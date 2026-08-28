@@ -1,0 +1,16 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "PalaTerm",
+  "outputfilename": "PalaTerm",
+  "frontend:install": "",
+  "frontend:build": "",
+  "frontend:dev:watcher": "",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "KJO"
+  },
+  "info": {
+    "productName": "PalaTerm",
+    "comments": "Parallel SSH/Telnet/Serial access - batch login tool"
+  }
+}

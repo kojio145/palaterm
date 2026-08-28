@@ -1,0 +1,27 @@
+# Build artifacts (keep build/windows icon sources tracked)
+/build/bin/
+/dist/
+*.exe
+*.syso
+!rsrc_windows_amd64.syso
+
+# Wails (frontend/dist is hand-authored source here, so it is committed)
+/frontend/node_modules/
+/frontend/wailsjs/
+
+# User data (never commit credentials)
+/testdata/local/
+devices.enc
+vault.enc
+*_vault.enc
+*.local.yaml
+
+# Logs
+/logs/
+*.log
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PalaTerm</title>
+  <link rel="stylesheet" href="/vendor/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- Lock screen -->
+  <div id="lock" class="lock-screen">
+    <div class="lock-card">
+      <div class="brand"><span class="logo">Pala</span>Term</div>
+      <div class="brand-sub">Parallel SSH / Telnet / Serial Access</div>
+      <div id="lock-body"></div>
+    </div>
+  </div>
+
+  <!-- Main app -->
+  <div id="app" class="app hidden">
+    <nav class="sidebar">
+      <div class="side-brand"><span class="logo">Pala</span>Term</div>
+      <button class="nav-btn active" data-tab="devices">機器一覧</button>
+      <button class="nav-btn" data-tab="commands">コマンドセット</button>
+      <button class="nav-btn" data-tab="run">実行</button>
+      <button class="nav-btn" data-tab="settings">ログ設定</button>
+      <button class="nav-btn" data-tab="ostypes">OSタイプ設定</button>
+      <div class="side-spacer"></div>
+      <select id="lang-select" class="lang-select" title="Language">
+        <option value="en">🌐 English</option>
+        <option value="ja">🌐 日本語</option>
+      </select>
+      <button class="nav-btn subtle" id="btn-chpw">パスワード変更</button>
+      <button class="nav-btn subtle" id="btn-about">バージョン情報</button>
+      <button class="nav-btn subtle" id="btn-lock">ロック</button>
+    </nav>
+
+    <main class="content">
+      <section id="tab-devices" class="tab active"></section>
+      <section id="tab-commands" class="tab"></section>
+      <section id="tab-run" class="tab"></section>
+      <section id="tab-settings" class="tab"></section>
+      <section id="tab-ostypes" class="tab"></section>
+    </main>
+  </div>
+
+  <!-- Modal host -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal" id="modal"></div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/xterm-addon-fit.js"></script>
+  <script src="/i18n.js"></script>
+  <script src="/app.js"></script>
+  <script src="/views.js"></script>
+  <script src="/views2.js"></script>
+  <script src="/terminal.js"></script>
+</body>
+</html>

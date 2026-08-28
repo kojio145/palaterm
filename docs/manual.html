@@ -1,0 +1,591 @@
+<title>PalaTerm 使い方マニュアル</title>
+<style>
+  :root {
+    --ground: #f6f8fb;
+    --panel: #ffffff;
+    --panel-2: #eef2f7;
+    --ink: #1b2430;
+    --ink-soft: #4c5a6b;
+    --ink-faint: #7a889a;
+    --line: #dde4ec;
+    --accent: #2563eb;
+    --accent-soft: #e5edff;
+    --ok: #15803d;
+    --ok-bg: #e5f5ea;
+    --warn: #b45309;
+    --warn-bg: #fbf0dd;
+    --err: #b91c1c;
+    --err-bg: #fbe6e6;
+    --term-bg: #0d1017;
+    --term-ink: #cbd5e1;
+    --mono: "Consolas", "SFMono-Regular", ui-monospace, monospace;
+    --sans: "Segoe UI", "Meiryo", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f141b;
+      --panel: #171d26;
+      --panel-2: #1e2632;
+      --ink: #e6ecf3;
+      --ink-soft: #a9b6c6;
+      --ink-faint: #7f8da0;
+      --line: #2a3442;
+      --accent: #5b9bff;
+      --accent-soft: #1a2740;
+      --ok: #4ade80;
+      --ok-bg: #12281b;
+      --warn: #fbbf24;
+      --warn-bg: #2c2410;
+      --err: #f87171;
+      --err-bg: #2a1618;
+      --term-bg: #0a0d12;
+      --term-ink: #cbd5e1;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0f141b;
+    --panel: #171d26;
+    --panel-2: #1e2632;
+    --ink: #e6ecf3;
+    --ink-soft: #a9b6c6;
+    --ink-faint: #7f8da0;
+    --line: #2a3442;
+    --accent: #5b9bff;
+    --accent-soft: #1a2740;
+    --ok: #4ade80;
+    --ok-bg: #12281b;
+    --warn: #fbbf24;
+    --warn-bg: #2c2410;
+    --err: #f87171;
+    --err-bg: #2a1618;
+    --term-bg: #0a0d12;
+    --term-ink: #cbd5e1;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font-family: var(--sans); line-height: 1.7; font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 22px 120px; }
+
+  /* Header */
+  header.hero {
+    padding: 56px 0 30px; border-bottom: 1px solid var(--line); margin-bottom: 8px;
+  }
+  .logo { font-family: var(--mono); font-size: 40px; font-weight: 700; letter-spacing: -1px; }
+  .logo .ex { color: var(--accent); }
+  .hero-sub { color: var(--ink-soft); font-size: 15px; margin-top: 6px; }
+  .hero-tag {
+    display: inline-block; margin-top: 18px; font-family: var(--mono); font-size: 12px;
+    color: var(--accent); background: var(--accent-soft); padding: 5px 12px; border-radius: 20px;
+    letter-spacing: .3px; margin-right: 8px;
+  }
+
+  /* TOC */
+  nav.toc {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 22px; margin: 28px 0 44px;
+  }
+  nav.toc h2 { font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--ink-faint); margin: 0 0 12px; }
+  nav.toc ol { margin: 0; padding-left: 0; list-style: none; counter-reset: toc;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
+  nav.toc li { counter-increment: toc; }
+  nav.toc a { color: var(--ink); text-decoration: none; display: flex; gap: 10px;
+    padding: 5px 0; align-items: baseline; }
+  nav.toc a::before { content: counter(toc, decimal-leading-zero); font-family: var(--mono);
+    font-size: 12px; color: var(--accent); font-weight: 700; }
+  nav.toc a:hover { color: var(--accent); }
+
+  section { margin: 0 0 52px; scroll-margin-top: 20px; }
+  h2.step {
+    font-size: 24px; margin: 0 0 6px; text-wrap: balance; display: flex;
+    align-items: baseline; gap: 14px;
+  }
+  h2.step .num {
+    font-family: var(--mono); font-size: 15px; color: #fff; background: var(--accent);
+    width: 30px; height: 30px; border-radius: 8px; display: inline-flex;
+    align-items: center; justify-content: center; flex: none; font-weight: 700;
+  }
+  .lead { color: var(--ink-soft); margin: 0 0 22px; padding-left: 44px; }
+  h3 { font-size: 17px; margin: 28px 0 10px; }
+  p { margin: 12px 0; }
+  strong { color: var(--ink); font-weight: 650; }
+
+  /* Cards / callouts */
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 22px; margin: 18px 0; }
+  .callout { border-radius: 10px; padding: 14px 18px; margin: 18px 0; font-size: 15px;
+    border: 1px solid; display: flex; gap: 12px; }
+  .callout .ic { font-family: var(--mono); font-weight: 700; flex: none; }
+  .callout p { margin: 0; }
+  .callout.tip { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .callout.tip .ic { color: var(--accent); }
+  .callout.warn { background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+  .callout.warn .ic { color: var(--warn); }
+  .callout.ok { background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 45%, transparent); }
+  .callout.ok .ic { color: var(--ok); }
+
+  /* Terminal block */
+  .term { background: var(--term-bg); border-radius: 10px; padding: 16px 18px; margin: 16px 0;
+    font-family: var(--mono); font-size: 13.5px; color: var(--term-ink); overflow-x: auto;
+    line-height: 1.7; border: 1px solid #1e2733; }
+  .term .c { color: #6b7a8d; }
+  code { font-family: var(--mono); font-size: .9em; background: var(--panel-2);
+    padding: 2px 6px; border-radius: 5px; color: var(--ink); }
+
+  /* Field table */
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14.5px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11.5px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--ink-faint); font-weight: 600; }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  td .must { color: var(--err); font-family: var(--mono); font-size: 11px; }
+  .scroll { overflow-x: auto; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* OS grid */
+  .os-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px; margin: 16px 0; }
+  .os { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 12px; font-size: 13.5px; font-family: var(--mono); }
+
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 16px 0; }
+  ol.steps > li { counter-increment: s; position: relative; padding: 4px 0 16px 40px; margin: 0; }
+  ol.steps > li::before { content: counter(s); position: absolute; left: 0; top: 2px;
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--accent);
+    background: var(--accent-soft); width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center; }
+
+  .pill { display: inline-block; font-family: var(--mono); font-size: 12px; padding: 2px 9px;
+    border-radius: 20px; font-weight: 600; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.err { background: var(--err-bg); color: var(--err); }
+  .pill.run { background: var(--accent-soft); color: var(--accent); }
+
+  /* Button color legend */
+  .btn-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+  .btn-chip { font-family: var(--mono); font-size: 13px; font-weight: 600;
+    padding: 4px 14px; border-radius: 8px; border: 1px solid; }
+  .btn-chip.b-conn { color: #16a34a; border-color: color-mix(in srgb, #16a34a 50%, transparent); background: var(--ok-bg); }
+  .btn-chip.b-edit { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
+  .btn-chip.b-copy { color: #9333ea; border-color: color-mix(in srgb, #9333ea 45%, transparent); background: color-mix(in srgb, #9333ea 12%, transparent); }
+  .btn-chip.b-del { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); background: var(--err-bg); }
+
+  footer { border-top: 1px solid var(--line); padding-top: 24px; color: var(--ink-faint);
+    font-size: 13.5px; }
+  a { color: var(--accent); }
+  hr { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  .kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2);
+    border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 7px; }
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="logo"><span class="ex">Pala</span>Term</div>
+    <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
+    <div class="hero-tag">使い方マニュアル / v1.0</div>
+  </header>
+
+  <nav class="toc">
+    <h2>目次</h2>
+    <ol>
+      <li><a href="#start">起動とマスターパスワード</a></li>
+      <li><a href="#flow">画面と全体の流れ</a></li>
+      <li><a href="#cmdset">コマンドセットを作る</a></li>
+      <li><a href="#device">機器を登録する</a></li>
+      <li><a href="#run">一括実行する</a></li>
+      <li><a href="#interactive">対話接続（手動ログイン）</a></li>
+      <li><a href="#log">ログを確認する</a></li>
+      <li><a href="#settings">ログ設定</a></li>
+      <li><a href="#ostype">OSタイプ設定</a></li>
+      <li><a href="#security">セキュリティ</a></li>
+      <li><a href="#trouble">困ったとき</a></li>
+    </ol>
+  </nav>
+
+  <section id="start">
+    <h2 class="step"><span class="num">1</span>起動とマスターパスワード</h2>
+    <p class="lead">機器の認証情報を暗号化して守るための、最初の1回だけの設定です。</p>
+
+    <p>起動するのは <code>PalaTerm.exe</code> です（インストール不要・ダブルクリックで起動）。
+    ソース一式のフォルダから使う場合は <code>build\bin\PalaTerm.exe</code> が本体です —
+    別の場所にある同名ファイルを起動すると「Wails applications will not build...」というエラーになります。</p>
+
+    <p>PalaTerm は機器のパスワードや enable パスワードを
+    <strong>マスターパスワードで暗号化して保存</strong>します（平文では一切保存しません）。
+    初回起動時にこのマスターパスワードを決めます。</p>
+
+    <ol class="steps">
+      <li><strong>マスターパスワード</strong>を入力します。これは PalaTerm を開くための鍵で、機器のパスワードとは別物です。忘れると保存済みの機器情報は復号できなくなるので、必ず覚えられるものにしてください。</li>
+      <li>下の欄に<strong>もう一度同じもの</strong>を入力します。</li>
+      <li><strong>「作成して開始」</strong>を押すと、メイン画面に入ります。</li>
+    </ol>
+
+    <div class="callout tip"><span class="ic">i</span><p>2回目以降の起動では、このマスターパスワードを入力して<strong>ロック解除</strong>するだけになります。暗号化ファイルは <code>data\palaterm_vault.enc</code> に作られます。</p></div>
+
+    <h3>ツールフォルダの構成</h3>
+    <p><code>PalaTerm.exe</code> の隣に、次のフォルダが自動で作られます。</p>
+    <div class="scroll"><table>
+      <thead><tr><th>フォルダ</th><th>中身</th></tr></thead>
+      <tbody>
+        <tr><td><code>logs\</code></td><td>実行ログの保存先（既定。ログ設定で変更可）</td></tr>
+        <tr><td><code>export\devices\</code></td><td>機器一覧のCSV書出/読込の既定フォルダ</td></tr>
+        <tr><td><code>export\command-sets\</code></td><td>コマンドセットのCSV書出/読込の既定フォルダ</td></tr>
+        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイルのJSON書出/読込の既定フォルダ（デフォルト14種のJSONを自動配置）</td></tr>
+        <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout ok"><span class="ic">✓</span><p><strong>持ち運びできます。</strong> <code>PalaTerm.exe</code> と <code>data\</code> フォルダを一緒にUSBや共有フォルダへコピーすれば、別のWindowsでもそのまま同じ設定で使えます。インストールは不要です。</p></div>
+  </section>
+
+  <section id="flow">
+    <h2 class="step"><span class="num">2</span>画面と全体の流れ</h2>
+    <p class="lead">操作は「コマンドを決める → 機器を登録する → 実行する」の3ステップです。</p>
+
+    <div class="card">
+      <p style="margin:0"><strong>① コマンドセットを作る</strong> … 各機器で流したいコマンド（例: <code>show running-config</code>）をまとめて登録します。サンプル5種が最初から入っています。</p>
+      <p style="margin:14px 0 0"><strong>② 機器を登録する</strong> … 接続先のIP・接続方式・OSタイプ・認証情報をグループ（会社）単位で登録し、①のコマンドセットを割り当てます。</p>
+      <p style="margin:14px 0 0"><strong>③ 一括実行する</strong> … 実行画面でグループを選び、チェックした機器へ並列で接続してログを自動保存します。</p>
+    </div>
+
+    <p>画面左のサイドバーには5つのタブがあります。</p>
+    <div class="scroll"><table>
+      <thead><tr><th>タブ</th><th>役割</th></tr></thead>
+      <tbody>
+        <tr><td>機器一覧</td><td>グループと機器の登録・編集・CSV入出力</td></tr>
+        <tr><td>コマンドセット</td><td>流すコマンドのまとまりの作成・CSV入出力</td></tr>
+        <tr><td>実行</td><td>対象の選択と一括実行・結果の確認</td></tr>
+        <tr><td>ログ設定</td><td>並列数・タイムアウト・ログ保存先などの共通設定</td></tr>
+        <tr><td>OSタイプ設定</td><td>機種別ログイン自動化プロファイルの管理</td></tr>
+      </tbody>
+    </table></div>
+    <p>サイドバー下部には<strong>言語切替・パスワード変更・リセット・バージョン情報・ロック</strong>があります。</p>
+    <div class="scroll"><table>
+      <thead><tr><th>メニュー</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>言語切替</td><td>UIの言語を切り替えます（<strong>既定は英語</strong>。🌐 日本語 を選ぶと日本語に）。選択は保存され、次回起動時も維持されます。</td></tr>
+        <tr><td>パスワード変更</td><td>マスターパスワードを変更します（現在のパスワード → 新しいパスワード → 確認入力）。</td></tr>
+        <tr><td>バージョン情報</td><td>ツール名・バージョン・作者・ライセンスの表示。</td></tr>
+        <tr><td>ロック</td><td>マスターパスワード入力画面に戻ります。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>ボタンの色</h3>
+    <p>一覧のボタンは全画面共通で、機能ごとに色が決まっています。</p>
+    <div class="btn-legend">
+      <span class="btn-chip b-conn">接続</span>
+      <span class="btn-chip b-edit">編集</span>
+      <span class="btn-chip b-copy">複製</span>
+      <span class="btn-chip b-del">削除</span>
+    </div>
+    <h3>行の並び替え（共通操作）</h3>
+    <p>機器一覧・コマンドセット・OSタイプ設定の一覧、およびコマンドセット編集・ログイン手順の行は、
+    左端の <strong>⠿ ハンドルをドラッグして並び替え</strong>できます。並び順は保存され、コマンドセットやOSタイプの<strong>選択リストの順序にも反映</strong>されます。</p>
+    <p><strong>複数行をまとめて移動</strong>するには、⠿ を<strong>クリックで選択</strong>、<span class="kbd">Ctrl</span>＋クリックで<strong>追加選択</strong>、
+    <span class="kbd">Shift</span>＋クリックで<strong>範囲選択</strong>してから、選択中のいずれかの行をドラッグします（選択した行が相対順を保ったまま一括で移動します）。</p>
+
+    <div class="callout tip"><span class="ic">i</span><p>画面のあちこちにある <strong>ⓘ</strong> マークにマウスを乗せると、その項目の説明がその場で表示されます。迷ったらまず ⓘ を見てください。</p></div>
+  </section>
+
+  <section id="cmdset">
+    <h2 class="step"><span class="num">3</span>コマンドセットを作る</h2>
+    <p class="lead">機器に流すコマンドのまとまりです。用途ごとに複数作れます（例: 設定バックアップ用、障害調査用）。</p>
+
+    <p>最初から<strong>サンプル5種</strong>（【サンプル】Cisco_ルータ / Cisco_L2SW / Cisco_L3SW / FortiGate / IXルータ）が入っています。そのまま使うことも、複製して自分用に直すこともできます。</p>
+
+    <ol class="steps">
+      <li>左サイドバーの<strong>「コマンドセット」</strong>を開きます。</li>
+      <li><strong>「＋ セットを追加」</strong>を押します（既存セットの<strong>「複製」</strong>から作るのも便利です）。</li>
+      <li><strong>セット名</strong>を付けます（例: <code>config-backup</code>）。</li>
+      <li><strong>コマンドの表</strong>に、1行1コマンドで入力します。「＋ 行を追加」で末尾に、各行の<strong>「＋」</strong>でその行の直後に挿入できます。</li>
+      <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。</li>
+      <li><strong>「保存」</strong>を押します。</li>
+    </ol>
+
+    <p>各行は「コマンド ＋ 待機(リモート) ＋ 待機(シリアル)」の形です。例（Cisco IOS の設定バックアップ）:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>コマンド</th><th>待機(リモート)</th><th>待機(シリアル)</th></tr></thead>
+      <tbody>
+        <tr><td><code>show running-config</code></td><td>2</td><td>3</td></tr>
+        <tr><td><code>show version</code></td><td>1</td><td>1</td></tr>
+        <tr><td><code>show ip interface brief</code></td><td>1</td><td>1</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="callout tip"><span class="ic">i</span><p>コマンド欄に<strong>複数行をまとめて貼り付ける</strong>と、その行数ぶん自動で行が分割されます。enable や terminal length などの<strong>ログイン・ページャ処理は自動</strong>（OSタイプ設定のプロファイルが担当）なので書く必要はありません。show 系のコマンドだけ並べればOKです。</p></div>
+
+    <h3>ファイルでの書出・読込</h3>
+    <p><strong>「CSV書出」</strong>で全セットを <code>export\command-sets\</code> に1セット1ファイルで出力します（<code>コマンド,リモート秒,シリアル秒</code> 形式）。
+    <strong>「CSV読込」</strong>で1ファイルを選んで取り込みます（ファイル名がセット名になり、同名セットは置き換え）。
+    CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイルもそのまま読み込めます。</p>
+  </section>
+
+  <section id="device">
+    <h2 class="step"><span class="num">4</span>機器を登録する</h2>
+    <p class="lead">接続先の情報を1台ずつ登録します。名前・ホスト・接続方式・OSタイプ・認証情報を設定します。</p>
+
+    <div class="callout tip"><span class="ic">i</span><p><strong>グループ（会社）単位で管理します。</strong> 「機器一覧」タブを開くと、まず<strong>グループ選択画面</strong>が表示されます。<strong>「＋ 新規グループ作成」</strong>で会社・拠点などのグループを作るか、既存グループを選ぶと、その範囲の機器一覧に移ります。上部の<strong>「← 対象選択」</strong>でいつでも戻れます。<strong>他のタブへ移動して戻ってきても、選んでいたグループは維持されます。</strong></p></div>
+
+    <ol class="steps">
+      <li>「機器一覧」タブで<strong>「＋ 新規グループ作成」</strong>を押し、グループ名（例: A社）を入力して作成します。作成直後にそのグループの（空の）一覧に移ります。</li>
+      <li><strong>「＋ 機器を追加」</strong>を押します（追加する機器は自動でそのグループに所属します）。</li>
+      <li>下の各項目を入力します。<strong>グループ（会社）</strong>欄で所属グループを変更することもできます。</li>
+      <li><strong>「保存」</strong>を押すと一覧に追加されます。</li>
+    </ol>
+    <p>グループ一覧の画面では、各グループの機器台数が表示され、<strong>カードをドラッグして並び順を変更</strong>できます。
+    グループ内の一覧では、上部の<strong>「グループ名変更」「グループ削除」</strong>が使えます（削除しても機器自体は残り、グループ未設定になります）。</p>
+
+    <h3>基本の項目</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>項目</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>ホスト名 <span class="must">必須</span></td><td>機器の識別名。<strong>ログファイル名に使われます</strong>（例: <code>core-sw1</code>）。</td></tr>
+        <tr><td>IPアドレス <span class="must">必須</span></td><td>接続先のIPアドレスまたはホスト名。（シリアル接続時は不要）</td></tr>
+        <tr><td>拠点名（任意）</td><td>本社／東京DC など。ログファイル名にも使えます。</td></tr>
+        <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポート自動検出＋ボーレート（既定9600）。</td></tr>
+        <tr><td>OSタイプ</td><td>ログイン自動化のプロファイル（<a href="#ostype">OSタイプ設定</a>参照）。enable昇格やページャ無効化を機種に合わせて自動で行います。</td></tr>
+        <tr><td>コマンドセット</td><td>STEP3で作ったセットを割り当てます。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>認証情報（暗号化して保存されます）</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>項目</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>ユーザー名</td><td>ログインユーザー。</td></tr>
+        <tr><td>パスワード</td><td>ログインパスワード。目のマークで表示/非表示を切替できます。</td></tr>
+        <tr><td>enable / 昇格パスワード（任意）</td><td>特権モードへ上がるためのパスワード（Cisco の enable など）。不要な機器は空欄でかまいません。</td></tr>
+        <tr><td>SSH認証方式</td><td>SSH接続時のみ。<code>パスワード</code> か <code>公開鍵</code>（Ed25519 / RSA / ECDSA対応）を選択。公開鍵では<strong>「参照…」で鍵ファイルを選択</strong>でき、前回使ったパスが自動入力されます。パスフレーズ付きの鍵は「秘密鍵のパスフレーズ」欄に入力してください（暗号化保存）。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>踏み台サーバ（任意・最大5段）</h3>
+    <p><strong>「＋ 踏み台を追加」</strong>で、踏み台（ジャンプサーバ）を<strong>最大5段まで</strong>登録できます。
+    外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
+    ホスト・ユーザー・パスワードを設定します（SSHは公開鍵認証も可）。
+    次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。踏み台を1つも追加しなければ直接接続です。</p>
+
+    <h3>一覧上で直接編集・複製・削除・並び替え</h3>
+    <p>機器一覧の表では、<strong>ホスト名（機器名）・IPアドレス・拠点名・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存）。
+    認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>で機器をコピー、<strong>「削除」</strong>で削除します。
+    行の順序は左端の <strong>⠿ ドラッグ</strong>で入れ替えられます（複数選択も可・<a href="#flow">共通操作参照</a>。グループ内の並びだけが変わり、他グループの機器は動きません）。</p>
+
+    <h3>入力チェック</h3>
+    <p>保存時に、IPアドレスの形式（例: <code>192.168.1111.1</code> のような明らかに不正な値は拒否）・必須項目・
+    ポート番号の範囲などを自動でチェックし、問題があればメッセージを出して保存しません。
+    入力途中に画面の他の場所を押しても内容は消えません（「キャンセル」か「保存」を押すまで保持されます）。</p>
+
+    <h3>CSVで一括登録・書き出し</h3>
+    <p>機器が多いときは、<strong>「CSV書出」</strong>で機器をCSVに出力し（対象グループまたは全機器を選択可）、Excel等でまとめて編集して
+    <strong>「CSV読込」</strong>で戻せます（機器名をキーに、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。既定の保存先は <code>export\devices\</code> です。</p>
+    <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
+  </section>
+
+  <section id="run">
+    <h2 class="step"><span class="num">5</span>一括実行する</h2>
+    <p class="lead">グループを選び、チェックした機器へ並列接続してコマンドを流し、ログを保存します。</p>
+
+    <ol class="steps">
+      <li>左サイドバーの<strong>「実行」</strong>を開き、<strong>「グループで対象を選択…」</strong>から実行するグループを選びます（グループを選ぶまで実行できません。うっかり全機器へ流してしまう事故を防ぐためです）。</li>
+      <li>グループ内の機器が一覧表示されます。<strong>左端のチェックボックスが実行対象</strong>です。ヘッダーのチェックで全選択/全解除、<span class="kbd">Shift</span>＋クリックで<strong>範囲をまとめて切替</strong>できます。</li>
+      <li><strong>「▶ 一括実行」</strong>を押します。</li>
+      <li>各機器の状態がリアルタイムで更新されます。</li>
+    </ol>
+
+    <p>状態は次のように表示されます。</p>
+    <p style="line-height:2.4">
+      <span class="pill run">接続中</span>
+      <span class="pill run">ログイン中</span>
+      <span class="pill run">実行中</span>
+      <span class="pill ok">完了</span>
+      <span class="pill err">エラー</span>
+    </p>
+    <p>実行中は、各機器の状態の下に<strong>プログレスバー</strong>が表示され、コマンドの進み具合（完了数/全体数）が機器ごとに見えます。
+    右上には<strong>成功 / 失敗 / 実行中</strong>の件数に加えて<strong>予想残り時間</strong>が表示されます
+    （完了済みコマンド数と経過時間からの概算で、実行が進むほど精度が上がります）。
+    途中で止めたいときは<strong>「■ 中止」</strong>を押します（接続待ちの最中でも即座に止まります）。</p>
+
+    <h3>失敗した機器だけやり直す</h3>
+    <p>実行後にエラーの機器があると、<strong>「↻ 失敗のみ再実行（n台）」</strong>ボタンが現れます。
+    認証情報や設定を直してからこれを押せば、失敗した機器だけをもう一度実行できます。</p>
+
+    <div class="callout tip"><span class="ic">i</span><p>同時に接続する台数は「ログ設定」タブの<strong>最大並列数</strong>で調整できます（既定10台）。台数が多くても並列実行されるので、全体の待ち時間は「一番遅い1台」の時間で済みます。実行中は二重実行できません。また実行中に設定を変えても、動いているバッチには反映されず次回から有効です。</p></div>
+  </section>
+
+  <section id="interactive">
+    <h2 class="step"><span class="num">★</span>対話接続（1台に手動ログイン）</h2>
+    <p class="lead">1台の機器にログイン処理まで自動で済ませ、そのまま手動操作に引き継ぐモードです。</p>
+
+    <p>一括実行とは別に、<strong>その場で1台を操作したいとき</strong>に使います。機器一覧または実行タブの各行の
+    <strong>「接続」</strong>ボタンを押すと、PalaTerm がその機器へ接続し、OSプロファイルに沿って
+    <strong>ログイン・enable昇格・ページャ無効化まで自動で行った状態</strong>の端末画面が開きます。</p>
+
+    <ol class="steps">
+      <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
+      <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
+      <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
+      <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。</li>
+      <li><code>exit</code> で機器から抜けるか、ウィンドウを閉じて終了します。</li>
+    </ol>
+
+    <div class="callout tip"><span class="ic">i</span><p><strong>複数の機器へ同時に別々のウィンドウで接続できます。</strong> それぞれ独立したウィンドウなので、並べて同時作業が可能です。踏み台（最大5段）経由でも自動で通り抜けます。対話接続の内容も<strong>ログファイルに保存</strong>されます（切断時に保存先が画面末尾に表示）。</p></div>
+  </section>
+
+  <section id="log">
+    <h2 class="step"><span class="num">6</span>ログを確認する</h2>
+    <p class="lead">取得したログは自動でファイル保存され、その場でも確認できます。</p>
+
+    <p>実行が終わると、各機器の行に<strong>「ログ表示」</strong>が出ます。クリックすると、その機器のログをその場で開けます。
+    実際のファイルは、<strong>「ログフォルダを開く」</strong>ボタンでエクスプローラーから確認できます。</p>
+
+    <h3>保存先とファイル名</h3>
+    <p>実行するたびに、ログフォルダの中に <code>log_日付_時刻/</code> というフォルダが作られ、その中に機器ごとのログが入ります。ファイル名の既定は次の形式です。</p>
+    <div class="term">{host}_Config_{date}_{time}.txt<br>
+<span class="c"># 例: core-sw1_Config_20260827_1830.txt</span></div>
+    <p>ファイル名テンプレートは「ログ設定」タブで変更でき、次の部品が使えます（クリックでコピーできます）。</p>
+    <div class="scroll"><table>
+      <thead><tr><th>部品</th><th>意味</th></tr></thead>
+      <tbody>
+        <tr><td><code>{host}</code></td><td>ホスト名（機器の名前）</td></tr>
+        <tr><td><code>{ip}</code></td><td>IPアドレス</td></tr>
+        <tr><td><code>{os}</code></td><td>OSタイプ</td></tr>
+        <tr><td><code>{group}</code></td><td>グループ（会社）</td></tr>
+        <tr><td><code>{site}</code></td><td>拠点名</td></tr>
+        <tr><td><code>{date}</code></td><td>日付（yyyymmdd）</td></tr>
+        <tr><td><code>{time}</code></td><td>時刻（hhmmss）</td></tr>
+        <tr><td><code>{hhmm}</code></td><td>時刻（hhmm）</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="settings">
+    <h2 class="step"><span class="num">7</span>ログ設定</h2>
+    <p class="lead">実行とログ保存の共通設定です。</p>
+    <div class="scroll"><table>
+      <thead><tr><th>項目</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>最大並列数</td><td>同時に接続する台数。<code>0</code> で無制限。既定10。</td></tr>
+        <tr><td>接続タイムアウト</td><td>接続確立を待つ秒数。既定20秒。</td></tr>
+        <tr><td>コマンドタイムアウト</td><td>1コマンドの応答（プロンプト復帰）を待つ秒数。既定30秒。</td></tr>
+        <tr><td>ログ保存フォルダ</td><td>ログの出力先。既定 <code>logs</code>。<strong>「参照…」</strong>でフォルダ選択もできます。相対パスは <code>PalaTerm.exe</code> と同じフォルダが基準です。</td></tr>
+        <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout tip"><span class="ic">i</span><p>変更したら<strong>「保存」</strong>を忘れずに。未保存のまま他のタブへ移ろうとすると確認が出ます。</p></div>
+
+    <h3>危険な操作: リセット（全データ初期化）</h3>
+    <p>タブの最下部に、誤操作しにくい位置として<strong>「危険な操作」</strong>枠があります。
+    <strong>「リセット（全データ初期化）…」</strong>を押すと、登録済みの<strong>すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワード</strong>を削除して初期状態に戻します（<strong>元に戻せません</strong>）。</p>
+    <p>実行には、警告ダイアログでの確認に加えて<strong>マスターパスワードの入力が必須</strong>です。ログファイルと export フォルダの書き出しファイル（機器CSV・コマンドセット・OSプロファイルJSON）は削除されずに残るため、必要ならそこから読み込みで復元できます。</p>
+  </section>
+
+  <section id="ostype">
+    <h2 class="step"><span class="num">8</span>OSタイプ設定</h2>
+    <p class="lead">機種別のログイン自動化（プロファイル）の管理画面です。標準14種はそのまま使え、編集も自作もできます。</p>
+
+    <p>OSタイププロファイルは「接続してからコマンドが打てる状態になるまで」と「切断」を自動化する手順書です。
+    <strong>標準の14種</strong>が最初から入っています。</p>
+
+    <div class="os-grid">
+      <div class="os">Cisco IOS</div><div class="os">Cisco ASA</div>
+      <div class="os">Juniper JUNOS</div><div class="os">Juniper NetScreen</div>
+      <div class="os">A10 ACOS</div><div class="os">FortiGate</div>
+      <div class="os">FortiAnalyzer</div><div class="os">HPE (Comware)</div>
+      <div class="os">NEC IX</div><div class="os">NEC QX</div>
+      <div class="os">NEC WA</div><div class="os">Aruba OS-Switch</div>
+      <div class="os">Yamaha RTX</div><div class="os">Generic</div>
+    </div>
+
+    <p>一覧では標準・自作の区別なく、どのプロファイルも<strong>「編集」「複製」「削除」</strong>できます
+    （機器が使用中のプロファイルは削除できません）。標準を機種の実情に合わせて直したいときは、そのまま編集するか、複製してから直します。</p>
+
+    <h3>書き方は「文字そのまま」</h3>
+    <p>待つ文字（プロンプト・expect）は<strong>正規表現ではなく、画面に出る文字をそのまま</strong>書きます。
+    文字の一部が画面に現れた時点で一致します（部分一致・大文字小文字は区別）。
+    たとえば <code>assword:</code> と書けば <code>Password:</code> にも <code>password:</code> にも一致します。</p>
+
+    <h3>プロファイルの項目</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>項目</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>showコマンド完了の目印 <span class="must">必須</span></td><td>コマンドが打てる状態のときに機器が出す表示（例: <code>Router#</code>）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。<code>#</code> のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: <code>FG(console)#</code>）にも一致します。</td></tr>
+        <tr><td>ログイン手順</td><td>上から順に実行。<strong>expect</strong>（待つ表示）が出るのを待ち、<strong>send</strong>（入力コマンド）を入力します。sendには変数 <code>{user}</code> <code>{password}</code> <code>{enable}</code> が使え、機器に登録した認証情報に置き換わります。<strong>最後の行の入力が終わると自動で「showコマンド完了の目印」を待つ</strong>ため、目印を待つだけの行は不要です。</td></tr>
+        <tr><td>認証行の自動スキップ</td><td><code>{user}</code> / <code>{password}</code> / <code>{enable}</code> を送る行は、その表示を出さない機器・接続方式では<strong>自動でスキップ</strong>されます（SSH直接続では認証済みのため <code>{user}</code> / <code>{password}</code> の行は即スキップ）。手順に書いておけば、聞かれる機器では入力され、聞かれない機器では飛ばされる——<strong>同じプロファイルがSSH / Telnet / シリアルで共通に使えます</strong>。</td></tr>
+        <tr><td>ページャ解除コマンド（任意）</td><td>ログイン直後に流す、出力の一時停止（--More--）をなくすコマンド。複数行OK（設定モードに入る手順ごと書けます）。機器側で設定済みなら空欄で。</td></tr>
+        <tr><td>ページャ表示の目印（任意）</td><td>出力の途中一時停止の表示（例: <code>--- more ---</code>）。これが出たらスペースを送って続きを表示します。解除コマンドで止まらないOSだけ設定します。</td></tr>
+        <tr><td>切断コマンド</td><td>実行終了時にログアウトのため送るコマンド。1行1コマンドで複数行可（exitを2回打つ機器は2行書く）。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>ファイルでの書出・読込</h3>
+    <p><strong>「ファイル書出」</strong>で全プロファイルを <code>export\os-profiles\</code> に1プロファイル1ファイル（JSON）で出力します。
+    <strong>「ファイル読込」</strong>でJSONを選んで取り込みます。標準14種のJSONは起動時に自動で置かれ、
+    <strong>アプリがこれらのファイルを消すことはありません</strong>。プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。</p>
+
+    <div class="callout warn"><span class="ic">!</span><p>特定の機種でログインが途中で止まる場合は、その機種の実際のプロンプト表示を確認し、プロファイルの「目印」やログイン手順を実機に合わせて直してください。<strong>迷ったら対話接続で実機の表示を見るのが確実です。</strong></p></div>
+  </section>
+
+  <section id="security">
+    <h2 class="step"><span class="num">9</span>セキュリティ</h2>
+    <p class="lead">認証情報と通信を守るための仕組みと、知っておくべき注意点です。</p>
+
+    <div class="scroll"><table>
+      <thead><tr><th>仕組み</th><th>説明</th></tr></thead>
+      <tbody>
+        <tr><td>保存データの暗号化</td><td>機器のパスワード類はすべて <strong>AES-256-GCM</strong> で暗号化して保存します（鍵はマスターパスワードから scrypt で導出）。平文保存モードはありません。</td></tr>
+        <tr><td>SSHホストキーの記録と検証</td><td>SSH接続先のホストキーは<strong>初回接続時に記録され、以後の接続で一致を検証</strong>します（なりすまし・中間者攻撃対策）。キーが変わると接続を拒否してエラーを表示します。機器の交換等で正当に変わった場合は、機器の編集画面の<strong>「ホストキー記録を削除」</strong>で再登録してください。<strong>心当たりがないのにキーが変わった場合は削除せず、ネットワーク管理者に確認を。</strong></td></tr>
+        <tr><td>強い暗号方式が既定</td><td>SSHの鍵交換・暗号は既定で強い方式のみを使います。SHA-1系・CBC・3DESなどの旧方式は、対応していない古い機器のためだけに機器ごとの<strong>「レガシー暗号を許可」</strong>で有効化できます（通常はオフのまま）。</td></tr>
+        <tr><td>ログのパスワード自動マスク</td><td>機器がパスワードを画面にエコーバックした場合でも、ログ保存時に <code>****</code> へ自動マスクされます（一括実行・対話接続とも）。</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>運用上の注意</h3>
+    <ul>
+      <li><strong>Telnet・シリアルは平文通信</strong>です（プロトコルの仕様）。信頼できる経路でのみ使い、可能ならSSHを選んでください。</li>
+      <li><strong>CSV書き出しファイルはパスワードが平文</strong>です。編集が済んだら速やかに削除してください。</li>
+      <li><strong>マスターパスワードは長く推測されにくいもの</strong>に。暗号化の実効強度はマスターパスワードの強度で決まります。</li>
+      <li>踏み台の2段目以降の接続は踏み台上のsshコマンドが行うため、そのホストキー検証は<strong>踏み台側の設定に依存</strong>します。</li>
+    </ul>
+  </section>
+
+  <section id="trouble">
+    <h2 class="step"><span class="num">10</span>困ったとき</h2>
+    <p class="lead">よくあるつまずきと対処です。</p>
+
+    <h3>起動時に青い警告画面が出る</h3>
+    <p>「WindowsによってPCが保護されました」（SmartScreen）は、未署名アプリで出る正常な挙動です。
+    <strong>「詳細情報」→「実行」</strong>で起動できます。一度実行すれば以降は出にくくなります。</p>
+
+    <h3>特定の機器でログインが止まる / エラーになる</h3>
+    <ul>
+      <li><strong>OSタイプ</strong>が機種と合っているか確認します。</li>
+      <li>ユーザー名・パスワード・enableパスワードが正しいか確認します。</li>
+      <li>接続方式（SSH/Telnet/シリアル）とポートが合っているか確認します。</li>
+      <li>それでも止まる場合、どこで止まったかは次の2箇所で確認できます:
+        実行画面の<strong>メッセージ列</strong>に <code>waiting for "〜"</code> と「待っていたのに現れなかった文字」が表示されます。
+        また<strong>エラーでも途中までの実機出力はログに保存される</strong>ので、その行の「ログ表示」で機器が実際に何を表示していたかを確認できます。
+        あとは<a href="#ostype">OSタイプ設定</a>でプロファイルの目印・手順を実機の表示に合わせて直すだけです。</li>
+    </ul>
+
+    <h3>実行対象のチェックボックスが見つからない</h3>
+    <p>実行対象のオン/オフは<strong>「実行」タブ</strong>に集約されています。まずグループを選ぶと、機器ごとのチェックが表示されます。</p>
+
+    <h3>マスターパスワードを忘れた</h3>
+    <p>暗号化の仕様上、<strong>忘れると保存済みの機器情報は復号できません</strong>。その場合は
+    <code>data\palaterm_vault.enc</code> を削除して作り直し（機器の再登録）になります。パスワードは確実に管理してください。
+    覚えている状態でパスワードを変えたいだけなら、サイドバーの<strong>「パスワード変更」</strong>で変更できます。
+    データごとやり直したい場合は、<a href="#settings">ログ設定</a>タブ最下部の<strong>「リセット（全データ初期化）」</strong>が同じ初期化を行えます（ロック解除中のみ・マスターパスワード入力必須）。</p>
+
+    <div class="callout warn"><span class="ic">!</span><p><strong>本番機器での利用について。</strong> PalaTerm は設定変更コマンドも実行できます。本番機器で使う前に、必ず検証環境で動作を確認し、所属組織のルール（会社PCでの利用申請など）に従ってください。</p></div>
+  </section>
+
+  <footer>
+    PalaTerm v1.0 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    実行ファイル: <code>build\bin\PalaTerm.exe</code>
+  </footer>
+</div>
