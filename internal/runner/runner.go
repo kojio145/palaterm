@@ -219,6 +219,9 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
 	skipCreds := len(bastions) == 0 && dev.Conn == model.ConnSSH
 	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
+		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
+			return exp, prof, errors.New(hint)
+		}
 		return exp, prof, fmt.Errorf("login: %w", err)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
@@ -328,6 +331,20 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 // command means every long output hangs until the command timeout and the
 // whole device fails — a profile mistake should cost tidiness, not the run.
 const genericMore = `(?i)-{2,}\s*\(?\s*more`
+
+// wrongPortHint names the mistake behind a login that never got a prompt when
+// the evidence is unambiguous. A Telnet client aimed at port 22 reads the SSH
+// identification string the server opens with and then waits out the timeout
+// for a login prompt that is never coming — which otherwise surfaces only as
+// a generic expect timeout, pointing at the profile rather than the port.
+func wrongPortHint(dev *model.Device, transcript string) string {
+	if dev.Conn == model.ConnTelnet && strings.HasPrefix(strings.TrimSpace(transcript), "SSH-") {
+		return fmt.Sprintf(
+			"Telnetで接続しましたが、ポート%dはSSHサーバーです。機器のポートを23に直すか、接続方式をSSHに戻してください",
+			dev.EffectivePort())
+	}
+	return ""
+}
 
 // promptSettle is how long the prompt must remain the tail of the output
 // before the device counts as idle. A single read can end exactly on a prompt

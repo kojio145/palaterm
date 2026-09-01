@@ -326,3 +326,23 @@ func TestCountdownReportsSecondsLeft(t *testing.T) {
 		t.Fatal("a cancelled context must abort the wait")
 	}
 }
+
+// TestWrongPortHint covers the Telnet-at-port-22 mistake: switching a device's
+// method without moving its port leaves a Telnet client reading the SSH
+// identification string, which used to surface only as an expect timeout.
+func TestWrongPortHint(t *testing.T) {
+	telnetOn22 := &model.Device{Name: "d", Conn: model.ConnTelnet, Port: 22}
+	sshBanner := "SSH-2.0-NEC-IX2105-ms-10.2.16\r\n"
+
+	if h := wrongPortHint(telnetOn22, sshBanner); h == "" || !strings.Contains(h, "22") {
+		t.Fatalf("expected a hint naming port 22, got %q", h)
+	}
+	// A real Telnet login must not be second-guessed.
+	if h := wrongPortHint(&model.Device{Name: "d", Conn: model.ConnTelnet, Port: 23}, "\r\nlogin: "); h != "" {
+		t.Fatalf("unexpected hint on a genuine telnet login: %q", h)
+	}
+	// SSH devices legitimately see that banner; saying anything there is noise.
+	if h := wrongPortHint(&model.Device{Name: "d", Conn: model.ConnSSH, Port: 22}, sshBanner); h != "" {
+		t.Fatalf("unexpected hint on an SSH device: %q", h)
+	}
+}

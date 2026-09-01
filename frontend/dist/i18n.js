@@ -45,6 +45,8 @@ const I18N_EN_PATTERNS = [
     'Host key for $1 changed (now: $2 / pinned: $3). Possible man-in-the-middle attack or a replaced device. If the device was replaced, use "Clear pinned host key" in the device editor and reconnect.'],
   [/— 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください/,
     '— the device may not support modern algorithms. Enable "Allow legacy ciphers" in the device editor.'],
+  [/^Telnetで接続しましたが、ポート(\d+)はSSHサーバーです。機器のポートを23に直すか、接続方式をSSHに戻してください$/,
+    "Connected over Telnet, but port $1 is an SSH server. Set the device port to 23, or switch the method back to SSH."],
   [/^(.+) は既に接続中です$/, "$1 is already connected"],
   [/^(.+) は接続していません$/, "$1 is not connected"],
   [/^秘密鍵のパスフレーズが違います: (.+)$/, "Wrong private-key passphrase: $1"],

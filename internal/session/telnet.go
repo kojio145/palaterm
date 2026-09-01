@@ -17,8 +17,15 @@ const (
 	se   = 240 // subnegotiation end
 )
 
-// telnetSession is a TCP connection that answers option negotiation minimally
-// (refusing everything) so that plain text flows through.
+// Telnet options this client engages with (RFC 857 / 858).
+const (
+	optEcho            = 1
+	optSuppressGoAhead = 3
+)
+
+// telnetSession is a TCP connection that answers option negotiation so that
+// plain text flows through: it accepts remote echo and suppress-go-ahead and
+// refuses everything else.
 type telnetSession struct {
 	conn net.Conn
 	buf  []byte // leftover decoded bytes
@@ -98,7 +105,7 @@ func (t *telnetSession) decode(raw []byte) []byte {
 				break
 			}
 			opt := raw[i+2]
-			t.refuse(cmd, opt)
+			t.answer(cmd, opt)
 			i += 2
 		case sb: // skip subnegotiation until IAC SE
 			j := i + 2
@@ -113,14 +120,30 @@ func (t *telnetSession) decode(raw []byte) []byte {
 	return out
 }
 
-// refuse answers an option request the standard way: DO->WONT, WILL->DONT.
-func (t *telnetSession) refuse(cmd, opt byte) {
+// answer replies to an option request: everything is refused except remote
+// echo and suppress-go-ahead, the pair that puts the session in the ordinary
+// character-at-a-time mode network gear expects.
+//
+// Refusing those two is not merely suboptimal — a NEC IX2105 opens with
+// "IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD" and closes the connection the
+// moment a username arrives on a session where the client said DONT to both.
+// The login then failed with nothing in the log but the device's "login: "
+// prompt, since the drop looked like a device that simply never answered.
+func (t *telnetSession) answer(cmd, opt byte) {
 	var reply byte
 	switch cmd {
-	case do:
-		reply = wont
 	case will:
-		reply = dont
+		if opt == optEcho || opt == optSuppressGoAhead {
+			reply = do // let the far end echo and run full duplex
+		} else {
+			reply = dont
+		}
+	case do:
+		if opt == optSuppressGoAhead {
+			reply = will
+		} else {
+			reply = wont // no terminal type, window size, or the rest
+		}
 	default:
 		return // WONT/DONT need no acknowledgement
 	}

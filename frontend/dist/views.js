@@ -248,7 +248,20 @@ function renderDeviceList() {
   });
   root.querySelectorAll(".inl-host").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { host: el.value.trim() }));
   root.querySelectorAll(".inl-site").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { site: el.value.trim() }));
-  root.querySelectorAll(".inl-conn").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { conn: el.value }));
+  // Switching the method here must carry the port with it, the way the editor
+  // dialog already does: leaving 22 behind on a switch to Telnet points a
+  // Telnet client at the SSH port, where it reads the "SSH-2.0-..." banner and
+  // then waits forever for a login prompt. A port the user chose deliberately
+  // (anything but the two standard ones) survives the switch.
+  root.querySelectorAll(".inl-conn").forEach(el => el.onchange = () => {
+    const patch = { conn: el.value };
+    const dev = (INV.devices || []).find(x => x.name === el.dataset.name) || {};
+    const port = dev.port || 0;
+    if (el.value !== "serial" && (!port || port === 22 || port === 23)) {
+      patch.port = el.value === "ssh" ? 22 : 23;
+    }
+    inlineSave(el.dataset.name, patch);
+  });
   root.querySelectorAll(".inl-os").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { osType: el.value }));
   root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { commandSet: el.value }));
 }
