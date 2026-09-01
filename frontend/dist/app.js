@@ -191,10 +191,13 @@ function wirePasswordToggles(scope) {
     const btn = document.createElement("button");
     btn.type = "button"; btn.className = "eye-btn"; btn.textContent = "👁";
     btn.title = t("表示 / 非表示");
+    btn.setAttribute("aria-label", t("表示 / 非表示"));
     btn.onclick = () => {
       const showing = inp.type === "text";
       inp.type = showing ? "password" : "text";
       btn.classList.toggle("on", !showing);
+      // Keep typing where it was: clicking the button steals focus otherwise.
+      inp.focus();
     };
     parent.appendChild(btn);
   });
@@ -235,6 +238,7 @@ function renderLock(exists) {
       <div class="muted" style="margin-top:12px;font-size:12px">${esc(t("暗号化された機器情報を復号します"))}</div>`;
     $("#unlock").onclick = doUnlock;
     $("#pw").addEventListener("keydown", e => { if (e.key === "Enter") doUnlock(); });
+    wirePasswordToggles(body);
   } else {
     body.innerHTML = `
       <div class="muted" style="margin-bottom:16px;font-size:13px">
@@ -243,6 +247,7 @@ function renderLock(exists) {
       <div class="field"><label>${esc(t("確認のため再入力"))}</label><input id="pw2" type="password" /></div>
       <button class="btn primary" id="create" style="width:100%">${esc(t("作成して開始"))}</button>`;
     $("#create").onclick = doCreate;
+    wirePasswordToggles(body);
   }
 }
 

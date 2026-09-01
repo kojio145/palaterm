@@ -29,12 +29,16 @@ async function bootTerminalWindow() {
     <div id="tw-pw" class="hidden" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85)">
       <div style="width:340px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px">
         <div style="color:#e6ecf3;margin-bottom:12px">${esc(t("マスターパスワード"))}</div>
-        <input id="tw-pw-in" type="password" style="width:100%;background:#11151c;color:#e6ecf3;border:1px solid #2a3442;border-radius:8px;padding:9px" autofocus>
+        <div id="tw-pw-field" style="position:relative">
+          <input id="tw-pw-in" type="password" style="width:100%;background:#11151c;color:#e6ecf3;border:1px solid #2a3442;border-radius:8px;padding:9px" autofocus>
+        </div>
         <button id="tw-pw-ok" style="width:100%;margin-top:12px;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:9px;cursor:pointer">${esc(t("接続"))}</button>
       </div>
     </div>
   </div>`);
   document.body.appendChild(wrap);
+  // Same show/hide eye affordance as the main window's master-password fields.
+  wirePasswordToggles(document.getElementById("tw-pw-field"));
 
   const term = new Terminal({
     convertEol: false, cursorBlink: true,

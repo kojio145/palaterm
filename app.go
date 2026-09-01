@@ -287,6 +287,32 @@ func (a *App) Unlock(password string) error {
 			seed = true
 		}
 	}
+	// NEC IX keeps "terminal length 0" behind configure mode: run in operation
+	// mode the device answers "% terminal -- Invalid command." and keeps
+	// paging, so the first long output hangs the run at "--More--". It enters
+	// with svintr-config because plain "configure" fails while another session
+	// holds the mode. Upgrade profiles still carrying a built-in pager; one the
+	// user has since edited (a pager of their own, or a MorePrompt) is left
+	// exactly as they wrote it.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key != "nec-ix" || p.MorePrompt != "" {
+			continue
+		}
+		pristine := len(p.Pager) == 1 && p.Pager[0].Send == "terminal length 0"
+		// An intermediate build entered with "configure", which loses the pager
+		// (and every show running-config) whenever someone else holds the mode.
+		interim := len(p.Pager) == 2 && p.Pager[0].Send == "configure" && p.Pager[1].Send == "terminal length 0"
+		if pristine || interim {
+			p.MorePrompt = "--More--"
+			p.Pager = []profile.Step{{Send: "svintr-config"}, {Send: "terminal length 0"}}
+			// Logging out now has one extra mode to climb back out of.
+			if len(p.Disconnect) == 1 && p.Disconnect[0].Send == "exit" {
+				p.Disconnect = []profile.Step{{Send: "exit"}, {Send: "exit"}}
+			}
+			seed = true
+		}
+	}
 	if seed {
 		if err := vault.Save(a.vaultPath, password, inv); err != nil {
 			return err

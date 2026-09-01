@@ -5,6 +5,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -38,6 +39,9 @@ type Event struct {
 	Message string `json:"message"`
 	Done    int    `json:"done,omitempty"`
 	Total   int    `json:"total,omitempty"`
+	// WaitSec counts down the configured pause after a command, so a run that
+	// looks frozen on a 10-second 待機 says how much of it is left.
+	WaitSec int `json:"waitSec,omitempty"`
 }
 
 // DeviceResult is the outcome of one device run.
@@ -130,7 +134,12 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 				break
 			}
 			if p := pauseFor(cmd, dev.Conn); p > 0 {
-				if !sleepCtx(ctx, time.Duration(p)*time.Second) {
+				if !countdown(ctx, p, func(left int) {
+					if emit != nil {
+						emit(Event{Device: dev.Name, Phase: PhaseRunning, Message: cmd.Text,
+							Done: i, Total: total, WaitSec: left})
+					}
+				}) {
 					res.Error = ctx.Err().Error()
 					break
 				}
@@ -142,7 +151,7 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 	}
 
 	// Clean logout (best effort), then unwind each bastion layer.
-	_ = r.runSteps(ctx, exp, prof.Disconnect, vars, 3*time.Second, false)
+	_ = r.runSteps(ctx, exp, prof.Disconnect, vars, 3*time.Second, false, "")
 	for range dev.ActiveBastions() {
 		_ = exp.Send("exit")
 		time.Sleep(150 * time.Millisecond)
@@ -209,7 +218,7 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	// {user}/{password} steps are skipped outright; through a bastion (or on
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
 	skipCreds := len(bastions) == 0 && dev.Conn == model.ConnSSH
-	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds); err != nil {
+	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
 		return exp, prof, fmt.Errorf("login: %w", err)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
@@ -273,6 +282,19 @@ func dialCtx(ctx context.Context, dial func() (session.Session, error)) (session
 }
 
 // sleepCtx waits d, returning false immediately if ctx is canceled first.
+// countdown sleeps for sec seconds, reporting the seconds still to go once a
+// second (starting at sec, so the UI never shows a stale count). It returns
+// false if the context ended first.
+func countdown(ctx context.Context, sec int, report func(left int)) bool {
+	for left := sec; left > 0; left-- {
+		report(left)
+		if !sleepCtx(ctx, time.Second) {
+			return false
+		}
+	}
+	return true
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -296,27 +318,87 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 	return r.waitPrompt(ctx, exp, prof, timeout)
 }
 
+// genericMore matches the pager markers vendors actually print — "--More--",
+// "---- More ----", "--- more ---", "-- MORE --", "---(more 25%)---" — and
+// backs up profiles that declare no MorePrompt of their own.
+//
+// The pager-disable command differs per OS and is easy to get wrong (NEC IX,
+// for one, only accepts "terminal length 0" inside configure mode and answers
+// "% terminal -- Invalid command." elsewhere). Without this net, one wrong
+// command means every long output hangs until the command timeout and the
+// whole device fails — a profile mistake should cost tidiness, not the run.
+const genericMore = `(?i)-{2,}\s*\(?\s*more`
+
+// promptSettle is how long the prompt must remain the tail of the output
+// before the device counts as idle. A single read can end exactly on a prompt
+// character that is really mid-line, so re-checking after a beat costs
+// milliseconds and keeps the next command out of a device still printing.
+const promptSettle = 120 * time.Millisecond
+
 // waitPrompt waits for the operational prompt, advancing through pager prompts.
 func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Profile, timeout time.Duration) error {
+	more := prof.MorePrompt
+	if more == "" {
+		more = genericMore
+	}
+	// The prompt counts only as the TAIL of what has arrived. Matched anywhere
+	// in the stream, a prompt character inside a command's own output ends the
+	// wait early: NEC IX's "show processes" prints a "PDEV#" column header, so
+	// the run moved on mid-output and typed the next command into a device that
+	// was still paging — which ate its first character, turning "show logging"
+	// into "how logging".
+	tail := "(?:" + prof.Prompt + `)[ \t]*\z`
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return ErrExpectTimeout
+		}
+		if exp.Seen(tail) {
+			time.Sleep(promptSettle)
+			if exp.Seen(tail) {
+				exp.Drain() // nothing follows the tail; start the next wait clean
+				return nil
+			}
+			continue
+		}
+		// Not idle. If a pager is showing, advance it; the short wait doubles
+		// as this loop's poll interval. The marker and the last page can land
+		// in one read, so re-check first: a space typed at a device that has
+		// already returned to its prompt is echoed into the next command line.
+		if err := exp.Expect(ctx, more, 150*time.Millisecond); err == nil && !exp.Seen(tail) {
+			_ = exp.SendRaw(" ")
+		}
+	}
+}
+
+// expectOrReady waits for pattern, reporting ready=true instead if the device
+// reaches its operational prompt first. Both are polled in short slices so a
+// step that will never match costs a fraction of a second rather than the full
+// timeout; pattern is checked first each round, so a device that really does
+// show it still takes the normal path.
+func (r *Runner) expectOrReady(ctx context.Context, exp *expecter, pattern, ready string, timeout time.Duration) (bool, error) {
+	if ready == "" {
+		return false, exp.Expect(ctx, pattern, timeout)
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return ErrExpectTimeout
+			return false, ErrExpectTimeout
 		}
-		if prof.MorePrompt != "" {
-			// Race the prompt against the pager marker by polling briefly.
-			if err := exp.Expect(ctx, prof.Prompt, min(remaining, 800*time.Millisecond)); err == nil {
-				return nil
-			}
-			// Not the prompt yet; if a pager is showing, advance it.
-			if err := exp.Expect(ctx, prof.MorePrompt, 200*time.Millisecond); err == nil {
-				_ = exp.SendRaw(" ")
-				continue
-			}
-			continue
+		err := exp.Expect(ctx, pattern, min(remaining, 300*time.Millisecond))
+		if err == nil {
+			return false, nil
 		}
-		return exp.Expect(ctx, prof.Prompt, remaining)
+		if !errors.Is(err, ErrExpectTimeout) {
+			return false, err // context cancelled or closed
+		}
+		if exp.Seen(ready) {
+			return true, nil
+		}
 	}
 }
 
@@ -327,7 +409,13 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 // transport, auth steps ({user}/{password}/{enable}) whose prompt does not
 // appear within a short wait are skipped without error — that is how one
 // profile serves devices that ask for none, some, or all of the credentials.
-func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.Step, vars profile.Vars, timeout time.Duration, skipCreds bool) error {
+//
+// readyPrompt is the operational prompt for a login list (empty elsewhere). A
+// non-auth step is abandoned as soon as that prompt is already on screen: the
+// privilege-escalation row (wait ">" / send "enable") has no ">" to wait for
+// on a device whose account logs straight in privileged, and without this it
+// would burn the whole timeout and then fail the login outright.
+func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.Step, vars profile.Vars, timeout time.Duration, skipCreds bool, readyPrompt string) error {
 	for _, st := range steps {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -336,16 +424,26 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 			continue // transport-level auth already done (direct SSH)
 		}
 		if st.Expect != "" {
-			stepTimeout := timeout
+			// Auth steps keep the plain short wait: their prompt can legitimately
+			// arrive after a banner, and racing them against readyPrompt would let
+			// a banner containing the prompt character skip a credential.
+			var (
+				ready bool
+				err   error
+			)
 			if st.Auth() {
-				stepTimeout = min(timeout, 3*time.Second)
+				err = exp.Expect(ctx, st.Expect, min(timeout, 3*time.Second))
+			} else {
+				ready, err = r.expectOrReady(ctx, exp, st.Expect, readyPrompt, timeout)
 			}
-			err := exp.Expect(ctx, st.Expect, stepTimeout)
 			if err != nil {
 				if st.Auth() {
 					continue // prompt absent: device skips this question
 				}
 				return fmt.Errorf("waiting for %q: %w", st.Expect, err)
+			}
+			if ready {
+				continue // already operational: this step has nothing to do
 			}
 		}
 		if st.Sends() {

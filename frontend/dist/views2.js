@@ -166,6 +166,24 @@ let running = false;
 // so the selector and the heading show what is targeted).
 let runGroupSel = "";
 
+// Fraction of a device's whole run that is behind it, as a percentage.
+// Connect and login get fixed slices up front so the bar moves as soon as work
+// starts; the command phase fills the long middle; a device that errored keeps
+// the position it reached, which is what says "it died during login".
+function runPct(st) {
+  const total = st.total || 0;
+  const cmdPart = total > 0 ? Math.round((st.done || 0) / total * 70) : 35;
+  switch (st.phase) {
+    case "connecting": return 10;
+    case "login": return 25;
+    case "running": return 25 + cmdPart;
+    case "saving": return 97;
+    case "done": return 100;
+    case "error": return Math.max(12, 25 + cmdPart);
+    default: return 0; // queued / off
+  }
+}
+
 function renderRun() {
   const root = document.getElementById("tab-run");
   // Targets appear only after a group is chosen (no accidental all-device
@@ -176,9 +194,21 @@ function renderRun() {
     : [];
   const rows = devs.map(d => {
     const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" };
-    const pbar = (st.total > 0)
-      ? `<div class="pbar" data-tip="${esc(t("{a} / {b} コマンド完了", { a: st.done || 0, b: st.total }))}"><i class="pf-${st.phase}" style="width:${Math.min(100, Math.round((st.done || 0) / st.total * 100))}%"></i></div><div class="pnum">${st.done || 0}/${st.total}</div>`
-      : "";
+    // One continuous bar per device across 接続 → ログイン → コマンド → 保存, so a
+    // row shows how far along it is even before the first command is sent (the
+    // bar used to appear only once commands started, leaving connect/login blank).
+    const pct = runPct(st);
+    const tip = st.total > 0
+      ? t("{a} / {b} コマンド完了", { a: st.done || 0, b: st.total })
+      : statusLabel(st.phase);
+    // The number line only means something once a command count is known; the
+    // phase itself is already spelled out beside the status dot. During a
+    // command's configured 待機 the seconds still to go ride alongside it, so a
+    // long pause reads as a countdown instead of a frozen row.
+    const wait = st.waitSec > 0 ? ` <span class="pwait">${esc(t("待機 あと{n}秒", { n: st.waitSec }))}</span>` : "";
+    const pnum = st.total > 0 ? `<div class="pnum">${st.done || 0}/${st.total}${wait}</div>` : "";
+    const pbar = st.phase === "off" ? ""
+      : `<div class="pbar" data-tip="${esc(tip)}"><i class="pf-${st.phase}" style="width:${pct}%"></i></div>${pnum}`;
     return `<tr>
       <td><input type="checkbox" data-enable="${esc(d.name)}" ${d.enabled ? "checked" : ""} ${running ? "disabled" : ""}></td>
       <td><span class="dot st-${st.phase === "off" ? "queued" : st.phase}"></span>${statusLabel(st.phase)}${pbar}</td>
@@ -222,7 +252,7 @@ function renderRun() {
       ${devs.length === 0 ? `<div class="empty">${esc(runGroupSel ? t("このグループに実行対象の機器がありません。機器一覧でチェックしてください。") : t("「グループで対象を選択…」から実行するグループを選んでください。"))}</div>`
         : `<table><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${devs.length && devs.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(t("全選択/全解除"))}"></th>
-           <th style="width:120px">${esc(t("状態"))}</th><th>${esc(t("ホスト名"))}</th><th style="width:140px">${esc(t("IPアドレス"))}</th>
+           <th style="width:170px">${esc(t("状態"))}</th><th>${esc(t("ホスト名"))}</th><th style="width:140px">${esc(t("IPアドレス"))}</th>
            <th style="width:120px">${esc(t("拠点名"))}</th><th style="width:190px">${esc(t("コマンドセット"))}</th>
            <th>${esc(t("メッセージ"))}</th><th></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
@@ -410,6 +440,9 @@ function wireEvents() {
     runState[ev.device] = { phase: ev.phase, message: ev.message,
       done: ev.phase === "running" ? (ev.done || 0) : prev.done,
       total: ev.phase === "running" ? (ev.total || 0) : prev.total,
+      // Seconds left of the command's configured 待機. Absent on every other
+      // event, which is what clears the countdown once the pause is over.
+      waitSec: ev.waitSec || 0,
       logPath: ev.phase === "done" ? ev.message : prev.logPath };
     const active = document.querySelector(".tab.active");
     if (active && active.id === "tab-run") renderRun();

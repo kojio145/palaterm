@@ -480,13 +480,20 @@ func DefaultCommandSets() []CommandSet {
 			c("get system arp", 1, 1),
 			c("diagnose ip arp list", 1, 1),
 		}},
+		// Verified against a real IX2105 (10.2.16). Nearly every show command
+		// here needs configure mode — operation mode answers "% ... Invalid
+		// command." even for "show running-config" — which the NEC IX profile's
+		// pager step enters (see internal/profile/builtin.go). The one genuine
+		// difference from Cisco is ARP: plain "show arp" returns "% Expects a
+		// subcommand", and the device's own show tech-support spells it
+		// "show arp neighbors".
 		{Name: "【サンプル】IXルータ", Commands: []Command{
 			c("show running-config", 10, 10),
 			c("show startup-config", 10, 10),
 			c("show version", 1, 1),
 			c("show interfaces", 5, 1),
 			c("show ip route", 1, 1),
-			c("show arp", 1, 1),
+			c("show arp neighbors", 1, 1),
 			c("show ntp", 1, 1),
 			c("show memory", 1, 1),
 			c("show processes", 1, 1),

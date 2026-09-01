@@ -140,12 +140,15 @@ tr:hover td { background: var(--bg-2); }
 .st-done { background: var(--ok); }
 .st-error { background: var(--err); }
 
-/* Password show/hide toggle */
+/* Password show/hide toggle. It sits on dark input backgrounds, so it carries
+   its own surface and border: a bare translucent glyph reads as a smudge
+   rather than as something clickable. */
 .eye-btn { position: absolute; right: 6px; bottom: 6px; width: 30px; height: 30px;
-  background: transparent; border: none; cursor: pointer; opacity: .5; font-size: 15px;
-  border-radius: 6px; line-height: 1; }
-.eye-btn:hover { opacity: 1; background: var(--bg-3); }
-.eye-btn.on { opacity: 1; }
+  background: var(--bg-3); border: 1px solid var(--border); cursor: pointer;
+  opacity: .9; font-size: 15px; border-radius: 6px; line-height: 1; padding: 0; }
+.eye-btn:hover { opacity: 1; border-color: var(--accent); }
+/* Unmasked: the accent border says the password is currently readable. */
+.eye-btn.on { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 
 /* Draggable group cards */
 .choice.dragging { opacity: .4; }
@@ -251,7 +254,14 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .pbar i { display: block; height: 100%; background: var(--run); transition: width .3s ease; }
 .pbar i.pf-done { background: var(--ok); }
 .pbar i.pf-error { background: var(--err); }
+.pbar i.pf-queued { background: #475569; }
+.pbar i.pf-connecting, .pbar i.pf-login { background: var(--warn); }
+/* Phases still waiting on the device pulse, so a stalled row reads as alive. */
+.pbar i.pf-connecting, .pbar i.pf-login, .pbar i.pf-running, .pbar i.pf-saving {
+  animation: pbar-pulse 1.6s ease-in-out infinite; }
+@keyframes pbar-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 .pnum { font-size: 10.5px; color: var(--text-dim); font-family: Consolas, monospace; margin-top: 2px; }
+.pwait { color: var(--warn); }
 
 /* Drag-reorder rows (multi-select on the handle) */
 .drag-handle { cursor: grab; color: var(--text-dim); text-align: center;

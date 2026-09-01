@@ -346,3 +346,127 @@ func TestReorderProfilesDrivesListOrder(t *testing.T) {
 			after[0].Key, after[len(after)-1].Key)
 	}
 }
+
+// TestNecIXPagerMigration covers the upgrade of a vault seeded before the NEC
+// IX pager fix. On that hardware "terminal length 0" is only valid inside
+// configure mode — in operation mode the device answers "% terminal --
+// Invalid command." and keeps paging, so the first long output hangs the run
+// at "--More--". Unlocking must repair a pristine profile and leave an edited
+// one untouched.
+func TestNecIXPagerMigration(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	// Rewind both NEC profiles to how they were seeded before the fix.
+	a.mu.Lock()
+	for i := range a.inv.CustomProfiles {
+		p := &a.inv.CustomProfiles[i]
+		if p.Key == "nec-ix" || p.Key == "nec-wa" {
+			p.MorePrompt = ""
+			p.Pager = []profile.Step{{Send: "terminal length 0"}}
+			p.Disconnect = []profile.Step{{Send: "exit"}}
+		}
+	}
+	a.mu.Unlock()
+	if err := a.persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	a2 := NewApp()
+	a2.vaultPath = a.vaultPath
+	if err := a2.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	find := func(app *App, key string) profile.Profile {
+		for _, p := range app.GetInventory().CustomProfiles {
+			if p.Key == key {
+				return p
+			}
+		}
+		t.Fatalf("profile %q missing", key)
+		return profile.Profile{}
+	}
+	ix := find(a2, "nec-ix")
+	if ix.MorePrompt != "--More--" {
+		t.Errorf("MorePrompt = %q, want --More--", ix.MorePrompt)
+	}
+	if len(ix.Pager) != 2 || ix.Pager[0].Send != "svintr-config" || ix.Pager[1].Send != "terminal length 0" {
+		t.Errorf("pager = %+v, want svintr-config then terminal length 0", ix.Pager)
+	}
+	if len(ix.Disconnect) != 2 {
+		t.Errorf("disconnect = %+v, want two exits (configure mode then session)", ix.Disconnect)
+	}
+	// The migration is keyed to nec-ix only: NEC WA is a different product and
+	// must not be dragged into configure mode alongside it.
+	if wa := find(a2, "nec-wa"); wa.MorePrompt != "" || len(wa.Pager) != 1 {
+		t.Errorf("nec-wa must be untouched, got morePrompt=%q pager=%+v", wa.MorePrompt, wa.Pager)
+	}
+
+	// A profile the user has edited keeps exactly what they wrote.
+	custom := []profile.Step{{Send: "my-own-pager-command"}}
+	a3 := NewApp()
+	a3.vaultPath = a.vaultPath
+	if err := a3.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	a3.mu.Lock()
+	for i := range a3.inv.CustomProfiles {
+		if a3.inv.CustomProfiles[i].Key == "nec-ix" {
+			a3.inv.CustomProfiles[i].MorePrompt = ""
+			a3.inv.CustomProfiles[i].Pager = custom
+		}
+	}
+	a3.mu.Unlock()
+	if err := a3.persist(); err != nil {
+		t.Fatal(err)
+	}
+	a4 := NewApp()
+	a4.vaultPath = a.vaultPath
+	if err := a4.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	if got := find(a4, "nec-ix"); len(got.Pager) != 1 || got.Pager[0].Send != "my-own-pager-command" {
+		t.Errorf("user-edited pager was overwritten: %+v", got.Pager)
+	}
+}
+
+// TestNecIXPagerMigrationFromInterim covers the vault of an intermediate build
+// that entered configure mode with plain "configure": that fails outright with
+// "% CONFIG process is occupied." whenever another session holds the mode, so
+// it is upgraded to svintr-config too.
+func TestNecIXPagerMigrationFromInterim(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	for i := range a.inv.CustomProfiles {
+		if a.inv.CustomProfiles[i].Key == "nec-ix" {
+			a.inv.CustomProfiles[i].MorePrompt = ""
+			a.inv.CustomProfiles[i].Pager = []profile.Step{{Send: "configure"}, {Send: "terminal length 0"}}
+		}
+	}
+	a.mu.Unlock()
+	if err := a.persist(); err != nil {
+		t.Fatal(err)
+	}
+	a2 := NewApp()
+	a2.vaultPath = a.vaultPath
+	if err := a2.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range a2.GetInventory().CustomProfiles {
+		if p.Key != "nec-ix" {
+			continue
+		}
+		if len(p.Pager) != 2 || p.Pager[0].Send != "svintr-config" {
+			t.Fatalf("pager = %+v, want svintr-config first", p.Pager)
+		}
+		if p.MorePrompt != "--More--" {
+			t.Fatalf("MorePrompt = %q, want --More--", p.MorePrompt)
+		}
+		return
+	}
+	t.Fatal("nec-ix profile missing")
+}

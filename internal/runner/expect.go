@@ -117,6 +117,19 @@ func (e *expecter) Expect(ctx context.Context, pattern string, timeout time.Dura
 	}
 }
 
+// Seen reports whether pattern is currently present in the unconsumed output,
+// without consuming it. It lets a caller notice that the device is already at
+// its operational prompt while it is still waiting for some other pattern.
+func (e *expecter) Seen(pattern string) bool {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return re.MatchString(e.buf.String())
+}
+
 // Drain discards any pending unmatched output, so the next Expect only sees
 // data that arrives afterward. The full transcript is unaffected. This clears
 // stale prompts left by prior commands before a new command is sent.

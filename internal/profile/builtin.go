@@ -142,16 +142,38 @@ var defaults = []Profile{
 		},
 	},
 	{
-		Key:    "nec-ix",
-		Name:   "NEC IX",
-		Prompt: "#",
+		// NEC IX puts "terminal length 0" — and "show running-config" — behind
+		// configure mode: in operation mode the device answers
+		// "% terminal -- Invalid command." and keeps paging. So the pager step
+		// enters configure first and stays there, which is how IX is operated
+		// (nothing is written without an explicit "write memory").
+		//
+		// It enters with "svintr-config" rather than "configure" because only
+		// one session may hold configure mode: "configure" fails outright with
+		// "% CONFIG process is occupied." when someone else is already in it,
+		// which would silently cost the pager and every show running-config of
+		// the batch. svintr-config takes it (dropping that session back to
+		// operation mode) — deliberate, and the reason it is worth knowing that
+		// a run can bump a colleague out of configure mode. Swap it for
+		// "configure" in OSタイプ設定 to run strictly non-intrusively.
+		//
+		// MorePrompt is the net for when neither works (a monitor-privilege
+		// account, or firmware without svintr-config): the run still completes,
+		// answering each --More-- with a space.
+		Key:        "nec-ix",
+		Name:       "NEC IX",
+		Prompt:     "#",
+		MorePrompt: "--More--",
 		Login: []Step{
 			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
 			{Expect: ">", Send: "enable"},
 		},
-		Pager:      []Step{{Send: "terminal length 0"}},
-		Disconnect: []Step{{Send: "exit"}},
+		Pager: []Step{
+			{Send: "svintr-config"},
+			{Send: "terminal length 0"},
+		},
+		Disconnect: []Step{{Send: "exit"}, {Send: "exit"}},
 	},
 	{
 		Key:    "nec-wa",

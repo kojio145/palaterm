@@ -184,6 +184,7 @@ const I18N_EN = {
   // ---- CSV dialogs ----
   "CSV書き出し": "Export CSV",
   "書き出す対象": "Scope",
+  "待機 あと{n}秒": "waiting {n}s",
   "全機器（{n}台）": "All devices ({n})",
   "{g}（{n}台）": "{g} ({n})",
   "※パスワードも平文で書き出されます。編集後は削除してください。":
