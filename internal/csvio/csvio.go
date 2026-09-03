@@ -6,8 +6,10 @@
 //	method:host:port:user:pass:auth:keyfile | method:host:...
 //
 // (up to model.MaxBastions hops, "|"-separated, outermost first). Empty trailing fields may be
-// omitted. A bastion's key passphrase and jump command are not part of the
-// encoding — set those in the app. Passwords are written in clear text —
+// omitted. A bastion's key passphrase, legacy-cipher flag and jump command are
+// not part of the encoding — set those in the app. The field order is fixed
+// with keyfile last so a Windows path's own colons survive the round trip, so
+// new fields cannot simply be appended. Passwords are written in clear text —
 // treat exported CSV as sensitive and delete it after re-import.
 package csvio
 

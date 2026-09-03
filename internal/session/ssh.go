@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -88,6 +89,39 @@ type DialOpts struct {
 	Legacy bool
 }
 
+// dialSSHClient connects and completes the SSH handshake, with the connect
+// timeout covering both.
+//
+// ssh.Dial would apply cfg.Timeout to the TCP connect alone and then let the
+// handshake run unbounded. Pointing SSH at a Telnet port is enough to expose
+// that: the TCP connect succeeds instantly, the far end never speaks SSH, and
+// the dial sat there for two minutes — until the *device* gave up — no matter
+// what connect timeout the user had set. In a batch that is one worker stuck
+// on a typo.
+//
+// The deadline is cleared once the handshake is through: from there the
+// session is long-lived and must not expire mid-command.
+func dialSSHClient(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, error) {
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		c.Close()
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
+}
+
 func dialSSH(host string, port int, user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (Session, error) {
 	var authMethods []ssh.AuthMethod
 
@@ -141,7 +175,7 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	}
 
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	client, err := ssh.Dial("tcp", addr, cfg)
+	client, err := dialSSHClient(addr, cfg, timeout)
 	if err != nil {
 		if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
 			return nil, fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
@@ -189,6 +223,13 @@ func loadPrivateKey(keyFile, passphrase string) (ssh.Signer, error) {
 	data, err := os.ReadFile(keyFile)
 	if err != nil {
 		return nil, fmt.Errorf("read key file: %w", err)
+	}
+	// A PuTTY .ppk is not an OpenSSH key, and on Windows plenty of people have
+	// one because PuTTY and Tera Term are what they already use. Left to the
+	// parser it comes back as "ssh: no key found", which says nothing about
+	// the format or what to do next.
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("PuTTY-User-Key-File")) {
+		return nil, fmt.Errorf("この鍵はPuTTY形式（.ppk）です。PuTTYgenで開き「Conversions → Export OpenSSH key」で変換したファイルを指定してください: %s", keyFile)
 	}
 	// Supports Ed25519, RSA, ECDSA (PEM/OpenSSH keys, passphrase-protected or
 	// not). DSA is not supported by design.

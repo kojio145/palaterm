@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.0 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.2 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 ## Features
 

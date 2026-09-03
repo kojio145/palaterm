@@ -287,6 +287,27 @@ func (a *App) Unlock(password string) error {
 			seed = true
 		}
 	}
+	// NEC IX has no ">" privilege level, so the escalation row copied from the
+	// Cisco profiles waits for a prompt the device never prints. An
+	// administrator reaches "#" directly and the row is merely skipped; a
+	// monitor user lands on "%", where neither ">" nor the profile's "#" ever
+	// appears, and the login fails after burning the whole command timeout.
+	// Drop the row where it is still the built-in one; a row the user has
+	// edited into something else is theirs.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key != "nec-ix" {
+			continue
+		}
+		n := len(p.Login)
+		if n == 0 {
+			continue
+		}
+		if last := p.Login[n-1]; last.Expect == ">" && last.Send == "enable" {
+			p.Login = p.Login[:n-1]
+			seed = true
+		}
+	}
 	// NEC IX keeps "terminal length 0" behind configure mode: run in operation
 	// mode the device answers "% terminal -- Invalid command." and keeps
 	// paging, so the first long output hangs the run at "--More--". It enters

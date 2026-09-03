@@ -55,6 +55,12 @@ type Bastion struct {
 	// only inside the encrypted vault, like passwords.
 	KeyPassphrase string `json:"keyPassphrase,omitempty"`
 
+	// LegacyAlgos offers this hop the old SSH KEX/ciphers, independently of the
+	// device's own setting: crypto policy belongs to the endpoint you are
+	// talking to, and an ancient jump host must not force the device behind it
+	// onto weak algorithms (nor the reverse).
+	LegacyAlgos bool `json:"legacyAlgos,omitempty"`
+
 	// JumpCommand overrides the command typed ON this hop's shell to reach the
 	// next hop (or the device). Placeholders: {user} {host} {port}. Empty means
 	// the standard "ssh user@host" / "telnet host" for the next hop's method.
@@ -283,6 +289,9 @@ func (d *Device) Validate() error {
 		if b.Method != BastionSSH && b.Method != BastionTelnet {
 			return fmt.Errorf("踏み台%d段目の接続方式が不正です", i+1)
 		}
+		if b.Port < 0 || b.Port > 65535 {
+			return fmt.Errorf("踏み台%d段目のポート番号が範囲外です: %d（0〜65535）", i+1, b.Port)
+		}
 	}
 	return nil
 }
@@ -480,7 +489,7 @@ func DefaultCommandSets() []CommandSet {
 			c("get system arp", 1, 1),
 			c("diagnose ip arp list", 1, 1),
 		}},
-		// Verified against a real IX2105 (10.2.16). Nearly every show command
+		// Verified against a real NEC IX series router. Nearly every show command
 		// here needs configure mode — operation mode answers "% ... Invalid
 		// command." even for "show running-config" — which the NEC IX profile's
 		// pager step enters (see internal/profile/builtin.go). The one genuine

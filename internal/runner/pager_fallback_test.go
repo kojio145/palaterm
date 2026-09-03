@@ -327,22 +327,46 @@ func TestCountdownReportsSecondsLeft(t *testing.T) {
 	}
 }
 
-// TestWrongPortHint covers the Telnet-at-port-22 mistake: switching a device's
-// method without moving its port leaves a Telnet client reading the SSH
-// identification string, which used to surface only as an expect timeout.
+// TestWrongPortHint covers the method/port mismatches the app names at error
+// time rather than leaving to a raw timeout or handshake failure: a Telnet
+// client on the SSH port, and SSH on the Telnet port. It must stay evidence-
+// based and say nothing about pairings that are perfectly fine, so the hint
+// never becomes noise the user learns to ignore.
 func TestWrongPortHint(t *testing.T) {
-	telnetOn22 := &model.Device{Name: "d", Conn: model.ConnTelnet, Port: 22}
-	sshBanner := "SSH-2.0-NEC-IX2105-ms-10.2.16\r\n"
+	sshBanner := "SSH-2.0-NEC-IX-ms-10.0.0\r\n"
 
-	if h := wrongPortHint(telnetOn22, sshBanner); h == "" || !strings.Contains(h, "22") {
-		t.Fatalf("expected a hint naming port 22, got %q", h)
+	cases := []struct {
+		name       string
+		dev        *model.Device
+		transcript string
+		wantPort   string // port the hint must name; empty means no hint at all
+	}{
+		{"telnet reading an SSH banner", &model.Device{Conn: model.ConnTelnet, Port: 22}, sshBanner, "23"},
+		{"telnet on 22, dial failed before any output", &model.Device{Conn: model.ConnTelnet, Port: 22}, "", "23"},
+		{"ssh on the telnet port", &model.Device{Conn: model.ConnSSH, Port: 23}, "", "22"},
+		{"genuine telnet login", &model.Device{Conn: model.ConnTelnet, Port: 23}, "\r\nlogin: ", ""},
+		{"ssh device seeing its own banner", &model.Device{Conn: model.ConnSSH, Port: 22}, sshBanner, ""},
+		// A deliberate non-standard port is the user's business, not ours.
+		{"telnet on a custom port", &model.Device{Conn: model.ConnTelnet, Port: 2323}, "", ""},
+		{"ssh on a custom port", &model.Device{Conn: model.ConnSSH, Port: 2222}, "", ""},
+		// Port 0 means "use the default for the method", which always agrees.
+		{"telnet with the default port", &model.Device{Conn: model.ConnTelnet, Port: 0}, "", ""},
+		{"ssh with the default port", &model.Device{Conn: model.ConnSSH, Port: 0}, "", ""},
+		{"serial is unrelated", &model.Device{Conn: model.ConnSerial}, "", ""},
 	}
-	// A real Telnet login must not be second-guessed.
-	if h := wrongPortHint(&model.Device{Name: "d", Conn: model.ConnTelnet, Port: 23}, "\r\nlogin: "); h != "" {
-		t.Fatalf("unexpected hint on a genuine telnet login: %q", h)
-	}
-	// SSH devices legitimately see that banner; saying anything there is noise.
-	if h := wrongPortHint(&model.Device{Name: "d", Conn: model.ConnSSH, Port: 22}, sshBanner); h != "" {
-		t.Fatalf("unexpected hint on an SSH device: %q", h)
+	for _, tc := range cases {
+		tc.dev.Name = "d"
+		h := wrongPortHint(tc.dev, tc.transcript)
+		if tc.wantPort == "" {
+			if h != "" {
+				t.Errorf("%s: expected no hint, got %q", tc.name, h)
+			}
+			continue
+		}
+		if h == "" {
+			t.Errorf("%s: expected a hint, got none", tc.name)
+		} else if !strings.Contains(h, tc.wantPort) {
+			t.Errorf("%s: hint should point at port %s, got %q", tc.name, tc.wantPort, h)
+		}
 	}
 }

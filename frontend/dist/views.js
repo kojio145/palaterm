@@ -295,6 +295,7 @@ function exportCsvDialog(defaultGroup) {
     <h3>${esc(t("CSV書き出し"))}</h3>
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
     <div class="muted" style="font-size:12px">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
+    <div class="muted" style="font-size:12px">${esc(t("※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。読み込むと空になるので、CSVは完全なバックアップではありません。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
@@ -324,6 +325,7 @@ function importCsvDialog(defaultGroup) {
     <div class="field" id="ci-grp-wrap"><label>${esc(t("追加先グループ"))}</label>
       <input id="ci-grp" list="ci-grp-list" value="${esc(defaultGroup || "")}" placeholder="${esc(t("グループ名"))}">
       <datalist id="ci-grp-list">${opts}</datalist></div>
+    <div class="muted" style="font-size:12px">${esc(t("※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。踏み台を使う機器は、読み込み後に編集画面で入れ直してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="ci-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="ci-ok">${esc(t("ファイルを選択して読み込む"))}</button></div>
   </div>`);
@@ -477,11 +479,13 @@ function editDevice(dev, preGroup) {
     rows.forEach(r => arr.push({
       host: r.querySelector(".b-host").value.trim(),
       method: r.querySelector(".b-method").value,
+      port: parseInt(r.querySelector(".b-port").value, 10) || 0,
       username: r.querySelector(".b-user").value,
       password: r.querySelector(".b-pw").value,
       authMethod: r.querySelector(".b-auth").value,
       keyFile: r.querySelector(".b-key").value,
       keyPassphrase: r.querySelector(".b-keypass").value,
+      legacyAlgos: r.querySelector(".b-legacy").checked,
       jumpCommand: r.querySelector(".b-jump").value.trim(),
     }));
     return arr;
@@ -493,12 +497,17 @@ function editDevice(dev, preGroup) {
           <b>${esc(t("{n}段目の踏み台", { n: i + 1 }))}</b>
           <button class="btn sm act-del" type="button" data-rm="${i}">${esc(t("削除"))}</button>
         </div>
-        <div class="grid-2">
+        <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))}</label><input class="b-host" value="${esc(b.host || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("接続方式"))}</label><select class="b-method">
             <option value="ssh" ${b.method === "ssh" ? "selected" : ""}>SSH</option>
             <option value="telnet" ${b.method === "telnet" ? "selected" : ""}>Telnet</option></select></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label>
+            <input class="b-port" type="number" value="${esc(String(b.port || (b.method === "telnet" ? 23 : 22)))}"></div>
         </div>
+        <div class="field" style="margin-bottom:8px${b.method === "telnet" ? ";display:none" : ""}" data-b-legacy>
+          <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
+            <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))}</label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
@@ -528,6 +537,17 @@ function editDevice(dev, preGroup) {
         const p = await App().PickKeyFile();
         if (p) btn.closest("[data-bastion-row]").querySelector(".b-key").value = p;
       } catch (e) { toast(t("選択失敗") + ": " + terr(e), "err"); }
+    });
+    // The port follows the method, as it does for the device itself: a hop left
+    // on 22 after a switch to Telnet reads the SSH banner and hangs. A port the
+    // user picked (anything but the two standard ones) survives. The legacy
+    // cipher option is SSH-only, so it hides for a Telnet hop.
+    bhost.querySelectorAll(".b-method").forEach(sel => sel.onchange = () => {
+      const row = sel.closest("[data-bastion-row]");
+      const portInp = row.querySelector(".b-port");
+      const p = parseInt(portInp.value, 10) || 0;
+      if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
+      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
     bhost.querySelectorAll(".b-auth").forEach(sel => sel.onchange = () => {

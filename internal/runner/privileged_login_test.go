@@ -16,7 +16,7 @@ import (
 	"github.com/kojio145/palaterm/internal/model"
 )
 
-// fakeIX is an in-process SSH server standing in for a NEC IX2105 whose
+// fakeIX is an in-process SSH server standing in for a NEC IX series router whose
 // account logs in already privileged: it lands on "IX-A#" and never shows the
 // ">" that the profile's escalation step waits for.
 func fakeIX(t *testing.T) (addr string, stop func()) {
@@ -91,7 +91,7 @@ func ixShell(ch ssh.Channel) {
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
 				if cmd == "show version" {
-					io.WriteString(ch, "\r\nIX Series IX2105 (magellan-sec) Software, Version 10.2.16\r\nIX-A#")
+					io.WriteString(ch, "\r\nIX Series (magellan-sec) Software, Version 10.0.0\r\nIX-A#")
 				} else {
 					io.WriteString(ch, "\r\nIX-A#")
 				}
@@ -139,7 +139,7 @@ func TestLoginOnAlreadyPrivilegedDevice(t *testing.T) {
 	if !res.Success {
 		t.Fatalf("login failed on already-privileged device: %s\n---transcript---\n%s", res.Error, res.Transcript)
 	}
-	if !strings.Contains(res.Transcript, "Version 10.2.16") {
+	if !strings.Contains(res.Transcript, "Version 10.0.0") {
 		t.Fatalf("show version output missing\n---transcript---\n%s", res.Transcript)
 	}
 	// The skip must be cheap: burning the 20s command timeout on the ">" that

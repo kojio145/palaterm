@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -151,11 +152,7 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 	}
 
 	// Clean logout (best effort), then unwind each bastion layer.
-	_ = r.runSteps(ctx, exp, prof.Disconnect, vars, 3*time.Second, false, "")
-	for range dev.ActiveBastions() {
-		_ = exp.Send("exit")
-		time.Sleep(150 * time.Millisecond)
-	}
+	r.disconnect(ctx, exp, prof, vars, len(dev.ActiveBastions()))
 
 	res.Transcript = exp.Transcript()
 	res.Success = res.Error == ""
@@ -168,6 +165,149 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 		r.emit(emit, dev.Name, PhaseError, res.Error)
 	}
 	return res
+}
+
+// wakeSerial coaxes a console line into showing where it stands.
+//
+// A serial console, unlike a network session, is not opened — it is joined. It
+// printed its prompt whenever it last had something to say, possibly days ago,
+// and says nothing at all to a program that only listens. The login steps then
+// wait out their timeout for a prompt that already came and went, and the run
+// ends with an empty log and a timeout naming the wrong thing.
+//
+// Enter makes it repeat itself: a login prompt, or the shell prompt of a
+// session someone left logged in. It is retried a few times because some
+// consoles spend the first keystroke waking up and print nothing for it.
+//
+// The line is erased first, because it may not be empty. Someone who typed
+// half a command and walked away leaves it in the input buffer, and a bare
+// Enter runs it — on the bench "show ru" came back as
+// "% ru -- Invalid command.", and a half-typed line in config mode would be
+// worse than a wasted round trip.
+//
+// Backspaces do the erasing, for the one property nothing else had: they
+// cannot submit. Ctrl+U, the readline way, did nothing at all on the NEC IX router we tested.
+// Ctrl+C, the network-CLI way, does abandon the line at a command prompt — but
+// at a login prompt the same device treats it as Enter, so each attempt to be
+// careful cost an extra failed login, and the stale prompts it left behind
+// made the profile's own expects match the wrong one. Backspace at a login
+// prompt just erases a half-typed username, which is the same thing it means
+// everywhere else.
+func wakeSerial(ctx context.Context, exp *expecter, prof profile.Profile) {
+	const (
+		tries = 3
+		wait  = time.Second
+	)
+	for i := 0; i < tries; i++ {
+		if err := exp.SendRaw(eraseLine); err != nil {
+			return
+		}
+		// Send, not SendRaw: the console counts CR and LF as two Enters, and
+		// the transport's own line ending is what gets that right.
+		if err := exp.Send(""); err != nil {
+			return
+		}
+		// Seen rather than Expect: the reply is the login banner the profile's
+		// own steps are about to match against, so it must not be consumed.
+		if waitSeen(ctx, exp, `\S`, wait) {
+			clearStaleLogin(ctx, exp, prof)
+			return
+		}
+	}
+}
+
+// eraseLine backs over anything typed on the current line. The width is a
+// guess at "longer than any half-typed command", and overshooting is free:
+// backspace at the start of an empty line does nothing at all.
+var eraseLine = strings.Repeat("\b", 120)
+
+// clearStaleLogin abandons a half-finished login that was already on the
+// console when we joined.
+//
+// A console is shared and has no session: whoever used it last may have typed
+// a username and walked away, leaving a password prompt that belongs to an
+// attempt we know nothing about. Answering it with our password fails, and the
+// run then reports bad credentials for credentials that are perfectly good.
+// An empty Enter lets that stale attempt fail on its own so the device returns
+// to its login prompt, which the profile can drive from the start.
+//
+// This only applies when the profile supplies a username: a device whose
+// console asks for a password and nothing else is at its real prompt, not a
+// stale one, and must not have it thrown away.
+func clearStaleLogin(ctx context.Context, exp *expecter, prof profile.Profile) {
+	sendsUsername := false
+	for _, st := range prof.Login {
+		if strings.Contains(st.Send, "{user}") {
+			sendsUsername = true
+			break
+		}
+	}
+	if !sendsUsername || !exp.Seen(rePassword) || exp.Seen(reLogin) {
+		return
+	}
+	if err := exp.Send(""); err != nil {
+		return
+	}
+	waitSeen(ctx, exp, reLogin, 3*time.Second)
+}
+
+// waitSeen polls until pattern is present in the unconsumed output, without
+// consuming it, and reports whether it turned up before the deadline.
+func waitSeen(ctx context.Context, exp *expecter, pattern string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if exp.Seen(pattern) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return false
+}
+
+// disconnectSettle bounds the wait for a hop to finish answering one logout
+// step. Teardown is best effort, so this stays short.
+const disconnectSettle = 2 * time.Second
+
+// disconnect logs out and unwinds the jump-host chain, letting each step land
+// before sending the next.
+//
+// Logout steps are pure sends with no prompt of their own to key off, and a
+// device changing mode reprints its prompt while it works. Fired back to back,
+// the second "exit" lands inside that reprint and loses characters: NEC IX
+// received it as "e" + prompt + "t" and answered "% t -- Ambiguous command.",
+// leaving the session logged in and the jump host's inner session dangling.
+//
+// The settle happens BEFORE each send rather than after, so the final logout —
+// which is answered by a closed connection, never a prompt — costs nothing.
+func (r *Runner) disconnect(ctx context.Context, exp *expecter, prof profile.Profile, vars profile.Vars, hops int) {
+	sends := make([]string, 0, len(prof.Disconnect)+hops)
+	for _, st := range prof.Disconnect {
+		if !st.Sends() {
+			continue
+		}
+		if st.SendRaw != "" {
+			sends = append(sends, profile.Expand(st.SendRaw, vars))
+			continue
+		}
+		sends = append(sends, profile.Expand(st.Send, vars))
+	}
+	// One "exit" per jump host, to leave the shell we typed the jump command on.
+	for i := 0; i < hops; i++ {
+		sends = append(sends, "exit")
+	}
+
+	for i, s := range sends {
+		if i > 0 {
+			_ = r.waitPrompt(ctx, exp, prof, disconnectSettle)
+		}
+		if err := exp.Send(s); err != nil {
+			return // the far end is already gone; nothing left to unwind
+		}
+	}
 }
 
 // Connect dials the device (through any jump-host chain), runs the OS profile
@@ -201,9 +341,19 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 		sess, err = dialCtx(ctx, func() (session.Session, error) { return session.DialDirect(dev, connTimeout, r.dialOpts(dev)) })
 	}
 	if err != nil {
+		// A dial that fails on a method/port pairing that cannot work is worth
+		// saying so about: the transport error alone reads as an unreachable
+		// device. Nothing has been received yet, so the port is the evidence.
+		if hint := wrongPortHint(dev, ""); hint != "" && len(bastions) == 0 {
+			return nil, prof, fmt.Errorf("%w — %s", err, errors.New(hint))
+		}
 		return nil, prof, err
 	}
 	exp := newExpecter(sess)
+
+	if dev.Conn == model.ConnSerial {
+		wakeSerial(ctx, exp, prof)
+	}
 
 	if len(bastions) > 0 {
 		if err := r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
@@ -222,6 +372,9 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
 			return exp, prof, errors.New(hint)
 		}
+		if backAtLogin(exp.Transcript()) {
+			return exp, prof, errors.New(errAuthRefused)
+		}
 		return exp, prof, fmt.Errorf("login: %w", err)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
@@ -230,6 +383,19 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	// behavior — no second wait that would hang.
 	if n := len(prof.Login); n == 0 || prof.Login[n-1].Sends() {
 		if err := r.waitPrompt(ctx, exp, prof, cmdTimeout); err != nil {
+			// The same three explanations as above, and for the same reason:
+			// which of the login steps happens to be the one that times out
+			// depends on the profile, so a diagnosis attached to only one of
+			// them disappears the moment a profile changes shape.
+			if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
+				return exp, prof, errors.New(hint)
+			}
+			if backAtLogin(exp.Transcript()) {
+				return exp, prof, errors.New(errAuthRefused)
+			}
+			if hint := promptMismatchHint(prof, exp.Transcript()); hint != "" {
+				return exp, prof, errors.New(hint)
+			}
 			return exp, prof, fmt.Errorf("login: waiting for prompt: %w", err)
 		}
 	}
@@ -332,16 +498,84 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 // whole device fails — a profile mistake should cost tidiness, not the run.
 const genericMore = `(?i)-{2,}\s*\(?\s*more`
 
-// wrongPortHint names the mistake behind a login that never got a prompt when
-// the evidence is unambiguous. A Telnet client aimed at port 22 reads the SSH
-// identification string the server opens with and then waits out the timeout
-// for a login prompt that is never coming — which otherwise surfaces only as
-// a generic expect timeout, pointing at the profile rather than the port.
+// promptMismatchHint names the case where the login worked and the device is
+// waiting at a prompt — just not the one this OS type expects.
+//
+// It happens when the account has a different privilege level than the profile
+// assumes (a NEC IX monitor user sits at "%" where an administrator gets "#"),
+// or when the device is set to the wrong OS type entirely. Both used to end as
+// "waiting for prompt: expect timeout", which describes what the code was
+// doing rather than what the device was showing — and the device was showing
+// the answer the whole time.
+func promptMismatchHint(prof profile.Profile, transcript string) string {
+	tail := transcript
+	const tailLen = 200
+	if len(tail) > tailLen {
+		tail = tail[len(tail)-tailLen:]
+	}
+	m := reIdlePrompt.FindStringSubmatch(tail)
+	if m == nil {
+		return "" // nothing prompt-shaped at the end: the device is not idle
+	}
+	want, err := regexp.Compile("(?:" + prof.Prompt + `)[ \t]*\z`)
+	if err != nil || want.MatchString(tail) {
+		return "" // the profile's own prompt: not a mismatch, some other fault
+	}
+	return fmt.Sprintf(
+		"ログインはできましたが、機器は「%s」を表示していて、OSタイプ「%s」が待つプロンプト「%s」になりません。機器の権限レベル（昇格が必要か）と、機器の編集画面のOSタイプ設定を確認してください",
+		m[1], prof.Name, prof.Prompt)
+}
+
+// reIdlePrompt matches a device sitting at some prompt, whatever level it is.
+var reIdlePrompt = regexp.MustCompile(`([>%$#\]])[ \t]*\z`)
+
+// errAuthRefused is what a device asking for a username again actually means.
+const errAuthRefused = "認証に失敗しました。ユーザー名とパスワードを確認してください"
+
+// backAtLogin reports that the device is sitting at its login prompt again.
+//
+// A refused password is the commonest way a run fails, and it used to surface
+// as "login: waiting for \">\": expect timeout" — the profile's next step
+// timing out on a prompt that was never going to come. That names the step we
+// happened to be on, not the reason, and sends the reader looking at the OS
+// profile instead of at the credentials.
+//
+// Only the tail counts, as it does for the operational prompt: every login
+// transcript contains a login prompt near the top, and matching that would
+// call any failure an auth failure.
+func backAtLogin(transcript string) bool {
+	const tailLen = 200
+	tail := transcript
+	if len(tail) > tailLen {
+		tail = tail[len(tail)-tailLen:]
+	}
+	return reBackAtLogin.MatchString(tail)
+}
+
+var reBackAtLogin = regexp.MustCompile(`(?i)(login|username):\s*\z`)
+
+// wrongPortHint names the mistake behind a failed connection when the method
+// and the port disagree, so the run view says what to go and check instead of
+// leaving a raw timeout or handshake error to be interpreted.
+//
+// It fires only on evidence, never as a guess on any failure: a Telnet client
+// aimed at port 22 reads the SSH identification string the server opens with
+// and then waits out the timeout for a login prompt that is never coming, and
+// SSH on port 23 cannot complete a handshake at all. Both look like the device
+// is at fault. transcript is what the device actually said (empty when the
+// dial itself failed).
 func wrongPortHint(dev *model.Device, transcript string) string {
-	if dev.Conn == model.ConnTelnet && strings.HasPrefix(strings.TrimSpace(transcript), "SSH-") {
+	port := dev.EffectivePort()
+	switch {
+	case dev.Conn == model.ConnTelnet &&
+		(strings.HasPrefix(strings.TrimSpace(transcript), "SSH-") || port == 22):
 		return fmt.Sprintf(
-			"Telnetで接続しましたが、ポート%dはSSHサーバーです。機器のポートを23に直すか、接続方式をSSHに戻してください",
-			dev.EffectivePort())
+			"接続方式=Telnet ですが、ポート%dはSSH用です。機器の編集画面でポートを23に直すか、接続方式をSSHに変更してください",
+			port)
+	case dev.Conn == model.ConnSSH && port == 23:
+		return fmt.Sprintf(
+			"接続方式=SSH ですが、ポート%dはTelnet用です。機器の編集画面でポートを22に直すか、接続方式をTelnetに変更してください",
+			port)
 	}
 	return ""
 }

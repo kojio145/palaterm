@@ -28,7 +28,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	// Log into the first hop if it was reached by Telnet (SSH already authed).
 	if bastions[0].Method == model.BastionTelnet {
 		if err := loginHop(ctx, exp, bastions[0], timeout); err != nil {
-			return fmt.Errorf("bastion 1 login: %w", err)
+			return fmt.Errorf("踏み台1段目のログインに失敗: %w", err)
 		}
 	} else {
 		// Wait until the first SSH bastion's shell prompt appears.
@@ -40,10 +40,10 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	for i := 1; i < len(bastions); i++ {
 		next := bastions[i]
 		if err := jumpTo(ctx, exp, bastions[i-1].JumpCommand, next.Method, next.Host, next.Username, next.Port, timeout); err != nil {
-			return fmt.Errorf("hop to bastion %d: %w", i+1, err)
+			return fmt.Errorf("踏み台%d段目へのジャンプに失敗: %w", i+1, err)
 		}
 		if err := loginHop(ctx, exp, next, timeout); err != nil {
-			return fmt.Errorf("bastion %d login: %w", i+1, err)
+			return fmt.Errorf("踏み台%d段目のログインに失敗: %w", i+1, err)
 		}
 	}
 
@@ -56,7 +56,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	}
 	last := bastions[len(bastions)-1]
 	if err := jumpTo(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, timeout); err != nil {
-		return fmt.Errorf("jump to device: %w", err)
+		return fmt.Errorf("機器へのジャンプに失敗: %w", err)
 	}
 	return nil
 }
@@ -97,6 +97,12 @@ func buildJumpCommand(template string, method model.BastionMethod, host, user st
 }
 
 // loginHop answers the login/password prompts for a bastion we just reached.
+//
+// Reaching the hop's shell prompt afterwards is required, not optional: a hop
+// that rejects the credentials prints its login prompt again, and continuing
+// regardless types the jump command in as a username. The run then fails much
+// later, on the device's prompt, with a timeout that says nothing about the
+// hop whose password was actually wrong.
 func loginHop(ctx context.Context, exp *expecter, b model.Bastion, timeout time.Duration) error {
 	if b.Username != "" {
 		if err := exp.Expect(ctx, reLogin, timeout); err == nil {
@@ -106,7 +112,13 @@ func loginHop(ctx context.Context, exp *expecter, b model.Bastion, timeout time.
 	if err := exp.Expect(ctx, rePassword, timeout); err == nil {
 		_ = exp.Send(b.Password)
 	}
-	// Settle on the bastion's shell prompt before continuing.
-	_ = exp.Expect(ctx, reShellDone, timeout)
+	// Settle on the bastion's shell prompt before continuing. A login prompt
+	// coming back instead is the hop saying no.
+	if err := exp.Expect(ctx, reShellDone, timeout); err != nil {
+		if exp.Seen(reLogin) {
+			return fmt.Errorf("%s がログインを拒否しました（ユーザー名・パスワードを確認してください）", b.Host)
+		}
+		return fmt.Errorf("%s のログイン後にプロンプトが出ませんでした: %w", b.Host, err)
+	}
 	return nil
 }

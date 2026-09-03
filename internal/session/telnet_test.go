@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kojio145/palaterm/internal/model"
 )
 
 // drainFor accumulates everything the client sends within d. The client writes
@@ -31,7 +33,7 @@ func drainFor(conn net.Conn, d time.Duration) []byte {
 	return acc
 }
 
-// fakeIXTelnet stands in for a NEC IX2105 telnet server. It opens with
+// fakeIXTelnet stands in for a NEC IX router telnet server. It opens with
 // "IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD" and — like the real device —
 // hangs up on a client that refuses both, instead of falling back to line
 // mode. Whatever the client replied is reported back to the test.
@@ -74,7 +76,7 @@ func fakeIXTelnet(t *testing.T) (addr string, replies func() []byte, stop func()
 }
 
 // TestTelnetAcceptsEchoAndSuppressGoAhead pins the negotiation policy. The
-// client used to refuse every option, which a NEC IX2105 answers by closing
+// client used to refuse every option, which a NEC IX router answers by closing
 // the connection as soon as a username arrives — the login then failed with
 // nothing logged but the device's own "login: " prompt.
 func TestTelnetAcceptsEchoAndSuppressGoAhead(t *testing.T) {
@@ -150,6 +152,32 @@ func TestTelnetRefusesOtherOptions(t *testing.T) {
 	} {
 		if !strings.Contains(string(answer), string(seq)) {
 			t.Errorf("client did not reply %s; sent % x", name, answer)
+		}
+	}
+}
+
+// TestBastionUsesItsOwnLegacySetting pins that a jump host's algorithm policy
+// comes from the hop, not from the device behind it. The two are different
+// machines: an old jump host must not drag the device onto weak algorithms,
+// and a device needing them must not weaken the hop.
+func TestBastionUsesItsOwnLegacySetting(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		hopLegacy bool
+		devOpts   DialOpts // what the runner passes in, derived from the device
+		want      bool
+	}{
+		{"hop off, device on", false, DialOpts{Legacy: true}, false},
+		{"hop on, device off", true, DialOpts{Legacy: false}, true},
+		{"both off", false, DialOpts{Legacy: false}, false},
+		{"both on", true, DialOpts{Legacy: true}, true},
+	} {
+		// Dial a port nothing is listening on: the connection fails, but the
+		// options are resolved before that, which is what is under test.
+		b := &model.Bastion{Host: "127.0.0.1", Port: 1, Method: model.BastionSSH, LegacyAlgos: tc.hopLegacy}
+		got := effectiveBastionLegacy(b, tc.devOpts)
+		if got != tc.want {
+			t.Errorf("%s: legacy=%v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

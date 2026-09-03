@@ -164,10 +164,14 @@ var defaults = []Profile{
 		Name:       "NEC IX",
 		Prompt:     "#",
 		MorePrompt: "--More--",
+		// No privilege-escalation row: IX has no ">" level to escalate FROM.
+		// An administrator lands on "#" and a monitor user on "%", and "enable"
+		// on IX does not mean "become privileged" at all — it enters config
+		// mode, which the pager rows below already do properly. The row was
+		// inherited from the Cisco profiles and only ever cost a timeout.
 		Login: []Step{
 			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
-			{Expect: ">", Send: "enable"},
 		},
 		Pager: []Step{
 			{Send: "svintr-config"},

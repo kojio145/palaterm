@@ -88,3 +88,39 @@ func TestImportCapsBastionsAtMax(t *testing.T) {
 		t.Fatalf("expected chain capped at %d, got %d", model.MaxBastions, len(out[0].Bastions))
 	}
 }
+
+// TestBastionPortSurvivesCSV pins the port through an export/import cycle. The
+// editor dialog had no port field for a long time, so a hop on a non-standard
+// port could only be set via CSV — and was silently reset to 0 the next time
+// the device was opened and saved. The field now exists in both places; this
+// keeps the CSV half honest.
+func TestBastionPortSurvivesCSV(t *testing.T) {
+	in := []model.Device{{
+		Name: "d1", Host: "10.0.0.1", Conn: model.ConnSSH, OSType: "cisco-ios", Enabled: true,
+		Bastions: []model.Bastion{
+			{Host: "10.9.9.9", Method: model.BastionSSH, Port: 2222, Username: "jump", Password: "pw"},
+			{Host: "10.9.9.8", Method: model.BastionTelnet, Port: 2323, Username: "j2"},
+		},
+	}}
+	blob, err := Export(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Import(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("device count = %d, want 1", len(out))
+	}
+	got := out[0].ActiveBastions()
+	if len(got) != 2 {
+		t.Fatalf("bastion count = %d, want 2", len(got))
+	}
+	if got[0].Port != 2222 {
+		t.Errorf("hop 1 port = %d, want 2222", got[0].Port)
+	}
+	if got[1].Port != 2323 {
+		t.Errorf("hop 2 port = %d, want 2323", got[1].Port)
+	}
+}

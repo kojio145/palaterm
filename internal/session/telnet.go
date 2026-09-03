@@ -124,7 +124,7 @@ func (t *telnetSession) decode(raw []byte) []byte {
 // echo and suppress-go-ahead, the pair that puts the session in the ordinary
 // character-at-a-time mode network gear expects.
 //
-// Refusing those two is not merely suboptimal — a NEC IX2105 opens with
+// Refusing those two is not merely suboptimal — a NEC IX router opens with
 // "IAC WILL ECHO, IAC WILL SUPPRESS-GO-AHEAD" and closes the connection the
 // moment a username arrives on a session where the client said DONT to both.
 // The login then failed with nothing in the log but the device's "login: "
