@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PalaTerm - 複数のネットワーク機器へ SSH / Telnet / シリアルで一括ログイン・並列コマンド実行（Windows）</title>
+<meta name="description" content="PalaTerm は Cisco・JUNOS・FortiGate・NEC IX・Yamaha RTX など複数台のネットワーク機器に SSH / Telnet / シリアルで同時ログインし、コマンドを一括実行してログを自動保存する Windows 用のポータブルツールです。Tera Term マクロや手作業のログ採取の置き換えに。インストール不要・外部通信ゼロ・MIT ライセンス。">
+<link rel="canonical" href="https://kojio145.github.io/palaterm/">
+<meta property="og:title" content="PalaTerm - ネットワーク機器への一括ログイン・並列コマンド実行ツール">
+<meta property="og:description" content="複数の NW 機器に SSH / Telnet / シリアルで同時ログインし、コマンド一括実行とログ自動保存を行う Windows 用ツール。インストール不要・外部通信ゼロ。">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://kojio145.github.io/palaterm/">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"PalaTerm","operatingSystem":"Windows 10, Windows 11","applicationCategory":"DeveloperApplication","softwareVersion":"1.3","license":"https://opensource.org/licenses/MIT","url":"https://kojio145.github.io/palaterm/","downloadUrl":"https://github.com/kojio145/palaterm/releases/latest","description":"Batch SSH/Telnet/Serial login and parallel command execution tool for network devices.","offers":{"@type":"Offer","price":"0","priceCurrency":"JPY"}}
+</script>
+<style>
+  :root { --ground:#f6f8fb; --panel:#fff; --panel-2:#eef2f7; --ink:#1b2430; --ink-soft:#4c5a6b; --ink-faint:#7a889a; --line:#dde4ec; --accent:#2563eb; --accent-soft:#e5edff; }
+  @media (prefers-color-scheme: dark) { :root { --ground:#0f141b; --panel:#171e28; --panel-2:#1f2835; --ink:#e6ebf2; --ink-soft:#aab6c5; --ink-faint:#7a889a; --line:#2a3542; --accent:#6ea0ff; --accent-soft:#1c2a45; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:"Segoe UI","Hiragino Sans","Noto Sans JP",system-ui,sans-serif; line-height:1.7; }
+  main { max-width:860px; margin:0 auto; padding:48px 20px 64px; }
+  h1 { font-size:2.2rem; margin:0 0 6px; letter-spacing:.01em; }
+  .tag { color:var(--ink-soft); font-size:1.05rem; margin:0 0 24px; }
+  .lead { font-size:1.08rem; margin:0 0 28px; }
+  .cta { display:flex; flex-wrap:wrap; gap:12px; margin:0 0 36px; }
+  .btn { display:inline-block; padding:12px 20px; border-radius:8px; text-decoration:none; font-weight:600; border:1px solid var(--line); background:var(--panel); color:var(--ink); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .note { color:var(--ink-faint); font-size:.9rem; margin:-24px 0 32px; }
+  h2 { font-size:1.25rem; margin:36px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  ul { padding-left:1.3em; } li { margin:4px 0; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .card b { display:block; margin-bottom:4px; }
+  code { background:var(--panel-2); padding:1px 5px; border-radius:4px; font-size:.92em; }
+  footer { margin-top:48px; color:var(--ink-faint); font-size:.85rem; border-top:1px solid var(--line); padding-top:16px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>PalaTerm</h1>
+  <p class="tag">複数のネットワーク機器へ SSH / Telnet / シリアルで一括ログインし、コマンドを並列実行する Windows 用ツール</p>
+  <p class="lead">
+    数十台のルータ・スイッチ・ファイアウォールに同時ログインしてログを採取し、コマンドセットを一括実行し、設定変更を並列で流し込む。
+    PalaTerm は Tera Term マクロや手作業のログ取得を置き換えるために作った、ネットワークエンジニア向けの一括ログインツールです。
+    単一のポータブル exe で動き、インストールは不要です。
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/kojio145/palaterm/releases/latest">PalaTerm.exe をダウンロード（GitHub Releases）</a>
+    <a class="btn" href="manual.html">使い方マニュアル</a>
+    <a class="btn" href="https://github.com/kojio145/palaterm">ソースコード（GitHub）</a>
+  </div>
+  <p class="note">現在 v1.3（β）。Windows 10 / 11（x64）。未署名のため初回起動時に SmartScreen の警告が出ることがあります（「詳細情報」から「実行」）。MIT ライセンス・商用利用可。</p>
+
+  <h2>できること</h2>
+  <div class="grid">
+    <div class="card"><b>同時ログイン</b>機器リストの全台へ並列接続。同時実行数は調整できます。</div>
+    <div class="card"><b>3 つの接続方式</b>SSH / Telnet / シリアルコンソール（COM ポート自動探索）。</div>
+    <div class="card"><b>踏み台（多段）対応</b>踏み台サーバ経由の多段接続。SSH 公開鍵認証（Ed25519 / RSA / ECDSA、パスフレーズ付き鍵）に対応。</div>
+    <div class="card"><b>ログイン自動化</b>Cisco IOS / ASA、JUNOS、FortiGate、HPE、NEC IX、Yamaha RTX など 14 種の OS プロファイル内蔵。enable 昇格やページャ無効化まで自動。プロファイルは編集・自作可。</div>
+    <div class="card"><b>コマンド一括実行</b>名前付きコマンドセットを機器ごとに割り当てて一括実行。</div>
+    <div class="card"><b>ログ自動保存</b><code>{host}_Config_{date}_{time}.txt</code> 形式で保存。命名はプレースホルダで変更可。</div>
+    <div class="card"><b>認証情報の暗号化保存</b>マスターパスワードによる AES-256-GCM 暗号化。平文では保存しません。</div>
+    <div class="card"><b>対話接続</b>1 台へのログイン自動化を済ませてから内蔵ターミナル（xterm.js）で手動操作に引き継げます。</div>
+    <div class="card"><b>外部通信ゼロ</b>テレメトリなし・自動更新なし。閉域の社内ネットワークでの利用を想定した設計です。</div>
+  </div>
+
+  <h2>こんな場面に</h2>
+  <ul>
+    <li>作業前後で数十台の <code>show running-config</code> / <code>show tech-support</code> を一度に取得して差分を取りたい</li>
+    <li>同じ設定変更を複数台に並列で投入し、結果ログを機器ごとに残したい</li>
+    <li>Tera Term マクロの保守が限界で、機種ごとのログイン手順（enable・ページャ）を GUI で管理したい</li>
+    <li>踏み台を 2 段挟んだ先の機器にも同じ手順で入りたい</li>
+  </ul>
+
+  <h2>使い方</h2>
+  <ol>
+    <li><a href="https://github.com/kojio145/palaterm/releases/latest">Releases</a> から <code>PalaTerm.exe</code> をダウンロードして起動（インストール不要）</li>
+    <li>初回にマスターパスワードを設定し、機器リストとコマンドセットを登録</li>
+    <li>実行タブで対象機器とコマンドセットを選んで一括実行。ログは exe と同じフォルダの <code>logs/</code> に保存されます</li>
+  </ol>
+  <p>詳しくは <a href="manual.html">使い方マニュアル</a>、<a href="https://github.com/kojio145/palaterm/blob/main/docs/USAGE.md">USAGE.md</a>、<a href="https://github.com/kojio145/palaterm/blob/main/docs/SECURITY.md">セキュリティレビュー記録</a> を参照してください。</p>
+
+  <h2>English</h2>
+  <p>PalaTerm is a batch login tool for network engineers: parallel SSH / Telnet / serial access to many network devices, batch command execution and automatic log saving, shipped as a single portable Windows executable. A Tera Term macro alternative. See the <a href="https://github.com/kojio145/palaterm">GitHub repository</a> for the English README.</p>
+
+  <footer>
+    PalaTerm is an open-source project (MIT License) by KJO. This is a spare-time project; issues are read but answered on an irregular schedule.<br>
+    免責: 本ツールはネットワーク機器への接続・設定変更を自動化します。利用により生じたいかなる損害についても作者は責任を負いません。本番機器に使う前にラボで検証し、所属組織のルールを確認してください。
+  </footer>
+</main>
+</body>
+</html>

@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://kojio145.github.io/palaterm/sitemap.xml

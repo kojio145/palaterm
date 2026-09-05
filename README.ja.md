@@ -4,8 +4,9 @@
 
 English version: [README.md](README.md)
 
-複数のネットワーク機器に同時ログインし、ログ取得・コマンド一括実行・設定変更を行うWindows用ツールです。
-単一のポータブルexeで動作し、インストール不要です。
+複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
+ログ取得・コマンド一括実行・設定変更を並列で行うWindows用ツールです。Tera Term マクロや手作業のログ採取の置き換えを想定しています。
+単一のポータブルexeで動作し、インストール不要です。紹介ページ: https://kojio145.github.io/palaterm/
 
 > **開発状況: v1.3（β）。** 動作しますが荒削りな部分があります。Issueでのフィードバック歓迎です。
 
