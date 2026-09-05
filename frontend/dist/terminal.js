@@ -65,7 +65,10 @@ async function bootTerminalWindow() {
   let connecting = true;
   rt().EventsOn("term:progress", ev => {
     if (!connecting) return;
-    stateEl.textContent = t("接続中… ({a}/{b}秒)", { a: ev.elapsed, b: ev.total });
+    // Past the bound only the elapsed time is honest to show.
+    stateEl.textContent = ev.elapsed > ev.total
+      ? t("接続中… ({a}秒)", { a: ev.elapsed })
+      : t("接続中… ({a}/{b}秒)", { a: ev.elapsed, b: ev.total });
   });
   rt().EventsOn("term:ready", ev => {
     connecting = false;

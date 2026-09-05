@@ -122,9 +122,19 @@ func (t *Term) connect(pw string) {
 
 	// Tick elapsed/total seconds to the UI while connecting, so a slow or
 	// failing connection shows progress instead of a silent wait.
+	//
+	// Connect() covers the dial AND the login, so the bound is the sum of the
+	// two timeouts. With only the connect timeout as the total, a console that
+	// opened instantly and then never answered counted up to "39/10秒" — past
+	// the end of its own gauge — before the login timeout finally fired.
 	total := inv.Settings.ConnectTimeout
 	if total <= 0 {
 		total = 20
+	}
+	if ct := inv.Settings.CommandTimeout; ct > 0 {
+		total += ct
+	} else {
+		total += 30
 	}
 	progressDone := make(chan struct{})
 	go func() {
@@ -147,6 +157,14 @@ func (t *Term) connect(pw string) {
 	close(progressDone)
 	if err != nil {
 		if exp != nil {
+			// Show what the device said before the error line, the way a
+			// successful connect replays the login. An error alone ("認証に
+			// 失敗しました") leaves the reader guessing which prompt the
+			// device was really at; the transcript is the evidence.
+			if tr := exp.Transcript(); tr != "" {
+				runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.deviceArg,
+					Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(tr, dev)))})
+			}
 			exp.Close()
 		}
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: err.Error()})

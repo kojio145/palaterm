@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.2";
+const APP_VERSION = "1.3";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -406,4 +406,11 @@ function profileName(key) {
   return p ? p.name : key;
 }
 
-boot();
+// Boot once every script has run. app.js is loaded before views*.js and
+// terminal.js, and boot() calls straight into them: the main window happened
+// to survive because its first call into views.js sits behind an await, but
+// the interactive window's bootTerminalWindow() (terminal.js) was reached
+// synchronously and did not exist yet — every 対話接続 window opened as a bare
+// lock card with nothing on it.
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+else boot();

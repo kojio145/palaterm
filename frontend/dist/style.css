@@ -83,6 +83,11 @@ html, body {
 
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }
+/* Fixed layout so the header widths hold and .clip cells truncate. Without it a
+   single unbreakable value (a saved log's full path in the run tab's message
+   column) claims the width and squeezes the status column down to a few pixels,
+   stacking its text vertically and shrinking the progress bar to a dot. */
+table.fixed { table-layout: fixed; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
 th { color: var(--text-dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
 tr:hover td { background: var(--bg-2); }

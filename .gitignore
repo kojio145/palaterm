@@ -20,6 +20,9 @@ vault.enc
 /logs/
 *.log
 
+# Python tooling
+__pycache__/
+
 # OS / editor
 Thumbs.db
 .DS_Store

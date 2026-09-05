@@ -250,11 +250,11 @@ function renderRun() {
     </div>
     <div class="panel">
       ${devs.length === 0 ? `<div class="empty">${esc(runGroupSel ? t("このグループに実行対象の機器がありません。機器一覧でチェックしてください。") : t("「グループで対象を選択…」から実行するグループを選んでください。"))}</div>`
-        : `<table><thead><tr>
+        : `<table class="fixed"><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${devs.length && devs.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(t("全選択/全解除"))}"></th>
-           <th style="width:170px">${esc(t("状態"))}</th><th>${esc(t("ホスト名"))}</th><th style="width:140px">${esc(t("IPアドレス"))}</th>
+           <th style="width:170px">${esc(t("状態"))}</th><th style="width:200px">${esc(t("ホスト名"))}</th><th style="width:140px">${esc(t("IPアドレス"))}</th>
            <th style="width:120px">${esc(t("拠点名"))}</th><th style="width:190px">${esc(t("コマンドセット"))}</th>
-           <th>${esc(t("メッセージ"))}</th><th></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
+           <th>${esc(t("メッセージ"))}</th><th style="width:150px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
 
   document.getElementById("btn-run").onclick = startRun;

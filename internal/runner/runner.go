@@ -209,7 +209,16 @@ func wakeSerial(ctx context.Context, exp *expecter, prof profile.Profile) {
 		}
 		// Seen rather than Expect: the reply is the login banner the profile's
 		// own steps are about to match against, so it must not be consumed.
-		if waitSeen(ctx, exp, `\S`, wait) {
+		//
+		// A reply is printable text, not a bell. NEC IX answers every
+		// backspace on an empty line with BEL (0x07), so the erase above
+		// comes back as 120 bells before the Enter's real answer ("Password:"
+		// on a console sitting at its login prompt). Counting the bells as the
+		// console answering moved on before "Password:" arrived: the stale-
+		// login clearing saw nothing to clear, the profile's "login:" wait
+		// timed out, and the password was typed as the answer to an empty
+		// username — "認証に失敗" on a console with perfectly good credentials.
+		if waitSeen(ctx, exp, consoleText, wait) {
 			clearStaleLogin(ctx, exp, prof)
 			return
 		}
@@ -220,6 +229,11 @@ func wakeSerial(ctx context.Context, exp *expecter, prof profile.Profile) {
 // guess at "longer than any half-typed command", and overshooting is free:
 // backspace at the start of an empty line does nothing at all.
 var eraseLine = strings.Repeat("\b", 120)
+
+// consoleText is what counts as the console having answered: a printable
+// character. Whitespace is the echo of our own Enter, and BEL (0x07) is what
+// NEC IX sends for every backspace that has nothing to erase.
+const consoleText = `[^\s\x07]`
 
 // clearStaleLogin abandons a half-finished login that was already on the
 // console when we joined.
@@ -372,6 +386,9 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
 			return exp, prof, errors.New(hint)
 		}
+		if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
+			return exp, prof, errors.New(hint)
+		}
 		if backAtLogin(exp.Transcript()) {
 			return exp, prof, errors.New(errAuthRefused)
 		}
@@ -388,6 +405,9 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 			// depends on the profile, so a diagnosis attached to only one of
 			// them disappears the moment a profile changes shape.
 			if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
+				return exp, prof, errors.New(hint)
+			}
+			if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
 				return exp, prof, errors.New(hint)
 			}
 			if backAtLogin(exp.Transcript()) {
@@ -524,6 +544,26 @@ func promptMismatchHint(prof profile.Profile, transcript string) string {
 	return fmt.Sprintf(
 		"ログインはできましたが、機器は「%s」を表示していて、OSタイプ「%s」が待つプロンプト「%s」になりません。機器の権限レベル（昇格が必要か）と、機器の編集画面のOSタイプ設定を確認してください",
 		m[1], prof.Name, prof.Prompt)
+}
+
+// silentDeviceHint names the case where the login timed out because nothing
+// at all arrived from the device.
+//
+// Found on the bench with a console cable that was no longer plugged into
+// anything: the port opened fine, so the run reached the login phase and sat
+// there for the whole command timeout before ending as "login: waiting for
+// prompt: expect timeout" — the same words as a wrong OS type or a refused
+// password, none of which apply when the device never said a thing. An empty
+// transcript is the evidence; the wording follows the transport, since a
+// silent console and a silent network session have different things to check.
+func silentDeviceHint(dev *model.Device, transcript string) string {
+	if strings.TrimSpace(transcript) != "" {
+		return ""
+	}
+	if dev.Conn == model.ConnSerial {
+		return "コンソールから応答がありません。ケーブルの結線・COMポート・ボーレートと、機器の電源を確認してください"
+	}
+	return "接続はできましたが、機器から何も受信しませんでした。ポート番号と機器の状態を確認してください"
 }
 
 // reIdlePrompt matches a device sitting at some prompt, whatever level it is.

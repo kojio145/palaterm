@@ -342,6 +342,45 @@ func TestWakeSerialClearsAStaleLoginAttempt(t *testing.T) {
 	}
 }
 
+// A console sitting at a clean login prompt — the most ordinary state there
+// is — failed to log in on NEC IX. The device answers every backspace of the
+// line erase with a bell, and 120 bells are 120 non-whitespace bytes: the
+// wake-up took them for the console's reply and returned before the Enter's
+// real answer arrived. That answer is "Password:" (an empty username is
+// accepted), so with the stale-login clearing skipped, the profile's wait for
+// "login:" timed out, and the password went in as the answer to an empty
+// username: "認証に失敗" against credentials that were fine.
+func TestWakeSerialIgnoresBellsFromTheLineErase(t *testing.T) {
+	dev, sess := newScriptedDevice()
+	exp := newExpecter(sess)
+	defer exp.Close()
+
+	prof := profile.Profile{
+		Prompt: "#",
+		Login: []profile.Step{
+			{Expect: "ogin:", Send: "{user}"},
+			{Expect: "assword:", Send: "{password}"},
+		},
+	}
+
+	go func() {
+		<-dev.sent                              // the backspaces...
+		dev.say(strings.Repeat("\a", 120))      // ...each answered with a bell
+		<-dev.sent                              // the Enter
+		time.Sleep(200 * time.Millisecond)      // the device takes a beat
+		dev.say("\r\nPassword: ")               // empty username accepted
+		<-dev.sent                              // the Enter that abandons it
+		dev.say("\r\nLogin attempt failed.\r\nlogin: ")
+	}()
+
+	wakeSerial(context.Background(), exp, prof)
+
+	if !exp.Seen("ogin:") {
+		t.Fatalf("wakeSerial took the bells for an answer; transcript ends %q",
+			strings.TrimLeft(exp.Transcript(), "\a"))
+	}
+}
+
 // A console that really does ask for a password and nothing else is at its
 // own prompt, not a stale one, and must not have it thrown away.
 func TestWakeSerialKeepsAPasswordOnlyPrompt(t *testing.T) {
@@ -385,6 +424,33 @@ func TestPromptMismatchNamesWhatTheDeviceShowed(t *testing.T) {
 	}
 	if got := promptMismatchHint(prof, "login: admin\r\nPassword: \r\nsome output"); got != "" {
 		t.Errorf("output that is not a prompt was reported as a mismatch: %q", got)
+	}
+}
+
+// A console cable that is plugged into nothing opens like any other port, so
+// the run reaches the login phase and then hears nothing for the whole command
+// timeout. That used to end as the generic "waiting for prompt: expect
+// timeout", which also covers a wrong OS type and a refused password — neither
+// of which can be the case when the device never sent a byte.
+func TestSilentDeviceIsNamedByTransport(t *testing.T) {
+	serial := &model.Device{Name: "IX-A-serial", Conn: model.ConnSerial, SerialPort: "COM3"}
+	got := silentDeviceHint(serial, "")
+	if !strings.Contains(got, "コンソール") || !strings.Contains(got, "ボーレート") {
+		t.Errorf("silent console hint %q does not point at the cable/port/baud", got)
+	}
+	ssh := &model.Device{Name: "sw", Conn: model.ConnSSH, Host: "192.0.2.1"}
+	got = silentDeviceHint(ssh, "")
+	if got == "" || strings.Contains(got, "コンソール") {
+		t.Errorf("silent network session got the console wording: %q", got)
+	}
+	// Anything received at all means the device is talking: not this case.
+	if got := silentDeviceHint(serial, "\r\nIX-A% "); got != "" {
+		t.Errorf("a device that answered was reported as silent: %q", got)
+	}
+	// Bare line endings (the echo of our own Enter) carry no information
+	// about the device: still silent.
+	if got := silentDeviceHint(serial, "   \r\n"); got == "" {
+		t.Error("whitespace-only echo was taken as the device answering")
 	}
 }
 
