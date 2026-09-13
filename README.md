@@ -14,6 +14,10 @@ Windows exe — no installation required.
 
 > **Status: v1.3 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
+![Run tab: four devices executing a command set in parallel](docs/img/run-en.png)
+
+![Devices tab: hosts grouped by customer, with jump hosts and a serial console](docs/img/devices-en.png)
+
 ## Features
 
 - 🖥 **Parallel login** — connect to every device in your list at once (concurrency is adjustable)
@@ -38,6 +42,10 @@ Windows exe — no installation required.
 ## Installation
 
 None needed. Download `PalaTerm.exe` from [Releases](../../releases) and run it.
+All PalaTerm data (encrypted vault, logs, exports) is written next to the exe.
+The only exception is the WebView2 runtime's own browser cache, which Windows keeps
+under `%APPDATA%\PalaTerm.exe\EBWebView\` (no PalaTerm data is stored there).
+To uninstall, delete the exe folder and, optionally, that cache folder.
 
 Unsigned executables may trigger a Microsoft Defender SmartScreen warning on first
 launch ("More info" → "Run anyway"). Code signing is planned.

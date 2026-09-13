@@ -10,6 +10,10 @@ English version: [README.md](README.md)
 
 > **開発状況: v1.3（β）。** 動作しますが荒削りな部分があります。Issueでのフィードバック歓迎です。
 
+![実行タブ: 4台へコマンドセットを並列実行中](docs/img/run-ja.png)
+
+![機器一覧: 顧客ごとのグループ、踏み台経由・シリアルコンソールの機器も同じ表で管理](docs/img/devices-ja.png)
+
 ## 特徴
 
 - 🖥 **同時ログイン**: 機器リストの全機器へ並列接続（同時実行数は調整可能）
@@ -30,6 +34,10 @@ English version: [README.md](README.md)
 ## インストール
 
 不要です。[Releases](../../releases) から `PalaTerm.exe` をダウンロードして実行してください。
+PalaTerm のデータ（暗号化vault・ログ・書き出しファイル）はすべて exe の隣に作られます。
+唯一の例外は WebView2 ランタイム自身のブラウザキャッシュで、Windows が
+`%APPDATA%\PalaTerm.exe\EBWebView\` に作ります（PalaTerm のデータは含まれません）。
+アンインストールは exe のフォルダを削除するだけです（必要ならこのキャッシュフォルダも削除してください）。
 
 無署名exeのため、初回実行時にMicrosoft Defender SmartScreenの警告が出ることがあります
 （「詳細情報」→「実行」で起動できます）。コード署名は導入予定です。

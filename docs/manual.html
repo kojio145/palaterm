@@ -241,6 +241,7 @@
       </tbody>
     </table></div>
     <div class="callout ok"><span class="ic">✓</span><p><strong>持ち運びできます。</strong> <code>PalaTerm.exe</code> と <code>data\</code> フォルダを一緒にUSBや共有フォルダへコピーすれば、別のWindowsでもそのまま同じ設定で使えます。インストールは不要です。</p></div>
+    <div class="callout tip"><span class="ic">i</span><p><strong>exe の外に作られるもの。</strong> PalaTerm 自身のデータ（vault・ログ・書き出し）はすべて上の表のとおり exe の隣に作られます。唯一の例外は画面描画に使う WebView2 ランタイム自身のブラウザキャッシュで、Windows が <code>%APPDATA%\PalaTerm.exe\EBWebView\</code> に作ります（PalaTerm のデータは含まれません）。レジストリやシステムフォルダには何も書きません。アンインストールは exe のフォルダを削除するだけで済みます（必要ならこのキャッシュフォルダも削除してください）。</p></div>
   </section>
 
   <section id="flow">

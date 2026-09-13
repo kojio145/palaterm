@@ -34,6 +34,9 @@
   code { background:var(--panel-2); padding:1px 5px; border-radius:4px; font-size:.92em; }
   footer { margin-top:48px; color:var(--ink-faint); font-size:.85rem; border-top:1px solid var(--line); padding-top:16px; }
   a { color:var(--accent); }
+  figure.shot { margin:1.5rem 0 0; }
+  figure.shot img { width:100%; height:auto; border-radius:8px; border:1px solid rgba(127,127,127,.35); display:block; }
+  figure.shot figcaption { font-size:.85rem; opacity:.75; margin-top:.4rem; }
 </style>
 </head>
 <body>
@@ -51,6 +54,15 @@
     <a class="btn" href="https://github.com/kojio145/palaterm">ソースコード（GitHub）</a>
   </div>
   <p class="note">現在 v1.3（β）。Windows 10 / 11（x64）。未署名のため初回起動時に SmartScreen の警告が出ることがあります（「詳細情報」から「実行」）。MIT ライセンス・商用利用可。</p>
+
+  <figure class="shot">
+    <img src="img/run-ja.png" width="1424" height="480" alt="PalaTerm の実行タブ: 4台のルータへコマンドセットを並列実行している画面" loading="eager">
+    <figcaption>実行タブ: 機器ごとの進捗バーと予想残り時間を見ながら、コマンドセットを並列実行</figcaption>
+  </figure>
+  <figure class="shot">
+    <img src="img/devices-ja.png" width="1424" height="480" alt="PalaTerm の機器一覧: 顧客ごとのグループに SSH・Telnet・シリアル・踏み台経由の機器を登録した画面" loading="lazy">
+    <figcaption>機器一覧: SSH / Telnet / シリアル、踏み台経由の機器も同じ表で管理（アドレスは文書用の例）</figcaption>
+  </figure>
 
   <h2>できること</h2>
   <div class="grid">

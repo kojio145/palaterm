@@ -28,3 +28,7 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# Secrets (API keys) — other projects use the same convention
+.env
+.env.*

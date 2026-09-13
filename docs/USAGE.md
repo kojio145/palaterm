@@ -4,12 +4,17 @@
 
 1. `PalaTerm.exe` をダブルクリック（インストール不要）。
 2. 初回はマスターパスワードを設定します。機器の認証情報はこのパスワードで
-   AES-256-GCM 暗号化され、`PalaTerm.exe` と同じフォルダの `palaterm_vault.enc` に
+   AES-256-GCM 暗号化され、`PalaTerm.exe` の隣の `data\palaterm_vault.enc` に
    保存されます。**平文では一切保存されません。**
 3. 2 回目以降はマスターパスワードでロック解除します。
 
-> 持ち運び: `PalaTerm.exe` と `palaterm_vault.enc` を一緒に USB 等へコピーすれば
+> 持ち運び: `PalaTerm.exe` と `data\` フォルダを一緒に USB 等へコピーすれば
 > どの Windows でもそのまま使えます。
+>
+> 書き込み先: PalaTerm のデータ（vault・ログ・書き出し）はすべて exe の隣に作られます。
+> 唯一の例外は WebView2 ランタイム自身のブラウザキャッシュで、Windows が
+> `%APPDATA%\PalaTerm.exe\EBWebView\` に作ります（PalaTerm のデータは含まれません）。
+> アンインストールは exe のフォルダの削除だけで済みます（必要ならこのキャッシュも削除してください）。
 
 ## 基本の流れ
 
