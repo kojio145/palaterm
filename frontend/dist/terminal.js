@@ -51,6 +51,38 @@ async function bootTerminalWindow() {
   term.focus();
   let closed = false;
 
+  // 貼り付けキー。xterm.js の既定は Ctrl+V を制御文字 ^V として機器へ送り、Shift+Insert も
+  // ESC[2~ を送ってしまい、どちらもブラウザ既定の貼り付けを抑止する（Ctrl+Shift+V だけが貼り付く）。
+  // Windows の Win+V（クリップボード履歴）は項目を選ぶと Ctrl+V を打鍵注入するので、同じ理由で
+  // 貼り付かなかった（2026-09-13 実測）。ここで false を返すと xterm は何もせず、ブラウザ既定の
+  // 貼り付けが textarea の paste イベントとして xterm に渡り、機器へ送られる。
+  // 判定は e.code と e.key の両方で行う（キー注入ツールなどスキャンコード無しの入力では
+  // e.code が空になるため）。
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type !== "keydown" || e.altKey || e.metaKey) return true;
+    const isV = e.code === "KeyV" || e.key === "v" || e.key === "V";
+    const isIns = e.code === "Insert" || e.key === "Insert";
+    if (e.ctrlKey && !e.shiftKey && isV) return false;
+    if (e.shiftKey && !e.ctrlKey && isIns) return false;
+    return true;
+  });
+
+  // Tera Term 風の「選択で自動コピー」: マウスで選択した範囲を、選択が確定した時点で
+  // クリップボードへ入れる（ドラッグ中は連続で発火するので少し待ってから1回）。
+  // 書き込みは Go 側（Wails runtime）経由。WebView2 内の navigator.clipboard は
+  // フォーカスや権限の条件で失敗することがあるため、そちらは保険のフォールバック。
+  let selTimer = null;
+  term.onSelectionChange(() => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      const s = term.getSelection();
+      if (!s) return;
+      Term().SetClipboard(s).catch(() => {
+        try { navigator.clipboard.writeText(s).catch(() => {}); } catch (e) {}
+      });
+    }, 150);
+  });
+
   function doFit() {
     try { fit.fit(); Term().Resize(term.cols, term.rows).catch(() => {}); } catch (e) {}
   }

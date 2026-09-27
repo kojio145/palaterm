@@ -188,7 +188,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.3</div>
+    <div class="hero-tag">使い方マニュアル / v1.4</div>
   </header>
 
   <nav class="toc">
@@ -430,6 +430,8 @@
       <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
       <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
+      <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目もそのまま貼り付きます。複数行を貼ると各行がそのまま機器へ送られるので、設定モードでの貼り付けは内容を確認してから行ってください。</li>
+      <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入ります（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
       <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。</li>
       <li><code>exit</code> で機器から抜けるか、ウィンドウを閉じて終了します。</li>
     </ol>
@@ -586,7 +588,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.3 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

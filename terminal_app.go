@@ -228,6 +228,13 @@ func (t *Term) Resize(cols, rows int) error {
 	return r(cols, rows)
 }
 
+// SetClipboard puts text selected in the terminal on the OS clipboard
+// (Tera Term-style copy on select). Done in Go because the browser Clipboard
+// API inside WebView2 is not reliably available to the page.
+func (t *Term) SetClipboard(text string) error {
+	return runtime.ClipboardSetText(t.ctx, text)
+}
+
 // Close ends the session.
 func (t *Term) Close() {
 	t.mu.Lock()
