@@ -20,10 +20,9 @@ function renderCommands() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("コマンドセット"))}</div>
-        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。CSV書出は export\\command-sets\\ に1セット1ファイルで保存されます"))}</div></div>
+        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書出（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
       <div class="row-inline">
-        <button class="btn" id="cs-imp">${esc(t("CSV読込"))}</button>
-        <button class="btn" id="cs-exp">${esc(t("CSV書出"))}</button>
+        <button class="btn" id="cs-imp">${esc(t("ファイル読込"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
       </div>
     </div>
@@ -39,12 +38,6 @@ function renderCommands() {
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); await refreshInventory(); }
   });
   document.getElementById("add-set").onclick = () => editCommandSet(null);
-  document.getElementById("cs-exp").onclick = async () => {
-    try {
-      const dir = await App().ExportCommandSets();
-      if (dir) toast(t("書き出しました: {p}", { p: dir }), "ok");
-    } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
-  };
   document.getElementById("cs-imp").onclick = async () => {
     try {
       const nm = await App().ImportCommandSetFile();
@@ -567,10 +560,9 @@ function renderOSTypes() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("OSタイプ設定"))}</div>
-        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。ファイル書出は export\\os-profiles\\ に1プロファイル1ファイル（JSON）。削除してもファイルは消えないので、読込でいつでも戻せます"))}</div></div>
+        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読込で戻せます。書き出しは「機器」タブの一式書出にまとまっています"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp">${esc(t("ファイル読込"))}</button>
-        <button class="btn" id="prof-exp">${esc(t("ファイル書出"))}</button>
         <button class="btn primary" id="prof-add">${esc(t("＋ 追加"))}</button>
       </div>
     </div>
@@ -610,7 +602,7 @@ function renderOSTypes() {
   });
   root.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
     const p = (INV.customProfiles || []).find(x => x.key === b.dataset.pdel);
-    if (!(await uiConfirm({ title: t("プロファイルを削除"), message: t("OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">書き出し済みのJSONファイルは残るため、「ファイル読込」でいつでも戻せます</span>", { n: esc(p ? p.name : "") }), okLabel: t("削除"), danger: true }))) return;
+    if (!(await uiConfirm({ title: t("プロファイルを削除"), message: t("OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">標準プロファイルは export\\os-profiles\\ のJSONから、自作のものは一式書出したフォルダから「ファイル読込」で戻せます</span>", { n: esc(p ? p.name : "") }), okLabel: t("削除"), danger: true }))) return;
     try {
       await App().DeleteProfile(b.dataset.pdel);
       INV = await App().GetInventory();
@@ -620,12 +612,6 @@ function renderOSTypes() {
     } catch (e) { toast(terr(e), "err"); }
   });
   document.getElementById("prof-add").onclick = () => editProfile(null);
-  document.getElementById("prof-exp").onclick = async () => {
-    try {
-      const dir = await App().ExportOSProfiles();
-      if (dir) toast(t("書き出しました: {p}", { p: dir }), "ok");
-    } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
-  };
   document.getElementById("prof-imp").onclick = async () => {
     try {
       const nm = await App().ImportOSProfileFile();

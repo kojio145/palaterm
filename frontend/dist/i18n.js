@@ -126,9 +126,7 @@ const I18N_EN = {
   "書き出しました: {p}": "Exported to: {p}",
   "「{n}」を読み込みました": 'Imported "{n}"',
   "CSV読込": "Import CSV",
-  "CSV書出": "Export CSV",
   "ファイル読込": "Import File",
-  "ファイル書出": "Export Files",
 
   // ---- about / password / reset ----
   "バージョン": "Version",
@@ -202,7 +200,6 @@ const I18N_EN = {
   "踏{n}": "via {n}",
 
   // ---- CSV dialogs ----
-  "CSV書き出し": "Export CSV",
   "書き出す対象": "Scope",
   "待機 あと{n}秒": "waiting {n}s",
   "この踏み台にレガシー暗号を許可 ⓘ": "Allow legacy ciphers for this hop ⓘ",
@@ -211,17 +208,34 @@ const I18N_EN = {
   "{g}（{n}台）": "{g} ({n})",
   "※パスワードも平文で書き出されます。編集後は削除してください。":
     "Passwords are written in plain text. Delete the file when done.",
-  "※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。読み込むと空になるので、CSVは完全なバックアップではありません。":
-    "A jump host's jump command, key passphrase and legacy-cipher setting are not written to CSV. They come back empty on import, so a CSV is not a complete backup.",
-  "※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。踏み台を使う機器は、読み込み後に編集画面で入れ直してください。":
-    "A jump host's jump command, key passphrase and legacy-cipher setting are not carried in CSV. Re-enter them in the device editor after importing.",
+  // ---- 一式 (bundle) export / import ----
+  "読込": "Import",
+  "一式書出": "Export Bundle",
+  "一式書き出し": "Export Bundle",
+  "機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。":
+    "Writes the devices (devices.csv) together with the command sets and OS type profiles they use to export\\bundles\\<group>\\. \"All devices\" also includes every command set and profile — a complete backup.",
+  "書き出しました": "Exported",
+  "フォルダを開く": "Open folder",
+  "読み込み": "Import",
+  "一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は機器名をキーに、既存は上書き・新規は追加です。":
+    "Pick a bundle manifest (palaterm-bundle.json) to import devices, command sets and OS type profiles together, or a devices CSV (*.csv) for devices only. Devices are matched by name: existing ones are replaced, new ones added.",
+  "ファイルのグループをそのまま使う": "Keep the groups named in the file",
+  "同名の既存コマンドセット・OSタイププロファイルも一式の内容で上書きする": "Also overwrite existing command sets / OS type profiles of the same name",
+  "オフのときは、既にあるコマンドセット・プロファイルはそのまま残し、無いものだけ追加します（他のグループが使っている設定を壊さないため）。":
+    "When off, command sets and profiles that already exist are left untouched and only missing ones are added (so settings other groups rely on are not changed).",
+  "ファイルを選択": "Choose file…",
+  "機器: {n} 台（新規 {a}・上書き {b}）": "Devices: {n} (new {a}, replaced {b})",
+  "コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）": "Command sets: {n} (new {a}, overwritten {b}, kept {c})",
+  "OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）": "OS type profiles: {n} (new {a}, overwritten {b}, kept {c})",
+  "新規グループ: {g}": "New groups: {g}",
+  "⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}": "⚠ Command sets not found (devices import, but run with no set): {g}",
+  "⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}": "⚠ OS types not found (devices import, but use the generic profile): {g}",
+  "読み込み内容の確認": "Confirm import",
+  "読み込む": "Import",
   "書き出す": "Export",
-  "CSV読み込み": "Import CSV",
   "読み込んだ機器の所属グループ": "Group for imported devices",
-  "CSVのグループをそのまま使う": "Keep each row's own group",
   "指定グループに追加する": "Assign all to one group",
   "追加先グループ": "Target group",
-  "ファイルを選択して読み込む": "Choose file & import",
   "{n} 台を読み込みました": "Imported {n} devices",
 
   // ---- device editor ----
@@ -276,8 +290,8 @@ const I18N_EN = {
   "「{n}」は既に登録されています。別のホスト名にしてください": '"{n}" is already registered. Choose another hostname.',
 
   // ---- command sets tab ----
-  "機器ごとに割り当てて一括実行するコマンド群。CSV書出は export\\command-sets\\ に1セット1ファイルで保存されます":
-    "Command bundles assigned per device and run in batch. Export writes one CSV per set under export\\command-sets\\.",
+  "機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書出（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます":
+    "Command bundles assigned per device and run in batch. Exporting is part of the Devices tab's Export Bundle (per group, or all devices); here you can import a single file (CSV / legacy .list).",
   "＋ セットを追加": "+ Add Set",
   "コマンドセットがありません。": "No command sets.",
   "名前": "Name",
@@ -374,8 +388,8 @@ const I18N_EN = {
   "破棄して移動": "Discard & leave",
 
   // ---- OS types tab ----
-  "機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。ファイル書出は export\\os-profiles\\ に1プロファイル1ファイル（JSON）。削除してもファイルは消えないので、読込でいつでも戻せます":
-    'Login automation per device type (expect/send). Waits are literal text such as "#" or "assword:" (substring match). Export writes one JSON per profile under export\\os-profiles\\; deleting never touches the files, so Import can always restore one.',
+  "機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読込で戻せます。書き出しは「機器」タブの一式書出にまとまっています":
+    'Login automation per device type (expect/send). Waits are literal text such as "#" or "assword:" (substring match). The default profiles\' JSONs are placed under export\\os-profiles\\ automatically and never deleted by the app, so a removed one can be imported back. Exporting is part of the Devices tab\'s Export Bundle.',
   "＋ 追加": "+ Add",
   "プロファイルがありません。「ファイル読込」で export\\os-profiles\\ のJSONから復元するか、「＋ 追加」で作成してください。":
     'No profiles. Restore from the JSONs under export\\os-profiles\\ via "Import File", or create one with "+ Add".',
@@ -383,8 +397,8 @@ const I18N_EN = {
   "ログイン手順": "Login Steps",
   "{n} 行": "{n} steps",
   "プロファイルを削除": "Delete Profile",
-  "OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">書き出し済みのJSONファイルは残るため、「ファイル読込」でいつでも戻せます</span>":
-    'Delete OS type profile "<b>{n}</b>"?<br><span class="muted" style="font-size:12px">Its exported JSON file is kept, so Import can always bring it back.</span>',
+  "OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">標準プロファイルは export\\os-profiles\\ のJSONから、自作のものは一式書出したフォルダから「ファイル読込」で戻せます</span>":
+    'Delete OS type profile "<b>{n}</b>"?<br><span class="muted" style="font-size:12px">A default profile can be imported back from its JSON under export\\os-profiles\\; a custom one from an exported bundle folder.</span>',
 
   // ---- profile editor ----
   "OSタイププロファイルを編集": "Edit OS Type Profile",

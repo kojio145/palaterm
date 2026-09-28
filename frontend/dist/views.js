@@ -41,8 +41,8 @@ function renderGroupChooser() {
       <div><div class="page-title">${esc(t("機器グループを選択"))}</div>
         <div class="page-sub">${esc(t("グループを選ぶか、新規に作成してください。グループ作成後にそのグループへ機器を追加します"))}</div></div>
       <div class="row-inline">
-        <button class="btn" id="imp-csv">${esc(t("CSV読込"))}</button>
-        <button class="btn" id="exp-csv">${esc(t("CSV書出"))}</button>
+        <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
+        <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
       </div>
     </div>
     <div class="chooser">
@@ -56,8 +56,8 @@ function renderGroupChooser() {
       </button>`).join("")}
     </div>`;
 
-  document.getElementById("exp-csv").onclick = () => exportCsvDialog("");
-  document.getElementById("imp-csv").onclick = () => importCsvDialog("");
+  document.getElementById("exp-csv").onclick = () => exportBundleDialog("");
+  document.getElementById("imp-csv").onclick = () => importDialog("");
   document.getElementById("choice-new").onclick = newGroupPrompt;
   root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
     deviceView = { mode: "list", group: b.dataset.open === "__ALL__" ? null : b.dataset.open };
@@ -166,8 +166,8 @@ function renderDeviceList() {
       <div class="row-inline">
         ${scopeGroup ? `<button class="btn" id="grp-rename">${esc(t("グループ名変更"))}</button>
         <button class="btn danger" id="grp-delete">${esc(t("グループ削除"))}</button>` : ""}
-        <button class="btn" id="imp-csv">${esc(t("CSV読込"))}</button>
-        <button class="btn" id="exp-csv">${esc(t("CSV書出"))}</button>
+        <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
+        <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
         <button class="btn primary" id="add-dev">${esc(t("＋ 機器を追加"))}</button>
       </div>
     </div>
@@ -213,8 +213,8 @@ function renderDeviceList() {
       };
     };
   }
-  document.getElementById("exp-csv").onclick = () => exportCsvDialog(scopeGroup ? scopeGroup.name : "");
-  document.getElementById("imp-csv").onclick = () => importCsvDialog(scopeGroup ? scopeGroup.name : "");
+  document.getElementById("exp-csv").onclick = () => exportBundleDialog(scopeGroup ? scopeGroup.name : "");
+  document.getElementById("imp-csv").onclick = () => importDialog(scopeGroup ? scopeGroup.name : "");
 
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editDevice(INV.devices.find(d => d.name === b.dataset.edit)));
@@ -286,16 +286,18 @@ async function delDevice(name) {
   await App().DeleteDevice(name); await refreshInventory(); toast(t("削除しました"), "ok");
 }
 
-// CSV export: choose which group (or all) to write out.
-function exportCsvDialog(defaultGroup) {
+// 一式書出: pick a group (or all) → export\bundles\<group>\ holding devices.csv
+// plus the command sets and OS profiles those devices use (for "all devices":
+// every set and profile, i.e. a complete copy of the configuration).
+function exportBundleDialog(defaultGroup) {
   const groups = INV.deviceGroups || [];
   const opts = `<option value="__ALL__">${esc(t("全機器（{n}台）", { n: (INV.devices || []).length }))}</option>` +
     groups.map(g => `<option value="${esc(g.name)}" ${g.name === defaultGroup ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("");
   const node = h(`<div>
-    <h3>${esc(t("CSV書き出し"))}</h3>
+    <h3>${esc(t("一式書き出し"))}</h3>
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
+    <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
     <div class="muted" style="font-size:12px">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
-    <div class="muted" style="font-size:12px">${esc(t("※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。読み込むと空になるので、CSVは完全なバックアップではありません。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
@@ -305,29 +307,36 @@ function exportCsvDialog(defaultGroup) {
     const v = node.querySelector("#cx-grp").value;
     closeModal();
     try {
-      const p = await App().ExportDevicesCSVGroup(v === "__ALL__" ? "" : v);
-      if (p) toast(t("書き出しました: {p}", { p }), "ok");
+      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v);
+      if (!dir) return;
+      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く") })) {
+        try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
+      }
     } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
   };
 }
 
-// CSV import: keep the CSV's own groups, or force everything into one group.
-function importCsvDialog(defaultGroup) {
+// 読込: a bundle's palaterm-bundle.json (devices + command sets + OS
+// profiles) or a bare devices CSV. Options first, then the file picker, then a
+// preview of what will change before anything is written.
+function importDialog(defaultGroup) {
   const groups = INV.deviceGroups || [];
   const opts = groups.map(g => `<option value="${esc(g.name)}" ${g.name === defaultGroup ? "selected" : ""}>${esc(g.name)}</option>`).join("");
   const node = h(`<div>
-    <h3>${esc(t("CSV読み込み"))}</h3>
+    <h3>${esc(t("読み込み"))}</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は機器名をキーに、既存は上書き・新規は追加です。"))}</div>
     <div class="field"><label>${esc(t("読み込んだ機器の所属グループ"))}</label>
       <select id="ci-mode">
-        <option value="keep">${esc(t("CSVのグループをそのまま使う"))}</option>
+        <option value="keep">${esc(t("ファイルのグループをそのまま使う"))}</option>
         <option value="assign" ${defaultGroup ? "selected" : ""}>${esc(t("指定グループに追加する"))}</option>
       </select></div>
     <div class="field" id="ci-grp-wrap"><label>${esc(t("追加先グループ"))}</label>
       <input id="ci-grp" list="ci-grp-list" value="${esc(defaultGroup || "")}" placeholder="${esc(t("グループ名"))}">
       <datalist id="ci-grp-list">${opts}</datalist></div>
-    <div class="muted" style="font-size:12px">${esc(t("※踏み台の「ジャンプコマンド」「秘密鍵のパスフレーズ」「レガシー暗号を許可」はCSVに含まれません。踏み台を使う機器は、読み込み後に編集画面で入れ直してください。"))}</div>
+    <div class="field"><label style="font-weight:normal"><input type="checkbox" id="ci-ow" style="width:auto"> ${esc(t("同名の既存コマンドセット・OSタイププロファイルも一式の内容で上書きする"))}</label></div>
+    <div class="muted" style="font-size:12px">${esc(t("オフのときは、既にあるコマンドセット・プロファイルはそのまま残し、無いものだけ追加します（他のグループが使っている設定を壊さないため）。"))}</div>
     <div class="modal-actions"><button class="btn" id="ci-cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="ci-ok">${esc(t("ファイルを選択して読み込む"))}</button></div>
+      <button class="btn primary" id="ci-ok">${esc(t("ファイルを選択"))}</button></div>
   </div>`);
   openModal(node, "mid");
   const modeSel = node.querySelector("#ci-mode");
@@ -338,10 +347,28 @@ function importCsvDialog(defaultGroup) {
   node.querySelector("#ci-ok").onclick = async () => {
     const target = modeSel.value === "assign" ? node.querySelector("#ci-grp").value.trim() : "";
     if (modeSel.value === "assign" && !target) { toast(t("グループ名を入力してください"), "err"); return; }
+    const ow = node.querySelector("#ci-ow").checked;
     closeModal();
+    let pv;
+    try { pv = await App().PickImportFile(target, ow); }
+    catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); return; }
+    if (!pv) return;
+    const s = pv.summary;
+    const lines = [t("機器: {n} 台（新規 {a}・上書き {b}）", { n: s.devices, a: s.devicesNew, b: s.devicesUpdated })];
+    if (pv.kind === "bundle") {
+      lines.push(t("コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.sets, a: s.setsNew, b: s.setsUpdated, c: s.setsSkipped }));
+      lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
+    }
+    if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
+    if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
+    if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));
+    const msg = `<span class="muted" style="font-size:12px">${esc(pv.path)}</span><br>` + lines.map(esc).join("<br>");
+    if (!(await uiConfirm({ title: t("読み込み内容の確認"), message: msg, okLabel: t("読み込む") }))) return;
     try {
-      const n = await App().ImportDevicesCSVToGroup(target);
-      if (n > 0) { await refreshInventory(); toast(t("{n} 台を読み込みました", { n }), "ok"); }
+      const r = await App().ApplyImport(pv.path, target, ow);
+      PROFILES = await App().ListProfiles();
+      await refreshInventory();
+      toast(t("{n} 台を読み込みました", { n: r.devices }), "ok");
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
 }

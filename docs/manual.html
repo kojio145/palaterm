@@ -188,7 +188,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.4</div>
+    <div class="hero-tag">使い方マニュアル / v1.4.1</div>
   </header>
 
   <nav class="toc">
@@ -234,9 +234,9 @@
       <thead><tr><th>フォルダ</th><th>中身</th></tr></thead>
       <tbody>
         <tr><td><code>logs\</code></td><td>実行ログの保存先（既定。ログ設定で変更可）</td></tr>
-        <tr><td><code>export\devices\</code></td><td>機器一覧のCSV書出/読込の既定フォルダ</td></tr>
-        <tr><td><code>export\command-sets\</code></td><td>コマンドセットのCSV書出/読込の既定フォルダ</td></tr>
-        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイルのJSON書出/読込の既定フォルダ（デフォルト14種のJSONを自動配置）</td></tr>
+        <tr><td><code>exportundles\</code></td><td>「一式書出」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
+        <tr><td><code>export\command-sets\</code></td><td>コマンドセット単体ファイル読込の既定フォルダ</td></tr>
+        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読込の既定フォルダ（標準14種のJSONを自動配置。アプリが消すことはない）</td></tr>
         <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）</td></tr>
       </tbody>
     </table></div>
@@ -258,8 +258,8 @@
     <div class="scroll"><table>
       <thead><tr><th>タブ</th><th>役割</th></tr></thead>
       <tbody>
-        <tr><td>機器一覧</td><td>グループと機器の登録・編集・CSV入出力</td></tr>
-        <tr><td>コマンドセット</td><td>流すコマンドのまとまりの作成・CSV入出力</td></tr>
+        <tr><td>機器一覧</td><td>グループと機器の登録・編集・一式書出/読込（機器CSV＋コマンドセット＋OSタイププロファイル）</td></tr>
+        <tr><td>コマンドセット</td><td>流すコマンドのまとまりの作成・単体ファイル読込</td></tr>
         <tr><td>実行</td><td>対象の選択と一括実行・結果の確認</td></tr>
         <tr><td>ログ設定</td><td>並列数・タイムアウト・ログ保存先などの共通設定</td></tr>
         <tr><td>OSタイプ設定</td><td>機種別ログイン自動化プロファイルの管理</td></tr>
@@ -320,10 +320,10 @@
 
     <div class="callout tip"><span class="ic">i</span><p>コマンド欄に<strong>複数行をまとめて貼り付ける</strong>と、その行数ぶん自動で行が分割されます。enable や terminal length などの<strong>ログイン・ページャ処理は自動</strong>（OSタイプ設定のプロファイルが担当）なので書く必要はありません。show 系のコマンドだけ並べればOKです。</p></div>
 
-    <h3>ファイルでの書出・読込</h3>
-    <p><strong>「CSV書出」</strong>で全セットを <code>export\command-sets\</code> に1セット1ファイルで出力します（<code>コマンド,リモート秒,シリアル秒</code> 形式）。
-    <strong>「CSV読込」</strong>で1ファイルを選んで取り込みます（ファイル名がセット名になり、同名セットは置き換え）。
-    CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイルもそのまま読み込めます。</p>
+    <h3>ファイルでの読込・書出</h3>
+    <p><strong>「ファイル読込」</strong>で1ファイルを選んで取り込みます（<code>コマンド,リモート秒,シリアル秒</code> 形式。ファイル名がセット名になり、同名セットは置き換え）。
+    CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイル（旧ツールの Show_Command_Pattern）もそのまま読み込めます。
+    書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うセットが <code>exportundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
   </section>
 
   <section id="device">
@@ -381,9 +381,12 @@
     ポート番号の範囲などを自動でチェックし、問題があればメッセージを出して保存しません。
     入力途中に画面の他の場所を押しても内容は消えません（「キャンセル」か「保存」を押すまで保持されます）。</p>
 
-    <h3>CSVで一括登録・書き出し</h3>
-    <p>機器が多いときは、<strong>「CSV書出」</strong>で機器をCSVに出力し（対象グループまたは全機器を選択可）、Excel等でまとめて編集して
-    <strong>「CSV読込」</strong>で戻せます（機器名をキーに、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。既定の保存先は <code>export\devices\</code> です。</p>
+    <h3>一式書出・読込（会社単位の持ち出し／CSVでの一括登録）</h3>
+    <p><strong>「一式書出」</strong>は、対象グループ（または全機器）の機器CSV（<code>devices.csv</code>）と、その機器が使う<strong>コマンドセット・OSタイププロファイル</strong>を
+    <code>exportundles\グループ名\</code> にまとめて書き出します。「全機器」を選ぶとコマンドセット・プロファイルも全件含む<strong>完全なバックアップ</strong>になります。
+    別の PalaTerm へ持ち込むときは、そのフォルダをコピーして<strong>「読込」</strong>で中の <code>palaterm-bundle.json</code> を選びます。</p>
+    <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読込」で CSV 単体を選べば機器だけを読み込めます（機器名をキーに、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
+    読み込む前に<strong>確認画面</strong>で新規・上書き・既存のまま残す件数が表示されます。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。</p>
     <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
   </section>
 
@@ -484,7 +487,7 @@
     <h3>危険な操作: リセット（全データ初期化）</h3>
     <p>タブの最下部に、誤操作しにくい位置として<strong>「危険な操作」</strong>枠があります。
     <strong>「リセット（全データ初期化）…」</strong>を押すと、登録済みの<strong>すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワード</strong>を削除して初期状態に戻します（<strong>元に戻せません</strong>）。</p>
-    <p>実行には、警告ダイアログでの確認に加えて<strong>マスターパスワードの入力が必須</strong>です。ログファイルと export フォルダの書き出しファイル（機器CSV・コマンドセット・OSプロファイルJSON）は削除されずに残るため、必要ならそこから読み込みで復元できます。</p>
+    <p>実行には、警告ダイアログでの確認に加えて<strong>マスターパスワードの入力が必須</strong>です。ログファイルと export フォルダの書き出しファイル（一式書出のフォルダ・標準プロファイルのJSON）は削除されずに残るため、必要ならそこから読み込みで復元できます（事前に「全機器」で一式書出しておけば、そのフォルダひとつで元に戻せます）。</p>
   </section>
 
   <section id="ostype">
@@ -525,10 +528,10 @@
       </tbody>
     </table></div>
 
-    <h3>ファイルでの書出・読込</h3>
-    <p><strong>「ファイル書出」</strong>で全プロファイルを <code>export\os-profiles\</code> に1プロファイル1ファイル（JSON）で出力します。
-    <strong>「ファイル読込」</strong>でJSONを選んで取り込みます。標準14種のJSONは起動時に自動で置かれ、
-    <strong>アプリがこれらのファイルを消すことはありません</strong>。プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。</p>
+    <h3>ファイルでの読込・書出</h3>
+    <p><strong>「ファイル読込」</strong>でJSONを選んで取り込みます。標準14種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
+    <strong>アプリがこれらのファイルを消すことはありません</strong>。標準プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。
+    自作プロファイルの書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うプロファイルが <code>exportundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
 
     <div class="callout warn"><span class="ic">!</span><p>特定の機種でログインが途中で止まる場合は、その機種の実際のプロンプト表示を確認し、プロファイルの「目印」やログイン手順を実機に合わせて直してください。<strong>迷ったら対話接続で実機の表示を見るのが確実です。</strong></p></div>
   </section>
@@ -588,7 +591,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.4.1 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

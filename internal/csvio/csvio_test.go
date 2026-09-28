@@ -1,6 +1,7 @@
 package csvio
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kojio145/palaterm/internal/model"
@@ -122,5 +123,56 @@ func TestBastionPortSurvivesCSV(t *testing.T) {
 	}
 	if got[1].Port != 2323 {
 		t.Errorf("hop 2 port = %d, want 2323", got[1].Port)
+	}
+}
+
+// TestLegacyAndBastionExtrasRoundTrip covers the columns added so a CSV is a
+// complete copy of a device: the device's own legacy-cipher flag and, per jump
+// hop, the key passphrase / legacy-cipher flag / jump command that the
+// positional "bastions" column cannot carry.
+func TestLegacyAndBastionExtrasRoundTrip(t *testing.T) {
+	in := []model.Device{{
+		Name: "d1", Host: "10.0.0.1", Conn: model.ConnSSH, OSType: "cisco-ios", Enabled: true,
+		LegacyAlgos: true,
+		Bastions: []model.Bastion{
+			{Host: "jump1", Method: model.BastionSSH, Username: "j1", AuthMethod: model.AuthPublicKey,
+				KeyFile: `C:\k\id_rsa`, KeyPassphrase: "pp,1", LegacyAlgos: true, JumpCommand: "ssh -l {user} {host}"},
+			{Host: "jump2", Method: model.BastionTelnet, Username: "j2"},
+		},
+	}, {
+		Name: "d2", Host: "10.0.0.2", Conn: model.ConnSSH, OSType: "generic", Enabled: true,
+	}}
+	blob, err := Export(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Import(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out[0].LegacyAlgos || out[1].LegacyAlgos {
+		t.Errorf("device legacyAlgos round trip failed: %v %v", out[0].LegacyAlgos, out[1].LegacyAlgos)
+	}
+	b := out[0].Bastions
+	if len(b) != 2 {
+		t.Fatalf("bastion count = %d, want 2", len(b))
+	}
+	if b[0].KeyPassphrase != "pp,1" || !b[0].LegacyAlgos || b[0].JumpCommand != "ssh -l {user} {host}" {
+		t.Errorf("hop 1 extras lost: %+v", b[0])
+	}
+	if b[0].KeyFile != `C:\k\id_rsa` {
+		t.Errorf("hop 1 keyFile lost: %q", b[0].KeyFile)
+	}
+	if b[1].KeyPassphrase != "" || b[1].LegacyAlgos || b[1].JumpCommand != "" {
+		t.Errorf("hop 2 should have no extras: %+v", b[1])
+	}
+	// A device with no extras writes an empty column, not "[{},{}]".
+	if strings.Contains(blob, "[{}") {
+		t.Errorf("empty extras should be omitted: %s", blob)
+	}
+	// An old CSV without the new columns still imports.
+	old, err := Import("name,host,bastions\nd,10.0.0.1,ssh:h1:22:u:p\n")
+	if err != nil || len(old) != 1 || len(old[0].Bastions) != 1 || old[0].LegacyAlgos {
+		t.Fatalf("old CSV import broken: %v %+v", err, old)
 	}
 }

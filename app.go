@@ -3,21 +3,19 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/kojio145/palaterm/internal/csvio"
+	"github.com/kojio145/palaterm/internal/bundle"
 	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
@@ -70,7 +68,7 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	// Materialize the tool's folder layout next to the exe so users can find
 	// everything: logs / export destinations / internal parts (data).
-	for _, d := range []string{"logs", filepath.Join("export", "devices"), filepath.Join("export", "command-sets"), filepath.Join("export", "os-profiles"), "data"} {
+	for _, d := range []string{"logs", filepath.Join("export", "bundles"), filepath.Join("export", "command-sets"), filepath.Join("export", "os-profiles"), "data"} {
 		_ = os.MkdirAll(filepath.Join(exeDir(), d), 0o755)
 	}
 	// Keep a JSON of every default OS profile on disk (written only when the
@@ -81,11 +79,11 @@ func (a *App) startup(ctx context.Context) {
 	// they would never match.
 	profDir := filepath.Join(exeDir(), "export", "os-profiles")
 	for _, p := range profile.Defaults() {
-		path := filepath.Join(profDir, fileNameSafe(p.Name)+".json")
+		path := filepath.Join(profDir, bundle.FileNameSafe(p.Name)+".json")
 		if data, err := os.ReadFile(path); err == nil && !strings.Contains(string(data), `"regex"`) {
 			continue
 		}
-		_ = writeProfileJSON(profDir, p)
+		_, _ = bundle.WriteProfileJSON(profDir, p)
 	}
 }
 
@@ -1218,50 +1216,15 @@ func (a *App) CloseInteractive(name string) {
 
 // ---- command set file export / import (旧 Show_Command_Pattern_*.list 相当) ----
 
-// fileNameSafe replaces characters Windows forbids in file names.
-func fileNameSafe(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch r {
-		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
-			return '_'
-		}
-		return r
-	}, s)
-}
-
-// ExportCommandSets writes every command set to export\command-sets\<セット名>.csv
-// (one file per set; lines of "コマンド,リモート待機秒,シリアル待機秒" — the
-// legacy Show_Command_Pattern format). Returns the folder written to.
-func (a *App) ExportCommandSets() (string, error) {
-	a.mu.Lock()
-	if a.inv == nil {
-		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
-	}
-	sets := make([]model.CommandSet, len(a.inv.CommandSets))
-	copy(sets, a.inv.CommandSets)
-	a.mu.Unlock()
-
-	dir := filepath.Join(exeDir(), "export", "command-sets")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	for _, s := range sets {
-		var b strings.Builder
-		for _, c := range s.Commands {
-			fmt.Fprintf(&b, "%s,%d,%d\r\n", c.Text, c.PauseSec, c.SerialSec)
-		}
-		name := fileNameSafe(s.Name) + ".csv"
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o644); err != nil {
-			return "", err
-		}
-	}
-	return dir, nil
-}
+// appVersion is recorded in bundle manifests. The About screen has its own
+// copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
+// build/windows/winres.json — bump all three together.
+const appVersion = "1.4.1"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
-// replaced). Legacy Show_Command_Pattern .list files import as-is.
+// replaced). Legacy Show_Command_Pattern .list files import as-is. This is
+// the single-file path; a whole bundle goes through PickImportFile.
 func (a *App) ImportCommandSetFile() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            "コマンドセットのファイルを読み込む",
@@ -1278,30 +1241,9 @@ func (a *App) ImportCommandSetFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var cmds []model.Command
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// The command itself may contain commas: only the last two fields are
-		// the pause seconds (both optional).
-		text, p1, p2 := line, 1, 1
-		if parts := strings.Split(line, ","); len(parts) >= 3 {
-			if n1, e1 := strconv.Atoi(strings.TrimSpace(parts[len(parts)-2])); e1 == nil {
-				if n2, e2 := strconv.Atoi(strings.TrimSpace(parts[len(parts)-1])); e2 == nil {
-					text = strings.TrimSpace(strings.Join(parts[:len(parts)-2], ","))
-					p1, p2 = n1, n2
-				}
-			}
-		}
-		if text == "" {
-			continue
-		}
-		cmds = append(cmds, model.Command{Text: text, PauseSec: p1, SerialSec: p2})
-	}
-	if len(cmds) == 0 {
-		return "", fmt.Errorf("有効なコマンド行がありません")
+	cmds, err := bundle.ParseCommandSet(string(data))
+	if err != nil {
+		return "", err
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
@@ -1325,42 +1267,6 @@ func (a *App) ImportCommandSetFile() (string, error) {
 	return name, a.persist()
 }
 
-// writeProfileJSON writes one profile to dir as <名前>.json.
-func writeProfileJSON(dir string, p profile.Profile) error {
-	data, err := json.MarshalIndent(p, "", "  ")
-	if err != nil {
-		return err
-	}
-	name := fileNameSafe(p.Name) + ".json"
-	return os.WriteFile(filepath.Join(dir, name), append(data, '\r', '\n'), 0o644)
-}
-
-// ExportOSProfiles writes every OS profile to export\os-profiles\<名前>.json
-// (one file per profile) and returns the folder written to. The tool only
-// ever writes these files — deleting a profile in the app leaves its file, so
-// ファイル読込 can always restore it.
-func (a *App) ExportOSProfiles() (string, error) {
-	a.mu.Lock()
-	if a.inv == nil {
-		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
-	}
-	profiles := make([]profile.Profile, len(a.inv.CustomProfiles))
-	copy(profiles, a.inv.CustomProfiles)
-	a.mu.Unlock()
-
-	dir := filepath.Join(exeDir(), "export", "os-profiles")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	for _, p := range profiles {
-		if err := writeProfileJSON(dir, p); err != nil {
-			return "", err
-		}
-	}
-	return dir, nil
-}
-
 // ImportOSProfileFile reads one exported profile JSON. A profile with the
 // same key (or, failing that, the same name) is replaced — so re-importing a
 // deleted default restores it under its original key and devices that
@@ -1381,19 +1287,9 @@ func (a *App) ImportOSProfileFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var p profile.Profile
-	if err := json.Unmarshal(data, &p); err != nil {
-		return "", fmt.Errorf("JSONの形式が不正です: %w", err)
-	}
-	p.Name = strings.TrimSpace(p.Name)
-	if p.Name == "" {
-		return "", fmt.Errorf("プロファイル名（name）がありません")
-	}
-	if strings.TrimSpace(p.Prompt) == "" {
-		return "", fmt.Errorf("「showコマンド完了の目印」（prompt）がありません")
-	}
-	if p.Key == "" {
-		p.Key = "custom:" + p.Name
+	p, err := bundle.ParseProfileJSON(data)
+	if err != nil {
+		return "", err
 	}
 
 	a.mu.Lock()
@@ -1429,102 +1325,140 @@ func (a *App) ImportOSProfileFile() (string, error) {
 	return p.Name, a.persist()
 }
 
-// ---- CSV import / export ----
+// ---- 一式 (bundle) export / import ----
 
-// ExportDevicesCSV writes all devices to a chosen CSV file.
-func (a *App) ExportDevicesCSV() (string, error) { return a.ExportDevicesCSVGroup("") }
+// bundleDir is where ExportBundle writes: export\bundles\<グループ名>\, or
+// export\bundles\all-devices\ for the whole inventory.
+func bundleDir(group string) string {
+	name := "all-devices"
+	if group != "" {
+		name = bundle.FileNameSafe(group)
+	}
+	return filepath.Join(exeDir(), "export", "bundles", name)
+}
 
-// ExportDevicesCSVGroup writes the devices of one group (or all when group is
-// "") to a chosen CSV file. Returns the written path (empty if cancelled).
-func (a *App) ExportDevicesCSVGroup(group string) (string, error) {
+// ExportBundle writes one group's devices together with the command sets and
+// OS profiles they use — or, for group "", every device, set and profile —
+// to export\bundles\<group>\ and returns that folder. The folder is the
+// hand-over unit: copy it to another PalaTerm and pick its
+// palaterm-bundle.json in 読込. devices.csv inside it is the same CSV as
+// before, so Excel editing still works.
+func (a *App) ExportBundle(group string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return "", fmt.Errorf("vault is locked")
 	}
-	var devices []model.Device
-	for _, d := range a.inv.Devices {
-		if group == "" || d.Group == group {
-			devices = append(devices, d)
-		}
-	}
+	c := bundle.Select(a.inv, group)
 	a.mu.Unlock()
-
-	defName := "palaterm_devices.csv"
-	if group != "" {
-		defName = "palaterm_" + group + ".csv"
+	if group != "" && len(c.Devices) == 0 {
+		return "", fmt.Errorf("グループ「%s」に機器がありません", group)
 	}
-	devDir := filepath.Join(exeDir(), "export", "devices")
-	_ = os.MkdirAll(devDir, 0o755)
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		DefaultDirectory: devDir,
-		DefaultFilename:  defName,
-		Title:            "機器一覧をCSVに書き出す",
-		Filters:          []runtime.FileFilter{{DisplayName: "CSV", Pattern: "*.csv"}},
-	})
-	if err != nil || path == "" {
+	dir := bundleDir(group)
+	if _, err := bundle.Write(dir, c, "PalaTerm "+appVersion); err != nil {
 		return "", err
 	}
-	text, err := csvio.Export(devices)
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+	return dir, nil
 }
 
-// ImportDevicesCSV merges a chosen CSV keeping each row's own group.
-func (a *App) ImportDevicesCSV() (int, error) { return a.ImportDevicesCSVToGroup("") }
+// ImportPreview is what PickImportFile hands the UI to confirm before
+// ApplyImport: the chosen file, what it contains and what applying it would do.
+type ImportPreview struct {
+	Path     string         `json:"path"`
+	Kind     string         `json:"kind"`  // "bundle" | "csv"
+	Group    string         `json:"group"` // group named in the manifest ("" = all devices / plain CSV)
+	Sets     []string       `json:"sets"`
+	Profiles []string       `json:"profiles"`
+	Summary  bundle.Summary `json:"summary"`
+}
 
-// ImportDevicesCSVToGroup merges a chosen CSV, assigning every imported device
-// to targetGroup when it is non-empty (otherwise the CSV's own group is kept).
-// Matches by name: existing devices are updated, new ones added.
-func (a *App) ImportDevicesCSVToGroup(targetGroup string) (int, error) {
+// PickImportFile lets the user choose a bundle manifest or a bare devices CSV
+// and returns a preview of applying it with the given options. Nothing is
+// changed yet: the UI shows the counts, then calls ApplyImport with the same
+// path and options. Returns nil when the dialog is cancelled.
+func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportPreview, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "機器一覧のCSVを読み込む",
-		DefaultDirectory: filepath.Join(exeDir(), "export", "devices"),
-		Filters:          []runtime.FileFilter{{DisplayName: "CSV", Pattern: "*.csv"}},
+		Title:            "一式の目録（palaterm-bundle.json）または機器CSVを読み込む",
+		DefaultDirectory: filepath.Join(exeDir(), "export", "bundles"),
+		Filters: []runtime.FileFilter{
+			{DisplayName: "一式の目録 / 機器CSV", Pattern: "palaterm-bundle.json;*.csv"},
+			{DisplayName: "すべてのファイル", Pattern: "*.*"},
+		},
 	})
 	if err != nil || path == "" {
-		return 0, err
+		return nil, err
 	}
-	data, err := os.ReadFile(path)
+	c, kind, err := readImportFile(path)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	devices, err := csvio.Import(string(data))
-	if err != nil {
-		return 0, err
+	pv := &ImportPreview{Path: path, Kind: kind, Group: c.Manifest.Group, Sets: []string{}, Profiles: []string{}}
+	for _, s := range c.CommandSets {
+		pv.Sets = append(pv.Sets, s.Name)
 	}
-
+	for _, p := range c.Profiles {
+		pv.Profiles = append(pv.Profiles, p.Name)
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return 0, fmt.Errorf("vault is locked")
+		return nil, fmt.Errorf("vault is locked")
 	}
-	byName := map[string]int{}
-	for i := range a.inv.Devices {
-		byName[a.inv.Devices[i].Name] = i
-	}
-	for _, d := range devices {
-		if targetGroup != "" {
-			d.Group = targetGroup
-		}
-		a.ensureGroupExists(d.Group)
-		if i, ok := byName[d.Name]; ok {
-			a.inv.Devices[i] = d
-		} else {
-			byName[d.Name] = len(a.inv.Devices)
-			a.inv.Devices = append(a.inv.Devices, d)
-		}
-	}
+	pv.Summary = bundle.Preview(a.inv, c, bundle.Options{TargetGroup: targetGroup, OverwriteShared: overwriteShared})
 	a.mu.Unlock()
-	if err := a.persist(); err != nil {
-		return 0, err
+	return pv, nil
+}
+
+// readImportFile loads a manifest (.json) as a bundle or anything else as a
+// devices CSV.
+func readImportFile(path string) (bundle.Contents, string, error) {
+	if strings.EqualFold(filepath.Ext(path), ".json") {
+		c, err := bundle.Read(path)
+		return c, "bundle", err
 	}
-	return len(devices), nil
+	c, err := bundle.ReadDevicesCSV(path)
+	return c, "csv", err
+}
+
+// ApplyImport merges the previewed file into the vault (rules: bundle.Apply)
+// and returns what happened.
+func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bundle.Summary, error) {
+	c, _, err := readImportFile(path)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return nil, fmt.Errorf("vault is locked")
+	}
+	s, changed := bundle.Apply(a.inv, c, bundle.Options{TargetGroup: targetGroup, OverwriteShared: overwriteShared})
+	a.mu.Unlock()
+	for _, p := range changed {
+		a.profiles.Add(profile.Quote(p))
+	}
+	if err := a.persist(); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// OpenExportFolder opens a folder under export\ in Explorer (offered after
+// 一式書出). Anything outside export\ is refused.
+func (a *App) OpenExportFolder(dir string) error {
+	root, err := filepath.Abs(filepath.Join(exeDir(), "export"))
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("export フォルダの外は開けません")
+	}
+	return exec.Command("explorer", abs).Start()
 }
 
 // ReorderDeviceGroups sets the display order of groups to match the given list

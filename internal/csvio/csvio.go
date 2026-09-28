@@ -6,16 +6,21 @@
 //	method:host:port:user:pass:auth:keyfile | method:host:...
 //
 // (up to model.MaxBastions hops, "|"-separated, outermost first). Empty trailing fields may be
-// omitted. A bastion's key passphrase, legacy-cipher flag and jump command are
-// not part of the encoding — set those in the app. The field order is fixed
-// with keyfile last so a Windows path's own colons survive the round trip, so
-// new fields cannot simply be appended. Passwords are written in clear text —
-// treat exported CSV as sensitive and delete it after re-import.
+// omitted. The field order is fixed with keyfile last so a Windows path's own
+// colons survive the round trip, so new fields cannot simply be appended; the
+// per-hop extras that came later (key passphrase, legacy-cipher flag, jump
+// command) therefore travel in a separate "bastionExtras" column as a JSON
+// array aligned with the hops, empty when no hop uses them. Together with the
+// device-level "legacyAlgos" column this makes the CSV a complete copy of a
+// device. Older CSVs without these columns still import (the extras default to
+// empty). Passwords are written in clear text — treat exported CSV as
+// sensitive and delete it after re-import.
 package csvio
 
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -26,7 +31,8 @@ import (
 var header = []string{
 	"name", "group", "site", "host", "conn", "port", "serialPort", "baud",
 	"osType", "commandSet", "authMethod", "keyFile", "keyPassphrase",
-	"username", "password", "enablePassword", "bastions", "enabled",
+	"username", "password", "enablePassword", "legacyAlgos",
+	"bastions", "bastionExtras", "enabled",
 }
 
 // Export renders devices as CSV text with a header row.
@@ -42,8 +48,8 @@ func Export(devices []model.Device) (string, error) {
 		rec := []string{
 			d.Name, d.Group, d.Site, d.Host, string(d.Conn), itoa(d.Port), d.SerialPort, itoa(d.Baud),
 			d.OSType, d.CommandSet, string(d.AuthMethod), d.KeyFile, d.KeyPassphrase,
-			d.Username, d.Password, d.EnablePassword,
-			encodeBastions(d.Bastions), boolStr(d.Enabled),
+			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
+			encodeBastions(d.Bastions), encodeBastionExtras(d.Bastions), boolStr(d.Enabled),
 		}
 		if err := w.Write(rec); err != nil {
 			return "", err
@@ -103,9 +109,11 @@ func Import(text string) ([]model.Device, error) {
 			Username:       get(row, "username"),
 			Password:       get(row, "password"),
 			EnablePassword: get(row, "enablepassword"),
+			LegacyAlgos:    parseBool(get(row, "legacyalgos"), false),
 			Bastions:       decodeBastions(get(row, "bastions")),
 			Enabled:        parseBool(get(row, "enabled"), true),
 		}
+		applyBastionExtras(d.Bastions, get(row, "bastionextras"))
 		out = append(out, d)
 	}
 	return out, nil
@@ -156,6 +164,58 @@ func decodeBastions(s string) []model.Bastion {
 		}
 	}
 	return out
+}
+
+// bastionExtra is the per-hop part of a bastion that the positional
+// "bastions" column cannot carry. Field names match model.Bastion's JSON so
+// the column reads like the vault.
+type bastionExtra struct {
+	KeyPassphrase string `json:"keyPassphrase,omitempty"`
+	LegacyAlgos   bool   `json:"legacyAlgos,omitempty"`
+	JumpCommand   string `json:"jumpCommand,omitempty"`
+}
+
+func encodeBastionExtras(bs []model.Bastion) string {
+	if len(bs) == 0 {
+		return ""
+	}
+	extras := make([]bastionExtra, len(bs))
+	any := false
+	for i, b := range bs {
+		extras[i] = bastionExtra{KeyPassphrase: b.KeyPassphrase, LegacyAlgos: b.LegacyAlgos, JumpCommand: b.JumpCommand}
+		if b.KeyPassphrase != "" || b.LegacyAlgos || b.JumpCommand != "" {
+			any = true
+		}
+	}
+	if !any {
+		return ""
+	}
+	data, err := json.Marshal(extras)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// applyBastionExtras merges the JSON extras column into the decoded hops by
+// position. A malformed or absent column leaves the hops as decoded.
+func applyBastionExtras(bs []model.Bastion, s string) {
+	s = strings.TrimSpace(s)
+	if s == "" || len(bs) == 0 {
+		return
+	}
+	var extras []bastionExtra
+	if err := json.Unmarshal([]byte(s), &extras); err != nil {
+		return
+	}
+	for i := range bs {
+		if i >= len(extras) {
+			break
+		}
+		bs[i].KeyPassphrase = extras[i].KeyPassphrase
+		bs[i].LegacyAlgos = extras[i].LegacyAlgos
+		bs[i].JumpCommand = extras[i].JumpCommand
+	}
 }
 
 func itoa(i int) string {
