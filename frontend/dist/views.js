@@ -517,6 +517,11 @@ function editDevice(dev, preGroup) {
     }));
     return arr;
   }
+  // Hops after the first are reached by an ssh/telnet command typed on the
+  // previous hop's shell (runner.traverseBastions), so PalaTerm's own key file
+  // and legacy-cipher switch only ever apply to hop 1. The fields stay in the
+  // DOM (collectBastions reads them) but are hidden with a note for hop 2+.
+  const NOTE_HOP = "2段目以降の認証は手前の踏み台の ssh / telnet コマンドが行うため、ここで使われるのはユーザー名とパスワードだけです。鍵認証やレガシー暗号は、手前の踏み台側の ssh 設定（~/.ssh の鍵など）で用意してください。";
   function renderBastions() {
     bhost.innerHTML = bastions.map((b, i) => `
       <div class="card" data-bastion-row style="padding:14px 16px;margin:10px 0">
@@ -532,17 +537,18 @@ function editDevice(dev, preGroup) {
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label>
             <input class="b-port" type="number" value="${esc(String(b.port || (b.method === "telnet" ? 23 : 22)))}"></div>
         </div>
-        <div class="field" style="margin-bottom:8px${b.method === "telnet" ? ";display:none" : ""}" data-b-legacy>
+        <div class="field" style="margin-bottom:8px${b.method === "telnet" || i > 0 ? ";display:none" : ""}" data-b-legacy>
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))}</label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
+          <div class="field" style="margin-bottom:8px${i > 0 ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
             <option value="publickey" ${b.authMethod === "publickey" ? "selected" : ""}>${esc(t("公開鍵"))}</option></select></div>
         </div>
-        <div class="grid-2">
+        ${i > 0 ? `<div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t(NOTE_HOP))}</div>` : ""}
+        <div class="grid-2" ${i > 0 ? 'style="display:none"' : ""}>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
             <div class="row-inline" style="gap:6px">
               <input class="b-key" style="flex:1" value="${esc(b.keyFile || "")}">
@@ -574,7 +580,8 @@ function editDevice(dev, preGroup) {
       const portInp = row.querySelector(".b-port");
       const p = parseInt(portInp.value, 10) || 0;
       if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
-      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" ? "none" : "";
+      const first = row === bhost.querySelector("[data-bastion-row]");
+      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || !first ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
     bhost.querySelectorAll(".b-auth").forEach(sel => sel.onchange = () => {

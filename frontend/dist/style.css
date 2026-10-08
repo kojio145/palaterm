@@ -144,6 +144,7 @@ tr:hover td { background: var(--bg-2); }
 .st-saving { background: var(--run); }
 .st-done { background: var(--ok); }
 .st-error { background: var(--err); }
+.st-canceled { background: var(--warn); }
 
 /* Password show/hide toggle. It sits on dark input backgrounds, so it carries
    its own surface and border: a bare translucent glyph reads as a smudge
@@ -259,6 +260,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .pbar i { display: block; height: 100%; background: var(--run); transition: width .3s ease; }
 .pbar i.pf-done { background: var(--ok); }
 .pbar i.pf-error { background: var(--err); }
+.pbar i.pf-canceled { background: var(--warn); }
 .pbar i.pf-queued { background: #475569; }
 .pbar i.pf-connecting, .pbar i.pf-login { background: var(--warn); }
 /* Phases still waiting on the device pulse, so a stalled row reads as alive. */

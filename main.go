@@ -54,9 +54,11 @@ func runMainApp() {
 func runTerminalWindow(device string) {
 	t := NewTerm(device)
 	err := wails.Run(&options.App{
-		Title:  "PalaTerm - " + device,
-		Width:  900,
-		Height: 560,
+		Title:     "PalaTerm - " + device,
+		Width:     1200,
+		Height:    760,
+		MinWidth:  640,
+		MinHeight: 400,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

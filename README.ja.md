@@ -8,7 +8,7 @@ English version: [README.md](README.md)
 ログ取得・コマンド一括実行・設定変更を並列で行うWindows用ツールです。Tera Term マクロや手作業のログ採取の置き換えを想定しています。
 単一のポータブルexeで動作し、インストール不要です。紹介ページ: https://kojio145.github.io/palaterm/
 
-> **開発状況: v1.4.1（β）。** 動作しますが荒削りな部分があります。Issueでのフィードバック歓迎です。
+> **開発状況: v1.4.2（β）。** 動作しますが荒削りな部分があります。Issueでのフィードバック歓迎です。
 
 ![実行タブ: 4台へコマンドセットを並列実行中](docs/img/run-ja.png)
 
@@ -33,7 +33,7 @@ English version: [README.md](README.md)
 
 ## インストール
 
-不要です。[Releases](../../releases) から `PalaTerm.exe` をダウンロードして実行してください。
+不要です。[Releases](../../releases) から `PalaTerm-vX.Y-win64.zip` をダウンロードして展開し、できた `PalaTerm` フォルダごと好きな場所（例: `C:\Tools\PalaTerm`）に置いて、中の `PalaTerm.exe` を実行してください。vault・ログ・書き出しはそのフォルダの中に作られるので、exe の周りが散らかりません。更新用に `PalaTerm.exe` 単体も添付しています（フォルダはそのまま、exe だけ差し替え）。
 PalaTerm のデータ（暗号化vault・ログ・書き出しファイル）はすべて exe の隣に作られます。
 唯一の例外は WebView2 ランタイム自身のブラウザキャッシュで、Windows が
 `%APPDATA%\PalaTerm.exe\EBWebView\` に作ります（PalaTerm のデータは含まれません）。

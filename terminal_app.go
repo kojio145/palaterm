@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ type Term struct {
 	send     func(string) error
 	resizeFn func(cols, rows int) error
 	closeFn  func() error
+	logDir   string // Settings.LogDir once the vault is open ("" => logs/)
 }
 
 // NewTerm builds the terminal-window backend and starts reading the password
@@ -181,6 +183,9 @@ func (t *Term) connect(pw string) {
 		logMu.Unlock()
 		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.deviceArg, Data: base64.StdEncoding.EncodeToString(b)})
 	}
+	t.mu.Lock()
+	t.logDir = settings.LogDir
+	t.mu.Unlock()
 	onClose := func() {
 		logMu.Lock()
 		data := append([]byte(nil), logBuf...)
@@ -233,6 +238,28 @@ func (t *Term) Resize(cols, rows int) error {
 // API inside WebView2 is not reliably available to the page.
 func (t *Term) SetClipboard(text string) error {
 	return runtime.ClipboardSetText(t.ctx, text)
+}
+
+// GetClipboard returns the OS clipboard text for the paste-confirmation
+// dialog (Alt+V / right-click / toolbar), read in Go for the same reason
+// SetClipboard writes in Go.
+func (t *Term) GetClipboard() (string, error) {
+	return runtime.ClipboardGetText(t.ctx)
+}
+
+// OpenLogDir opens the log folder in Explorer — the same folder the main
+// window's ログフォルダを開く uses, so the interactive log saved on close is
+// one click away from this window too.
+func (t *Term) OpenLogDir() error {
+	t.mu.Lock()
+	dir := t.logDir
+	t.mu.Unlock()
+	if dir == "" {
+		dir = "logs"
+	}
+	abs := logstore.ResolveRoot(dir)
+	_ = os.MkdirAll(abs, 0o755)
+	return exec.Command("explorer", abs).Start()
 }
 
 // Close ends the session.

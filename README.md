@@ -12,7 +12,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.4.1 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.4.2 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 ![Run tab: four devices executing a command set in parallel](docs/img/run-en.png)
 
@@ -41,7 +41,7 @@ Windows exe — no installation required.
 
 ## Installation
 
-None needed. Download `PalaTerm.exe` from [Releases](../../releases) and run it.
+None needed. Download `PalaTerm-vX.Y-win64.zip` from [Releases](../../releases), extract it, and put the `PalaTerm` folder wherever you like (e.g. `C:\Tools\PalaTerm`). Run `PalaTerm.exe` inside it — the vault, logs and exports are created in that folder, so nothing is scattered around the exe. The bare `PalaTerm.exe` is also attached for updating in place: replace the exe, keep the folder.
 All PalaTerm data (encrypted vault, logs, exports) is written next to the exe.
 The only exception is the WebView2 runtime's own browser cache, which Windows keeps
 under `%APPDATA%\PalaTerm.exe\EBWebView\` (no PalaTerm data is stored there).

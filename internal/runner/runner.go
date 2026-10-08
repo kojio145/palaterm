@@ -29,6 +29,11 @@ const (
 	PhaseSaving     Phase = "saving"
 	PhaseDone       Phase = "done"
 	PhaseError      Phase = "error"
+	// PhaseCanceled: the run was stopped by the user before this device
+	// finished — either it never started, or it was cut off mid-way. Kept
+	// apart from PhaseError so the UI can offer "re-run what was cut off"
+	// without lumping it in with devices that actually failed.
+	PhaseCanceled Phase = "canceled"
 )
 
 // Event is a progress update emitted during a run. During PhaseRunning, Done
@@ -53,6 +58,28 @@ type DeviceResult struct {
 	LogPath    string        `json:"logPath,omitempty"`
 	Elapsed    time.Duration `json:"elapsed"`
 	Transcript string        `json:"-"`
+	// Canceled is set when the batch was stopped (中止) before this device
+	// completed. Success is false; Error says whether it never ran or was
+	// interrupted.
+	Canceled bool `json:"canceled,omitempty"`
+}
+
+// CanceledMsg / CanceledNotRunMsg are the messages a stopped run leaves on
+// its devices (the UI translates them).
+const (
+	CanceledMsg       = "中止しました"
+	CanceledNotRunMsg = "中止しました（未実行）"
+)
+
+// finishPhase picks the terminal phase for a failed device: canceled when the
+// run was stopped, error otherwise.
+func finishPhase(ctx context.Context, res *DeviceResult) Phase {
+	if ctx.Err() != nil {
+		res.Canceled = true
+		res.Error = CanceledMsg
+		return PhaseCanceled
+	}
+	return PhaseError
 }
 
 // EmitFunc receives progress events; may be nil.
@@ -101,12 +128,13 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 	}
 	if err != nil {
 		res.Error = err.Error()
+		ph := finishPhase(ctx, &res)
 		if exp != nil {
 			res.Transcript = exp.Transcript()
 		}
 		r.saveLog(&res, dev, s, runDir, now)
 		res.Elapsed = time.Since(start)
-		r.emit(emit, dev.Name, PhaseError, res.Error)
+		r.emit(emit, dev.Name, ph, res.Error)
 		return res
 	}
 
@@ -162,7 +190,7 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 	if res.Success {
 		r.emit(emit, dev.Name, PhaseDone, res.LogPath)
 	} else {
-		r.emit(emit, dev.Name, PhaseError, res.Error)
+		r.emit(emit, dev.Name, finishPhase(ctx, &res), res.Error)
 	}
 	return res
 }
@@ -817,6 +845,13 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 		go func(idx int, d *model.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// A device whose turn comes after 中止 is reported as never run,
+			// not as an error: nothing was attempted against it.
+			if ctx.Err() != nil {
+				results[idx] = DeviceResult{Device: d.Name, Canceled: true, Error: CanceledNotRunMsg}
+				r.emit(emit, d.Name, PhaseCanceled, CanceledNotRunMsg)
+				return
+			}
 			var set *model.CommandSet
 			if cs, ok := sets[d.CommandSet]; ok {
 				set = cs

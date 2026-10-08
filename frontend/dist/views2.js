@@ -155,6 +155,14 @@ function editCommandSet(set) {
 
 // ---- Run tab ----
 let running = false;
+// True between pressing ■ 中止 and the backend's run:done, so the button can
+// say 中止中… and the completion toast can say what was stopped.
+let cancelling = false;
+// Devices the last run left unfinished: real failures plus the ones 中止 cut
+// off or never started. Both can be re-run with one button.
+function unfinishedNames() {
+  return Object.keys(runState).filter(n => ["error", "canceled"].includes((runState[n] || {}).phase));
+}
 // Group last chosen with the run tab's group selector (kept across re-renders
 // so the selector and the heading show what is targeted).
 let runGroupSel = "";
@@ -173,6 +181,7 @@ function runPct(st) {
     case "saving": return 97;
     case "done": return 100;
     case "error": return Math.max(12, 25 + cmdPart);
+    case "canceled": return st.total > 0 ? Math.max(12, 25 + cmdPart) : 0;
     default: return 0; // queued / off
   }
 }
@@ -198,8 +207,11 @@ function renderRun() {
     // phase itself is already spelled out beside the status dot. During a
     // command's configured 待機 the seconds still to go ride alongside it, so a
     // long pause reads as a countdown instead of a frozen row.
-    const wait = st.waitSec > 0 ? ` <span class="pwait">${esc(t("待機 あと{n}秒", { n: st.waitSec }))}</span>` : "";
-    const pnum = st.total > 0 ? `<div class="pnum">${st.done || 0}/${st.total}${wait}</div>` : "";
+    // Beside the count: how long until *all* of this device's remaining
+    // commands are done (not just the current command's pause) — refreshed
+    // every second by updateEta via the data-dev hook.
+    const eta = devEta(d.name, st);
+    const pnum = st.total > 0 ? `<div class="pnum">${st.done || 0}/${st.total}<span class="pwait pdev-eta" data-dev="${esc(d.name)}">${eta ? " " + esc(eta) : ""}</span></div>` : "";
     const pbar = st.phase === "off" ? ""
       : `<div class="pbar" data-tip="${esc(tip)}"><i class="pf-${st.phase}" style="width:${pct}%"></i></div>${pnum}`;
     return `<tr>
@@ -218,7 +230,13 @@ function renderRun() {
   }).join("");
 
   const enabledCount = devs.filter(d => d.enabled).length;
-  const failedCount = Object.keys(runState).filter(n => (runState[n] || {}).phase === "error").length;
+  const vals = Object.values(runState);
+  const failedCount = vals.filter(s => s.phase === "error").length;
+  const canceledCount = vals.filter(s => s.phase === "canceled").length;
+  const retryLabel = failedCount && canceledCount ? t("↻ 失敗・中断のみ再実行（{n}台）", { n: failedCount + canceledCount })
+    : canceledCount ? t("↻ 中断分のみ再実行（{n}台）", { n: canceledCount })
+    : t("↻ 失敗のみ再実行（{n}台）", { n: failedCount });
+  const hasResults = vals.length > 0;
   const groups = INV.deviceGroups || [];
   root.innerHTML = `
     <div class="page-head">
@@ -227,8 +245,9 @@ function renderRun() {
     </div>
     <div class="run-toolbar">
       <button class="btn run" id="btn-run" ${running || enabledCount === 0 ? "disabled" : ""}>${esc(t("▶ 一括実行"))}</button>
-      <button class="btn danger" id="btn-cancel" ${running ? "" : "disabled"}>${esc(t("■ 中止"))}</button>
-      ${!running && failedCount ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(t("↻ 失敗のみ再実行（{n}台）", { n: failedCount }))}</button>` : ""}
+      <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
+      ${!running && (failedCount || canceledCount) ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(retryLabel)}</button>` : ""}
+      ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「待機」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
       ${groups.length ? `<select id="run-grp" class="btn" style="padding-right:8px" ${running ? "disabled" : ""}>
         <option value="">${esc(t("グループで対象を選択…"))}</option>
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
@@ -251,19 +270,37 @@ function renderRun() {
     </div>`;
 
   document.getElementById("btn-run").onclick = startRun;
-  document.getElementById("btn-cancel").onclick = () => App().CancelRun();
+  document.getElementById("btn-cancel").onclick = async () => {
+    // Stopping is immediate for queued devices; a device in the middle of a
+    // command stops as soon as that command's read returns. The confirm
+    // prevents a stray click from killing a long batch.
+    const inFlight = Object.values(runState).filter(s => ["connecting", "login", "running", "saving"].includes(s.phase)).length;
+    const queued = Object.values(runState).filter(s => s.phase === "queued").length;
+    const ok = await uiConfirm({
+      title: t("一括実行を中止"),
+      message: t("実行中 <b>{a} 台</b>を打ち切り、未実行 <b>{b} 台</b>は開始しません。<br>完了済みの機器のログはそのまま残ります。中止しますか？", { a: inFlight, b: queued }),
+      okLabel: t("■ 中止する"),
+      danger: true,
+    });
+    if (!ok || !running) return;
+    cancelling = true;
+    renderRun();
+    App().CancelRun();
+  };
   const btnRetry = document.getElementById("btn-retry");
-  if (btnRetry) btnRetry.onclick = retryFailed;
+  if (btnRetry) btnRetry.onclick = retryUnfinished;
+  const btnClear = document.getElementById("btn-clear");
+  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
     // Results (and the 失敗のみ再実行 button) belong to the previous group's
     // run — warn before dropping them along with the switch.
-    const failed = Object.keys(runState).filter(n => (runState[n] || {}).phase === "error").length;
+    const failed = unfinishedNames().length;
     if (failed) {
       const ok = await uiConfirm({
         title: t("実行結果のクリア"),
-        message: t("グループを切り替えると、前回の実行結果と「↻ 失敗のみ再実行（{n}台）」ボタンは消えます。<br>切り替えますか？", { n: failed }),
+        message: t("グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中断 {n}台）は消えます。<br>切り替えますか？", { n: failed }),
         okLabel: t("切り替える"),
         danger: true,
       });
@@ -304,7 +341,7 @@ function fmtRunMsg(m) {
 
 function statusLabel(p) {
   return ({ queued: t("待機"), off: t("対象外"), connecting: t("接続中"), login: t("ログイン中"),
-    running: t("実行中"), saving: t("保存中"), done: t("完了"), error: t("エラー") }[p]) || p;
+    running: t("実行中"), saving: t("保存中"), done: t("完了"), error: t("エラー"), canceled: t("中止") }[p]) || p;
 }
 
 async function startRun() {
@@ -327,9 +364,13 @@ async function startRun() {
 // The actual batch kick-off (shared by 一括実行 and 失敗のみ再実行).
 // With names, only those devices run (checkbox state is left untouched).
 async function doRun(names) {
-  for (const k in runState) delete runState[k];
+  // A full run starts from a clean table; a partial re-run (失敗・中断のみ)
+  // resets only its own rows, so the devices that already finished keep
+  // showing 完了 and their ログ表示 link.
+  if (!names) for (const k in runState) delete runState[k];
   const targets = names || (INV.devices || []).filter(d => d.enabled).map(d => d.name);
   targets.forEach(n => runState[n] = { phase: "queued" });
+  cancelling = false;
   // For the overall ETA: how many commands each target will run.
   runTargets = targets.slice();
   runTotals = {};
@@ -379,19 +420,55 @@ function updateEta() {
   if (!running) { clearInterval(etaTimer); etaTimer = 0; }
   const el = document.getElementById("rc-eta");
   if (el) el.textContent = running ? computeEta() : "—";
+  document.querySelectorAll(".pdev-eta").forEach(sp => {
+    const eta = running ? devEta(sp.dataset.dev, runState[sp.dataset.dev] || {}) : "";
+    sp.textContent = eta ? " " + eta : "";
+  });
 }
 
-// Re-run only the devices that errored in the last batch.
-async function retryFailed() {
-  const failed = Object.keys(runState).filter(n => (runState[n] || {}).phase === "error");
-  if (!failed.length) return;
+// ---- per-device 残り時間 ----
+// Configured pauses of a device's command set, one per command (serial
+// devices use the serial column).
+function devPauses(name) {
+  const d = (INV.devices || []).find(x => x.name === name);
+  const cs = d && (INV.commandSets || []).find(s => s.name === d.commandSet);
+  if (!cs) return [];
+  return (cs.commands || []).map(c => d.conn === "serial" ? (c.serialSec || 0) : (c.pauseSec || 0));
+}
+
+// Time until every remaining command of this device has finished. The
+// configured pauses are known exactly; the time a command itself takes is
+// learned from the ones already done on this device (elapsed since the
+// command phase started, minus the pauses spent). Until the first command
+// finishes there is nothing to learn from, so it says 計測中…. The part of
+// the current command already spent is subtracted, so the figure counts
+// down steadily instead of jumping at each command boundary.
+function devEta(name, st) {
+  if (st.phase !== "running" || !st.total || !st.startedAt) return "";
+  const pauses = devPauses(name);
+  const done = Math.min(st.done || 0, st.total);
+  if (done <= 0) return t("残り {t}", { t: t("計測中…") });
+  const sum = arr => arr.reduce((a, b) => a + b, 0);
+  const elapsed = (Date.now() - st.startedAt) / 1000;
+  const donePause = sum(pauses.slice(0, done));
+  const avgExec = Math.max(0, (elapsed - donePause) / done);
+  const planned = sum(pauses.slice(done)) + avgExec * (st.total - done);
+  const spentInCurrent = Math.max(0, elapsed - (donePause + avgExec * done));
+  return t("残り {t}", { t: fmtDur(Math.max(0, planned - spentInCurrent)) });
+}
+
+// Re-run the devices the last batch left unfinished: failures, plus the
+// ones 中止 interrupted or never started.
+async function retryUnfinished() {
+  const names = unfinishedNames();
+  if (!names.length) return;
   const ok = await uiConfirm({
-    title: t("失敗のみ再実行"),
-    message: t("失敗した <b>{n} 台</b>のみ再実行します。よろしいですか？", { n: failed.length }),
+    title: t("失敗・中断のみ再実行"),
+    message: t("失敗・中断した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？", { n: names.length }),
     okLabel: t("↻ 再実行"),
   });
   if (!ok) return;
-  doRun(failed);
+  doRun(names);
 }
 
 function updateRunRow(name) {
@@ -433,6 +510,7 @@ function wireEvents() {
     runState[ev.device] = { phase: ev.phase, message: ev.message,
       done: ev.phase === "running" ? (ev.done || 0) : prev.done,
       total: ev.phase === "running" ? (ev.total || 0) : prev.total,
+      startedAt: ev.phase === "running" ? (prev.phase === "running" && prev.startedAt ? prev.startedAt : Date.now()) : prev.startedAt,
       // Seconds left of the command's configured 待機. Absent on every other
       // event, which is what clears the countdown once the pause is over.
       waitSec: ev.waitSec || 0,
@@ -446,18 +524,24 @@ function wireEvents() {
     (results || []).forEach(r => {
       const prev = runState[r.device] || {};
       runState[r.device] = {
-        phase: r.success ? "done" : "error",
+        phase: r.success ? "done" : (r.canceled ? "canceled" : "error"),
         message: r.success ? (r.logPath || "") : r.error,
         logPath: r.logPath,
         done: r.success ? prev.total : prev.done,
         total: prev.total,
       };
     });
+    const wasCancel = cancelling;
+    cancelling = false;
     const active = document.querySelector(".tab.active");
     if (active && active.id === "tab-run") renderRun();
     // Clear the "実行中" notice on the settings tab (unless mid-edit).
     else if (active && active.id === "tab-settings" && !settingsDirty) renderSettings();
-    toast(t("実行が完了しました"), "ok");
+    if (wasCancel) {
+      const v = Object.values(runState);
+      toast(t("中止しました（完了 {a}・失敗 {b}・中断/未実行 {c}）", {
+        a: v.filter(s => s.phase === "done").length, b: v.filter(s => s.phase === "error").length, c: v.filter(s => s.phase === "canceled").length }), "ok");
+    } else toast(t("実行が完了しました"), "ok");
   });
 }
 

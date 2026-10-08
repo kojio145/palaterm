@@ -146,6 +146,11 @@
   td:first-child { font-weight: 600; white-space: nowrap; }
   td .must { color: var(--err); font-family: var(--mono); font-size: 11px; }
   .scroll { overflow-x: auto; }
+  /* Screenshots */
+  figure.shot { margin: 18px 0 22px; }
+  figure.shot img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+  figure.shot figcaption { color: var(--ink-faint); font-size: 13px; margin-top: 8px; padding-left: 2px; }
   tbody tr:last-child td { border-bottom: none; }
 
   /* OS grid */
@@ -188,7 +193,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.4.1</div>
+    <div class="hero-tag">使い方マニュアル / v1.4.2</div>
   </header>
 
   <nav class="toc">
@@ -212,7 +217,7 @@
     <h2 class="step"><span class="num">1</span>起動とマスターパスワード</h2>
     <p class="lead">機器の認証情報を暗号化して守るための、最初の1回だけの設定です。</p>
 
-    <p>起動するのは <code>PalaTerm.exe</code> です（インストール不要・ダブルクリックで起動）。
+    <p>配布物は <code>PalaTerm-vX.Y-win64.zip</code> です。展開してできた <strong><code>PalaTerm</code> フォルダごと</strong>好きな場所（例: <code>C:\Tools\PalaTerm</code>）に置き、中の <code>PalaTerm.exe</code> をダブルクリックで起動します（インストール不要）。vault・ログ・書き出しはこのフォルダの中に作られるので、デスクトップに exe を直接置くより散らかりません。更新は新しい <code>PalaTerm.exe</code> でフォルダ内の exe を置き換えるだけです。
     ソース一式のフォルダから使う場合は <code>build\bin\PalaTerm.exe</code> が本体です —
     別の場所にある同名ファイルを起動すると「Wails applications will not build...」というエラーになります。</p>
 
@@ -225,6 +230,7 @@
       <li>下の欄に<strong>もう一度同じもの</strong>を入力します。</li>
       <li><strong>「作成して開始」</strong>を押すと、メイン画面に入ります。</li>
     </ol>
+    <figure class="shot" data-shot="00_lock_create"><img src="img/manual/00_lock_create.png" alt="初回起動: マスターパスワードを決めて「作成して開始」" loading="lazy"><figcaption>初回起動: マスターパスワードを決めて「作成して開始」</figcaption></figure>
 
     <div class="callout tip"><span class="ic">i</span><p>2回目以降の起動では、このマスターパスワードを入力して<strong>ロック解除</strong>するだけになります。暗号化ファイルは <code>data\palaterm_vault.enc</code> に作られます。</p></div>
 
@@ -234,7 +240,7 @@
       <thead><tr><th>フォルダ</th><th>中身</th></tr></thead>
       <tbody>
         <tr><td><code>logs\</code></td><td>実行ログの保存先（既定。ログ設定で変更可）</td></tr>
-        <tr><td><code>exportundles\</code></td><td>「一式書出」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
+        <tr><td><code>export\bundles\</code></td><td>「一式書出」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
         <tr><td><code>export\command-sets\</code></td><td>コマンドセット単体ファイル読込の既定フォルダ</td></tr>
         <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読込の既定フォルダ（標準14種のJSONを自動配置。アプリが消すことはない）</td></tr>
         <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）</td></tr>
@@ -275,6 +281,7 @@
         <tr><td>ロック</td><td>マスターパスワード入力画面に戻ります。</td></tr>
       </tbody>
     </table></div>
+    <figure class="shot" data-shot="17_about"><img src="img/manual/17_about.png" alt="バージョン情報" loading="lazy"><figcaption>バージョン情報</figcaption></figure>
 
     <h3>ボタンの色</h3>
     <p>一覧のボタンは全画面共通で、機能ごとに色が決まっています。</p>
@@ -308,6 +315,8 @@
       <li><strong>「保存」</strong>を押します。</li>
     </ol>
 
+    <figure class="shot" data-shot="04_commands"><img src="img/manual/04_commands.png" alt="コマンドセットの一覧" loading="lazy"><figcaption>コマンドセットの一覧</figcaption></figure>
+    <figure class="shot" data-shot="05_command_edit"><img src="img/manual/05_command_edit.png" alt="コマンドセットの編集。1行1コマンドと待機秒" loading="lazy"><figcaption>コマンドセットの編集。1行1コマンドと待機秒</figcaption></figure>
     <p>各行は「コマンド ＋ 待機(リモート) ＋ 待機(シリアル)」の形です。例（Cisco IOS の設定バックアップ）:</p>
     <div class="scroll"><table>
       <thead><tr><th>コマンド</th><th>待機(リモート)</th><th>待機(シリアル)</th></tr></thead>
@@ -323,7 +332,7 @@
     <h3>ファイルでの読込・書出</h3>
     <p><strong>「ファイル読込」</strong>で1ファイルを選んで取り込みます（<code>コマンド,リモート秒,シリアル秒</code> 形式。ファイル名がセット名になり、同名セットは置き換え）。
     CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイル（旧ツールの Show_Command_Pattern）もそのまま読み込めます。
-    書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うセットが <code>exportundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
+    書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うセットが <code>export\bundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
   </section>
 
   <section id="device">
@@ -338,6 +347,9 @@
       <li>下の各項目を入力します。<strong>グループ（会社）</strong>欄で所属グループを変更することもできます。</li>
       <li><strong>「保存」</strong>を押すと一覧に追加されます。</li>
     </ol>
+    <figure class="shot" data-shot="01_groups"><img src="img/manual/01_groups.png" alt="機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ" loading="lazy"><figcaption>機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ</figcaption></figure>
+    <figure class="shot" data-shot="02_devices"><img src="img/manual/02_devices.png" alt="グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除" loading="lazy"><figcaption>グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除</figcaption></figure>
+    <figure class="shot" data-shot="03_device_edit"><img src="img/manual/03_device_edit.png" alt="機器の編集画面（上部: 基本項目と認証情報）" loading="lazy"><figcaption>機器の編集画面（上部: 基本項目と認証情報）</figcaption></figure>
     <p>グループ一覧の画面では、各グループの機器台数が表示され、<strong>カードをドラッグして並び順を変更</strong>できます。
     グループ内の一覧では、上部の<strong>「グループ名変更」「グループ削除」</strong>が使えます（削除しても機器自体は残り、グループ未設定になります）。</p>
 
@@ -365,10 +377,12 @@
       </tbody>
     </table></div>
 
+    <figure class="shot" data-shot="03b_device_edit_bastion"><img src="img/manual/03b_device_edit_bastion.png" alt="機器の編集画面（下部: 踏み台チェーン。2段目以降は鍵欄が出ない）" loading="lazy"><figcaption>機器の編集画面（下部: 踏み台チェーン。2段目以降は鍵欄が出ない）</figcaption></figure>
     <h3>踏み台サーバ（任意・最大5段）</h3>
     <p><strong>「＋ 踏み台を追加」</strong>で、踏み台（ジャンプサーバ）を<strong>最大5段まで</strong>登録できます。
     外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
-    ホスト・ユーザー・パスワードを設定します（SSHは公開鍵認証も可）。
+    ホスト・ユーザー・パスワードを設定します（<strong>1段目</strong>のSSHは公開鍵認証・レガシー暗号の許可も可）。
+    <strong>2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進む</strong>ため、その認証は手前の踏み台側の ssh クライアントが行います。PalaTerm に登録した鍵ファイルが使われるのは1段目だけで、2段目以降を鍵認証にしたい場合は手前の踏み台に鍵を置いてください（編集画面でも2段目以降は鍵の欄が出ません）。
     次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。踏み台を1つも追加しなければ直接接続です。</p>
 
     <h3>一覧上で直接編集・複製・削除・並び替え</h3>
@@ -381,9 +395,13 @@
     ポート番号の範囲などを自動でチェックし、問題があればメッセージを出して保存しません。
     入力途中に画面の他の場所を押しても内容は消えません（「キャンセル」か「保存」を押すまで保持されます）。</p>
 
+    <figure class="shot" data-shot="08_export_bundle"><img src="img/manual/08_export_bundle.png" alt="一式書き出しダイアログ。グループまたは全機器を選ぶ" loading="lazy"><figcaption>一式書き出しダイアログ。グループまたは全機器を選ぶ</figcaption></figure>
+    <figure class="shot" data-shot="08b_export_done"><img src="img/manual/08b_export_done.png" alt="書き出し完了。出力先フォルダをそのまま開ける" loading="lazy"><figcaption>書き出し完了。出力先フォルダをそのまま開ける</figcaption></figure>
+    <figure class="shot" data-shot="09_import_dialog"><img src="img/manual/09_import_dialog.png" alt="読み込みダイアログ。グループの扱いと共有物の上書き可否を選んでからファイルを選ぶ" loading="lazy"><figcaption>読み込みダイアログ。グループの扱いと共有物の上書き可否を選んでからファイルを選ぶ</figcaption></figure>
+    <figure class="shot" data-shot="09b_import_preview"><img src="img/manual/09b_import_preview.png" alt="読み込み前の確認画面。新規・上書き・既存のまま残す件数が出る" loading="lazy"><figcaption>読み込み前の確認画面。新規・上書き・既存のまま残す件数が出る</figcaption></figure>
     <h3>一式書出・読込（会社単位の持ち出し／CSVでの一括登録）</h3>
     <p><strong>「一式書出」</strong>は、対象グループ（または全機器）の機器CSV（<code>devices.csv</code>）と、その機器が使う<strong>コマンドセット・OSタイププロファイル</strong>を
-    <code>exportundles\グループ名\</code> にまとめて書き出します。「全機器」を選ぶとコマンドセット・プロファイルも全件含む<strong>完全なバックアップ</strong>になります。
+    <code>export\bundles\グループ名\</code> にまとめて書き出します。「全機器」を選ぶとコマンドセット・プロファイルも全件含む<strong>完全なバックアップ</strong>になります。
     別の PalaTerm へ持ち込むときは、そのフォルダをコピーして<strong>「読込」</strong>で中の <code>palaterm-bundle.json</code> を選びます。</p>
     <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読込」で CSV 単体を選べば機器だけを読み込めます（機器名をキーに、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
     読み込む前に<strong>確認画面</strong>で新規・上書き・既存のまま残す件数が表示されます。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。</p>
@@ -400,6 +418,10 @@
       <li><strong>「▶ 一括実行」</strong>を押します。</li>
       <li>各機器の状態がリアルタイムで更新されます。</li>
     </ol>
+    <figure class="shot" data-shot="10_run_ready"><img src="img/manual/10_run_ready.png" alt="実行タブ。グループを選ぶと対象機器が並ぶ" loading="lazy"><figcaption>実行タブ。グループを選ぶと対象機器が並ぶ</figcaption></figure>
+    <figure class="shot" data-shot="11_run_confirm"><img src="img/manual/11_run_confirm.png" alt="一括実行の確認" loading="lazy"><figcaption>一括実行の確認</figcaption></figure>
+    <figure class="shot" data-shot="12_run_progress_2"><img src="img/manual/12_run_progress_2.png" alt="実行中。機器ごとの進捗バーと全体の予想残り時間" loading="lazy"><figcaption>実行中。機器ごとの進捗バーと全体の予想残り時間</figcaption></figure>
+    <figure class="shot" data-shot="13_run_done"><img src="img/manual/13_run_done.png" alt="完了。各行に「ログ表示」が出る" loading="lazy"><figcaption>完了。各行に「ログ表示」が出る</figcaption></figure>
 
     <p>状態は次のように表示されます。</p>
     <p style="line-height:2.4">
@@ -409,14 +431,25 @@
       <span class="pill ok">完了</span>
       <span class="pill err">エラー</span>
     </p>
-    <p>実行中は、各機器の状態の下に<strong>プログレスバー</strong>が表示され、コマンドの進み具合（完了数/全体数）が機器ごとに見えます。
+    <p>実行中は、各機器の状態の下に<strong>プログレスバー</strong>が表示され、コマンドの進み具合（完了数/全体数）と、<strong>その機器の残りコマンドがすべて終わるまでの残り時間</strong>（設定した待機秒＋これまでのコマンド所要時間からの概算。最初の1コマンドが終わるまでは「計測中…」）が機器ごとに見えます。
     右上には<strong>成功 / 失敗 / 実行中</strong>の件数に加えて<strong>予想残り時間</strong>が表示されます
     （完了済みコマンド数と経過時間からの概算で、実行が進むほど精度が上がります）。
-    途中で止めたいときは<strong>「■ 中止」</strong>を押します（接続待ちの最中でも即座に止まります）。</p>
+    途中で止めたいときは<strong>「■ 中止」</strong>を押します（確認のうえ、接続待ちの最中でも即座に止まります）。</p>
+
+    <figure class="shot" data-shot="14b_cancel_confirm"><img src="img/manual/14b_cancel_confirm.png" alt="■ 中止 を押したときの確認（実行中・未実行の台数）" loading="lazy"><figcaption>■ 中止 を押したときの確認（実行中・未実行の台数）</figcaption></figure>
+    <figure class="shot" data-shot="15_after_cancel"><img src="img/manual/15_after_cancel.png" alt="中止後。打ち切られた機器と未実行の機器は「中止」。再実行とクリアのボタンが出る" loading="lazy"><figcaption>中止後。打ち切られた機器と未実行の機器は「中止」。再実行とクリアのボタンが出る</figcaption></figure>
+    <h3>中止したあと</h3>
+    <p>中止すると、実行中だった機器は打ち切られ、まだ始まっていなかった機器は開始されません。どちらも状態欄に<span class="pill" style="background:#7c5a12;color:#ffe3a3">中止</span>と表示され、
+    <strong>完了済みの機器のログはそのまま残ります</strong>。そのあとは次の3つから選べます。</p>
+    <ul>
+      <li><strong>「▶ 一括実行」</strong> — 最初から全対象をやり直す</li>
+      <li><strong>「↻ 失敗・中断のみ再実行（n台）」</strong> — 失敗した機器と中止で止まった機器だけをやり直す（完了済みはそのまま表示が残ります）</li>
+      <li><strong>「✕ 結果をクリア」</strong> — 表を「待機」に戻す（ログファイルは消えません）</li>
+    </ul>
 
     <h3>失敗した機器だけやり直す</h3>
-    <p>実行後にエラーの機器があると、<strong>「↻ 失敗のみ再実行（n台）」</strong>ボタンが現れます。
-    認証情報や設定を直してからこれを押せば、失敗した機器だけをもう一度実行できます。</p>
+    <p>実行後にエラーの機器があると、<strong>「↻ 失敗のみ再実行（n台）」</strong>ボタンが現れます（中止で止まった機器もあれば「失敗・中断のみ再実行」）。
+    認証情報や設定を直してからこれを押せば、その機器だけをもう一度実行できます。</p>
 
     <div class="callout tip"><span class="ic">i</span><p>同時に接続する台数は「ログ設定」タブの<strong>最大並列数</strong>で調整できます（既定10台）。台数が多くても並列実行されるので、全体の待ち時間は「一番遅い1台」の時間で済みます。実行中は二重実行できません。また実行中に設定を変えても、動いているバッチには反映されず次回から有効です。</p></div>
   </section>
@@ -433,11 +466,16 @@
       <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
       <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
-      <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目もそのまま貼り付きます。複数行を貼ると各行がそのまま機器へ送られるので、設定モードでの貼り付けは内容を確認してから行ってください。</li>
-      <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入ります（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
+      <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>、またはツールバーの<strong>「貼り付け…」</strong>。いずれも Tera Term と同じく<strong>貼り付ける内容の確認ダイアログ</strong>が開きます。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。<kbd>Alt</kbd>+<kbd>V</kbd> のときは「最後に Enter を送る」が最初からオンです。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
+      <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入り、上部バーに「コピーしました」と短く表示されます（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
+      <li>上部バーの<strong>「ログフォルダ」</strong>でログの保存先フォルダを開けます（対話接続のログは切断時に保存され、保存先が画面末尾にも表示されます）。</li>
       <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。</li>
       <li><code>exit</code> で機器から抜けるか、ウィンドウを閉じて終了します。</li>
     </ol>
+    <figure class="shot" data-shot="18_terminal"><img src="img/manual/18_terminal.png" alt="対話接続ウィンドウ（ログイン済みの状態で開く）" loading="lazy"><figcaption>対話接続ウィンドウ（ログイン済みの状態で開く）</figcaption></figure>
+    <figure class="shot" data-shot="19_terminal_paste"><img src="img/manual/19_terminal_paste.png" alt="貼り付けの確認ダイアログ（Alt+V / Ctrl+V / 右クリック / ボタンのいずれでも）" loading="lazy"><figcaption>貼り付けの確認ダイアログ（Alt+V / Ctrl+V / 右クリック / ボタンのいずれでも）</figcaption></figure>
+    <figure class="shot" data-shot="20_terminal_copied"><img src="img/manual/20_terminal_copied.png" alt="マウスで選択するとクリップボードへコピーされ「コピーしました」が出る" loading="lazy"><figcaption>マウスで選択するとクリップボードへコピーされ「コピーしました」が出る</figcaption></figure>
+    <figure class="shot" data-shot="21_terminal_closed"><img src="img/manual/21_terminal_closed.png" alt="切断時。保存したログのパスが画面末尾に出る" loading="lazy"><figcaption>切断時。保存したログのパスが画面末尾に出る</figcaption></figure>
 
     <div class="callout tip"><span class="ic">i</span><p><strong>複数の機器へ同時に別々のウィンドウで接続できます。</strong> それぞれ独立したウィンドウなので、並べて同時作業が可能です。踏み台（最大5段）経由でも自動で通り抜けます。対話接続の内容も<strong>ログファイルに保存</strong>されます（切断時に保存先が画面末尾に表示）。</p></div>
   </section>
@@ -482,6 +520,7 @@
         <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
       </tbody>
     </table></div>
+    <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="ログ設定タブ" loading="lazy"><figcaption>ログ設定タブ</figcaption></figure>
     <div class="callout tip"><span class="ic">i</span><p>変更したら<strong>「保存」</strong>を忘れずに。未保存のまま他のタブへ移ろうとすると確認が出ます。</p></div>
 
     <h3>危険な操作: リセット（全データ初期化）</h3>
@@ -515,6 +554,8 @@
     文字の一部が画面に現れた時点で一致します（部分一致・大文字小文字は区別）。
     たとえば <code>assword:</code> と書けば <code>Password:</code> にも <code>password:</code> にも一致します。</p>
 
+    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準14種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準14種＋自作）</figcaption></figure>
+    <figure class="shot" data-shot="07_profile_edit"><img src="img/manual/07_profile_edit.png" alt="OSタイププロファイルの編集（expect / send の手順）" loading="lazy"><figcaption>OSタイププロファイルの編集（expect / send の手順）</figcaption></figure>
     <h3>プロファイルの項目</h3>
     <div class="scroll"><table>
       <thead><tr><th>項目</th><th>説明</th></tr></thead>
@@ -531,7 +572,7 @@
     <h3>ファイルでの読込・書出</h3>
     <p><strong>「ファイル読込」</strong>でJSONを選んで取り込みます。標準14種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
     <strong>アプリがこれらのファイルを消すことはありません</strong>。標準プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。
-    自作プロファイルの書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うプロファイルが <code>exportundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
+    自作プロファイルの書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うプロファイルが <code>export\bundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
 
     <div class="callout warn"><span class="ic">!</span><p>特定の機種でログインが途中で止まる場合は、その機種の実際のプロンプト表示を確認し、プロファイルの「目印」やログイン手順を実機に合わせて直してください。<strong>迷ったら対話接続で実機の表示を見るのが確実です。</strong></p></div>
   </section>
@@ -591,7 +632,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.4.1 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.4.2 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>
