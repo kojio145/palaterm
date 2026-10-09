@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/kojio145/palaterm/internal/bundle"
+	"github.com/kojio145/palaterm/internal/guard"
+	"github.com/kojio145/palaterm/internal/history"
 	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
@@ -176,6 +179,13 @@ func (s *memHostKeys) SetHostKey(addr, fp string) {
 	s.m[addr] = fp
 }
 
+// Delete forgets the pin for addr.
+func (s *memHostKeys) Delete(addr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, addr)
+}
+
 // exeDir returns the folder PalaTerm.exe runs from (the user-facing tool folder).
 func exeDir() string {
 	exe, err := os.Executable()
@@ -331,6 +341,12 @@ func (a *App) Unlock(password string) error {
 			}
 			seed = true
 		}
+	}
+	// Vaults still on the original default log name move to the current one
+	// (site and stage in the name); a template the user changed is theirs.
+	if inv.Settings.LogNameTemplate == "" || inv.Settings.LogNameTemplate == logstore.OldDefaultTemplate {
+		inv.Settings.LogNameTemplate = logstore.DefaultTemplate
+		seed = true
 	}
 	if seed {
 		if err := vault.Save(a.vaultPath, password, inv); err != nil {
@@ -775,6 +791,58 @@ func (a *App) SaveDeviceGroup(g model.DeviceGroup) error {
 	return a.persist()
 }
 
+// CopyDeviceGroup duplicates a group — its default credentials and every
+// one of its devices — under newName. Device names must stay unique (they
+// name the log files), so each copy gets suffix appended; the copy is
+// refused whole if any resulting name is taken. Returns the device count.
+func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return 0, fmt.Errorf("グループ名は必須です")
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return 0, fmt.Errorf("vault is locked")
+	}
+	src := a.inv.Group(name)
+	if src == nil {
+		a.mu.Unlock()
+		return 0, fmt.Errorf("グループ「%s」が見つかりません", name)
+	}
+	if a.inv.Group(newName) != nil {
+		a.mu.Unlock()
+		return 0, fmt.Errorf("同名のグループ「%s」が既にあります", newName)
+	}
+	taken := map[string]bool{}
+	for _, d := range a.inv.Devices {
+		taken[d.Name] = true
+	}
+	var copies []model.Device
+	for _, d := range a.inv.Devices {
+		if d.Group != name {
+			continue
+		}
+		c := d
+		c.Name = d.Name + suffix
+		c.Group = newName
+		c.Bastions = append([]model.Bastion(nil), d.Bastions...)
+		if taken[c.Name] {
+			a.mu.Unlock()
+			return 0, fmt.Errorf("機器名「%s」は既に使われています。別の接尾辞を指定してください", c.Name)
+		}
+		taken[c.Name] = true
+		copies = append(copies, c)
+	}
+	g := *src
+	g.Name = newName
+	g.Members = nil
+	a.inv.DeviceGroups = append(a.inv.DeviceGroups, g)
+	a.inv.Devices = append(a.inv.Devices, copies...)
+	a.mu.Unlock()
+	return len(copies), a.persist()
+}
+
 // DeleteDeviceGroup removes a device group. Its devices are kept but ungrouped.
 func (a *App) DeleteDeviceGroup(name string) error {
 	a.mu.Lock()
@@ -904,6 +972,8 @@ func (a *App) SaveSettings(s model.Settings) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
+	// The form never shows LastKeyFile; keep it instead of blanking it.
+	s.LastKeyFile = a.inv.Settings.LastKeyFile
 	a.inv.Settings = s
 	a.mu.Unlock()
 	return a.persist()
@@ -911,39 +981,69 @@ func (a *App) SaveSettings(s model.Settings) error {
 
 // ---- Execution ----
 
+// RunRequest is what the run tab sends to start a batch.
+type RunRequest struct {
+	Names  []string `json:"names"`  // devices to run (checkbox state is left alone)
+	Group  string   `json:"group"`  // group shown in the run tab (recorded in the run summary)
+	Stage  string   `json:"stage"`  // "" / before / during / after
+	DryRun bool     `json:"dryRun"` // connect + login only, no commands, no logs
+}
+
+// RunDone is the "run:done" payload: the per-device results plus the folder
+// the logs were written to ("" for a dry run).
+type RunDone struct {
+	Results []runpkg.DeviceResult `json:"results"`
+	RunDir  string                `json:"runDir,omitempty"`
+	DryRun  bool                  `json:"dryRun,omitempty"`
+}
+
 // RunBatch runs the currently enabled devices, emitting live progress events
 // ("run:event") and a final "run:done" with the results.
 func (a *App) RunBatch() error {
-	return a.run(nil)
+	return a.run(RunRequest{})
 }
 
 // RunSelected runs a specific set of devices by name (ignores Enabled flag).
 func (a *App) RunSelected(names []string) error {
-	return a.run(names)
+	return a.run(RunRequest{Names: names})
 }
 
-func (a *App) run(only []string) error {
+// RunWith runs with the full set of per-run choices (stage, dry run).
+func (a *App) RunWith(req RunRequest) error {
+	return a.run(req)
+}
+
+func (a *App) run(req RunRequest) error {
+	stage := model.Stage(req.Stage)
+	if !stage.Valid() {
+		return fmt.Errorf("作業タイミングの値が不正です: %q", req.Stage)
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	// Build a snapshot inventory for this run.
+	// Build a snapshot inventory for this run, with each device's group
+	// default credentials substituted where the device asks for them.
 	snap := *a.inv
-	if only != nil {
-		want := make(map[string]bool, len(only))
-		for _, n := range only {
+	var want map[string]bool
+	if req.Names != nil {
+		want = make(map[string]bool, len(req.Names))
+		for _, n := range req.Names {
 			want[n] = true
 		}
-		var sel []model.Device
-		for _, d := range a.inv.Devices {
-			if want[d.Name] {
-				d.Enabled = true
-				sel = append(sel, d)
-			}
-		}
-		snap.Devices = sel
 	}
+	var sel []model.Device
+	for _, d := range a.inv.Devices {
+		if want != nil {
+			if !want[d.Name] {
+				continue
+			}
+			d.Enabled = true
+		}
+		sel = append(sel, a.inv.ResolveCredentials(d))
+	}
+	snap.Devices = sel
 	if a.runActive {
 		a.mu.Unlock()
 		return fmt.Errorf("一括実行中です。完了または中止を待ってください")
@@ -958,12 +1058,171 @@ func (a *App) run(only []string) error {
 		emit := func(ev runpkg.Event) {
 			runtime.EventsEmit(a.ctx, "run:event", ev)
 		}
-		results := a.runner.RunBatch(ctx, &snap, emit)
+		started := time.Now()
+		results, runDir := a.runner.RunBatchOpts(ctx, &snap, runpkg.Options{Stage: stage, DryRun: req.DryRun, Group: req.Group}, emit)
+		if runDir != "" {
+			writeRunSummary(runDir, &snap, req, started, results)
+		}
 		a.mu.Lock()
 		a.runActive = false
 		a.mu.Unlock()
-		runtime.EventsEmit(a.ctx, "run:done", results)
+		runtime.EventsEmit(a.ctx, "run:done", RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun})
 	}()
+	return nil
+}
+
+// writeRunSummary records the batch in its log folder for the 実行履歴 tab.
+// Best effort: a summary that cannot be written costs the history row, not
+// the logs.
+func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, started time.Time, results []runpkg.DeviceResult) {
+	byName := map[string]model.Device{}
+	for _, d := range inv.Devices {
+		byName[d.Name] = d
+	}
+	s := history.Summary{
+		App:        "PalaTerm " + appVersion,
+		StartedAt:  started.Format(time.RFC3339),
+		FinishedAt: time.Now().Format(time.RFC3339),
+		Group:      req.Group,
+		Stage:      req.Stage,
+		DryRun:     req.DryRun,
+		Devices:    []history.DeviceSummary{},
+	}
+	for _, r := range results {
+		d := byName[r.Device]
+		ds := history.DeviceSummary{
+			Name: r.Device, Host: d.Host, Site: d.Site, CommandSet: d.CommandSet,
+			Success: r.Success, Canceled: r.Canceled, Error: r.Error,
+			ElapsedSec: r.Elapsed.Seconds(),
+		}
+		if r.LogPath != "" {
+			ds.LogFile = filepath.Base(r.LogPath)
+		}
+		s.Devices = append(s.Devices, ds)
+	}
+	_ = history.Write(runDir, s)
+}
+
+// DangerWarning lists the commands in one device's command set that would
+// change the device (see package guard).
+type DangerWarning struct {
+	Device     string      `json:"device"`
+	CommandSet string      `json:"commandSet"`
+	Hits       []guard.Hit `json:"hits"`
+}
+
+// CheckDangerousCommands scans the named devices' command sets for
+// configuration-changing commands, so the run tab can warn before starting.
+// Devices sharing a command set are each listed (the user reads it per
+// device), but the scan itself runs once per set.
+func (a *App) CheckDangerousCommands(names []string) []DangerWarning {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := []DangerWarning{}
+	if a.inv == nil {
+		return out
+	}
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
+	sets := map[string]*model.CommandSet{}
+	for i := range a.inv.CommandSets {
+		sets[a.inv.CommandSets[i].Name] = &a.inv.CommandSets[i]
+	}
+	scanned := map[string][]guard.Hit{}
+	for _, d := range a.inv.Devices {
+		if !want[d.Name] || d.CommandSet == "" {
+			continue
+		}
+		hits, ok := scanned[d.CommandSet]
+		if !ok {
+			if cs := sets[d.CommandSet]; cs != nil {
+				texts := make([]string, len(cs.Commands))
+				for i, c := range cs.Commands {
+					texts[i] = c.Text
+				}
+				hits = guard.Check(texts)
+			}
+			scanned[d.CommandSet] = hits
+		}
+		if len(hits) > 0 {
+			out = append(out, DangerWarning{Device: d.Name, CommandSet: d.CommandSet, Hits: hits})
+		}
+	}
+	return out
+}
+
+// ---- 実行履歴 ----
+
+// ListRunHistory returns past batches (newest first) found under the log
+// folder: one row per log_<timestamp>[_<stage>] sub-folder.
+func (a *App) ListRunHistory() ([]history.Run, error) {
+	runs, err := history.List(a.logRoot())
+	if runs == nil {
+		runs = []history.Run{}
+	}
+	return runs, err
+}
+
+// DiffLogFiles compares two saved logs line by line (A = before, B = after).
+// Both must sit under the log folder. With ignoreNoise, lines that differ
+// only in clock readings, uptimes and traffic counters count as unchanged.
+func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.DiffResult, error) {
+	for _, p := range []string{pathA, pathB} {
+		if err := a.underLogRoot(p); err != nil {
+			return nil, err
+		}
+	}
+	ba, err := os.ReadFile(pathA)
+	if err != nil {
+		return nil, err
+	}
+	bb, err := os.ReadFile(pathB)
+	if err != nil {
+		return nil, err
+	}
+	r := history.Diff(string(ba), string(bb), ignoreNoise)
+	if r.Lines == nil {
+		r.Lines = []history.DiffLine{}
+	}
+	return &r, nil
+}
+
+// OpenRunFolder opens one run's folder in Explorer (log folder only).
+func (a *App) OpenRunFolder(dir string) error {
+	if err := a.underLogRoot(dir); err != nil {
+		return err
+	}
+	return exec.Command("explorer", dir).Start()
+}
+
+// logRoot is the absolute log folder from the settings (locked: logs/).
+func (a *App) logRoot() string {
+	a.mu.Lock()
+	dir := "logs"
+	if a.inv != nil && a.inv.Settings.LogDir != "" {
+		dir = a.inv.Settings.LogDir
+	}
+	a.mu.Unlock()
+	return logstore.ResolveRoot(dir)
+}
+
+// underLogRoot refuses a path outside the configured log folder, so the
+// history tab's file arguments cannot be pointed at arbitrary files.
+func (a *App) underLogRoot(p string) error {
+	root, err := filepath.Abs(a.logRoot())
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("ログフォルダの外は開けません")
+	}
 	return nil
 }
 
@@ -1039,6 +1298,59 @@ func (a *App) OpenLogDir() error {
 	return exec.Command("explorer", abs).Start()
 }
 
+// StrictVerify picks the setting lines typed in the work log and reports
+// whether each is present in the after log (see history.StrictVerify). All
+// three files must lie under the log folder.
+func (a *App) StrictVerify(workPath, beforePath, afterPath string) (*history.StrictResult, error) {
+	read := func(p string) (string, error) {
+		if err := a.underLogRoot(p); err != nil {
+			return "", err
+		}
+		b, err := os.ReadFile(p)
+		return string(b), err
+	}
+	w, err := read(workPath)
+	if err != nil {
+		return nil, err
+	}
+	bf, err := read(beforePath)
+	if err != nil {
+		return nil, err
+	}
+	af, err := read(afterPath)
+	if err != nil {
+		return nil, err
+	}
+	r := history.StrictVerify(w, bf, af)
+	return &r, nil
+}
+
+// OpenDiffWindow compares two saved logs in their own window (PalaTerm.exe
+// --diff). Both files must lie under the log folder.
+func (a *App) OpenDiffWindow(pathA, pathB, label string) error {
+	for _, p := range []string{pathA, pathB} {
+		if err := a.underLogRoot(p); err != nil {
+			return err
+		}
+		if _, err := os.Stat(p); err != nil {
+			return err
+		}
+	}
+	return spawnWindow(nil, "--diff", pathA, pathB, label)
+}
+
+// OpenLogWindow shows a saved log in its own window (PalaTerm.exe --view).
+// Only files under the log folder are opened.
+func (a *App) OpenLogWindow(path string) error {
+	if err := a.underLogRoot(path); err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	return spawnWindow(nil, "--view", path)
+}
+
 // ReadLogFile returns the contents of a saved log for the in-app viewer.
 func (a *App) ReadLogFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
@@ -1084,16 +1396,35 @@ func (a *App) SpawnTerminal(name string) error {
 	if err != nil {
 		return err
 	}
+	// The child never writes the vault; it reports the one thing it needs
+	// persisted — the user allowing a changed host key — on stdout, and the
+	// main window applies it.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 	go func() {
 		_, _ = io.WriteString(stdin, pw+"\n")
 		_ = stdin.Close()
+	}()
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			if dev, ok := strings.CutPrefix(sc.Text(), termEventClearHostKey+" "); ok {
+				_ = a.ClearHostKeys(strings.TrimSpace(dev))
+			}
+		}
 		_ = cmd.Wait()
 	}()
 	return nil
 }
+
+// termEventClearHostKey is the stdout line a terminal window prints when the
+// user accepted a changed host key, followed by the device name.
+const termEventClearHostKey = "PALATERM clear-hostkey"
 
 // ConnectInteractive logs into a single device (running the OS profile login
 // and pager-disable) and then hands the session to a live terminal. Device
@@ -1107,7 +1438,7 @@ func (a *App) ConnectInteractive(name string) error {
 	var dev *model.Device
 	for i := range a.inv.Devices {
 		if a.inv.Devices[i].Name == name {
-			d := a.inv.Devices[i]
+			d := a.inv.ResolveCredentials(a.inv.Devices[i])
 			dev = &d
 			break
 		}
@@ -1219,7 +1550,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.4.2"
+const appVersion = "1.5"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

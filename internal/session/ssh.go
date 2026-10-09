@@ -73,7 +73,7 @@ func VerifyHostKey(store HostKeyStore) ssh.HostKeyCallback {
 			return nil
 		}
 		if prev != fp {
-			return fmt.Errorf("ホストキーが前回接続時と異なります（%s、今回: %s / 記録: %s）。中間者攻撃または機器交換の可能性があります。機器を交換した場合は機器の編集画面で「ホストキー記録を削除」してから接続し直してください", hostname, fp, prev)
+			return fmt.Errorf("ホストキーが前回接続時と異なります（%s、今回: %s / 記録: %s）。中間者攻撃または機器交換の可能性があります。機器を交換した場合は、接続時の確認で「機器を交換したので許可して再接続」を選んでください", hostname, fp, prev)
 		}
 		return nil
 	}

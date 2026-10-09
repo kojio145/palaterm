@@ -5,7 +5,8 @@
 //
 // Layout of a bundle folder:
 //
-//	palaterm-bundle.json      manifest (this file is what the user picks on import)
+//	palaterm-bundle.json      manifest (this file is what the user picks on import);
+//	                          also carries the groups' default credentials
 //	devices.csv               csvio format, complete (passwords in clear text)
 //	command-sets/<名前>.csv   "コマンド,リモート待機秒,シリアル待機秒" per line
 //	os-profiles/<名前>.json   profile.Profile
@@ -56,6 +57,11 @@ type Manifest struct {
 	DeviceCount int       `json:"deviceCount"`
 	CommandSets []FileRef `json:"commandSets"`
 	OSProfiles  []FileRef `json:"osProfiles"`
+	// Groups carries each exported group's default credentials (clear text,
+	// like the CSV's passwords), so a device marked useGroupCreds still logs
+	// in after the bundle is read elsewhere. Absent in bundles from before
+	// group credentials existed.
+	Groups []model.DeviceGroup `json:"groups,omitempty"`
 }
 
 // Contents is what a bundle carries, in memory.
@@ -97,6 +103,12 @@ func Select(inv *model.Inventory, group string) Contents {
 			c.Profiles = append(c.Profiles, p)
 		}
 	}
+	for _, g := range inv.DeviceGroups {
+		if all || g.Name == group {
+			c.Manifest.Groups = append(c.Manifest.Groups, model.DeviceGroup{
+				Name: g.Name, Username: g.Username, Password: g.Password, EnablePassword: g.EnablePassword})
+		}
+	}
 	return c
 }
 
@@ -126,6 +138,7 @@ func uniqueFile(taken map[string]bool, base, ext string) string {
 // format ("コマンド,リモート待機秒,シリアル待機秒", CRLF).
 func FormatCommandSet(s model.CommandSet) string {
 	var b strings.Builder
+	b.WriteString(csvio.BOM)
 	for _, c := range s.Commands {
 		fmt.Fprintf(&b, "%s,%d,%d\r\n", c.Text, c.PauseSec, c.SerialSec)
 	}
@@ -138,6 +151,7 @@ func FormatCommandSet(s model.CommandSet) string {
 // 1 second each), so the legacy Show_Command_Pattern .list files load as-is.
 func ParseCommandSet(data string) ([]model.Command, error) {
 	var cmds []model.Command
+	data = strings.TrimPrefix(data, csvio.BOM)
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -215,6 +229,7 @@ func Write(dir string, c Contents, app string) (string, error) {
 		DeviceCount: len(c.Devices),
 		CommandSets: []FileRef{},
 		OSProfiles:  []FileRef{},
+		Groups:      c.Manifest.Groups,
 	}
 	text, err := csvio.Export(c.Devices)
 	if err != nil {
@@ -458,8 +473,50 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	}
 
 	groups := map[string]bool{}
-	for _, g := range inv.DeviceGroups {
+	groupIdx := map[string]int{}
+	for i, g := range inv.DeviceGroups {
 		groups[g.Name] = true
+		groupIdx[g.Name] = i
+	}
+	// Group default credentials travel in the manifest. With TargetGroup the
+	// devices land in one group; its credentials come from the bundle only
+	// when the bundle was a single-group export (anything else would be a
+	// guess). An existing group keeps its own credentials unless
+	// OverwriteShared, the same rule as for sets and profiles; a group that
+	// does not exist yet is created with the bundle's.
+	bundleGroups := map[string]model.DeviceGroup{}
+	for _, g := range c.Manifest.Groups {
+		bundleGroups[g.Name] = g
+	}
+	credsFor := func(name string) (model.DeviceGroup, bool) {
+		if opt.TargetGroup != "" {
+			if len(c.Manifest.Groups) == 1 && c.Manifest.Group != "" {
+				g := c.Manifest.Groups[0]
+				g.Name = name
+				return g, true
+			}
+			return model.DeviceGroup{Name: name}, false
+		}
+		g, ok := bundleGroups[name]
+		return g, ok
+	}
+	ensureGroup := func(name string) {
+		if name == "" {
+			return
+		}
+		g, has := credsFor(name)
+		if !groups[name] {
+			groupIdx[name] = len(inv.DeviceGroups)
+			inv.DeviceGroups = append(inv.DeviceGroups, model.DeviceGroup{
+				Name: name, Username: g.Username, Password: g.Password, EnablePassword: g.EnablePassword})
+			groups[name] = true
+			s.GroupsCreated = append(s.GroupsCreated, name)
+			return
+		}
+		if has && opt.OverwriteShared && g.HasCreds() {
+			cur := &inv.DeviceGroups[groupIdx[name]]
+			cur.Username, cur.Password, cur.EnablePassword = g.Username, g.Password, g.EnablePassword
+		}
 	}
 	devByName := map[string]int{}
 	for i, d := range inv.Devices {
@@ -475,11 +532,7 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		if k, ok := keyMap[d.OSType]; ok {
 			d.OSType = k
 		}
-		if d.Group != "" && !groups[d.Group] {
-			inv.DeviceGroups = append(inv.DeviceGroups, model.DeviceGroup{Name: d.Group})
-			groups[d.Group] = true
-			s.GroupsCreated = append(s.GroupsCreated, d.Group)
-		}
+		ensureGroup(d.Group)
 		if d.CommandSet != "" {
 			if _, ok := setByName[d.CommandSet]; !ok && !missingSet[d.CommandSet] {
 				missingSet[d.CommandSet] = true

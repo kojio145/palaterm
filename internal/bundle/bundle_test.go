@@ -230,3 +230,48 @@ func TestParseCommandSetLegacyList(t *testing.T) {
 		t.Error("expected error for no commands")
 	}
 }
+
+func TestGroupCredentialsTravelInBundle(t *testing.T) {
+	inv := sampleInventory()
+	inv.DeviceGroups[0] = model.DeviceGroup{Name: "A社", Username: "gu", Password: "gp", EnablePassword: "ge"}
+	inv.Devices[0].UseGroupCreds = true
+	dir := t.TempDir()
+	if _, err := Write(dir, Select(inv, "A社"), "test"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Read(filepath.Join(dir, ManifestName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Manifest.Groups) != 1 || c.Manifest.Groups[0].Password != "gp" {
+		t.Fatalf("groups in manifest: %+v", c.Manifest.Groups)
+	}
+	if !c.Devices[0].UseGroupCreds || c.Devices[1].UseGroupCreds {
+		t.Fatalf("useGroupCreds lost in CSV: %+v", c.Devices)
+	}
+	// Into an empty inventory: the group is created with its credentials.
+	empty := &model.Inventory{}
+	Apply(empty, c, Options{})
+	if g := empty.Group("A社"); g == nil || g.Username != "gu" || g.EnablePassword != "ge" {
+		t.Fatalf("group not created with creds: %+v", empty.DeviceGroups)
+	}
+	if r := empty.ResolveCredentials(empty.Devices[0]); r.Password != "gp" {
+		t.Fatalf("resolve: %+v", r)
+	}
+	// Into an inventory that has the group: kept unless OverwriteShared.
+	have := &model.Inventory{DeviceGroups: []model.DeviceGroup{{Name: "A社", Username: "old", Password: "old"}}}
+	Apply(have, c, Options{})
+	if have.Group("A社").Password != "old" {
+		t.Fatalf("existing group creds overwritten without the option")
+	}
+	Apply(have, c, Options{OverwriteShared: true})
+	if have.Group("A社").Password != "gp" {
+		t.Fatalf("existing group creds not overwritten with the option")
+	}
+	// Re-targeted single-group bundle: the target group gets the creds.
+	tg := &model.Inventory{}
+	Apply(tg, c, Options{TargetGroup: "C社"})
+	if g := tg.Group("C社"); g == nil || g.Password != "gp" {
+		t.Fatalf("target group creds: %+v", tg.DeviceGroups)
+	}
+}

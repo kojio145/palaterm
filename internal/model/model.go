@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/profile"
 )
 
@@ -116,6 +117,14 @@ type Device struct {
 	// load; NormalizeBastions folds it into Bastions.
 	Bastion *Bastion `json:"bastion,omitempty"`
 
+	// UseGroupCreds makes the device log in with its group's default
+	// credentials (DeviceGroup.Username / Password / EnablePassword) instead of
+	// its own three fields above, so one shared account is typed once per
+	// group. A device in the same group that needs different credentials
+	// simply leaves this off and keeps its own. Resolved at run time by
+	// Inventory.ResolveCredentials; the device's own fields are kept as typed.
+	UseGroupCreds bool `json:"useGroupCreds,omitempty"`
+
 	// Whether this device is included in batch runs.
 	Enabled bool `json:"enabled"`
 }
@@ -186,6 +195,68 @@ type CommandSet struct {
 type DeviceGroup struct {
 	Name    string   `json:"name"`
 	Members []string `json:"members,omitempty"`
+
+	// Default credentials for the group's devices (persisted only inside the
+	// encrypted vault, like a device's own). A device opts in with
+	// Device.UseGroupCreds; the rest keep their individual credentials.
+	Username       string `json:"username,omitempty"`
+	Password       string `json:"password,omitempty"`
+	EnablePassword string `json:"enablePassword,omitempty"`
+}
+
+// HasCreds reports whether the group carries any default credential.
+func (g *DeviceGroup) HasCreds() bool {
+	return g != nil && (g.Username != "" || g.Password != "" || g.EnablePassword != "")
+}
+
+// Group returns the named group, or nil.
+func (inv *Inventory) Group(name string) *DeviceGroup {
+	if name == "" {
+		return nil
+	}
+	for i := range inv.DeviceGroups {
+		if inv.DeviceGroups[i].Name == name {
+			return &inv.DeviceGroups[i]
+		}
+	}
+	return nil
+}
+
+// ResolveCredentials returns a copy of d with the group's default
+// credentials substituted when the device asks for them. A device whose
+// group no longer exists keeps its own fields, so a deleted group never
+// silently empties a login.
+func (inv *Inventory) ResolveCredentials(d Device) Device {
+	if !d.UseGroupCreds {
+		return d
+	}
+	g := inv.Group(d.Group)
+	if g == nil {
+		return d
+	}
+	d.Username, d.Password, d.EnablePassword = g.Username, g.Password, g.EnablePassword
+	return d
+}
+
+// Stage is when in a maintenance window a batch is run: before the work,
+// during it, or after it. It travels into the run folder and log file names so
+// the before/after logs of one job can be told apart and compared.
+type Stage string
+
+const (
+	StageNone   Stage = ""
+	StageBefore Stage = "before"
+	StageDuring Stage = "during"
+	StageAfter  Stage = "after"
+)
+
+// Valid reports whether s is one of the known stages (empty included).
+func (s Stage) Valid() bool {
+	switch s {
+	case StageNone, StageBefore, StageDuring, StageAfter:
+		return true
+	}
+	return false
 }
 
 // NormalizeGroups migrates the legacy Members-based grouping to the Device.Group
@@ -249,13 +320,40 @@ type Inventory struct {
 type Settings struct {
 	MaxParallel     int    `json:"maxParallel"`     // 0 => unlimited
 	LogDir          string `json:"logDir"`          // output root; empty => ./logs
-	LogNameTemplate string `json:"logNameTemplate"` // e.g. "{host}_Config_{date}_{time}.txt"
-	ConnectTimeout  int    `json:"connectTimeout"`  // seconds
-	CommandTimeout  int    `json:"commandTimeout"`  // seconds per expect
+	LogNameTemplate string `json:"logNameTemplate"` // e.g. logstore.DefaultTemplate
+	// LogDirTemplate names each run's folder under LogDir (see
+	// logstore.RunDir); empty means logstore.DefaultDirTemplate.
+	LogDirTemplate string `json:"logDirTemplate,omitempty"`
+	ConnectTimeout int    `json:"connectTimeout"` // seconds
+	CommandTimeout int    `json:"commandTimeout"` // seconds per expect
 
 	// LastKeyFile is the most recently chosen SSH private-key path; the device
 	// editor pre-fills it when public-key auth is selected.
 	LastKeyFile string `json:"lastKeyFile,omitempty"`
+
+	// Idle auto-lock: the main window locks the vault after AutoLockMin minutes
+	// without keyboard or mouse input (never during a batch). Zero means the
+	// default (DefaultAutoLockMin) so vaults from before the setting existed
+	// get it; AutoLockOff disables it outright.
+	AutoLockMin int  `json:"autoLockMin,omitempty"`
+	AutoLockOff bool `json:"autoLockOff,omitempty"`
+}
+
+// DefaultAutoLockMin is the idle time before the vault locks itself when the
+// user has not chosen one. Long on purpose: a lock that fires during a short
+// break on a maintenance night is an irritation, not a safeguard.
+const DefaultAutoLockMin = 30
+
+// EffectiveAutoLockMin returns the idle minutes before auto-lock, or 0 when
+// auto-lock is off.
+func (s Settings) EffectiveAutoLockMin() int {
+	if s.AutoLockOff {
+		return 0
+	}
+	if s.AutoLockMin <= 0 {
+		return DefaultAutoLockMin
+	}
+	return s.AutoLockMin
 }
 
 // Validate checks a device's fields and returns a human-readable (Japanese)
@@ -360,9 +458,11 @@ func DefaultSettings() Settings {
 	return Settings{
 		MaxParallel:     10,
 		LogDir:          "logs",
-		LogNameTemplate: "{host}_Config_{date}_{time}.txt",
+		LogNameTemplate: logstore.DefaultTemplate,
+		LogDirTemplate:  logstore.DefaultDirTemplate,
 		ConnectTimeout:  20,
 		CommandTimeout:  30,
+		AutoLockMin:     DefaultAutoLockMin,
 	}
 }
 

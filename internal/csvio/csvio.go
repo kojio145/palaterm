@@ -32,12 +32,18 @@ var header = []string{
 	"name", "group", "site", "host", "conn", "port", "serialPort", "baud",
 	"osType", "commandSet", "authMethod", "keyFile", "keyPassphrase",
 	"username", "password", "enablePassword", "legacyAlgos",
-	"bastions", "bastionExtras", "enabled",
+	"bastions", "bastionExtras", "enabled", "useGroupCreds",
 }
+
+// BOM is the UTF-8 byte order mark every exported CSV starts with: without
+// it Excel on a Japanese Windows opens the file as Shift_JIS and every
+// group name and site reads as mojibake. Import strips it again.
+const BOM = "\ufeff"
 
 // Export renders devices as CSV text with a header row.
 func Export(devices []model.Device) (string, error) {
 	var buf bytes.Buffer
+	buf.WriteString(BOM)
 	w := csv.NewWriter(&buf)
 	if err := w.Write(header); err != nil {
 		return "", err
@@ -50,6 +56,7 @@ func Export(devices []model.Device) (string, error) {
 			d.OSType, d.CommandSet, string(d.AuthMethod), d.KeyFile, d.KeyPassphrase,
 			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
 			encodeBastions(d.Bastions), encodeBastionExtras(d.Bastions), boolStr(d.Enabled),
+			boolStr(d.UseGroupCreds),
 		}
 		if err := w.Write(rec); err != nil {
 			return "", err
@@ -62,6 +69,7 @@ func Export(devices []model.Device) (string, error) {
 // Import parses CSV text (with header) into devices. Column order follows the
 // header names, so users may reorder or omit optional columns.
 func Import(text string) ([]model.Device, error) {
+	text = strings.TrimPrefix(text, BOM)
 	r := csv.NewReader(strings.NewReader(text))
 	r.FieldsPerRecord = -1 // tolerate ragged rows
 	rows, err := r.ReadAll()
@@ -112,6 +120,7 @@ func Import(text string) ([]model.Device, error) {
 			LegacyAlgos:    parseBool(get(row, "legacyalgos"), false),
 			Bastions:       decodeBastions(get(row, "bastions")),
 			Enabled:        parseBool(get(row, "enabled"), true),
+			UseGroupCreds:  parseBool(get(row, "usegroupcreds"), false),
 		}
 		applyBastionExtras(d.Bastions, get(row, "bastionextras"))
 		out = append(out, d)

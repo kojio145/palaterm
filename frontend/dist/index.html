@@ -24,6 +24,7 @@
       <button class="nav-btn active" data-tab="devices">機器一覧</button>
       <button class="nav-btn" data-tab="commands">コマンドセット</button>
       <button class="nav-btn" data-tab="run">実行</button>
+      <button class="nav-btn" data-tab="history">実行履歴</button>
       <button class="nav-btn" data-tab="settings">ログ設定</button>
       <button class="nav-btn" data-tab="ostypes">OSタイプ設定</button>
       <div class="side-spacer"></div>
@@ -32,6 +33,7 @@
         <option value="ja">🌐 日本語</option>
       </select>
       <button class="nav-btn subtle" id="btn-chpw">パスワード変更</button>
+      <button class="nav-btn subtle" id="btn-reset">初期化</button>
       <button class="nav-btn subtle" id="btn-about">バージョン情報</button>
       <button class="nav-btn subtle" id="btn-lock">ロック</button>
     </nav>
@@ -40,6 +42,7 @@
       <section id="tab-devices" class="tab active"></section>
       <section id="tab-commands" class="tab"></section>
       <section id="tab-run" class="tab"></section>
+      <section id="tab-history" class="tab"></section>
       <section id="tab-settings" class="tab"></section>
       <section id="tab-ostypes" class="tab"></section>
     </main>
@@ -58,6 +61,9 @@
   <script src="/app.js"></script>
   <script src="/views.js"></script>
   <script src="/views2.js"></script>
+  <script src="/views3.js"></script>
   <script src="/terminal.js"></script>
+  <script src="/viewer.js"></script>
+  <script src="/diff.js"></script>
 </body>
 </html>

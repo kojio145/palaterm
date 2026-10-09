@@ -12,7 +12,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.4.2 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.5 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 ![Run tab: four devices executing a command set in parallel](docs/img/run-en.png)
 
@@ -28,7 +28,12 @@ Windows exe — no installation required.
   HPE, NEC IX, Yamaha RTX, …) handling enable escalation and pager disabling; all
   profiles are editable and you can add your own
 - 📋 **Batch command execution** — assign named command sets per device and run them in one go
-- 📁 **Automatic log saving** — `{host}_Config_{date}_{time}.txt` style, customizable with placeholders
+- 📁 **Automatic log saving** — `{host}_{site}_{stage}_{date}_{time}.txt` style, customizable with placeholders
+- 🕘 **Run history & before/after diff** — tag a run as before / during / after the work, then compare
+  the before and after logs per device (clock and counter noise ignored)
+- ⚠️ **Change guard** — a command set that contains `conf t` / `write` / `reload` … is called out
+  before the batch starts; a connect-only dry run checks credentials without sending a command
+- 🏢 **Group default credentials** — one shared account per group, with per-device overrides
 - 🔒 **Encrypted credential vault** — AES-256-GCM protected by a master password (nothing stored in plain text)
 - 💻 **Interactive terminal** — automate the login to a single device, then take over
   manually in a built-in terminal (xterm.js)

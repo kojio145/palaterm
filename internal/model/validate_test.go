@@ -44,3 +44,38 @@ func TestBastionValidation(t *testing.T) {
 		t.Fatal("expected error for malformed bastion host")
 	}
 }
+
+func TestResolveCredentials(t *testing.T) {
+	inv := &Inventory{
+		DeviceGroups: []DeviceGroup{{Name: "A社", Username: "gu", Password: "gp", EnablePassword: "ge"}},
+		Devices: []Device{
+			{Name: "shared", Group: "A社", Username: "du", Password: "dp", UseGroupCreds: true},
+			{Name: "own", Group: "A社", Username: "du", Password: "dp"},
+			{Name: "orphan", Group: "Z社", Username: "du", Password: "dp", UseGroupCreds: true},
+		},
+	}
+	if r := inv.ResolveCredentials(inv.Devices[0]); r.Username != "gu" || r.Password != "gp" || r.EnablePassword != "ge" {
+		t.Errorf("group creds not applied: %+v", r)
+	}
+	if r := inv.ResolveCredentials(inv.Devices[1]); r.Username != "du" || r.Password != "dp" {
+		t.Errorf("own creds replaced: %+v", r)
+	}
+	if r := inv.ResolveCredentials(inv.Devices[2]); r.Username != "du" {
+		t.Errorf("missing group must keep own creds: %+v", r)
+	}
+	if inv.Devices[0].Username != "du" {
+		t.Errorf("ResolveCredentials must not mutate the inventory")
+	}
+}
+
+func TestAutoLockDefaults(t *testing.T) {
+	if (Settings{}).EffectiveAutoLockMin() != DefaultAutoLockMin {
+		t.Errorf("missing setting must default to %d", DefaultAutoLockMin)
+	}
+	if (Settings{AutoLockMin: 5}).EffectiveAutoLockMin() != 5 {
+		t.Errorf("explicit minutes ignored")
+	}
+	if (Settings{AutoLockMin: 5, AutoLockOff: true}).EffectiveAutoLockMin() != 0 {
+		t.Errorf("off must give 0")
+	}
+}

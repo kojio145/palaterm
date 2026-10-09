@@ -364,12 +364,12 @@ func TestWakeSerialIgnoresBellsFromTheLineErase(t *testing.T) {
 	}
 
 	go func() {
-		<-dev.sent                              // the backspaces...
-		dev.say(strings.Repeat("\a", 120))      // ...each answered with a bell
-		<-dev.sent                              // the Enter
-		time.Sleep(200 * time.Millisecond)      // the device takes a beat
-		dev.say("\r\nPassword: ")               // empty username accepted
-		<-dev.sent                              // the Enter that abandons it
+		<-dev.sent                         // the backspaces...
+		dev.say(strings.Repeat("\a", 120)) // ...each answered with a bell
+		<-dev.sent                         // the Enter
+		time.Sleep(200 * time.Millisecond) // the device takes a beat
+		dev.say("\r\nPassword: ")          // empty username accepted
+		<-dev.sent                         // the Enter that abandons it
 		dev.say("\r\nLogin attempt failed.\r\nlogin: ")
 	}()
 

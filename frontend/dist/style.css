@@ -279,3 +279,53 @@ tr.dragging { opacity: .45; }
 
 /* Danger zone (reset) on the settings tab */
 .danger-zone { border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--text); }
+
+/* ---- ログ表示（幅広・ドラッグでサイズ変更） ---- */
+.modal.logwin { width: min(1300px, 95vw); max-width: 97vw; height: 82vh; max-height: 95vh;
+  resize: both; overflow: hidden; min-width: 520px; min-height: 280px; }
+.modal.logwin > div { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.modal.logwin .log-view { flex: 1; max-height: none; min-height: 100px; }
+.modal.logwin .modal-actions { margin-top: 12px; }
+.req { display: inline-block; font-size: 10px; color: #fff; background: var(--err); border-radius: 4px; padding: 0 5px; line-height: 16px; vertical-align: middle; }
+
+/* ---- 差分ウィンドウ（WinMerge 風） ---- */
+.dw-body { font-family: "Consolas", monospace; }
+.dw-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
+.dw-table td { padding: 0 6px; border-bottom: none; white-space: pre; overflow: hidden; text-overflow: ellipsis; line-height: 1.45; vertical-align: top; }
+.dw-table td.dw-ln { color: #475569; text-align: right; user-select: none; background: #0e1219; border-right: 1px solid #1f2733; }
+.dw-table td.dw-txt { color: #cbd5e1; }
+.dw-table td:nth-child(2) { border-right: 2px solid #2a3442; }
+.dw-table td.dw-ph { background: repeating-linear-gradient(135deg, #141a23 0 6px, #0f141b 6px 12px); }
+.dw-table tr.dw-changed td.dw-txt { background: rgba(250,204,21,.22); color: #fde68a; }
+.dw-table tr.dw-deleted td:nth-child(2) { background: rgba(239,68,68,.25); color: #fecaca; }
+.dw-table tr.dw-added td:nth-child(4) { background: rgba(34,197,94,.25); color: #bbf7d0; }
+.dw-table tr.dw-cur td { outline: 1px solid #60a5fa; outline-offset: -1px; }
+.dw-table tr.dw-skip td { color: #475569; text-align: center; background: #141a23; font-size: 11px; }
+.dw-table tr:hover td { filter: brightness(1.15); }
+.dw-mark { position: absolute; left: 3px; right: 3px; min-height: 2px; border-radius: 1px; opacity: .85; }
+.dw-mark.cur { outline: 1px solid #fff; }
+.dw-sw { display: inline-block; width: 14px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+
+/* ---- 実行履歴 / 差分 ---- */
+.badge { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-dim); margin-left: 6px; vertical-align: middle; }
+.badge.stage-before { color: #93c5fd; border-color: #1d4ed8; }
+.badge.stage-during { color: #fcd34d; border-color: #b45309; }
+.badge.stage-after { color: #86efac; border-color: #15803d; }
+.hist-devs td { padding: 6px 12px; font-size: 12px; }
+.hist-devs { background: var(--bg); }
+.diff-wrap { background: #0b0e13; border: 1px solid var(--border); border-radius: 10px;
+  max-height: 62vh; overflow: auto; font-family: "Consolas", monospace; font-size: 12px; }
+.diff-wrap table { table-layout: fixed; width: 100%; }
+.diff-wrap td { padding: 0 6px; border-bottom: none; white-space: pre; overflow: hidden; text-overflow: ellipsis; line-height: 1.5; }
+.diff-wrap td.ln { width: 46px; color: #475569; text-align: right; user-select: none; }
+.diff-wrap tr:hover td { background: transparent; }
+.diff-wrap tr.d-del td.side-a { background: rgba(239,68,68,.18); }
+.diff-wrap tr.d-add td.side-b { background: rgba(34,197,94,.18); }
+.diff-wrap tr.d-skip td { color: #475569; text-align: center; background: var(--bg-2); }
+.modal.xwide { width: min(1400px, 96vw); }
+.warn-box { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px; }
+.warn-box .mono { font-family: "Consolas", monospace; }

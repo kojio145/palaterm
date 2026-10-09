@@ -50,20 +50,59 @@ function renderGroupChooser() {
         <div class="choice-t">${esc(t("＋ 新規グループ作成"))}</div>
         <div class="choice-n">${esc(t("会社・拠点などの単位で作成"))}</div>
       </button>
-      ${groups.map(g => `<button class="choice" draggable="true" data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
-        <div class="choice-t">${esc(g.name)}</div>
+      ${groups.map(g => `<div class="choice" role="button" tabindex="0" draggable="true" data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
+        <div class="row-inline" style="justify-content:space-between;align-items:flex-start">
+          <div class="choice-t">${esc(g.name)}</div>
+          <button class="btn sm act-copy" type="button" data-dup="${esc(g.name)}" title="${esc(t("グループを複製"))}">${esc(t("複製"))}</button>
+        </div>
         <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(t("⠿ ドラッグで並替"))}</span></div>
-      </button>`).join("")}
+      </div>`).join("")}
     </div>`;
 
   document.getElementById("exp-csv").onclick = () => exportBundleDialog("");
   document.getElementById("imp-csv").onclick = () => importDialog("");
   document.getElementById("choice-new").onclick = newGroupPrompt;
-  root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => {
-    deviceView = { mode: "list", group: b.dataset.open === "__ALL__" ? null : b.dataset.open };
-    renderDevices();
+  root.querySelectorAll("[data-open]").forEach(b => {
+    b.onclick = e => {
+      if (e.target.closest("[data-dup]")) return;
+      deviceView = { mode: "list", group: b.dataset.open === "__ALL__" ? null : b.dataset.open };
+      renderDevices();
+    };
+    b.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); b.onclick(e); } };
   });
+  root.querySelectorAll("[data-dup]").forEach(b => b.onclick = e => { e.stopPropagation(); duplicateGroupDialog(b.dataset.dup); });
   wireGroupDrag(root);
+}
+
+// 複製: a new group with the same default credentials and copies of every
+// device (names get a suffix — they name the log files, so they stay unique).
+function duplicateGroupDialog(name) {
+  const n = groupCount(name);
+  const node = h(`<div>
+    <h3>${esc(t("グループを複製"))} <span class="muted" style="font-size:14px;font-weight:400">/ ${esc(name)}</span></h3>
+    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("グループ「{g}」の既定の認証情報と機器 {n} 台をコピーして新しいグループを作ります。機器名はログファイル名になるため重複できず、接尾辞を付けて複製します。", { g: name, n }))}</p>
+    <div class="field"><label>${esc(t("新しいグループ名"))} <span class="req">${esc(t("必須"))}</span></label><input id="dg-name" value="${esc(name + "_copy")}" autofocus></div>
+    <div class="field"><label>${esc(t("機器名の接尾辞"))} <span class="req">${esc(t("必須"))}</span></label><input id="dg-suffix" value="_copy"></div>
+    <div class="modal-actions">
+      <button class="btn" id="dg-cancel">${esc(t("キャンセル"))}</button>
+      <button class="btn primary" id="dg-ok">${esc(t("複製する"))}</button>
+    </div>
+  </div>`);
+  openModal(node, "mid");
+  node.querySelector("#dg-cancel").onclick = closeModal;
+  const go = async () => {
+    const nn = node.querySelector("#dg-name").value.trim();
+    const suffix = node.querySelector("#dg-suffix").value;
+    if (!nn) { toast(t("グループ名を入力してください"), "err"); return; }
+    if (n > 0 && !suffix) { toast(t("機器名の接尾辞を入力してください"), "err"); return; }
+    try {
+      const cnt = await App().CopyDeviceGroup(name, nn, suffix);
+      closeModal(); await refreshInventory();
+      toast(t("グループ「{g}」を複製しました（機器 {n} 台）", { g: nn, n: cnt }), "ok");
+    } catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
+  };
+  node.querySelector("#dg-ok").onclick = go;
+  node.querySelector("#dg-name").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
 }
 
 // Drag-and-drop reordering of group cards; persists the new order.
@@ -80,15 +119,27 @@ function wireGroupDrag(root) {
       card.classList.remove("dragging");
       root.querySelectorAll(".dragover").forEach(c => c.classList.remove("dragover"));
       const order = [...root.querySelectorAll("[data-grp]")].map(c => c.dataset.grp);
-      try { await App().ReorderDeviceGroups(order); await refreshInventory(); } catch (e) {}
+      const was = (INV.deviceGroups || []).map(g => g.name);
+      dragEl = null;
+      if (order.join("\u0000") === was.join("\u0000")) return; // dropped where it was
+      try {
+        await App().ReorderDeviceGroups(order); await refreshInventory();
+        toast(t("並び順を保存しました"), "ok");
+      } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
     });
+    // Cards are laid out in a grid, so the drop side follows the pointer's
+    // position within the card both ways (left/top half = before it).
     card.addEventListener("dragover", e => {
       e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
       if (!dragEl || dragEl === card) return;
+      card.classList.add("dragover");
       const box = card.getBoundingClientRect();
-      const before = (e.clientY - box.top) < box.height / 2;
+      const before = (e.clientX - box.left) / box.width + (e.clientY - box.top) / box.height < 1;
       card.parentNode.insertBefore(dragEl, before ? card : card.nextSibling);
     });
+    card.addEventListener("dragleave", () => card.classList.remove("dragover"));
+    card.addEventListener("drop", e => { e.preventDefault(); card.classList.remove("dragover"); });
   });
 }
 
@@ -97,7 +148,7 @@ function newGroupPrompt() {
   const node = h(`<div>
     <h3>${esc(t("新規グループ作成"))}</h3>
     <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("会社名・拠点名など。作成後にこのグループへ機器を追加できます。"))}</p>
-    <div class="field"><label>${esc(t("グループ名"))}</label><input id="ng-name" placeholder="${esc(t("例: A社"))}" autofocus></div>
+    <div class="field"><label>${esc(t("グループ名"))} <span class="req">${esc(t("必須"))}</span></label><input id="ng-name" placeholder="${esc(t("例: A社"))}" autofocus></div>
     <div class="modal-actions">
       <button class="btn" id="ng-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="ng-create">${esc(t("作成して機器追加へ"))}</button>
@@ -142,6 +193,7 @@ function renderDeviceList() {
       <td>
         <select class="cell inl-conn" data-name="${esc(d.name)}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
+        ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
       <td><select class="cell inl-os" data-name="${esc(d.name)}">${osOptions(d.osType)}</select></td>
       <td><select class="cell inl-set" data-name="${esc(d.name)}">${cmdSetOptions(d.commandSet)}</select></td>
@@ -164,7 +216,8 @@ function renderDeviceList() {
           <div class="page-sub">${esc(t("{n} 台表示 / 実行対象のオンオフは実行画面で。表の項目は直接編集できます", { n: devs.length }))}</div></div>
       </div>
       <div class="row-inline">
-        ${scopeGroup ? `<button class="btn" id="grp-rename">${esc(t("グループ名変更"))}</button>
+        ${scopeGroup ? `<button class="btn" id="grp-creds" data-tip="${esc(t("このグループの機器が共通で使うユーザー名・パスワード。機器ごとに「グループ既定を使う／個別に設定」を選べます"))}">${esc(t("グループ既定の認証情報…"))}</button>
+        <button class="btn" id="grp-rename">${esc(t("グループ名変更"))}</button>
         <button class="btn danger" id="grp-delete">${esc(t("グループ削除"))}</button>` : ""}
         <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
         <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
@@ -184,6 +237,7 @@ function renderDeviceList() {
   // Adding inside a group scope pre-assigns that group to the new device.
   document.getElementById("add-dev").onclick = () => editDevice(null, scopeGroup ? scopeGroup.name : "");
   if (scopeGroup) {
+    document.getElementById("grp-creds").onclick = () => groupCredsDialog(scopeGroup.name);
     document.getElementById("grp-delete").onclick = async () => {
       if (!(await uiConfirm({ title: t("グループを削除"), message: t("グループ「<b>{g}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">所属機器は残り、グループ未設定になります</span>", { g: esc(scopeGroup.name) }), okLabel: t("削除"), danger: true }))) return;
       await App().DeleteDeviceGroup(scopeGroup.name);
@@ -195,7 +249,7 @@ function renderDeviceList() {
     document.getElementById("grp-rename").onclick = () => {
       const node = h(`<div>
         <h3>${esc(t("グループ名を変更"))}</h3>
-        <div class="field"><label>${esc(t("新しいグループ名"))}</label><input id="rn-name" value="${esc(scopeGroup.name)}" autofocus></div>
+        <div class="field"><label>${esc(t("新しいグループ名"))} <span class="req">${esc(t("必須"))}</span></label><input id="rn-name" value="${esc(scopeGroup.name)}" autofocus></div>
         <div class="modal-actions"><button class="btn" id="rn-cancel">${esc(t("キャンセル"))}</button>
           <button class="btn primary" id="rn-ok">${esc(t("変更"))}</button></div>
       </div>`);
@@ -266,6 +320,46 @@ function renderDeviceList() {
   root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { commandSet: el.value }));
 }
 
+// グループ既定の認証情報: one username / password / enable password shared by
+// the group's devices that opt in (機器の編集 → 認証情報の扱い). Devices that
+// need something else keep their own; nothing here touches those.
+function groupCredsDialog(groupName) {
+  const g = (INV.deviceGroups || []).find(x => x.name === groupName) || { name: groupName };
+  const members = (INV.devices || []).filter(d => (d.group || "") === groupName);
+  const using = members.filter(d => d.useGroupCreds).length;
+  const node = h(`<div>
+    <h3>${esc(t("グループ既定の認証情報"))} <span class="muted" style="font-size:14px;font-weight:400">/ ${esc(groupName)}</span></h3>
+    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("このグループの機器のうち「グループ既定を使う」にした機器が、ここのユーザー名・パスワードでログインします（暗号化保存）。現在 {a} / {b} 台が使用中。", { a: using, b: members.length }))}</p>
+    <div class="grid-2">
+      <div class="field"><label>${esc(t("ユーザー名"))}</label><input id="gc-user" value="${esc(g.username || "")}"></div>
+      <div class="field"><label>${esc(t("パスワード"))}</label><input id="gc-pw" type="password" value="${esc(g.password || "")}"></div>
+    </div>
+    <div class="field"><label>${esc(t("enable / 昇格パスワード（任意・ない機種は空欄）"))}</label><input id="gc-en" type="password" value="${esc(g.enablePassword || "")}"></div>
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px"><input type="checkbox" id="gc-all" style="width:auto"> ${esc(t("このグループの全機器（{n} 台）を「グループ既定を使う」に切り替える", { n: members.length }))}</label>
+    <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("オフのままなら各機器の設定は変わりません。個別のパスワードが要る機器は、機器の編集画面で「この機器に個別に設定」を選んでください。"))}</div>
+    <div class="modal-actions">
+      <button class="btn" id="gc-cancel">${esc(t("キャンセル"))}</button>
+      <button class="btn primary" id="gc-save">${esc(t("保存"))}</button>
+    </div>
+  </div>`);
+  openModal(node, "mid");
+  wirePasswordToggles(node);
+  node.querySelector("#gc-cancel").onclick = closeModal;
+  node.querySelector("#gc-save").onclick = async () => {
+    const out = { ...g, name: groupName,
+      username: node.querySelector("#gc-user").value,
+      password: node.querySelector("#gc-pw").value,
+      enablePassword: node.querySelector("#gc-en").value };
+    try {
+      await App().SaveDeviceGroup(out);
+      if (node.querySelector("#gc-all").checked) {
+        for (const d of members) if (!d.useGroupCreds) await App().SaveDevice({ ...d, useGroupCreds: true });
+      }
+      closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
+    } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+  };
+}
+
 // inlineSave merges a patch into an existing device and saves it, showing a
 // validation error (and reverting the table) if the edit is rejected.
 async function inlineSave(name, patch) {
@@ -330,7 +424,7 @@ function importDialog(defaultGroup) {
         <option value="keep">${esc(t("ファイルのグループをそのまま使う"))}</option>
         <option value="assign" ${defaultGroup ? "selected" : ""}>${esc(t("指定グループに追加する"))}</option>
       </select></div>
-    <div class="field" id="ci-grp-wrap"><label>${esc(t("追加先グループ"))}</label>
+    <div class="field" id="ci-grp-wrap"><label>${esc(t("追加先グループ"))} <span class="req">${esc(t("必須"))}</span></label>
       <input id="ci-grp" list="ci-grp-list" value="${esc(defaultGroup || "")}" placeholder="${esc(t("グループ名"))}">
       <datalist id="ci-grp-list">${opts}</datalist></div>
     <div class="field"><label style="font-weight:normal"><input type="checkbox" id="ci-ow" style="width:auto"> ${esc(t("同名の既存コマンドセット・OSタイププロファイルも一式の内容で上書きする"))}</label></div>
@@ -374,7 +468,11 @@ function importDialog(defaultGroup) {
 }
 
 function editDevice(dev, preGroup) {
-  const d = dev || { conn: "ssh", osType: "cisco-ios", authMethod: "password", enabled: true, group: preGroup || "" };
+  const preG = preGroup ? (INV.deviceGroups || []).find(g => g.name === preGroup) : null;
+  const preHasCreds = !!(preG && (preG.username || preG.password || preG.enablePassword));
+  // A device added inside a group that has default credentials starts on
+  // them; everything else starts on its own fields.
+  const d = dev || { conn: "ssh", osType: "cisco-ios", authMethod: "password", enabled: true, group: preGroup || "", useGroupCreds: preHasCreds };
   // Working copy of the bastion chain (fold legacy single bastion in).
   let bastions = (d.bastions && d.bastions.length) ? d.bastions.map(x => ({ ...x }))
     : (d.bastion && d.bastion.host ? [{ ...d.bastion }] : []);
@@ -388,34 +486,43 @@ function editDevice(dev, preGroup) {
   const groupOpts = (INV.deviceGroups || []).map(g => `<option value="${esc(g.name)}">`).join("");
   const node = h(`<div>
     <h3>${esc(dev ? t("機器を編集") : t("機器を追加"))}</h3>
+    <p class="muted" style="font-size:12px;margin:-10px 0 12px"><span class="req">${esc(t("必須"))}</span> ${esc(t("の付いた項目以外は任意です（空欄のままで保存できます）"))}</p>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("ホスト名（ログファイル名に使用）"))}</label><input id="f-name" value="${esc(d.name || "")}" ${dev ? "readonly" : ""}></div>
-      <div class="field"><label>${esc(t("グループ（会社）"))}</label>
-        <input id="f-group" list="${groupListId}" value="${esc(d.group || "")}" placeholder="${esc(t("例: A社（空欄=未設定）"))}">
+      <div class="field"><label>${esc(t("ホスト名（ログファイル名に使用）"))} <span class="req">${esc(t("必須"))}</span></label><input id="f-name" value="${esc(d.name || "")}" ${dev ? "readonly" : ""}></div>
+      <div class="field"><label>${esc(t("グループ"))}</label>
+        <div class="row-inline" id="f-group-ro" style="gap:12px;min-height:38px;align-items:center"><b>${esc(d.group || t("（未設定）"))}</b>
+          <span class="link" id="f-group-change" style="font-size:12px">${esc(t("別のグループへ移す…"))}</span></div>
+        <input id="f-group" list="${groupListId}" value="${esc(d.group || "")}" placeholder="${esc(t("例: A社（空欄=未設定）"))}" style="display:none">
         <datalist id="${groupListId}">${groupOpts}</datalist></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("IPアドレス"))}</label><input id="f-host" value="${esc(d.host || "")}"></div>
+      <div class="field"><label>${esc(t("IPアドレス"))} <span class="req" id="f-host-req">${esc(t("必須"))}</span></label><input id="f-host" value="${esc(d.host || "")}"></div>
       <div class="field"><label>${esc(t("拠点（任意）"))}</label><input id="f-site" value="${esc(d.site || "")}" placeholder="${esc(t("例: 本社 / 東京DC"))}"></div>
     </div>
     <div class="grid-3">
-      <div class="field"><label>${esc(t("接続方式"))}</label><select id="f-conn">
+      <div class="field"><label>${esc(t("接続方式"))} <span class="req">${esc(t("必須"))}</span></label><select id="f-conn">
         <option value="ssh" ${d.conn === "ssh" ? "selected" : ""}>SSH</option>
         <option value="telnet" ${d.conn === "telnet" ? "selected" : ""}>Telnet</option>
         <option value="serial" ${d.conn === "serial" ? "selected" : ""}>${esc(t("シリアル"))}</option></select></div>
-      <div class="field"><label>${esc(t("OSタイプ"))}</label><select id="f-os">${profOpts}</select></div>
+      <div class="field"><label>${esc(t("OSタイプ"))} <span class="req">${esc(t("必須"))}</span></label><select id="f-os">${profOpts}</select></div>
       <div class="field"><label>${esc(t("コマンドセット"))}</label><select id="f-set">${setOpts}</select></div>
     </div>
     <div id="conn-extra"></div>
 
     <div class="section-label">${esc(t("認証情報（暗号化保存）"))}</div>
+    <div class="field" id="fw-credmode"><label><span data-tip="${esc(t("「グループ既定を使う」にすると、ユーザー名・パスワード・enable パスワードはグループの既定（機器一覧の「グループ既定の認証情報…」）が使われ、この機器の欄は使われません。同じグループでもパスワードが違う機器は「個別に設定」のままにします"))}">${esc(t("認証情報の扱い ⓘ"))}</span></label>
+      <select id="f-credmode">
+        <option value="own" ${d.useGroupCreds ? "" : "selected"}>${esc(t("この機器に個別に設定"))}</option>
+        <option value="group" ${d.useGroupCreds ? "selected" : ""}>${esc(t("グループ既定を使う"))}</option>
+      </select>
+      <div class="muted" id="f-credmode-note" style="font-size:12px;margin-top:4px"></div></div>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("ユーザー名"))}</label><input id="f-user" value="${esc(d.username || "")}"></div>
+      <div class="field" id="fw-user"><label>${esc(t("ユーザー名"))}</label><input id="f-user" value="${esc(d.username || "")}"></div>
       <div class="field" id="fw-authmethod"><label>${esc(t("SSH認証方式"))}</label><select id="f-auth">
         <option value="password" ${d.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
         <option value="publickey" ${d.authMethod === "publickey" ? "selected" : ""}>${esc(t("公開鍵 (Ed25519/RSA/ECDSA)"))}</option></select></div>
     </div>
-    <div class="grid-2">
+    <div class="grid-2" id="fw-pwrow">
       <div class="field"><label>${esc(t("パスワード"))}</label><input id="f-pw" type="password" value="${esc(d.password || "")}"></div>
       <div class="field"><label>${esc(t("enable / 昇格パスワード（任意・ない機種は空欄）"))}</label><input id="f-en" type="password" value="${esc(d.enablePassword || "")}"></div>
     </div>
@@ -431,11 +538,6 @@ function editDevice(dev, preGroup) {
         <input type="checkbox" id="f-legacy" ${d.legacyAlgos ? "checked" : ""} style="width:auto">
         <span data-tip="${esc(t("SSHで古い暗号方式（SHA-1系の鍵交換・CBC・3DES）も候補に含めます。通常はオフのまま（強い方式のみ）。新しい方式に対応していない古い機器で接続エラーになる場合だけ有効にしてください"))}">${esc(t("レガシー暗号を許可（古い機器向け・通常はオフ） ⓘ"))}</span>
       </label></div>
-    ${dev && d.conn !== "serial" ? `<div class="field" id="fw-hostkey">
-      <div class="row-inline" style="gap:10px;align-items:center">
-        <button class="btn sm" id="f-hk-clear" type="button">${esc(t("ホストキー記録を削除"))}</button>
-        <span class="muted" style="font-size:12px" data-tip="${esc(t("SSHのホストキーは初回接続時に記録され、次回以降は一致を検証します（なりすまし防止）。機器を交換・OS再インストールしてホストキーが変わった場合のみ、記録を削除して再接続してください"))}">${esc(t("機器交換でホストキーが変わったときに使用"))} ⓘ</span>
-      </div></div>` : ""}
 
     <div class="section-label">${esc(t("踏み台サーバ（任意・最大5段。外側＝手前から順に）"))}</div>
     <div id="bastions-host"></div>
@@ -468,6 +570,8 @@ function editDevice(dev, preGroup) {
     }
     node.querySelector("#fw-authmethod").style.display = c === "ssh" ? "" : "none";
     node.querySelector("#fw-legacy").style.display = c === "ssh" ? "" : "none";
+    // A serial device has no address: the IP field stops being required.
+    node.querySelector("#f-host-req").style.display = c === "serial" ? "none" : "";
     syncAuth();
   }
   function syncAuth() {
@@ -481,6 +585,32 @@ function editDevice(dev, preGroup) {
       keyInp.value = INV.settings.lastKeyFile;
     }
   }
+  // Credential mode: the group choice only exists while a group is named,
+  // and the device's own fields hide while the group's defaults are in use.
+  const credMode = node.querySelector("#f-credmode");
+  function syncCredMode() {
+    const gname = node.querySelector("#f-group").value.trim();
+    const g = gname ? (INV.deviceGroups || []).find(x => x.name === gname) : null;
+    const wrap = node.querySelector("#fw-credmode");
+    if (!gname) { credMode.value = "own"; wrap.style.display = "none"; }
+    else wrap.style.display = "";
+    const useGroup = credMode.value === "group";
+    node.querySelector("#fw-user").style.display = useGroup ? "none" : "";
+    node.querySelector("#fw-pwrow").style.display = useGroup ? "none" : "";
+    const note = node.querySelector("#f-credmode-note");
+    if (!useGroup) note.textContent = "";
+    else if (g && (g.username || g.password || g.enablePassword)) note.textContent = t("グループ「{g}」の既定（ユーザー名: {u}）でログインします", { g: gname, u: g.username || "—" });
+    else note.textContent = t("⚠ グループ「{g}」の既定はまだ未設定です。機器一覧の「グループ既定の認証情報…」で設定してください", { g: gname });
+  }
+  credMode.onchange = syncCredMode;
+  node.querySelector("#f-group").addEventListener("input", syncCredMode);
+  // The group is shown as text (it was chosen by opening the group); the
+  // input only appears for the rare move to another group.
+  node.querySelector("#f-group-change").onclick = () => {
+    node.querySelector("#f-group-ro").style.display = "none";
+    const inp = node.querySelector("#f-group");
+    inp.style.display = ""; inp.focus();
+  };
   node.querySelector("#f-conn").onchange = syncConn;
   node.querySelector("#f-auth").onchange = syncAuth;
   node.querySelector("#f-key-pick").onclick = async () => {
@@ -489,13 +619,8 @@ function editDevice(dev, preGroup) {
       if (p) node.querySelector("#f-key").value = p;
     } catch (e) { toast(t("選択失敗") + ": " + terr(e), "err"); }
   };
-  const hkClear = node.querySelector("#f-hk-clear");
-  if (hkClear) hkClear.onclick = async () => {
-    if (!(await uiConfirm({ title: t("ホストキー記録を削除"), message: t("機器「<b>{n}</b>」（踏み台含む）のホストキー記録を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">次回接続時に新しいホストキーを記録し直します。機器を交換していないのにキーが変わった場合は、削除せずネットワーク管理者に確認してください</span>", { n: esc(d.name || "") }), okLabel: t("削除"), danger: true }))) return;
-    try { await App().ClearHostKeys(d.name); toast(t("ホストキー記録を削除しました"), "ok"); }
-    catch (e) { toast(terr(e), "err"); }
-  };
   syncConn();
+  syncCredMode();
 
   // ---- bastion chain (up to 5 hops) ----
   const bhost = node.querySelector("#bastions-host");
@@ -530,8 +655,8 @@ function editDevice(dev, preGroup) {
           <button class="btn sm act-del" type="button" data-rm="${i}">${esc(t("削除"))}</button>
         </div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))}</label><input class="b-host" value="${esc(b.host || "")}"></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("接続方式"))}</label><select class="b-method">
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-host" value="${esc(b.host || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("接続方式"))} <span class="req">${esc(t("必須"))}</span></label><select class="b-method">
             <option value="ssh" ${b.method === "ssh" ? "selected" : ""}>SSH</option>
             <option value="telnet" ${b.method === "telnet" ? "selected" : ""}>Telnet</option></select></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label>
@@ -541,7 +666,7 @@ function editDevice(dev, preGroup) {
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))}</label><input class="b-user" value="${esc(b.username || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
           <div class="field" style="margin-bottom:8px${i > 0 ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
@@ -558,7 +683,13 @@ function editDevice(dev, preGroup) {
             <input class="b-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
         </div>
         <div class="field" style="margin-bottom:0"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>
-          <input class="b-jump mono" value="${esc(b.jumpCommand || "")}" placeholder="${esc(t("例: ssh -l {user} {host}　（使用可: {user} {host} {port}）"))}"></div>
+          <input class="b-jump mono" value="${esc(b.jumpCommand || "")}" placeholder="ssh -l {user} {host}">
+          <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("例と使える変数（クリックでコピー）:"))}</div>
+          <table class="ph-table"><tbody>
+            <tr><td class="mono">ssh -l {user} {host}</td><td>${esc(t("例: Cisco IOS など、-l でユーザーを指定する ssh"))}</td></tr>
+            <tr><td class="mono">telnet {host} {port}</td><td>${esc(t("例: telnet で次ホップへ"))}</td></tr>
+            <tr><td class="mono">{user}</td><td>${esc(t("次ホップのユーザー名"))}</td><td class="mono">{host}</td><td>${esc(t("次ホップのホスト"))}</td><td class="mono">{port}</td><td>${esc(t("次ホップのポート"))}</td></tr>
+          </tbody></table></div>
       </div>`).join("");
     bhost.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
       bastions = collectBastions();
@@ -591,6 +722,7 @@ function editDevice(dev, preGroup) {
       }
     });
     wirePasswordToggles(bhost);
+    wireCopyCells(bhost);
     addBtn.style.display = bastions.length >= 5 ? "none" : "";
   }
   addBtn.onclick = () => {
@@ -619,6 +751,7 @@ function editDevice(dev, preGroup) {
       keyFile: node.querySelector("#f-key").value,
       keyPassphrase: node.querySelector("#f-keypass").value,
       legacyAlgos: node.querySelector("#f-legacy").checked,
+      useGroupCreds: !!node.querySelector("#f-group").value.trim() && node.querySelector("#f-credmode").value === "group",
       enabled: d.enabled !== false,
     };
     if (conn === "serial") {

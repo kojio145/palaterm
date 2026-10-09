@@ -112,10 +112,30 @@ func (r *Runner) emit(emit EmitFunc, dev string, phase Phase, msg string) {
 	}
 }
 
+// Options tune one batch beyond the vault's Settings.
+type Options struct {
+	// Stage labels the run (before / during / after the maintenance work).
+	// It goes into the run folder and log file names.
+	Stage model.Stage
+	// Group is the group the run was started for (named in the log folder).
+	Group string
+	// DryRun connects and logs in only: no command set is sent, nothing is
+	// written to disk. The result says whether each device is reachable with
+	// its credentials — a rehearsal for the real batch.
+	DryRun bool
+}
+
 // RunDevice connects to one device, drives login + commands, and writes a log.
 func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.CommandSet, s model.Settings, runDir string, now time.Time, emit EmitFunc) DeviceResult {
+	return r.runDevice(ctx, dev, set, s, runDir, now, emit, Options{})
+}
+
+func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.CommandSet, s model.Settings, runDir string, now time.Time, emit EmitFunc, opts Options) DeviceResult {
 	start := time.Now()
 	res := DeviceResult{Device: dev.Name}
+	if opts.DryRun {
+		set = nil
+	}
 
 	cmdTimeout := time.Duration(s.CommandTimeout) * time.Second
 	if cmdTimeout <= 0 {
@@ -132,7 +152,9 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 		if exp != nil {
 			res.Transcript = exp.Transcript()
 		}
-		r.saveLog(&res, dev, s, runDir, now)
+		if !opts.DryRun {
+			r.saveLog(&res, dev, s, runDir, now, opts.Stage)
+		}
 		res.Elapsed = time.Since(start)
 		r.emit(emit, dev.Name, ph, res.Error)
 		return res
@@ -184,11 +206,17 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 
 	res.Transcript = exp.Transcript()
 	res.Success = res.Error == ""
-	r.saveLog(&res, dev, s, runDir, now)
+	if !opts.DryRun {
+		r.saveLog(&res, dev, s, runDir, now, opts.Stage)
+	}
 	res.Elapsed = time.Since(start)
 
 	if res.Success {
-		r.emit(emit, dev.Name, PhaseDone, res.LogPath)
+		msg := res.LogPath
+		if opts.DryRun {
+			msg = DryRunOKMsg
+		}
+		r.emit(emit, dev.Name, PhaseDone, msg)
 	} else {
 		r.emit(emit, dev.Name, finishPhase(ctx, &res), res.Error)
 	}
@@ -784,16 +812,22 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 	return nil
 }
 
+// SecretsOf lists the passwords a transcript of dev must never show: its own,
+// its enable password, and its bastions'.
+func SecretsOf(dev *model.Device) []string {
+	secrets := []string{dev.Password, dev.EnablePassword}
+	for _, b := range dev.ActiveBastions() {
+		secrets = append(secrets, b.Password)
+	}
+	return secrets
+}
+
 // RedactSecrets masks the device's passwords (and its bastions') wherever
 // they appear in transcript text — some devices echo input back, and a
 // leaked prompt echo must not end up in a plaintext log file. Very short
 // passwords are left alone: masking e.g. every "a" would destroy the log.
 func RedactSecrets(text string, dev *model.Device) string {
-	secrets := []string{dev.Password, dev.EnablePassword}
-	for _, b := range dev.ActiveBastions() {
-		secrets = append(secrets, b.Password)
-	}
-	for _, sec := range secrets {
+	for _, sec := range SecretsOf(dev) {
 		if len(sec) >= 4 {
 			text = strings.ReplaceAll(text, sec, "****")
 		}
@@ -801,22 +835,33 @@ func RedactSecrets(text string, dev *model.Device) string {
 	return text
 }
 
-func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings, runDir string, now time.Time) {
+func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) {
 	if res.Transcript == "" {
 		return
 	}
 	path, err := logstore.Write(runDir, s.LogNameTemplate, logstore.Fields{
-		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site,
+		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Stage: string(stage),
 	}, RedactSecrets(res.Transcript, dev), now)
 	if err == nil {
 		res.LogPath = path
 	}
 }
 
+// DryRunOKMsg is the completion message of a device that passed a dry run
+// (the UI translates it).
+const DryRunOKMsg = "接続・ログイン OK（コマンドは送っていません）"
+
 // RunBatch runs all enabled devices, bounded by Settings.MaxParallel.
 func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFunc) []DeviceResult {
+	res, _ := r.RunBatchOpts(ctx, inv, Options{}, emit)
+	return res
+}
+
+// RunBatchOpts is RunBatch with per-run options. It also returns the run
+// folder the logs went to ("" for a dry run, which writes nothing).
+func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Options, emit EmitFunc) ([]DeviceResult, string) {
 	now := time.Now()
-	runDir := logstore.RunDir(inv.Settings.LogDir, now)
+	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), now)
 	sets := indexSets(inv.CommandSets)
 
 	var targets []*model.Device
@@ -833,7 +878,7 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 		limit = len(targets)
 	}
 	if limit == 0 {
-		return nil
+		return nil, ""
 	}
 	sem := make(chan struct{}, limit)
 	results := make([]DeviceResult, len(targets))
@@ -856,11 +901,14 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 			if cs, ok := sets[d.CommandSet]; ok {
 				set = cs
 			}
-			results[idx] = r.RunDevice(ctx, d, set, inv.Settings, runDir, now, emit)
+			results[idx] = r.runDevice(ctx, d, set, inv.Settings, runDir, now, emit, opts)
 		}(i, dev)
 	}
 	wg.Wait()
-	return results
+	if opts.DryRun {
+		return results, ""
+	}
+	return results, runDir
 }
 
 func indexSets(sets []model.CommandSet) map[string]*model.CommandSet {

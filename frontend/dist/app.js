@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.4.2";
+const APP_VERSION = "1.5";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -160,7 +160,14 @@ function wireCopyCells(scope) {
 const tipEl = document.createElement("div");
 tipEl.className = "tip hidden";
 document.body.appendChild(tipEl);
+// While a drag is in progress no mouseout ever arrives for the handle the
+// drag started on, so the handle's tooltip would sit over the rows being
+// reordered; hide it at dragstart and keep it hidden until the drop.
+let dragInProgress = false;
+document.addEventListener("dragstart", () => { dragInProgress = true; tipEl.classList.add("hidden"); }, true);
+document.addEventListener("dragend", () => { dragInProgress = false; }, true);
 document.addEventListener("mouseover", e => {
+  if (dragInProgress) return;
   const el = e.target.closest ? e.target.closest("[data-tip]") : null;
   const text = el && el.dataset.tip;
   if (!text) { tipEl.classList.add("hidden"); return; }
@@ -217,6 +224,21 @@ async function boot() {
   // Standalone terminal window? (child process binds Term, not App)
   if (window.go && window.go.main && window.go.main.Term) {
     bootTerminalWindow();
+    return;
+  }
+  // Diff window (binds DiffWin).
+  if (window.go && window.go.main && window.go.main.DiffWin) {
+    bootDiffWindow();
+    return;
+  }
+  // Log-viewer window (binds Viewer).
+  if (window.go && window.go.main && window.go.main.Viewer) {
+    bootViewerWindow();
+    return;
+  }
+  // Paste-confirmation window (child of a terminal window; binds Paste).
+  if (window.go && window.go.main && window.go.main.Paste) {
+    bootPasteWindow();
     return;
   }
   const exists = await App().VaultExists();
@@ -288,6 +310,7 @@ async function refreshInventory() {
 // ---- navigation ----
 document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
   b.onclick = () => switchTab(b.dataset.tab));
+$("#btn-reset").onclick = resetVaultFlow;
 $("#btn-lock").onclick = async () => {
   // Unsaved settings edits would be lost by the reload — warn first.
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lock"))) return;
@@ -334,6 +357,15 @@ async function resetVaultFlow() {
     danger: true,
   });
   if (!ok) return;
+  // A second, plainer question before the password: the first dialog is
+  // easy to click through while reading the list of what gets deleted.
+  const sure = await uiConfirm({
+    title: t("本当によろしいですか？"),
+    message: t("すべてのデータが削除され、<b>元に戻せません</b>。本当に初期化しますか？"),
+    okLabel: t("はい、初期化する"),
+    danger: true,
+  });
+  if (!sure) return;
   const node = h(`<div>
     <h3>${esc(t("最終確認"))}</h3>
     <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${t("本当にすべてのデータを削除して初期化しますか？")}<br>
@@ -397,9 +429,29 @@ function renderTab(name) {
   if (name === "devices") renderDevices();
   else if (name === "commands") renderCommands();
   else if (name === "run") renderRun();
+  else if (name === "history") renderHistory();
   else if (name === "settings") renderSettings();
   else if (name === "ostypes") renderOSTypes();
 }
+
+// ---- idle auto-lock ----
+// The vault locks itself after Settings.autoLockMin minutes without keyboard
+// or mouse input (default 30, 0 = off), the way a screen saver would — never
+// in the middle of a batch, whose progress table would be lost with the
+// reload. The interactive windows are separate processes and are not
+// affected. Runs only in the main window (INV is null in a terminal window).
+let lastActivityMs = Date.now();
+["mousemove", "mousedown", "keydown", "wheel", "touchstart"].forEach(ev =>
+  document.addEventListener(ev, () => { lastActivityMs = Date.now(); }, { passive: true }));
+setInterval(async () => {
+  if (!INV || !INV.settings || $("#app").classList.contains("hidden")) return;
+  const s = INV.settings;
+  const min = s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30);
+  if (!min || (typeof running !== "undefined" && running)) return;
+  if (Date.now() - lastActivityMs < min * 60000) return;
+  try { await App().Lock(); } catch (e) { }
+  location.reload();
+}, 15000);
 
 function profileName(key) {
   const p = PROFILES.find(p => p.key === key);
