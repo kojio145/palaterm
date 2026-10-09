@@ -50,6 +50,7 @@ PalaTerm のデータ（暗号化vault・ログ・書き出しファイル）は
 - [利用マニュアル](docs/manual.html)
 - [使い方ガイド](docs/USAGE.md) / [ビルド手順](docs/BUILD.md)
 - [セキュリティレビュー記録](docs/SECURITY.md) — 脆弱性の報告方法は [SECURITY.md](SECURITY.md) を参照
+- [開発記（Zenn）](https://zenn.dev/kjo145/articles/palaterm-batch-login-go-wails) — 設計方針・作業前後の照合・実機検証で踏んだバグ・配布の壁
 
 ## サポート方針
 

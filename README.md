@@ -60,6 +60,7 @@ launch ("More info" → "Run anyway"). Code signing is planned.
 - [User manual](docs/manual.html) (Japanese)
 - [Usage guide](docs/USAGE.md) / [Build instructions](docs/BUILD.md)
 - [Security review record](docs/SECURITY.md) — see [SECURITY.md](SECURITY.md) for how to report vulnerabilities
+- [Development story on Zenn](https://zenn.dev/kjo145/articles/palaterm-batch-login-go-wails) (Japanese) — design, before/after verification, bugs found on real devices, distribution hurdles
 
 ## Support
 
