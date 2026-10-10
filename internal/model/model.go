@@ -320,6 +320,12 @@ type Inventory struct {
 	// user deletes afterwards stays deleted. Zero = the original set.
 	ProfileSeedGen int `json:"profileSeedGen,omitempty"`
 
+	// CommandSetSeedGen is the same idea for the built-in 【サンプル】 command
+	// sets (CommandSetSeedGen const): a sample set added in a later release is
+	// offered to an older vault once, matched by name, and never re-added
+	// after the user deletes it. Zero = the original five.
+	CommandSetSeedGen int `json:"commandSetSeedGen,omitempty"`
+
 	// KnownHostKeys pins SSH host key fingerprints per "host:port"
 	// (trust-on-first-use); a later mismatch aborts the connection. Stored
 	// inside the encrypted vault like everything else.
@@ -638,5 +644,73 @@ func DefaultCommandSets() []CommandSet {
 			c("show logging", 15, 15),
 			c("show tech-support", 10, 10),
 		}},
+		// From the legacy tool's SW(ALAXALA) verification list (AX series L2
+		// switch), pauses as in that sheet. Not yet checked against a real
+		// switch; the ALAXALA AX profile disables the pager first.
+		{Name: "【サンプル】ALAXALA_L2SW", Commands: []Command{
+			c("show clock", 1, 1),
+			c("show running-config", 10, 10),
+			c("show startup-config", 10, 10),
+			c("show version", 1, 1),
+			c("show system", 1, 1),
+			c("show environment", 1, 1),
+			c("show flash", 1, 1),
+			c("show cpu days", 1, 1),
+			c("show cpu hours", 1, 1),
+			c("show processes cpu", 1, 1),
+			c("show memory", 1, 1),
+			c("show power", 1, 1),
+			c("show snmp", 1, 1),
+			c("show interfaces", 10, 10),
+			c("show port", 1, 1),
+			c("show port vlan", 1, 1),
+			c("show power inline", 1, 1),
+			c("show channel-group", 1, 1),
+			c("show channel-group statistics", 1, 1),
+			c("show vlan", 1, 1),
+			c("show vlan mac-vlan", 1, 1),
+			c("show spanning-tree", 1, 1),
+			c("show spanning-tree statistics", 1, 1),
+			c("show ip interface", 1, 1),
+			c("show ip arp", 1, 1),
+			c("show mac-address-table", 1, 1),
+			c("show ip route", 1, 1),
+			c("show access-filter", 1, 1),
+			c("show qos-flow", 1, 1),
+			c("show qos queueing", 30, 30),
+			c("show mac-authentication", 1, 1),
+			c("show gsrp aware", 1, 1),
+			c("show switchport-backup statistics", 1, 1),
+			c("show loop-detection", 1, 1),
+			c("show storm-control", 1, 1),
+			c("show lldp", 1, 1),
+			c("show lldp statistics", 1, 1),
+			c("show logging", 30, 30),
+		}},
 	}
+}
+
+// CommandSetSeedGen is the current generation of the built-in sample sets. A
+// vault records the generation it was last seeded from
+// (Inventory.CommandSetSeedGen); a sample set introduced in a later generation
+// is added to such a vault once. Bump this and add the set's name to
+// commandSetIntroducedIn whenever a sample set joins DefaultCommandSets.
+const CommandSetSeedGen = 1
+
+// commandSetIntroducedIn maps the sample sets that joined after the original
+// five to the generation that brought them. Original sets are absent (0).
+var commandSetIntroducedIn = map[string]int{
+	"【サンプル】ALAXALA_L2SW": 1,
+}
+
+// CommandSetsAddedAfter returns the sample sets introduced after generation
+// gen, in DefaultCommandSets order.
+func CommandSetsAddedAfter(gen int) []CommandSet {
+	var out []CommandSet
+	for _, cs := range DefaultCommandSets() {
+		if commandSetIntroducedIn[cs.Name] > gen {
+			out = append(out, cs)
+		}
+	}
+	return out
 }

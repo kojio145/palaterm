@@ -203,6 +203,84 @@ func TestNewDefaultProfilesAddedToOlderVault(t *testing.T) {
 	}
 }
 
+// A sample set that joins in a later release reaches a vault created before
+// it, once: added by name on unlock, not re-added after the user deletes it,
+// and never on top of a set the user already keeps under that name.
+func TestNewDefaultCommandSetsAddedToOlderVault(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	const newest = "【サンプル】ALAXALA_L2SW"
+	// Rewind to a v1.5.5 vault: five sample sets, generation unset.
+	a.mu.Lock()
+	var old []model.CommandSet
+	for _, cs := range a.inv.CommandSets {
+		if cs.Name != newest {
+			old = append(old, cs)
+		}
+	}
+	a.inv.CommandSets = old
+	a.inv.CommandSetSeedGen = 0
+	a.mu.Unlock()
+	if err := a.persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	a2 := NewApp()
+	a2.vaultPath = a.vaultPath
+	if err := a2.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	sets := a2.GetInventory().CommandSets
+	if len(sets) != len(model.DefaultCommandSets()) || sets[len(sets)-1].Name != newest {
+		t.Fatalf("new sample set should be appended, got %d sets, last %q", len(sets), sets[len(sets)-1].Name)
+	}
+	if a2.GetInventory().CommandSetSeedGen != model.CommandSetSeedGen {
+		t.Fatalf("generation not recorded: %d", a2.GetInventory().CommandSetSeedGen)
+	}
+	if err := a2.DeleteCommandSet(newest); err != nil {
+		t.Fatal(err)
+	}
+
+	a3 := NewApp()
+	a3.vaultPath = a.vaultPath
+	if err := a3.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, cs := range a3.GetInventory().CommandSets {
+		if cs.Name == newest {
+			t.Fatal("a deleted new sample set must not come back on the next unlock")
+		}
+	}
+
+	// A vault whose user already made a set under the same name keeps it.
+	a3.mu.Lock()
+	a3.inv.CommandSets = append(a3.inv.CommandSets, model.CommandSet{Name: newest, Commands: []model.Command{{Text: "show mine"}}})
+	a3.inv.CommandSetSeedGen = 0
+	a3.mu.Unlock()
+	if err := a3.persist(); err != nil {
+		t.Fatal(err)
+	}
+	a4 := NewApp()
+	a4.vaultPath = a.vaultPath
+	if err := a4.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, cs := range a4.GetInventory().CommandSets {
+		if cs.Name == newest {
+			n++
+			if len(cs.Commands) != 1 || cs.Commands[0].Text != "show mine" {
+				t.Fatalf("user set overwritten: %+v", cs)
+			}
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one %q, got %d", newest, n)
+	}
+}
+
 func TestCopyCommandSet(t *testing.T) {
 	a := newTestApp(t)
 	if err := a.CreateVault("master"); err != nil {

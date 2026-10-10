@@ -28,6 +28,8 @@ type expecter struct {
 	rawSink func([]byte) // when set, incoming bytes are forwarded here (interactive mode)
 	onClose func()       // called once when the read loop ends (session closed)
 
+	lastData time.Time // when the last byte arrived (creation time until then)
+
 	// eol ends a line sent to this transport. CRLF everywhere except a serial
 	// console, which reads CR and LF as two separate Enters.
 	eol string
@@ -36,7 +38,7 @@ type expecter struct {
 }
 
 func newExpecter(sess session.Session) *expecter {
-	e := &expecter{sess: sess, newData: make(chan struct{}, 1), eol: "\r\n"}
+	e := &expecter{sess: sess, newData: make(chan struct{}, 1), eol: "\r\n", lastData: time.Now()}
 	if le, ok := sess.(session.LineEnder); ok {
 		e.eol = le.LineEnding()
 	}
@@ -50,6 +52,7 @@ func (e *expecter) readLoop() {
 		n, err := e.sess.Read(tmp)
 		if n > 0 {
 			e.mu.Lock()
+			e.lastData = time.Now()
 			sink := e.rawSink
 			if sink == nil {
 				e.buf.Write(tmp[:n])
@@ -144,6 +147,13 @@ func (e *expecter) Drain() {
 	e.mu.Lock()
 	e.buf.Reset()
 	e.mu.Unlock()
+}
+
+// Idle reports how long the far end has been silent.
+func (e *expecter) Idle() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return time.Since(e.lastData)
 }
 
 // Send writes s followed by this transport's line ending.
