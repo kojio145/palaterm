@@ -161,12 +161,12 @@ CSVには group / site / role 列が含まれます（パスワードは平文�
   実行ごとのフォルダ（既定 `log_YYYYMMDD_HHMMSS[_作業タイミング]/`）が作られます。フォルダ名は
   「ログフォルダ名テンプレート」で変更可（`{date} {time} {hhmm} {group} {stage}`。例 `{date}_{group}_{stage}`。
   同名フォルダが既にあれば `_2`, `_3` … が付きます）。
-- ファイル名テンプレート（既定 `{host}_{site}_{stage}_{date}_{time}.txt`）で
+- ファイル名テンプレート（既定 `{host}_{site}_{role}_{stage}_{date}_{time}.txt`）で
   次のプレースホルダが使えます: `{host} {ip} {os} {group} {site} {role} {stage} {date} {time} {hhmm}`
   （`{stage}` は作業タイミング: 指定なし=`Config`・作業前=`before`・作業中=`work`・作業後=`after`。
   作業前／作業中／作業後の 3 語は「ログ設定」の「作業タイミングの付与文字列」で変更できます（空欄=既定）。
   改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます。
-  拠点・役割が空なら `{site}` / `{role}` の分は詰められます。旧既定 `{host}_Config_{date}_{time}.txt` のままの設定は自動で新既定に移行します）
+  拠点・役割が空なら `{site}` / `{role}` の分は詰められます。以前の既定（`{host}_Config_{date}_{time}.txt`・`{host}_{site}_{stage}_{date}_{time}.txt`）のままの設定は自動で新既定に移行します）
 - 対話接続のログも同じテンプレートで、作業タイミング `work` として `log_日時_work/` フォルダに保存され、
   「実行履歴」に「単独接続」として並びます。
 

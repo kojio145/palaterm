@@ -57,10 +57,10 @@ func runViewerWindow(path string) {
 	v := NewViewer(path, title)
 	err := wails.Run(&options.App{
 		Title:     title,
-		Width:     1200,
-		Height:    800,
-		MinWidth:  480,
-		MinHeight: 320,
+		Width:     viewerWin.W,
+		Height:    viewerWin.H,
+		MinWidth:  viewerWin.MinW,
+		MinHeight: viewerWin.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -86,10 +86,10 @@ func runDiffWindow(a, b, label string) {
 	d := NewDiffWin(a, b, label, title)
 	err := wails.Run(&options.App{
 		Title:     title,
-		Width:     1500,
-		Height:    860,
-		MinWidth:  720,
-		MinHeight: 400,
+		Width:     diffWin.W,
+		Height:    diffWin.H,
+		MinWidth:  diffWin.MinW,
+		MinHeight: diffWin.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -115,10 +115,10 @@ func runPasteWindow(device string) {
 	p := NewPaste(title)
 	err := wails.Run(&options.App{
 		Title:     title,
-		Width:     1100,
-		Height:    720,
-		MinWidth:  480,
-		MinHeight: 320,
+		Width:     pasteWin.W,
+		Height:    pasteWin.H,
+		MinWidth:  pasteWin.MinW,
+		MinHeight: pasteWin.MinH,
 		// Stays above the terminal it belongs to, like Tera Term's dialog;
 		// it can still be moved aside to read the terminal underneath.
 		AlwaysOnTop: true,
@@ -143,10 +143,10 @@ func runMainApp() {
 	app := NewApp()
 	err := wails.Run(&options.App{
 		Title:     "PalaTerm",
-		Width:     1440,
-		Height:    960,
-		MinWidth:  1100,
-		MinHeight: 680,
+		Width:     mainWin.W,
+		Height:    mainWin.H,
+		MinWidth:  mainWin.MinW,
+		MinHeight: mainWin.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
@@ -167,10 +167,10 @@ func runTerminalWindow(device string) {
 	t := NewTerm(device)
 	err := wails.Run(&options.App{
 		Title:     "PalaTerm - " + device,
-		Width:     1200,
-		Height:    760,
-		MinWidth:  640,
-		MinHeight: 400,
+		Width:     termWin.W,
+		Height:    termWin.H,
+		MinWidth:  termWin.MinW,
+		MinHeight: termWin.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

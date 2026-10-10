@@ -131,11 +131,29 @@ func (t StageTokens) Validate() error {
 }
 
 // DefaultTemplate is the log file name a new vault starts with; vaults still
-// on OldDefaultTemplate are moved to it on unlock.
-const (
-	DefaultTemplate    = "{host}_{site}_{stage}_{date}_{time}.txt"
-	OldDefaultTemplate = "{host}_Config_{date}_{time}.txt"
-)
+// on one of the earlier defaults (OldDefaultTemplates) are moved to it on
+// unlock, so a user who never touched the setting follows the current form
+// while a template they edited stays theirs.
+const DefaultTemplate = "{host}_{site}_{role}_{stage}_{date}_{time}.txt"
+
+// OldDefaultTemplates are the defaults of earlier releases, oldest first:
+// the original (host and a fixed "Config"), then the v1.5 one that added
+// site and stage. Role joined in v1.5.8.
+var OldDefaultTemplates = []string{
+	"{host}_Config_{date}_{time}.txt",
+	"{host}_{site}_{stage}_{date}_{time}.txt",
+}
+
+// IsOldDefaultTemplate reports whether tmpl is a default from an earlier
+// release (and so safe to move to DefaultTemplate).
+func IsOldDefaultTemplate(tmpl string) bool {
+	for _, t := range OldDefaultTemplates {
+		if tmpl == t {
+			return true
+		}
+	}
+	return false
+}
 
 // DefaultDirTemplate names the per-run folder: log_<date>_<time>[_<stage>].
 // Placeholders: {date} {time} {hhmm} {group} {stage}; a run with no stage

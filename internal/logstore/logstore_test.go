@@ -59,6 +59,18 @@ func TestStageInNames(t *testing.T) {
 	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before"}, now); got != "r1_before_20261009_123456.txt" {
 		t.Errorf("default before, no site: %q", got)
 	}
+	// The default carries {role} between site and stage (v1.5.8).
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Site: "本社", Role: "コア", Stage: "before"}, now); got != "r1_本社_コア_before_20261009_123456.txt" {
+		t.Errorf("default with role: %q", got)
+	}
+	for _, old := range OldDefaultTemplates {
+		if !IsOldDefaultTemplate(old) {
+			t.Errorf("%q should count as an old default", old)
+		}
+	}
+	if IsOldDefaultTemplate(DefaultTemplate) || IsOldDefaultTemplate("{host}_{date}.txt") {
+		t.Error("current default / user template must not count as old")
+	}
 	// {role} is a label like {site}: filled when set, squeezed out when blank.
 	if got := expandName("{host}_{site}_{role}_{date}.txt", Fields{Host: "r1", Site: "本社", Role: "コア"}, now); got != "r1_本社_コア_20261009.txt" {
 		t.Errorf("role: %q", got)

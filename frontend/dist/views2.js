@@ -797,7 +797,7 @@ function renderSettings() {
         <div class="field"><label><span data-tip="${esc(t("実行ごとに作るフォルダの名前です。使える変数は {date} {time} {hhmm} {group} {stage}（例: {date}_{group}_{stage}）。同名のフォルダが既にあれば _2, _3 … が付きます"))}">${esc(t("ログフォルダ名テンプレート ⓘ"))}</span></label>
           <input id="set-dtmpl" value="${esc(s.logDirTemplate || "log_{date}_{time}_{stage}")}"></div>
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
-          <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{stage}_{date}_{time}.txt")}"></div>
+          <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
       <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
@@ -844,7 +844,7 @@ function renderSettings() {
       connectTimeout: parseInt(document.getElementById("set-ct").value, 10) || 20,
       commandTimeout: parseInt(document.getElementById("set-cmt").value, 10) || 30,
       logDir: document.getElementById("set-dir").value || "logs",
-      logNameTemplate: document.getElementById("set-tmpl").value || "{host}_{site}_{stage}_{date}_{time}.txt",
+      logNameTemplate: document.getElementById("set-tmpl").value || "{host}_{site}_{role}_{stage}_{date}_{time}.txt",
       logDirTemplate: document.getElementById("set-dtmpl").value.trim() || "log_{date}_{time}_{stage}",
       // Empty = default (before / work / after); the backend validates.
       stageTokenBefore: document.getElementById("set-st-before").value.trim(),

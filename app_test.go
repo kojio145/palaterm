@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
 )
@@ -278,6 +279,51 @@ func TestNewDefaultCommandSetsAddedToOlderVault(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want exactly one %q, got %d", newest, n)
+	}
+}
+
+// A vault still on an earlier default log name follows the current default on
+// unlock; a template the user edited is left alone.
+func TestOldDefaultLogNameTemplateMigrates(t *testing.T) {
+	for _, old := range logstore.OldDefaultTemplates {
+		a := newTestApp(t)
+		if err := a.CreateVault("master"); err != nil {
+			t.Fatal(err)
+		}
+		a.mu.Lock()
+		a.inv.Settings.LogNameTemplate = old
+		a.mu.Unlock()
+		if err := a.persist(); err != nil {
+			t.Fatal(err)
+		}
+		a2 := NewApp()
+		a2.vaultPath = a.vaultPath
+		if err := a2.Unlock("master"); err != nil {
+			t.Fatal(err)
+		}
+		if got := a2.GetInventory().Settings.LogNameTemplate; got != logstore.DefaultTemplate {
+			t.Fatalf("%q should move to the current default, got %q", old, got)
+		}
+	}
+
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	const mine = "{host}_{date}.txt"
+	a.mu.Lock()
+	a.inv.Settings.LogNameTemplate = mine
+	a.mu.Unlock()
+	if err := a.persist(); err != nil {
+		t.Fatal(err)
+	}
+	a2 := NewApp()
+	a2.vaultPath = a.vaultPath
+	if err := a2.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a2.GetInventory().Settings.LogNameTemplate; got != mine {
+		t.Fatalf("user template overwritten: %q", got)
 	}
 }
 

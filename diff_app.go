@@ -36,7 +36,7 @@ func NewDiffWin(a, b, label, title string) *DiffWin {
 	return &DiffWin{a: a, b: b, label: label, title: title}
 }
 
-func (d *DiffWin) startup(ctx context.Context) { d.ctx = ctx }
+func (d *DiffWin) startup(ctx context.Context) { d.ctx = ctx; diffWin.fit(ctx) }
 
 func (d *DiffWin) domReady(ctx context.Context) { go focusOwnWindow() }
 
