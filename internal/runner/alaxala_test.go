@@ -117,9 +117,17 @@ func TestAlaxalaProfileEndToEnd(t *testing.T) {
 	settings.CommandTimeout = 6
 
 	r := New(testRegistry())
+	started := time.Now()
 	res := r.RunDevice(context.Background(), dev, set, settings, settings.LogDir, time.Now(), nil)
 	if !res.Success {
 		t.Fatalf("alaxala run failed: %s\n---\n%s", res.Error, res.Transcript)
+	}
+	// The enable-password wait (the switch never asks) used to cost its full
+	// three seconds; the prompt already on screen now ends it after about
+	// one. Of what remains, disconnect's settle wait after the first "exit"
+	// (the prompt is ">" then, not "#") is the bulk; the whole run was 6.1s.
+	if took := time.Since(started); took > 5*time.Second {
+		t.Errorf("run took %v; the skipped credential prompts should not cost their full wait", took)
 	}
 	if !strings.Contains(res.Transcript, "ALAXALA AX2530S-24T Ver. 4.4") {
 		t.Fatalf("show version output missing:\n%s", res.Transcript)

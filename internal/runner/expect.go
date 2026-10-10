@@ -30,7 +30,7 @@ type expecter struct {
 
 	lastData time.Time // when the last byte arrived (creation time until then)
 
-	// eol ends a line sent to this transport. CRLF everywhere except a serial
+	// eol ends a line sent to this transport. CRLF for Telnet; CR for SSH and
 	// console, which reads CR and LF as two separate Enters.
 	eol string
 

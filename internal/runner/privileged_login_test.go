@@ -85,9 +85,10 @@ func ixShell(ch ssh.Channel) {
 	for {
 		n, err := ch.Read(buf)
 		for _, b := range buf[:n] {
-			switch b {
-			case '\r':
-			case '\n':
+			switch {
+			case b == '\n' && line.Len() == 0:
+				// the LF of a CR LF pair: already handled on the CR
+			case b == '\r' || b == '\n':
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
 				if cmd == "show version" {

@@ -35,6 +35,13 @@ func (s *sshSession) Resize(cols, rows int) error {
 	return s.sess.WindowChange(rows, cols)
 }
 
+// LineEnding is a bare CR, as a terminal's Enter key sends. The pty on the
+// far side turns it into one newline; CR LF would be two Enters there — an
+// empty command and a second prompt after every line, visible as doubled
+// prompts on a Unix-style CLI, and through a jump host that is what every
+// device behind it receives.
+func (s *sshSession) LineEnding() string { return "\r" }
+
 func (s *sshSession) Close() error {
 	if s.stdin != nil {
 		_ = s.stdin.Close()
@@ -191,7 +198,12 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 		return nil, err
 	}
 
-	modes := ssh.TerminalModes{ssh.ECHO: 0, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
+	// ECHO stays on. Network gear ignores these modes, but a Unix-style far
+	// end honours them, and an OpenSSH client started on such a host — the
+	// jump-host case — copies its own tty's modes into the pty it requests
+	// from the next hop. With ECHO off here, nothing the user typed showed
+	// on an ALAXALA reached through a jump server (its CLI is a real shell).
+	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := sess.RequestPty("xterm", 40, 120, modes); err != nil {
 		sess.Close()
 		client.Close()

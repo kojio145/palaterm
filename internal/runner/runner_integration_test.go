@@ -104,10 +104,10 @@ func ciscoShell(ch ssh.Channel) {
 		n, err := ch.Read(reader)
 		if n > 0 {
 			for _, b := range reader[:n] {
-				switch b {
-				case '\r':
-					// Ignore CR; act only on LF, like a real device line.
-				case '\n':
+				switch {
+				case b == '\n' && line.Len() == 0:
+					// the LF of a CR LF pair: already handled on the CR
+				case b == '\r' || b == '\n':
 					cmd := strings.TrimSpace(line.String())
 					recordCmd(cmd)
 					line.Reset()

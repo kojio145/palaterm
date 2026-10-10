@@ -740,6 +740,56 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 // at the tail, before waitPrompt types a bare Enter to get the prompt back.
 const promptNudgeAfter = time.Second
 
+// expectAuth waits for a credential prompt and gives up early — the step is
+// then skipped, as it is after the full wait — once the device has visibly
+// moved past it:
+//
+//   - the next credential prompt is already on screen (SSH through a jump
+//     host asks for no username, only "password:"), or
+//   - for any step but the first, the operational prompt is there: at the
+//     tail, or anywhere once the device has been silent for a second (ALAXALA
+//     AX follows its first "#" with a log line of its own).
+//
+// The first step gets only the first rule: the buffer still holds the login
+// banner then, and banners are full of "#". Each skipped wait was three
+// seconds; a jump-host login to an ALAXALA had two of them.
+func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, ready string, pastFirst bool, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	tail := ""
+	if ready != "" {
+		tail = "(?:" + ready + `)[ \t]*\z`
+	}
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return ErrExpectTimeout
+		}
+		err := exp.Expect(ctx, pattern, min(remaining, 100*time.Millisecond))
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrExpectTimeout) {
+			return err // context cancelled or closed
+		}
+		if next != "" && exp.Seen(next) {
+			return ErrExpectTimeout
+		}
+		if !pastFirst || tail == "" {
+			continue
+		}
+		if exp.Seen(tail) {
+			time.Sleep(promptSettle)
+			if exp.Seen(tail) {
+				return ErrExpectTimeout
+			}
+			continue
+		}
+		if exp.Seen(ready) && exp.Idle() >= promptNudgeAfter {
+			return ErrExpectTimeout
+		}
+	}
+}
+
 // expectOrReady waits for pattern, reporting ready=true instead if the device
 // reaches its operational prompt first. Both are polled in short slices so a
 // step that will never match costs a fraction of a second rather than the full
@@ -782,7 +832,7 @@ func (r *Runner) expectOrReady(ctx context.Context, exp *expecter, pattern, read
 // on a device whose account logs straight in privileged, and without this it
 // would burn the whole timeout and then fail the login outright.
 func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.Step, vars profile.Vars, timeout time.Duration, skipCreds bool, readyPrompt string) error {
-	for _, st := range steps {
+	for i, st := range steps {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -790,15 +840,18 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 			continue // transport-level auth already done (direct SSH)
 		}
 		if st.Expect != "" {
-			// Auth steps keep the plain short wait: their prompt can legitimately
-			// arrive after a banner, and racing them against readyPrompt would let
-			// a banner containing the prompt character skip a credential.
 			var (
 				ready bool
 				err   error
 			)
 			if st.Auth() {
-				err = exp.Expect(ctx, st.Expect, min(timeout, 3*time.Second))
+				// Auth steps keep a short wait, cut shorter still once the
+				// device has visibly moved past the prompt — see expectAuth.
+				next := ""
+				if i+1 < len(steps) && steps[i+1].Auth() {
+					next = steps[i+1].Expect
+				}
+				err = r.expectAuth(ctx, exp, st.Expect, next, readyPrompt, i > 0, min(timeout, 3*time.Second))
 			} else {
 				ready, err = r.expectOrReady(ctx, exp, st.Expect, readyPrompt, timeout)
 			}
