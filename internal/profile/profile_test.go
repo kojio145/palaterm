@@ -58,9 +58,35 @@ func TestDefaultsArePlainText(t *testing.T) {
 }
 
 func TestExpectedDefaultCount(t *testing.T) {
-	// 13 concrete OS families + 1 generic fallback.
-	if got := len(Defaults()); got != 14 {
-		t.Fatalf("expected 14 default profiles, got %d", got)
+	// 14 concrete OS families + 1 generic fallback.
+	if got := len(Defaults()); got != 15 {
+		t.Fatalf("expected 15 default profiles, got %d", got)
+	}
+}
+
+// Every generation after 0 names at least one default, and AddedAfter of the
+// current generation is empty (nothing left to seed).
+func TestAddedAfter(t *testing.T) {
+	if got := AddedAfter(SeedGen); len(got) != 0 {
+		t.Fatalf("AddedAfter(SeedGen) = %d profiles, want 0", len(got))
+	}
+	all := AddedAfter(0)
+	if len(all) != len(introducedIn) {
+		t.Fatalf("AddedAfter(0) = %d, want %d", len(all), len(introducedIn))
+	}
+	for k, g := range introducedIn {
+		if g < 1 || g > SeedGen {
+			t.Errorf("%s: generation %d outside 1..%d", k, g, SeedGen)
+		}
+		found := false
+		for _, p := range defaults {
+			if p.Key == k {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: listed in introducedIn but not a default", k)
+		}
 	}
 }
 

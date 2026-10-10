@@ -84,12 +84,12 @@ func TestProfilesExposed(t *testing.T) {
 	if err := a.CreateVault("master"); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.ListProfiles()) != 14 {
-		t.Fatalf("expected 14 profiles exposed to UI, got %d", len(a.ListProfiles()))
+	if len(a.ListProfiles()) != 15 {
+		t.Fatalf("expected 15 profiles exposed to UI, got %d", len(a.ListProfiles()))
 	}
 }
 
-// A vault from before profiles-as-data gets the 14 defaults seeded exactly
+// A vault from before profiles-as-data gets the 15 defaults seeded exactly
 // once on unlock; a default the user then deletes stays deleted.
 func TestProfileSeedingAndDeletion(t *testing.T) {
 	a := newTestApp(t)
@@ -110,8 +110,8 @@ func TestProfileSeedingAndDeletion(t *testing.T) {
 	if err := a2.Unlock("master"); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(a2.GetInventory().CustomProfiles); n != 14 {
-		t.Fatalf("unlock should seed 14 default profiles, got %d", n)
+	if n := len(a2.GetInventory().CustomProfiles); n != 15 {
+		t.Fatalf("unlock should seed 15 default profiles, got %d", n)
 	}
 	if err := a2.DeleteProfile("yamaha-rtx"); err != nil {
 		t.Fatalf("defaults should be deletable: %v", err)
@@ -125,8 +125,81 @@ func TestProfileSeedingAndDeletion(t *testing.T) {
 	if a3.profiles.Has("yamaha-rtx") {
 		t.Fatal("deleted default must not be reseeded on the next unlock")
 	}
-	if n := len(a3.GetInventory().CustomProfiles); n != 13 {
-		t.Fatalf("profiles after deletion = %d, want 13", n)
+	if n := len(a3.GetInventory().CustomProfiles); n != 14 {
+		t.Fatalf("profiles after deletion = %d, want 14", n)
+	}
+}
+
+// A vault seeded by an earlier release (generation 0: no ALAXALA) gets the
+// defaults added since, once, placed before "generic"; deleting one of them
+// afterwards sticks, and a user-made profile of the same key is never
+// overwritten.
+func TestNewDefaultProfilesAddedToOlderVault(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	// Rewind to a v1.5.3 vault: 14 profiles, generation unset.
+	a.mu.Lock()
+	var old []profile.Profile
+	for _, p := range a.inv.CustomProfiles {
+		if p.Key != "alaxala-ax" {
+			old = append(old, p)
+		}
+	}
+	a.inv.CustomProfiles = old
+	a.inv.ProfileSeedGen = 0
+	a.mu.Unlock()
+	if err := a.persist(); err != nil {
+		t.Fatal(err)
+	}
+
+	a2 := NewApp()
+	a2.vaultPath = a.vaultPath
+	if err := a2.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	ps := a2.GetInventory().CustomProfiles
+	if len(ps) != 15 || ps[len(ps)-1].Key != "generic" || ps[len(ps)-2].Key != "alaxala-ax" {
+		keys := make([]string, len(ps))
+		for i, p := range ps {
+			keys[i] = p.Key
+		}
+		t.Fatalf("ALAXALA should be added before generic, got %v", keys)
+	}
+	if a2.GetInventory().ProfileSeedGen != profile.SeedGen {
+		t.Fatalf("generation not recorded: %d", a2.GetInventory().ProfileSeedGen)
+	}
+	if err := a2.DeleteProfile("alaxala-ax"); err != nil {
+		t.Fatal(err)
+	}
+
+	a3 := NewApp()
+	a3.vaultPath = a.vaultPath
+	if err := a3.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	if a3.profiles.Has("alaxala-ax") {
+		t.Fatal("a deleted new default must not come back on the next unlock")
+	}
+
+	// A vault whose user already made a profile under the same key keeps it.
+	a3.mu.Lock()
+	a3.inv.CustomProfiles = append(a3.inv.CustomProfiles, profile.Profile{Key: "alaxala-ax", Name: "mine", Prompt: "%"})
+	a3.inv.ProfileSeedGen = 0
+	a3.mu.Unlock()
+	if err := a3.persist(); err != nil {
+		t.Fatal(err)
+	}
+	a4 := NewApp()
+	a4.vaultPath = a.vaultPath
+	if err := a4.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range a4.GetInventory().CustomProfiles {
+		if p.Key == "alaxala-ax" && p.Name != "mine" {
+			t.Fatalf("user profile overwritten: %+v", p)
+		}
 	}
 }
 

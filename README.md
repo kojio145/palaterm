@@ -12,7 +12,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.5.3 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.5.4 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 ![Run tab: four devices executing a command set in parallel](docs/img/run-en.png)
 
@@ -24,8 +24,8 @@ Windows exe — no installation required.
 - 📡 **Three transports** — SSH / Telnet / serial console (COM ports auto-discovered)
 - 🏢 **Jump host support** — multi-hop connections through bastion servers
   (SSH public-key auth: Ed25519/RSA/ECDSA, passphrase-protected keys supported)
-- 🤖 **Login automation** — 14 built-in OS profiles (Cisco IOS/ASA, JUNOS, FortiGate,
-  HPE, NEC IX, Yamaha RTX, …) handling enable escalation and pager disabling; all
+- 🤖 **Login automation** — 15 built-in OS profiles (Cisco IOS/ASA, JUNOS, FortiGate,
+  HPE, NEC IX, ALAXALA AX, Yamaha RTX, …) handling enable escalation and pager disabling; all
   profiles are editable and you can add your own
 - 📋 **Batch command execution** — assign named command sets per device and run them in one go
 - 📁 **Automatic log saving** — `{host}_{site}_{stage}_{date}_{time}.txt` style, customizable with placeholders

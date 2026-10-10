@@ -32,7 +32,7 @@ var header = []string{
 	"name", "group", "site", "host", "conn", "port", "serialPort", "baud",
 	"osType", "commandSet", "authMethod", "keyFile", "keyPassphrase",
 	"username", "password", "enablePassword", "legacyAlgos",
-	"bastions", "bastionExtras", "enabled", "useGroupCreds",
+	"bastions", "bastionExtras", "enabled", "useGroupCreds", "role",
 }
 
 // BOM is the UTF-8 byte order mark every exported CSV starts with: without
@@ -56,7 +56,7 @@ func Export(devices []model.Device) (string, error) {
 			d.OSType, d.CommandSet, string(d.AuthMethod), d.KeyFile, d.KeyPassphrase,
 			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
 			encodeBastions(d.Bastions), encodeBastionExtras(d.Bastions), boolStr(d.Enabled),
-			boolStr(d.UseGroupCreds),
+			boolStr(d.UseGroupCreds), d.Role,
 		}
 		if err := w.Write(rec); err != nil {
 			return "", err
@@ -104,6 +104,7 @@ func Import(text string) ([]model.Device, error) {
 			Name:           name,
 			Group:          get(row, "group"),
 			Site:           get(row, "site"),
+			Role:           get(row, "role"),
 			Host:           get(row, "host"),
 			Conn:           model.ConnMethod(orDefault(get(row, "conn"), "ssh")),
 			Port:           atoi(get(row, "port")),

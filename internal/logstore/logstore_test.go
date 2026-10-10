@@ -59,6 +59,40 @@ func TestStageInNames(t *testing.T) {
 	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before"}, now); got != "r1_before_20261009_123456.txt" {
 		t.Errorf("default before, no site: %q", got)
 	}
+	// {role} is a label like {site}: filled when set, squeezed out when blank.
+	if got := expandName("{host}_{site}_{role}_{date}.txt", Fields{Host: "r1", Site: "本社", Role: "コア"}, now); got != "r1_本社_コア_20261009.txt" {
+		t.Errorf("role: %q", got)
+	}
+	if got := expandName("{host}_{site}_{role}_{date}.txt", Fields{Host: "r1"}, now); got != "r1_20261009.txt" {
+		t.Errorf("blank site and role: %q", got)
+	}
+	// An empty optional placeholder takes exactly one neighbouring separator
+	// with it, whatever the separator is, and whichever side it is on.
+	cases := []struct{ tmpl, want string }{
+		{"{host}-{site}-{role}-{date}.txt", "r1-20261009.txt"},
+		{"{site}_{host}_{date}.txt", "r1_20261009.txt"},
+		{"{site}-{role}-{host}.txt", "r1.txt"},
+		{"{host} {site} {date}.txt", "r1 20261009.txt"},
+		{"{host}.{site}.txt", "r1.txt"},
+		{"{host}__{site}__{date}.txt", "r1___20261009.txt"}, // exactly one separator goes; the rest is what the user typed
+		{"{host}({site}).txt", "r1().txt"},                 // only separators are dropped
+	}
+	for _, c := range cases {
+		if got := expandName(c.tmpl, Fields{Host: "r1"}, now); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.tmpl, got, c.want)
+		}
+	}
+	// A filled placeholder is never touched by that rule.
+	if got := expandName("{site}-{host}", Fields{Host: "r1", Site: "HQ"}, now); got != "HQ-r1" {
+		t.Errorf("filled site: %q", got)
+	}
+	// Folder names: an empty {group} and {stage} drop out the same way.
+	if got := filepath.Base(RunDir(root, "{date}-{group}-{stage}", "", "", StageTokens{}, now)); got != "20261009" {
+		t.Errorf("dir with blank group and stage: %q", got)
+	}
+	if got := filepath.Base(RunDir(root, "{group}_{date}_{stage}", "", "after", StageTokens{}, now)); got != "20261009_after" {
+		t.Errorf("dir with leading blank group: %q", got)
+	}
 	if !strings.HasSuffix(filepath.Base(RunDir(root, "", "", "", StageTokens{}, now)), "123456") {
 		t.Errorf("run dir without stage: %q", RunDir(root, "", "", "", StageTokens{}, now))
 	}

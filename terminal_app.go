@@ -208,7 +208,7 @@ func (t *Term) connect(pw string) {
 	started := time.Now()
 	runDir := logstore.RunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
 	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
-		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
+		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Role: d.Role, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
 	var secrets []string
 	if settings.MaskLogSecrets {
 		secrets = runpkg.SecretsOf(&d)

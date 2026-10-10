@@ -184,7 +184,7 @@ function runVisible(devs) {
   const q = runFilter.text.trim().toLowerCase();
   let out = devs.filter(d => {
     const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" };
-    if (q && ![d.name, d.host, d.site || "", d.commandSet || ""].some(v => String(v).toLowerCase().includes(q))) return false;
+    if (q && ![d.name, d.host, d.site || "", d.role || "", d.commandSet || ""].some(v => String(v).toLowerCase().includes(q))) return false;
     if (runFilter.site && (d.site || "") !== runFilter.site) return false;
     if (runFilter.status && st.phase !== runFilter.status) return false;
     return true;
@@ -266,6 +266,7 @@ function renderRun() {
       <td><div class="clip" data-tip="${esc(d.name)}"><b>${esc(d.name)}</b></div></td>
       <td class="mono"><div class="clip" data-tip="${esc(d.host)}">${esc(d.host)}</div></td>
       <td><div class="clip" data-tip="${esc(d.site || "")}">${esc(d.site || "")}</div></td>
+      <td><div class="clip" data-tip="${esc(d.role || "")}">${esc(d.role || "")}</div></td>
       <td class="muted"><div class="clip" data-tip="${esc(d.commandSet || "")}">${esc(d.commandSet || t("（なし）"))}</div></td>
       <td class="muted mono"><div class="clip" data-tip="${esc(fmtRunMsg(st.message))}">${esc(fmtRunMsg(st.message))}</div></td>
       <td style="text-align:right;white-space:nowrap">
@@ -316,7 +317,7 @@ function renderRun() {
       </div>
     </div>
     ${runGroupSel && devs.length ? `<div class="run-toolbar" style="margin-top:-8px;gap:8px">
-      <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（ホスト名・IP・拠点・コマンドセット）"))}" value="${esc(runFilter.text)}">
+      <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（ホスト名・IP・拠点・役割・コマンドセット）"))}" value="${esc(runFilter.text)}">
       <select id="run-filter-site" class="btn" style="padding-right:8px"><option value="">${esc(t("拠点: すべて"))}</option>${sites.map(s => `<option value="${esc(s)}" ${s === runFilter.site ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <select id="run-filter-status" class="btn" style="padding-right:8px"><option value="">${esc(t("状態: すべて"))}</option>${["queued", "off", "done", "error", "canceled", "running"].map(p => `<option value="${p}" ${p === runFilter.status ? "selected" : ""}>${esc(statusLabel(p))}</option>`).join("")}</select>
       ${filtered ? `<button class="btn sm" id="run-filter-clear">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
@@ -328,8 +329,8 @@ function renderRun() {
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
         : `<table class="fixed"><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
-           ${th("phase", t("状態"), "170px")}${th("name", t("ホスト名"), "200px")}${th("host", t("IPアドレス"), "140px")}
-           ${th("site", t("拠点名"), "120px")}${th("commandSet", t("コマンドセット"), "190px")}
+           ${th("phase", t("状態"), "150px")}${th("name", t("ホスト名"), "170px")}${th("host", t("IPアドレス"), "130px")}
+           ${th("site", t("拠点名"), "100px")}${th("role", t("役割"), "100px")}${th("commandSet", t("コマンドセット"), "160px")}
            <th>${esc(t("メッセージ"))}</th><th style="width:230px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
 
@@ -816,6 +817,7 @@ function renderSettings() {
         <tr><td class="mono">{ip}</td><td>${esc(t("IPアドレス"))}</td><td class="mono">{time}</td><td>${esc(t("時刻（hhmmss）"))}</td></tr>
         <tr><td class="mono">{os}</td><td>${esc(t("OS種別"))}</td><td class="mono">{hhmm}</td><td>${esc(t("時刻（hhmm）"))}</td></tr>
         <tr><td class="mono">{group}</td><td>${esc(t("グループ名"))}</td><td class="mono">{site}</td><td>${esc(t("拠点名"))}</td></tr>
+        <tr><td class="mono">{role}</td><td colspan="3">${esc(t("役割（機器編集の「役割（任意）」。空なら詰められます）"))}</td></tr>
         <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after。上の欄で変更可）。指定なしは Config。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>

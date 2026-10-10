@@ -232,6 +232,7 @@ func (a *App) CreateVault(password string) error {
 		DeviceGroups:   []model.DeviceGroup{{Name: "サンプルグループ"}},
 		CustomProfiles: profile.Defaults(),
 		ProfilesSeeded: true,
+		ProfileSeedGen: profile.SeedGen,
 	}
 	if err := vault.Save(a.vaultPath, password, inv); err != nil {
 		return err
@@ -278,6 +279,40 @@ func (a *App) Unlock(password string) error {
 		}
 		inv.CustomProfiles = append(merged, inv.CustomProfiles...)
 		inv.ProfilesSeeded = true
+		inv.ProfileSeedGen = profile.SeedGen
+		seed = true
+	}
+	// Defaults added by a later release (ALAXALA AX in generation 1) go into
+	// vaults seeded before them, once: the vault remembers the generation, so
+	// deleting such a profile afterwards sticks like deleting any other
+	// default. The new ones are placed before "generic" (the built-in order)
+	// when it is still there, else at the end.
+	if inv.ProfileSeedGen < profile.SeedGen {
+		have := map[string]bool{}
+		for _, p := range inv.CustomProfiles {
+			have[p.Key] = true
+		}
+		var added []profile.Profile
+		for _, p := range profile.AddedAfter(inv.ProfileSeedGen) {
+			if !have[p.Key] {
+				added = append(added, p)
+			}
+		}
+		if len(added) > 0 {
+			at := len(inv.CustomProfiles)
+			for i, p := range inv.CustomProfiles {
+				if p.Key == "generic" {
+					at = i
+					break
+				}
+			}
+			merged := make([]profile.Profile, 0, len(inv.CustomProfiles)+len(added))
+			merged = append(merged, inv.CustomProfiles[:at]...)
+			merged = append(merged, added...)
+			merged = append(merged, inv.CustomProfiles[at:]...)
+			inv.CustomProfiles = merged
+		}
+		inv.ProfileSeedGen = profile.SeedGen
 		seed = true
 	}
 	// The runner now waits for the operational prompt itself after the last
@@ -1515,7 +1550,7 @@ func (a *App) ConnectInteractive(name string) error {
 			logPath := ""
 			if len(data) > 0 {
 				if p, e := logstore.Write(settings.LogDir, "{host}_interactive_{date}_{time}.txt",
-					logstore.Fields{Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site},
+					logstore.Fields{Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Role: dev.Role},
 					string(data), time.Now()); e == nil {
 					logPath = p
 				}
@@ -1572,7 +1607,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.3"
+const appVersion = "1.5.4"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

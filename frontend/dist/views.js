@@ -190,6 +190,7 @@ function renderDeviceList() {
       <td><input class="cell inl-name" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600"></td>
       <td><input class="cell inl-host mono" data-name="${esc(d.name)}" value="${esc(d.host)}"></td>
       <td><input class="cell inl-site" data-name="${esc(d.name)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}"></td>
+      <td><input class="cell inl-role" data-name="${esc(d.name)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}"></td>
       <td>
         <select class="cell inl-conn" data-name="${esc(d.name)}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
@@ -228,8 +229,8 @@ function renderDeviceList() {
       ${devs.length === 0
         ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
         : `<table><thead><tr><th style="width:30px"></th>
-            <th>${esc(t("ホスト名"))}</th><th style="width:140px">${esc(t("IPアドレス"))}</th><th style="width:120px">${esc(t("拠点名"))}</th><th style="width:100px">${esc(t("接続"))}</th>
-            <th style="width:200px">OS</th><th style="width:200px">${esc(t("コマンドセット"))}</th><th></th></tr></thead>
+            <th>${esc(t("ホスト名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:100px">${esc(t("拠点名"))}</th><th style="width:100px">${esc(t("役割"))}</th><th style="width:100px">${esc(t("接続"))}</th>
+            <th style="width:170px">OS</th><th style="width:170px">${esc(t("コマンドセット"))}</th><th style="width:240px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
 
@@ -302,6 +303,7 @@ function renderDeviceList() {
   });
   root.querySelectorAll(".inl-host").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { host: el.value.trim() }));
   root.querySelectorAll(".inl-site").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { site: el.value.trim() }));
+  root.querySelectorAll(".inl-role").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { role: el.value.trim() }));
   // Switching the method here must carry the port with it, the way the editor
   // dialog already does: leaving 22 behind on a switch to Telnet points a
   // Telnet client at the SSH port, where it reads the "SSH-2.0-..." banner and
@@ -498,6 +500,9 @@ function editDevice(dev, preGroup) {
     <div class="grid-2">
       <div class="field"><label>${esc(t("IPアドレス"))} <span class="req" id="f-host-req">${esc(t("必須"))}</span></label><input id="f-host" value="${esc(d.host || "")}"></div>
       <div class="field"><label>${esc(t("拠点（任意）"))}</label><input id="f-site" value="${esc(d.site || "")}" placeholder="${esc(t("例: 本社 / 東京DC"))}"></div>
+    </div>
+    <div class="grid-2">
+      <div class="field"><label><span data-tip="${esc(t("機器の役割を表す自由なラベルです。拠点と同じく、ログ設定のテンプレートで {role} として使えます"))}">${esc(t("役割（任意） ⓘ"))}</span></label><input id="f-role" value="${esc(d.role || "")}" placeholder="${esc(t("例: コア / エッジ / FW"))}"></div>
     </div>
     <div class="grid-3">
       <div class="field"><label>${esc(t("接続方式"))} <span class="req">${esc(t("必須"))}</span></label><select id="f-conn">
@@ -740,6 +745,7 @@ function editDevice(dev, preGroup) {
       name: node.querySelector("#f-name").value.trim(),
       group: node.querySelector("#f-group").value.trim(),
       site: node.querySelector("#f-site").value.trim(),
+      role: node.querySelector("#f-role").value.trim(),
       host: node.querySelector("#f-host").value.trim(),
       conn,
       osType: node.querySelector("#f-os").value,

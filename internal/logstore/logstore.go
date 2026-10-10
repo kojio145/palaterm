@@ -17,6 +17,7 @@ type Fields struct {
 	OS    string // OS type key
 	Group string // group (company)
 	Site  string // site / location
+	Role  string // role (core / edge / FW …)
 	// Stage is the maintenance-window stage of the run ("before" / "during" /
 	// "after", or empty). It fills {stage}; a template without that
 	// placeholder gets "_<stage>" appended before the extension, so a stage
@@ -138,7 +139,7 @@ const (
 
 // DefaultDirTemplate names the per-run folder: log_<date>_<time>[_<stage>].
 // Placeholders: {date} {time} {hhmm} {group} {stage}; a run with no stage
-// leaves {stage} empty and the surrounding "_" is dropped.
+// leaves {stage} empty and it is dropped with one neighbouring separator.
 const DefaultDirTemplate = "log_{date}_{time}_{stage}"
 
 // StageWork is the stage recorded for an interactive (single-device) session:
@@ -153,6 +154,7 @@ const StageWork = "work"
 //	{os}     OS type key
 //	{group}  group (company)
 //	{site}   site / location
+//	{role}   role
 //	{stage}  run stage (before / during / after)
 //	{date}   yyyymmdd
 //	{time}   hhmmss
@@ -162,23 +164,19 @@ func expandName(tmpl string, f Fields, now time.Time) string {
 		ext := filepath.Ext(tmpl)
 		tmpl = strings.TrimSuffix(tmpl, ext) + "_{stage}" + ext
 	}
-	r := strings.NewReplacer(
-		"{host}", sanitize(f.Host),
-		"{ip}", sanitize(f.IP),
-		"{os}", sanitize(f.OS),
-		"{group}", sanitize(f.Group),
-		"{site}", sanitize(f.Site),
-		"{stage}", sanitize(f.Tokens.Token(f.Stage)),
-		"{date}", now.Format("20060102"),
-		"{time}", now.Format("150405"),
-		"{hhmm}", now.Format("1504"),
-	)
-	name := r.Replace(tmpl)
-	// An empty placeholder (a device with no site) must not leave "__" or a
-	// leading/trailing "_" behind.
-	for strings.Contains(name, "__") {
-		name = strings.ReplaceAll(name, "__", "_")
+	vals := map[string]string{
+		"{host}":  sanitize(f.Host),
+		"{ip}":    sanitize(f.IP),
+		"{os}":    sanitize(f.OS),
+		"{group}": sanitize(f.Group),
+		"{site}":  sanitize(f.Site),
+		"{role}":  sanitize(f.Role),
+		"{stage}": sanitize(f.Tokens.Token(f.Stage)),
+		"{date}":  now.Format("20060102"),
+		"{time}":  now.Format("150405"),
+		"{hhmm}":  now.Format("1504"),
 	}
+	name := expand(dropEmpty(tmpl, vals), vals)
 	ext := filepath.Ext(name)
 	base := strings.Trim(strings.TrimSuffix(name, ext), "_")
 	name = base + ext
@@ -186,6 +184,51 @@ func expandName(tmpl string, f Fields, now time.Time) string {
 		name = sanitize(f.Host) + ".txt"
 	}
 	return name
+}
+
+// separators are the characters a template uses between placeholders; one of
+// them goes away together with an empty placeholder.
+const separators = "_-. "
+
+// dropEmpty removes from tmpl every placeholder whose value is empty (a
+// device with no site or role, a run with no stage), together with ONE
+// adjacent separator — the one before it, or the one after it when the
+// placeholder opens the name — so "{host}_{site}_{stage}_{date}" for a device
+// without a site reads "r1_before_20261009", not "r1__before_20261009", and
+// "{site}-{host}" reads "r1". Placeholders with values, and everything the
+// user typed between them, are left exactly as written. Optional labels are
+// never required for this: an empty one simply drops out of the name.
+func dropEmpty(tmpl string, vals map[string]string) string {
+	for ph, v := range vals {
+		if v != "" {
+			continue
+		}
+		for {
+			i := strings.Index(tmpl, ph)
+			if i < 0 {
+				break
+			}
+			j := i + len(ph)
+			switch {
+			case i > 0 && strings.ContainsRune(separators, rune(tmpl[i-1])):
+				tmpl = tmpl[:i-1] + tmpl[j:]
+			case j < len(tmpl) && strings.ContainsRune(separators, rune(tmpl[j])):
+				tmpl = tmpl[:i] + tmpl[j+1:]
+			default:
+				tmpl = tmpl[:i] + tmpl[j:]
+			}
+		}
+	}
+	return tmpl
+}
+
+// expand substitutes every placeholder in vals.
+func expand(tmpl string, vals map[string]string) string {
+	pairs := make([]string, 0, 2*len(vals))
+	for ph, v := range vals {
+		pairs = append(pairs, ph, v)
+	}
+	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
 // ResolveRoot makes a relative log root absolute against the executable's
@@ -236,18 +279,17 @@ func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) str
 	if stage != "" {
 		stageTok = tok.Token(stage)
 	}
-	r := strings.NewReplacer(
-		"{group}", sanitize(group),
-		"{stage}", sanitize(stageTok),
-		"{date}", now.Format("20060102"),
-		"{time}", now.Format("150405"),
-		"{hhmm}", now.Format("1504"),
-	)
-	name := r.Replace(tmpl)
-	for strings.Contains(name, "__") {
-		name = strings.ReplaceAll(name, "__", "_")
+	vals := map[string]string{
+		"{group}": sanitize(group),
+		"{stage}": sanitize(stageTok),
+		"{date}":  now.Format("20060102"),
+		"{time}":  now.Format("150405"),
+		"{hhmm}":  now.Format("1504"),
 	}
-	name = strings.Trim(name, "_. ")
+	// An empty {group} / {stage} drops out with one neighbouring separator
+	// (see dropEmpty), so "log_{date}_{time}_{stage}" with no stage is
+	// "log_20261009_123456".
+	name := strings.Trim(expand(dropEmpty(tmpl, vals), vals), "_. ")
 	if name == "" {
 		name = fmt.Sprintf("log_%s", now.Format("20060102_150405"))
 	}

@@ -303,6 +303,13 @@ const I18N_EN = {
   "IPアドレス": "IP Address",
   "拠点名": "Site",
   "拠点": "site",
+  "役割": "Role",
+  "役割（任意） ⓘ": "Role (optional) ⓘ",
+  "例: コア / エッジ / FW": "e.g. core / edge / FW",
+  "機器の役割を表す自由なラベルです。拠点と同じく、ログ設定のテンプレートで {role} として使えます":
+    "A free-text label for the device's role. Like the site, it is available as {role} in the log name templates.",
+  "役割（機器編集の「役割（任意）」。空なら詰められます）": "Role (\"Role (optional)\" in the device editor; squeezed out when blank)",
+  "絞り込み（ホスト名・IP・拠点・役割・コマンドセット）": "Filter (host, IP, site, role, command set)",
   "OS": "OS",
   "グループを削除": "Delete Group",
   "グループ「<b>{g}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">所属機器は残り、グループ未設定になります</span>":

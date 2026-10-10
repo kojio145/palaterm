@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.3</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.4</div>
   </header>
 
   <nav class="toc">
@@ -244,7 +244,7 @@
         <tr><td><code>logs\</code></td><td>実行ログの保存先（既定。ログ設定で変更可）</td></tr>
         <tr><td><code>export\bundles\</code></td><td>「一式書出」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
         <tr><td><code>export\command-sets\</code></td><td>コマンドセット単体ファイル読込の既定フォルダ</td></tr>
-        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読込の既定フォルダ（標準14種のJSONを自動配置。アプリが消すことはない）</td></tr>
+        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読込の既定フォルダ（標準15種のJSONを自動配置。アプリが消すことはない）</td></tr>
         <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）</td></tr>
       </tbody>
     </table></div>
@@ -362,7 +362,8 @@
       <tbody>
         <tr><td>ホスト名 <span class="must">必須</span></td><td>機器の識別名。<strong>ログファイル名に使われます</strong>（例: <code>core-sw1</code>）。</td></tr>
         <tr><td>IPアドレス <span class="must">必須</span></td><td>接続先のIPアドレスまたはホスト名。（シリアル接続時は不要）</td></tr>
-        <tr><td>拠点名（任意）</td><td>本社／東京DC など。ログファイル名にも使えます。</td></tr>
+        <tr><td>拠点名（任意）</td><td>本社／東京DC など。ログファイル名（<code>{site}</code>）にも使えます。</td></tr>
+        <tr><td>役割（任意）</td><td>コア／エッジ／FW など、機器の役割を表す自由なラベル。ログファイル名（<code>{role}</code>）にも使えます。</td></tr>
         <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポート自動検出＋ボーレート（既定9600）。</td></tr>
         <tr><td>OSタイプ</td><td>ログイン自動化のプロファイル（<a href="#ostype">OSタイプ設定</a>参照）。enable昇格やページャ無効化を機種に合わせて自動で行います。</td></tr>
         <tr><td>コマンドセット</td><td>STEP3で作ったセットを割り当てます。</td></tr>
@@ -395,7 +396,7 @@
     次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。踏み台を1つも追加しなければ直接接続です。</p>
 
     <h3>一覧上で直接編集・複製・削除・並び替え</h3>
-    <p>機器一覧の表では、<strong>ホスト名（機器名）・IPアドレス・拠点名・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存）。
+    <p>機器一覧の表では、<strong>ホスト名（機器名）・IPアドレス・拠点名・役割・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存）。
     認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>で機器をコピー、<strong>「削除」</strong>で削除します。
     行の順序は左端の <strong>⠿ ドラッグ</strong>で入れ替えられます（複数選択も可・<a href="#flow">共通操作参照</a>。グループ内の並びだけが変わり、他グループの機器は動きません）。</p>
 
@@ -529,7 +530,7 @@
     <div class="term">{host}_{site}_{stage}_{date}_{time}.txt<br>
 <span class="c"># 例: core-sw1_本社_Config_20260827_183000.txt（作業タイミング指定なし）</span><br>
 <span class="c"># 例: core-sw1_本社_before_20260827_183000.txt（作業前）</span></div>
-    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Config</code>、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。この 3 語は「ログ設定」の<strong>作業タイミングの付与文字列</strong>で変えられます（空欄なら既定。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点が空の機器では <code>{site}</code> の分は詰められます。
+    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Config</code>、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。この 3 語は「ログ設定」の<strong>作業タイミングの付与文字列</strong>で変えられます（空欄なら既定。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点・役割が空の機器では <code>{site}</code> / <code>{role}</code> の分は詰められます。
     対話接続（1台に手動ログイン）のログも同じ名前で <code>log_日付_時刻_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「単独接続」として並びます。</p>
     <p>ファイル名テンプレートは「ログ設定」タブで変更でき、次の部品が使えます（クリックでコピーできます）。</p>
     <div class="scroll"><table>
@@ -540,6 +541,7 @@
         <tr><td><code>{os}</code></td><td>OSタイプ</td></tr>
         <tr><td><code>{group}</code></td><td>グループ（会社）</td></tr>
         <tr><td><code>{site}</code></td><td>拠点名</td></tr>
+        <tr><td><code>{role}</code></td><td>役割（機器編集の「役割（任意）」）</td></tr>
         <tr><td><code>{stage}</code></td><td>作業タイミングの付与文字列（既定 before / work / after。「ログ設定」で変更可）。テンプレートに無いときはファイル名の末尾に <code>_before</code> 等が自動で付きます</td></tr>
         <tr><td><code>{date}</code></td><td>日付（yyyymmdd）</td></tr>
         <tr><td><code>{time}</code></td><td>時刻（hhmmss）</td></tr>
@@ -575,10 +577,10 @@
 
   <section id="ostype">
     <h2 class="step"><span class="num">8</span>OSタイプ設定</h2>
-    <p class="lead">機種別のログイン自動化（プロファイル）の管理画面です。標準14種はそのまま使え、編集も自作もできます。</p>
+    <p class="lead">機種別のログイン自動化（プロファイル）の管理画面です。標準15種はそのまま使え、編集も自作もできます。</p>
 
     <p>OSタイププロファイルは「接続してからコマンドが打てる状態になるまで」と「切断」を自動化する手順書です。
-    <strong>標準の14種</strong>が最初から入っています。</p>
+    <strong>標準の15種</strong>が最初から入っています（新しい版で増えた標準プロファイルは、既存の設定を開いたときに 1 回だけ追加されます。削除すれば以後は戻りません）。</p>
 
     <div class="os-grid">
       <div class="os">Cisco IOS</div><div class="os">Cisco ASA</div>
@@ -587,7 +589,8 @@
       <div class="os">FortiAnalyzer</div><div class="os">HPE (Comware)</div>
       <div class="os">NEC IX</div><div class="os">NEC QX</div>
       <div class="os">NEC WA</div><div class="os">Aruba OS-Switch</div>
-      <div class="os">Yamaha RTX</div><div class="os">Generic</div>
+      <div class="os">Yamaha RTX</div><div class="os">ALAXALA AX</div>
+      <div class="os">Generic</div>
     </div>
 
     <p>一覧では標準・自作の区別なく、どのプロファイルも<strong>「編集」「複製」「削除」</strong>できます
@@ -598,7 +601,7 @@
     文字の一部が画面に現れた時点で一致します（部分一致・大文字小文字は区別）。
     たとえば <code>assword:</code> と書けば <code>Password:</code> にも <code>password:</code> にも一致します。</p>
 
-    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準14種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準14種＋自作）</figcaption></figure>
+    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準15種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準15種＋自作）</figcaption></figure>
     <figure class="shot" data-shot="07_profile_edit"><img src="img/manual/07_profile_edit.png" alt="OSタイププロファイルの編集（expect / send の手順）" loading="lazy"><figcaption>OSタイププロファイルの編集（expect / send の手順）</figcaption></figure>
     <h3>プロファイルの項目</h3>
     <div class="scroll"><table>
@@ -614,7 +617,7 @@
     </table></div>
 
     <h3>ファイルでの読込・書出</h3>
-    <p><strong>「読込」</strong>でJSONを選んで取り込みます。標準14種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
+    <p><strong>「読込」</strong>でJSONを選んで取り込みます。標準15種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
     <strong>アプリがこれらのファイルを消すことはありません</strong>。標準プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。
     自作プロファイルの書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うプロファイルが <code>export\bundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
 
@@ -676,7 +679,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.3 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

@@ -1,6 +1,6 @@
 package profile
 
-// Default profiles mirror the 14 OS types handled by the legacy TTL macro's
+// Default profiles mirror the 15 OS types handled by the legacy TTL macro's
 // changeAccessAuthority routine, written as the same plain wait strings the
 // macro used (e.g. wait 'assword:' / wait '#'). No regular expressions:
 // every Expect/Prompt is a literal substring, quoted via Quote when the
@@ -216,6 +216,29 @@ var defaults = []Profile{
 		Disconnect: []Step{{Send: "exit"}},
 	},
 	{
+		// ALAXALA AX (OS-L2N / OS-L3 …): the legacy macro's osType 15. The
+		// macro waited ":" for both login prompts, ">" before "enable", "#"
+		// after it, then "set terminal pager disable". The {enable} row is
+		// extra: AX asks "Password:" after enable only when an enable
+		// password is configured, and an auth step whose prompt never shows
+		// is skipped like the Cisco profiles' one.
+		Key:        "alaxala-ax",
+		Name:       "ALAXALA AX",
+		Prompt:     "#",
+		MorePrompt: "--More--",
+		Login: []Step{
+			{Expect: "ogin:", Send: "{user}"},
+			{Expect: "assword:", Send: "{password}"},
+			{Expect: ">", Send: "enable"},
+			{Expect: "assword:", Send: "{enable}"},
+		},
+		Pager: []Step{{Send: "set terminal pager disable"}},
+		Disconnect: []Step{
+			{Send: "exit"},
+			{Expect: ">", Send: "exit"},
+		},
+	},
+	{
 		Key:    "generic",
 		Name:   "Generic (no automation)",
 		Prompt: "#",
@@ -237,6 +260,31 @@ func Defaults() []Profile {
 	out := make([]Profile, len(defaults))
 	for i, p := range defaults {
 		out[i] = copyProfile(p)
+	}
+	return out
+}
+
+// SeedGen is the current generation of the built-in set. A vault records the
+// generation it was last seeded from (Inventory.ProfileSeedGen); a default
+// introduced in a later generation is added to it exactly once on unlock, so
+// an existing vault picks up new OS types without resurrecting defaults the
+// user deleted. Bump it together with introducedIn when adding a default.
+const SeedGen = 1
+
+// introducedIn maps a default's key to the generation that added it; keys
+// absent here belong to the original set (generation 0).
+var introducedIn = map[string]int{
+	"alaxala-ax": 1,
+}
+
+// AddedAfter returns deep copies of the defaults introduced after generation
+// gen, in their Defaults() order.
+func AddedAfter(gen int) []Profile {
+	var out []Profile
+	for _, p := range defaults {
+		if introducedIn[p.Key] > gen {
+			out = append(out, copyProfile(p))
+		}
 	}
 	return out
 }

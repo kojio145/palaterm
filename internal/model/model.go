@@ -94,6 +94,10 @@ type Device struct {
 	// Site is an optional free-text location/site label (e.g. 本社, 東京DC).
 	Site string `json:"site,omitempty"`
 
+	// Role is an optional free-text role label (e.g. コア, エッジ, FW); like
+	// Site it is only a label, usable in log names via {role}.
+	Role string `json:"role,omitempty"`
+
 	// OS behavior
 	OSType     string `json:"osType"`     // profile key, e.g. "cisco-ios"
 	CommandSet string `json:"commandSet"` // named command set to run
@@ -300,7 +304,7 @@ type Inventory struct {
 	DeviceGroups []DeviceGroup `json:"deviceGroups,omitempty"`
 	Settings     Settings      `json:"settings"`
 
-	// CustomProfiles holds every OS login profile — the default 14 seeded at
+	// CustomProfiles holds every OS login profile — the default 15 seeded at
 	// vault creation plus user-made ones — all equally editable. The JSON key
 	// keeps its historic name for vault compatibility.
 	CustomProfiles []profile.Profile `json:"customProfiles,omitempty"`
@@ -309,6 +313,12 @@ type Inventory struct {
 	// vault, so a vault from before profiles-as-data gets them exactly once
 	// (and a deliberately deleted default stays deleted).
 	ProfilesSeeded bool `json:"profilesSeeded,omitempty"`
+
+	// ProfileSeedGen is the newest built-in profile generation this vault has
+	// been offered (profile.SeedGen). Defaults added in a later release are
+	// seeded once when the vault is unlocked by that release; a default the
+	// user deletes afterwards stays deleted. Zero = the original set.
+	ProfileSeedGen int `json:"profileSeedGen,omitempty"`
 
 	// KnownHostKeys pins SSH host key fingerprints per "host:port"
 	// (trust-on-first-use); a later mismatch aborts the connection. Stored

@@ -178,7 +178,7 @@ func TestLegacyAndBastionExtrasRoundTrip(t *testing.T) {
 }
 
 func TestExportStartsWithBOMAndImportStripsIt(t *testing.T) {
-	text, err := Export([]model.Device{{Name: "r1", Host: "192.0.2.1", Conn: model.ConnSSH, Group: "A社", Site: "本社", Enabled: true}})
+	text, err := Export([]model.Device{{Name: "r1", Host: "192.0.2.1", Conn: model.ConnSSH, Group: "A社", Site: "本社", Role: "コア", Enabled: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestExportStartsWithBOMAndImportStripsIt(t *testing.T) {
 		t.Fatalf("export must start with a UTF-8 BOM for Excel: %q", text[:8])
 	}
 	out, err := Import(text)
-	if err != nil || len(out) != 1 || out[0].Name != "r1" || out[0].Group != "A社" || out[0].Site != "本社" {
+	if err != nil || len(out) != 1 || out[0].Name != "r1" || out[0].Group != "A社" || out[0].Site != "本社" || out[0].Role != "コア" {
 		t.Fatalf("import of BOM CSV: %v %+v", err, out)
 	}
 	// A CSV saved by Excel without the BOM still imports.
