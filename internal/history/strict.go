@@ -43,6 +43,56 @@ var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|tra
 
 var ws = regexp.MustCompile(`\s+`)
 
+// ansiSeq matches the terminal escape sequences a device or the local
+// terminal may leave in an interactive transcript: CSI (colour, cursor
+// movement, erase), OSC (window titles) and single-character ESC sequences.
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
+
+// ResolveLineEdits turns one raw transcript line into what was on the screen
+// when the line was finished. An interactive session log is a byte capture:
+// tab completion and corrections arrive as backspace-space-backspace (the
+// device erases the partial word and echoes the full one, so "sho<TAB>" is
+// recorded as "sho\b \b\b \b\b \bshow "), a bare carriage return rewrites
+// the line from column 0, and colour or cursor escapes may be interleaved.
+// Comparing the raw bytes against a running-config made every completed
+// command look unreflected (2026-10-10, NEC IX log: "sho▯ ▯▯ ▯show run…").
+func ResolveLineEdits(line string) string {
+	line = ansiSeq.ReplaceAllString(line, "")
+	buf := make([]rune, 0, len(line))
+	cur := 0 // cursor column in buf
+	for _, r := range line {
+		switch r {
+		case '\b', 0x7f:
+			if cur > 0 {
+				cur--
+			}
+		case '\r':
+			cur = 0
+		case 0x07, 0x00:
+			// bell, NUL: nothing on screen
+		default:
+			if cur < len(buf) {
+				buf[cur] = r
+			} else {
+				buf = append(buf, r)
+			}
+			cur++
+		}
+	}
+	// Text right of the final cursor stays: a device erases only with
+	// "\b \b", so a bare backspace leaves the character visible.
+	return string(buf)
+}
+
+// CleanTranscript applies ResolveLineEdits to every line of a transcript.
+func CleanTranscript(log string) string {
+	lines := splitLines(log)
+	for i, l := range lines {
+		lines[i] = ResolveLineEdits(l)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func normCmd(s string) string {
 	return strings.ToLower(strings.TrimSpace(ws.ReplaceAllString(s, " ")))
 }
@@ -54,6 +104,7 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 	seen := map[string]bool{}
 	typed := 0
 	for _, raw := range splitLines(workLog) {
+		raw = ResolveLineEdits(raw)
 		m := promptLine.FindStringSubmatch(strings.TrimRight(raw, " \t"))
 		if m == nil {
 			continue
@@ -77,7 +128,7 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 func lineCounts(log string) map[string]int {
 	m := map[string]int{}
 	for _, l := range splitLines(log) {
-		if k := normCmd(l); k != "" {
+		if k := normCmd(ResolveLineEdits(l)); k != "" {
 			m[k]++
 		}
 	}

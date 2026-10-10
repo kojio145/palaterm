@@ -69,6 +69,17 @@ func NewTerm(device string) *Term {
 
 func (t *Term) startup(ctx context.Context) { t.ctx = ctx }
 
+// domReady brings this window to the front and gives the WebView2 the
+// keyboard. A window spawned from the main window's "接続" button appeared
+// behind it (or without keyboard focus), so the first keystrokes went to the
+// main window and the user had to click into the terminal before typing
+// (2026-10-10). The paste and diff windows already do the same.
+func (t *Term) domReady(ctx context.Context) { go focusWindowByTitle("PalaTerm - " + t.deviceArg) }
+
+// Focus is called by the page once the session is connected: a second nudge
+// for the case where the window became visible only after domReady.
+func (t *Term) Focus() { go focusWindowByTitle("PalaTerm - " + t.deviceArg) }
+
 func (t *Term) shutdown(ctx context.Context) {
 	t.mu.Lock()
 	c := t.closeFn
@@ -195,9 +206,9 @@ func (t *Term) connect(pw string) {
 	// written as it arrives (Tera Term style) with the passwords masked —
 	// see streamLog.
 	started := time.Now()
-	runDir := logstore.RunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, started)
+	runDir := logstore.RunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
 	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
-		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Stage: logstore.StageWork}, started)))
+		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
 	slog := newStreamLog(logPath, runpkg.SecretsOf(&d))
 	sink := func(b []byte) {
 		slog.Write(b)

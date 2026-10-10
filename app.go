@@ -974,6 +974,22 @@ func (a *App) SaveSettings(s model.Settings) error {
 	}
 	// The form never shows LastKeyFile; keep it instead of blanking it.
 	s.LastKeyFile = a.inv.Settings.LastKeyFile
+	// Stage words: trimmed, defaults stored as empty, and checked before
+	// they can produce a bad file name or a mislabelled history row.
+	s.StageTokenBefore, s.StageTokenWork, s.StageTokenAfter = strings.TrimSpace(s.StageTokenBefore), strings.TrimSpace(s.StageTokenWork), strings.TrimSpace(s.StageTokenAfter)
+	if err := s.StageTokens().Validate(); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	if s.StageTokenBefore == logstore.DefaultStageTokens.Before {
+		s.StageTokenBefore = ""
+	}
+	if s.StageTokenWork == logstore.DefaultStageTokens.Work {
+		s.StageTokenWork = ""
+	}
+	if s.StageTokenAfter == logstore.DefaultStageTokens.After {
+		s.StageTokenAfter = ""
+	}
 	a.inv.Settings = s
 	a.mu.Unlock()
 	return a.persist()
@@ -1158,7 +1174,13 @@ func (a *App) CheckDangerousCommands(names []string) []DangerWarning {
 // ListRunHistory returns past batches (newest first) found under the log
 // folder: one row per log_<timestamp>[_<stage>] sub-folder.
 func (a *App) ListRunHistory() ([]history.Run, error) {
-	runs, err := history.List(a.logRoot())
+	a.mu.Lock()
+	var tok logstore.StageTokens
+	if a.inv != nil {
+		tok = a.inv.Settings.StageTokens()
+	}
+	a.mu.Unlock()
+	runs, err := history.List(a.logRoot(), tok)
 	if runs == nil {
 		runs = []history.Run{}
 	}
@@ -1550,7 +1572,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.1"
+const appVersion = "1.5.2"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

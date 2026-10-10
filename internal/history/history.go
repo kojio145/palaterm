@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kojio145/palaterm/internal/logstore"
 )
 
 // SummaryName is the record written into each run folder.
@@ -90,7 +92,10 @@ func Write(dir string, s Summary) error {
 
 // List returns the runs under root (an absolute log folder), newest first.
 // A run is any sub-folder named log_<yyyymmdd_hhmmss>[_<stage>].
-func List(root string) ([]Run, error) {
+//
+// tok are the stage words in use (see logstore.StageTokens): a folder
+// without a summary is sorted into its stage by the word in its name.
+func List(root string, tok logstore.StageTokens) ([]Run, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -109,7 +114,7 @@ func List(root string) ([]Run, error) {
 		if _, err := os.Stat(filepath.Join(dir, SummaryName)); err != nil && !strings.HasPrefix(e.Name(), "log_") {
 			continue
 		}
-		r := readRun(dir)
+		r := readRun(dir, tok)
 		if r.StartedAt == "" {
 			if info, err := e.Info(); err == nil {
 				r.StartedAt = info.ModTime().Format(time.RFC3339)
@@ -128,12 +133,12 @@ func List(root string) ([]Run, error) {
 
 // readRun builds a Run from one folder: the summary when present, otherwise
 // the folder's log files with their status unknown.
-func readRun(dir string) Run {
+func readRun(dir string, tok logstore.StageTokens) Run {
 	r := Run{Dir: dir, Name: filepath.Base(dir), Devices: []Device{}}
 	// Folder name gives the start time and stage even without a summary.
 	if ts, stage, ok := parseDirName(r.Name); ok {
 		r.StartedAt = ts.Format(time.RFC3339)
-		r.Stage = stage
+		r.Stage = tok.Canonical(stage)
 	}
 	if data, err := os.ReadFile(filepath.Join(dir, SummaryName)); err == nil {
 		var s Summary

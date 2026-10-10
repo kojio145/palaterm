@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/kojio145/palaterm/internal/logstore"
 )
 
 func TestDiffBasic(t *testing.T) {
@@ -99,7 +101,7 @@ func TestListReadsSummaryAndLegacy(t *testing.T) {
 	// Not a run folder.
 	os.WriteFile(filepath.Join(root, "r9_interactive_20261001_090000.txt"), []byte("z"), 0o644)
 
-	runs, err := List(root)
+	runs, err := List(root, logstore.StageTokens{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +119,46 @@ func TestListReadsSummaryAndLegacy(t *testing.T) {
 	if l.HasSummary || l.StartedAt == "" || len(l.Devices) != 1 || l.Devices[0].Name != "sw1" || l.Devices[0].Status != "unknown" {
 		t.Fatalf("legacy run: %+v", l)
 	}
-	if _, err := List(filepath.Join(root, "missing")); err != nil {
+	if _, err := List(filepath.Join(root, "missing"), logstore.StageTokens{}); err != nil {
 		t.Fatalf("missing root should be empty, got %v", err)
+	}
+}
+
+// Folders named with renamed stage words (and with the defaults from before
+// the rename) sort into their stage.
+func TestListCustomStageWords(t *testing.T) {
+	root := t.TempDir()
+	for _, n := range []string{"log_20261009_100000_pre", "log_20261009_110000_post", "log_20261009_120000_before", "log_20261009_130000_mid", "log_20261009_140000_odd"} {
+		os.MkdirAll(filepath.Join(root, n), 0o755)
+	}
+	// Japanese words round-trip through the folder name too.
+	os.MkdirAll(filepath.Join(root, "log_20261009_150000_事前"), 0o755)
+	jp, err := List(root, logstore.StageTokens{Before: "事前", Work: "作業", After: "事後"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jp[0].Name != "log_20261009_150000_事前" || jp[0].Stage != "before" {
+		t.Fatalf("japanese stage word: %+v", jp[0])
+	}
+	os.RemoveAll(filepath.Join(root, "log_20261009_150000_事前"))
+	runs, err := List(root, logstore.StageTokens{Before: "pre", Work: "mid", After: "post"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, r := range runs {
+		got[r.Name] = r.Stage
+	}
+	exp := map[string]string{
+		"log_20261009_100000_pre":    "before",
+		"log_20261009_110000_post":   "after",
+		"log_20261009_120000_before": "before",
+		"log_20261009_130000_mid":    "work",
+		"log_20261009_140000_odd":    "odd",
+	}
+	for n, st := range exp {
+		if got[n] != st {
+			t.Errorf("%s: stage %q, want %q", n, got[n], st)
+		}
 	}
 }

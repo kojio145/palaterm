@@ -79,3 +79,57 @@ func TestStrictVerify(t *testing.T) {
 		t.Errorf("show-only work: %+v", r3)
 	}
 }
+
+// An interactive (Tera Term style) capture keeps the device's line editing:
+// tab completion is recorded as "sho\b \b\b \b\b \bshow ". This is the real
+// 2026-10-10 NEC IX log, trimmed, which showed "5 / 6 件が未反映" although
+// every setting had been applied.
+func TestStrictVerifyInteractiveBackspaces(t *testing.T) {
+	work := strings.Join([]string{
+		"IX-A(config)# terminal length 0\r",
+		"IX-A(config)# sho\b \b\b \b\b \bshow run\b \b\b \b\b \brunning-config \r",
+		"hostname IX-A\r",
+		"IX-A(config)# \r",
+		"IX-A(config)# a\b \b\r",
+		"IX-A(config)# inter\b \b\b \b\b \b\b \b\b \binterface gi\b \b\b \bGigaEthernet0.0\r",
+		"IX-A(config-GigaEthernet0.0)# ip add\b \b\b \b\b \baddress 10.0.10.0\b \b1/24\r",
+		"IX-A(config-GigaEthernet0.0)# no shu\b \b\b \b\b \bshutdown \r",
+		"IX-A(config-GigaEthernet0.0)# exit\r",
+		"IX-A(config)# wr\b \b\b \bwrite mem\b \b\b \b\b \bmemory \r",
+		"Building configuration...\r",
+	}, "\n")
+	cmds, _ := ExtractConfigCommands(work)
+	want := []string{"interface GigaEthernet0.0", "ip address 10.0.10.1/24", "no shutdown"}
+	if strings.Join(cmds, "|") != strings.Join(want, "|") {
+		t.Fatalf("commands = %q, want %q", cmds, want)
+	}
+	before := "interface GigaEthernet0.0\r\n  no ip address\r\n  shutdown\r\n!\r\ninterface GigaEthernet1.0\r\n  ip address 192.0.2.201/24\r\n  no shutdown\r\n"
+	after := "interface GigaEthernet0.0\r\n  ip address 10.0.10.1/24\r\n  no shutdown\r\n!\r\ninterface GigaEthernet1.0\r\n  ip address 192.0.2.201/24\r\n  no shutdown\r\n"
+	r := StrictVerify(work, before, after)
+	if r.Missing != 0 || r.Reflected != 3 {
+		t.Fatalf("counts: %+v", r)
+	}
+	for _, c := range r.Commands {
+		if c.Line != "interface GigaEthernet0.0" && c.Status != "reflected" {
+			t.Errorf("%q: %s", c.Line, c.Status)
+		}
+	}
+}
+
+func TestResolveLineEdits(t *testing.T) {
+	cases := map[string]string{
+		"sho\b \b\b \b\b \bshow run":    "show run",
+		"abc\b\bX":                      "aXc",
+		"\x1b[32mR1#\x1b[0m conf t":     "R1# conf t",
+		"\x1b]0;title\x07R1#":           "R1#",
+		"first line\rsecond":            "secondline",
+		"\b\bx":                         "x",
+		"plain":                         "plain",
+		"ip address 10.0.10.0\b \b1/24": "ip address 10.0.10.1/24",
+	}
+	for in, want := range cases {
+		if got := ResolveLineEdits(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}

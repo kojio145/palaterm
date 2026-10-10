@@ -324,8 +324,14 @@ type Settings struct {
 	// LogDirTemplate names each run's folder under LogDir (see
 	// logstore.RunDir); empty means logstore.DefaultDirTemplate.
 	LogDirTemplate string `json:"logDirTemplate,omitempty"`
-	ConnectTimeout int    `json:"connectTimeout"` // seconds
-	CommandTimeout int    `json:"commandTimeout"` // seconds per expect
+	// StageTokenBefore / Work / After are the words {stage} is written as in
+	// folder and file names for 作業前 / 作業中 / 作業後 (see
+	// logstore.StageTokens); empty means the default before / work / after.
+	StageTokenBefore string `json:"stageTokenBefore,omitempty"`
+	StageTokenWork   string `json:"stageTokenWork,omitempty"`
+	StageTokenAfter  string `json:"stageTokenAfter,omitempty"`
+	ConnectTimeout   int    `json:"connectTimeout"` // seconds
+	CommandTimeout   int    `json:"commandTimeout"` // seconds per expect
 
 	// LastKeyFile is the most recently chosen SSH private-key path; the device
 	// editor pre-fills it when public-key auth is selected.
@@ -337,6 +343,11 @@ type Settings struct {
 	// get it; AutoLockOff disables it outright.
 	AutoLockMin int  `json:"autoLockMin,omitempty"`
 	AutoLockOff bool `json:"autoLockOff,omitempty"`
+}
+
+// StageTokens returns the stage words for log names, defaults filled in.
+func (s Settings) StageTokens() logstore.StageTokens {
+	return logstore.StageTokens{Before: s.StageTokenBefore, Work: s.StageTokenWork, After: s.StageTokenAfter}.Filled()
 }
 
 // DefaultAutoLockMin is the idle time before the vault locks itself when the

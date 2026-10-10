@@ -176,6 +176,7 @@ func runTerminalWindow(device string) {
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 1},
 		OnStartup:        t.startup,
+		OnDomReady:       t.domReady,
 		OnShutdown:       t.shutdown,
 		Bind:             []interface{}{t},
 		Windows: &windows.Options{

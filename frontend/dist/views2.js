@@ -793,23 +793,28 @@ function renderSettings() {
           </div></div>
       </div>
       <div class="grid-2">
-        <div class="field"><label>${esc(t("ログフォルダ名テンプレート（実行ごとのフォルダ）"))}</label>
+        <div class="field"><label><span data-tip="${esc(t("実行ごとに作るフォルダの名前です。使える変数は {date} {time} {hhmm} {group} {stage}（例: {date}_{group}_{stage}）。同名のフォルダが既にあれば _2, _3 … が付きます"))}">${esc(t("ログフォルダ名テンプレート ⓘ"))}</span></label>
           <input id="set-dtmpl" value="${esc(s.logDirTemplate || "log_{date}_{time}_{stage}")}"></div>
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{stage}_{date}_{time}.txt")}"></div>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:-6px">${esc(t("フォルダ名に使える変数: {date} {time} {hhmm} {group} {stage}（例: {date}_{group}_{stage}）。同名のフォルダが既にあれば _2, _3 … が付きます"))}</div>
+      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業後"))}</span><input id="set-st-after" style="flex:1" placeholder="after" value="${esc(s.stageTokenAfter || "after")}"></div>
+        </div></div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中はロックしません）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
           <input id="set-lock" type="number" min="0" value="${s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30)}"></div>
       </div>
-      <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("ファイル名に使える変数（クリックでコピー）:"))}</div>
+      <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
         <tr><td class="mono">{host}</td><td>${esc(t("ホスト名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
         <tr><td class="mono">{ip}</td><td>${esc(t("IPアドレス"))}</td><td class="mono">{time}</td><td>${esc(t("時刻（hhmmss）"))}</td></tr>
         <tr><td class="mono">{os}</td><td>${esc(t("OS種別"))}</td><td class="mono">{hhmm}</td><td>${esc(t("時刻（hhmm）"))}</td></tr>
         <tr><td class="mono">{group}</td><td>${esc(t("グループ名"))}</td><td class="mono">{site}</td><td>${esc(t("拠点名"))}</td></tr>
-        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミング（before / during / after）。指定なしは Config、作業中と対話接続は work になります。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
+        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after。上の欄で変更可）。指定なしは Config。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
@@ -817,7 +822,7 @@ function renderSettings() {
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
@@ -837,6 +842,10 @@ function renderSettings() {
       logDir: document.getElementById("set-dir").value || "logs",
       logNameTemplate: document.getElementById("set-tmpl").value || "{host}_{site}_{stage}_{date}_{time}.txt",
       logDirTemplate: document.getElementById("set-dtmpl").value.trim() || "log_{date}_{time}_{stage}",
+      // Empty = default (before / work / after); the backend validates.
+      stageTokenBefore: document.getElementById("set-st-before").value.trim(),
+      stageTokenWork: document.getElementById("set-st-work").value.trim(),
+      stageTokenAfter: document.getElementById("set-st-after").value.trim(),
     };
     const lockMin = parseInt(document.getElementById("set-lock").value, 10);
     out.autoLockOff = !(lockMin > 0);

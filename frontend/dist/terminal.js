@@ -405,6 +405,10 @@ async function bootTerminalWindow() {
     stateEl.textContent = t("接続済み"); stateEl.className = "pill ok";
     titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}`;
     term.focus(); doFit();
+    // The OS window may still be behind the main window: ask for the
+    // foreground once more now that there is something to type into.
+    Term().Focus().catch(() => {});
+    [150, 500].forEach(ms => setTimeout(() => term.focus(), ms));
   });
   // A changed host key is answered in the window: allow (device replaced)
   // and reconnect, or leave it refused.

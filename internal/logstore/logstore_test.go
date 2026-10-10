@@ -27,22 +27,22 @@ func TestStageInNames(t *testing.T) {
 		t.Errorf("no-stage placeholder should read Config: %q", got)
 	}
 	root := t.TempDir()
-	d := RunDir(root, "", "A社", "after", now)
+	d := RunDir(root, "", "A社", "after", StageTokens{}, now)
 	if filepath.Base(d) != "log_20261009_123456_after" {
 		t.Errorf("run dir: %q", d)
 	}
-	if filepath.Base(RunDir(root, "", "", "during", now)) != "log_20261009_123456_work" {
-		t.Errorf("during run dir should say work: %q", RunDir(root, "", "", "during", now))
+	if filepath.Base(RunDir(root, "", "", "during", StageTokens{}, now)) != "log_20261009_123456_work" {
+		t.Errorf("during run dir should say work: %q", RunDir(root, "", "", "during", StageTokens{}, now))
 	}
-	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "before", now)); got != "20261009_A社_before" {
+	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "before", StageTokens{}, now)); got != "20261009_A社_before" {
 		t.Errorf("custom dir template: %q", got)
 	}
-	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "", now)); got != "20261009_A社" {
+	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "", StageTokens{}, now)); got != "20261009_A社" {
 		t.Errorf("custom dir template, no stage: %q", got)
 	}
 	// An existing folder of the same name gets a numeric suffix.
 	os.MkdirAll(filepath.Join(root, "20261009_A社"), 0o755)
-	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "", now)); got != "20261009_A社_2" {
+	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "", StageTokens{}, now)); got != "20261009_A社_2" {
 		t.Errorf("unique suffix: %q", got)
 	}
 	// The default template: site and stage tokens, Config when no stage,
@@ -59,7 +59,87 @@ func TestStageInNames(t *testing.T) {
 	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before"}, now); got != "r1_before_20261009_123456.txt" {
 		t.Errorf("default before, no site: %q", got)
 	}
-	if !strings.HasSuffix(filepath.Base(RunDir(root, "", "", "", now)), "123456") {
-		t.Errorf("run dir without stage: %q", RunDir(root, "", "", "", now))
+	if !strings.HasSuffix(filepath.Base(RunDir(root, "", "", "", StageTokens{}, now)), "123456") {
+		t.Errorf("run dir without stage: %q", RunDir(root, "", "", "", StageTokens{}, now))
+	}
+}
+
+func TestStageTokens(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 34, 56, 0, time.Local)
+	tok := StageTokens{Before: "pre", Work: "mid", After: "post"}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before", Tokens: tok}, now); got != "r1_pre_20261009_123456.txt" {
+		t.Errorf("custom before: %q", got)
+	}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "during", Tokens: tok}, now); got != "r1_mid_20261009_123456.txt" {
+		t.Errorf("custom during: %q", got)
+	}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: StageWork, Tokens: tok}, now); got != "r1_mid_20261009_123456.txt" {
+		t.Errorf("custom work: %q", got)
+	}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "", Tokens: tok}, now); got != "r1_Config_20261009_123456.txt" {
+		t.Errorf("no stage keeps Config: %q", got)
+	}
+	// Partly set: the empty ones keep their default.
+	half := StageTokens{After: "post"}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before", Tokens: half}, now); got != "r1_before_20261009_123456.txt" {
+		t.Errorf("default before: %q", got)
+	}
+	root := t.TempDir()
+	if got := filepath.Base(RunDir(root, "", "", "after", tok, now)); got != "log_20261009_123456_post" {
+		t.Errorf("custom run dir: %q", got)
+	}
+	// Canonical reads both the custom and the default words.
+	for in, want := range map[string]string{"pre": "before", "PRE": "before", "before": "before", "mid": "work", "work": "work", "during": "work", "post": "after", "after": "after", "x": "x"} {
+		if got := tok.Canonical(in); got != want {
+			t.Errorf("Canonical(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Validation.
+	for _, bad := range []StageTokens{
+		{Before: "a b"},                 // space
+		{Before: "x/y"},                 // separator
+		{Before: "same", After: "same"}, // duplicate
+		{Before: "After"},               // another stage's default word
+		{Work: "config"},                // the no-stage word
+		{Before: strings.Repeat("あ", 33)},
+	} {
+		if bad.Validate() == nil {
+			t.Errorf("%+v should be rejected", bad)
+		}
+	}
+	for _, ok := range []StageTokens{{}, tok, {Before: "事前", Work: "作業", After: "事後"}, {Before: "before", Work: "work", After: "after"}} {
+		if err := ok.Validate(); err != nil {
+			t.Errorf("%+v rejected: %v", ok, err)
+		}
+	}
+}
+
+// Japanese stage words go through file and folder names, and back out of a
+// directory listing, unchanged (Go strings are UTF-8 and the Windows file
+// APIs are called with UTF-16, so nothing is transcoded by code page).
+func TestStageTokensJapanese(t *testing.T) {
+	now := time.Date(2026, 10, 10, 17, 30, 0, 0, time.Local)
+	tok := StageTokens{Before: "事前", Work: "作業", After: "事後"}
+	if err := tok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	dir := RunDir(root, "", "A社", "before", tok, now)
+	if filepath.Base(dir) != "log_20261010_173000_事前" {
+		t.Fatalf("run dir: %q", dir)
+	}
+	p, err := Write(dir, DefaultTemplate, Fields{Host: "r1", Site: "本社", Stage: "before", Tokens: tok}, "x", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(p) != "r1_本社_事前_20261010_173000.txt" {
+		t.Fatalf("file: %q", p)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != "r1_本社_事前_20261010_173000.txt" {
+		t.Fatalf("listed back: %v", entries)
+	}
+	if tok.Canonical("事後") != "after" || tok.Canonical("作業") != StageWork {
+		t.Fatalf("canonical of Japanese words")
 	}
 }

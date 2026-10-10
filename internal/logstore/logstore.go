@@ -22,6 +22,102 @@ type Fields struct {
 	// placeholder gets "_<stage>" appended before the extension, so a stage
 	// chosen in the run tab always shows up in the file name.
 	Stage string
+	// Tokens are the words Stage is written as (see StageTokens); the zero
+	// value is the default before / work / after.
+	Tokens StageTokens
+}
+
+// StageTokens are the words {stage} expands to for each run stage. The user
+// can rename them in ログ設定 (pre / mid / post, 事前 / 作業 / 事後, …);
+// an empty field falls back to its default, so the zero value names logs
+// the way they have always been named.
+type StageTokens struct {
+	Before string `json:"before"`
+	Work   string `json:"work"` // a batch marked 作業中, or an interactive session
+	After  string `json:"after"`
+}
+
+// DefaultStageTokens is the naming a new vault starts with.
+var DefaultStageTokens = StageTokens{Before: "before", Work: StageWork, After: "after"}
+
+// Filled returns t with every empty field replaced by its default.
+func (t StageTokens) Filled() StageTokens {
+	if strings.TrimSpace(t.Before) == "" {
+		t.Before = DefaultStageTokens.Before
+	}
+	if strings.TrimSpace(t.Work) == "" {
+		t.Work = DefaultStageTokens.Work
+	}
+	if strings.TrimSpace(t.After) == "" {
+		t.After = DefaultStageTokens.After
+	}
+	return StageTokens{Before: strings.TrimSpace(t.Before), Work: strings.TrimSpace(t.Work), After: strings.TrimSpace(t.After)}
+}
+
+// Token is what {stage} expands to: a plain capture with no stage is a
+// "Config" log (the historical default name); before, during / work and
+// after take the configured word.
+func (t StageTokens) Token(stage string) string {
+	t = t.Filled()
+	switch stage {
+	case "":
+		return "Config"
+	case "before":
+		return t.Before
+	case "during", StageWork:
+		return t.Work
+	case "after":
+		return t.After
+	}
+	return stage
+}
+
+// Canonical maps the stage word found in a folder name back to the stage it
+// stands for ("before" / "work" / "after"). Both the configured words and
+// the defaults are recognised, so folders written before a rename still
+// sort into the right stage in the history tab. Anything else is returned
+// as it is.
+func (t StageTokens) Canonical(tok string) string {
+	t = t.Filled()
+	switch strings.ToLower(tok) {
+	case strings.ToLower(t.Before), "before":
+		return "before"
+	case strings.ToLower(t.Work), StageWork, "during":
+		return StageWork
+	case strings.ToLower(t.After), "after":
+		return "after"
+	}
+	return tok
+}
+
+// Validate rejects words that cannot be part of a file name, that are the
+// same for two stages, or that would be read as a different stage.
+func (t StageTokens) Validate() error {
+	t = t.Filled()
+	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}}
+	seen := map[string]string{}
+	for _, x := range words {
+		if len([]rune(x.w)) > 32 {
+			return fmt.Errorf("%sの付与文字列が長すぎます（32文字まで）: %q", x.label, x.w)
+		}
+		if sanitize(x.w) != x.w {
+			return fmt.Errorf("%sの付与文字列にファイル名に使えない文字（空白や \\ / : * ? \" < > |）があります: %q", x.label, x.w)
+		}
+		k := strings.ToLower(x.w)
+		if prev, dup := seen[k]; dup {
+			return fmt.Errorf("%sと%sの付与文字列が同じです: %q", prev, x.label, x.w)
+		}
+		seen[k] = x.label
+	}
+	// A word that is another stage's default would be read back as that
+	// stage ("after" for 作業前 would list the run as 作業後).
+	defaults := map[string]string{"before": "作業前", "work": "作業中", "during": "作業中", "after": "作業後", "config": "指定なし"}
+	for _, x := range words {
+		if lbl, ok := defaults[strings.ToLower(x.w)]; ok && lbl != x.label {
+			return fmt.Errorf("%sの付与文字列 %q は「%s」の既定語なので使えません", x.label, x.w, lbl)
+		}
+	}
+	return nil
 }
 
 // DefaultTemplate is the log file name a new vault starts with; vaults still
@@ -41,19 +137,9 @@ const DefaultDirTemplate = "log_{date}_{time}_{stage}"
 // taken 作業中.
 const StageWork = "work"
 
-// StageToken is what {stage} expands to: a plain capture with no stage is a
-// "Config" log (the historical default name), work in progress — a batch
-// marked 作業中 or an interactive session — is "work", and before / after
-// stay as they are.
-func StageToken(stage string) string {
-	switch stage {
-	case "":
-		return "Config"
-	case "during", StageWork:
-		return StageWork
-	}
-	return stage
-}
+// StageToken is what {stage} expands to with the default words: see
+// StageTokens.Token.
+func StageToken(stage string) string { return DefaultStageTokens.Token(stage) }
 
 // Placeholders supported in the name template:
 //
@@ -77,7 +163,7 @@ func expandName(tmpl string, f Fields, now time.Time) string {
 		"{os}", sanitize(f.OS),
 		"{group}", sanitize(f.Group),
 		"{site}", sanitize(f.Site),
-		"{stage}", sanitize(StageToken(f.Stage)),
+		"{stage}", sanitize(f.Tokens.Token(f.Stage)),
 		"{date}", now.Format("20060102"),
 		"{time}", now.Format("150405"),
 		"{hhmm}", now.Format("1504"),
@@ -137,13 +223,13 @@ func Path(dir, tmpl string, f Fields, now time.Time) string {
 // empty) and makes it unique: a template without {time} can name the same
 // folder twice in a day, and the second run then gets "_2", "_3", … rather
 // than mixing its logs and overwriting the first run's summary.
-func RunDir(root, tmpl, group, stage string, now time.Time) string {
+func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) string {
 	if strings.TrimSpace(tmpl) == "" {
 		tmpl = DefaultDirTemplate
 	}
 	stageTok := ""
 	if stage != "" {
-		stageTok = StageToken(stage)
+		stageTok = tok.Token(stage)
 	}
 	r := strings.NewReplacer(
 		"{group}", sanitize(group),

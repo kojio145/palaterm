@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.1</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.2</div>
   </header>
 
   <nav class="toc">
@@ -426,7 +426,7 @@
     <ol class="steps">
       <li>左サイドバーの<strong>「実行」</strong>を開き、<strong>「グループで対象を選択…」</strong>から実行するグループを選びます（グループを選ぶまで実行できません。うっかり全機器へ流してしまう事故を防ぐためです）。</li>
       <li>グループ内の機器が一覧表示されます。<strong>左端のチェックボックスが実行対象</strong>です。ヘッダーのチェックで全選択/全解除、<span class="kbd">Shift</span>＋クリックで<strong>範囲をまとめて切替</strong>できます。列見出しのクリックで<strong>並び替え</strong>、表の上の<strong>絞り込み</strong>（文字・拠点・状態）で表示を絞れます。<strong>絞り込み中は表示されている機器だけが実行対象</strong>で、非表示の行にチェックが残っていれば台数つきで警告が出ます（含めるには絞り込みを解除）。</li>
-      <li>必要なら<strong>「作業タイミング」</strong>（指定なし / 作業前 / 作業中 / 作業後）を選びます。選ぶとログのフォルダ名とファイル名に <code>_before</code> / <code>_during</code> / <code>_after</code> が付き、<a href="#history">実行履歴</a>で作業前と作業後を比較できます。</li>
+      <li>必要なら<strong>「作業タイミング」</strong>（指定なし / 作業前 / 作業中 / 作業後）を選びます。選ぶとログのフォルダ名とファイル名に <code>_before</code> / <code>_work</code> / <code>_after</code> が付き（この 3 語は<a href="#settings">ログ設定</a>で変更できます）、<a href="#history">実行履歴</a>で作業前と作業後を比較できます。</li>
       <li><strong>「▶ 一括実行」</strong>を押します。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません）。</li>
       <li>各機器の状態がリアルタイムで更新されます。</li>
     </ol>
@@ -529,7 +529,7 @@
     <div class="term">{host}_{site}_{stage}_{date}_{time}.txt<br>
 <span class="c"># 例: core-sw1_本社_Config_20260827_183000.txt（作業タイミング指定なし）</span><br>
 <span class="c"># 例: core-sw1_本社_before_20260827_183000.txt（作業前）</span></div>
-    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Config</code>、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。拠点が空の機器では <code>{site}</code> の分は詰められます。
+    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Config</code>、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。この 3 語は「ログ設定」の<strong>作業タイミングの付与文字列</strong>で変えられます（空欄なら既定。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点が空の機器では <code>{site}</code> の分は詰められます。
     対話接続（1台に手動ログイン）のログも同じ名前で <code>log_日付_時刻_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「単独接続」として並びます。</p>
     <p>ファイル名テンプレートは「ログ設定」タブで変更でき、次の部品が使えます（クリックでコピーできます）。</p>
     <div class="scroll"><table>
@@ -540,7 +540,7 @@
         <tr><td><code>{os}</code></td><td>OSタイプ</td></tr>
         <tr><td><code>{group}</code></td><td>グループ（会社）</td></tr>
         <tr><td><code>{site}</code></td><td>拠点名</td></tr>
-        <tr><td><code>{stage}</code></td><td>作業タイミング（before / during / after）。テンプレートに無いときはファイル名の末尾に <code>_before</code> 等が自動で付きます</td></tr>
+        <tr><td><code>{stage}</code></td><td>作業タイミングの付与文字列（既定 before / work / after。「ログ設定」で変更可）。テンプレートに無いときはファイル名の末尾に <code>_before</code> 等が自動で付きます</td></tr>
         <tr><td><code>{date}</code></td><td>日付（yyyymmdd）</td></tr>
         <tr><td><code>{time}</code></td><td>時刻（hhmmss）</td></tr>
         <tr><td><code>{hhmm}</code></td><td>時刻（hhmm）</td></tr>
@@ -559,6 +559,7 @@
         <tr><td>コマンドタイムアウト</td><td>1コマンドの応答（プロンプト復帰）を待つ秒数。既定30秒。</td></tr>
         <tr><td>ログ保存フォルダ</td><td>ログの出力先。既定 <code>logs</code>。<strong>「参照…」</strong>でフォルダ選択もできます。相対パスは <code>PalaTerm.exe</code> と同じフォルダが基準です。</td></tr>
         <tr><td>ログフォルダ名テンプレート</td><td>実行ごとのフォルダ名。<code>{date} {time} {hhmm} {group} {stage}</code> が使えます（既定 <code>log_{date}_{time}_{stage}</code>）。</td></tr>
+        <tr><td>作業タイミングの付与文字列</td><td><code>{stage}</code> に入る語を作業前／作業中／作業後ごとに指定します（既定 <code>before</code> / <code>work</code> / <code>after</code>。空欄なら既定）。空白や <code>\ / : * ? " &lt; &gt; |</code> は使えず、3 語は互いに異なる必要があります。</td></tr>
         <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
         <tr><td>アイドル時の自動ロック</td><td>マウス・キーボード操作がこの分数なければ自動でロック画面に戻ります。既定 30 分、<code>0</code> で無効。一括実行中はロックしません（対話接続ウィンドウは別プロセスのため影響しません）。</td></tr>
       </tbody>
@@ -675,7 +676,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.1 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.2 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

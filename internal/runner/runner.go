@@ -840,7 +840,7 @@ func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings,
 		return
 	}
 	path, err := logstore.Write(runDir, s.LogNameTemplate, logstore.Fields{
-		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Stage: string(stage),
+		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Stage: string(stage), Tokens: s.StageTokens(),
 	}, RedactSecrets(res.Transcript, dev), now)
 	if err == nil {
 		res.LogPath = path
@@ -861,7 +861,7 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 // folder the logs went to ("" for a dry run, which writes nothing).
 func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Options, emit EmitFunc) ([]DeviceResult, string) {
 	now := time.Now()
-	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), now)
+	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
 	sets := indexSets(inv.CommandSets)
 
 	var targets []*model.Device
