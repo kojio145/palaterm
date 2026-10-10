@@ -88,8 +88,9 @@ func pagingShell(ch ssh.Channel) {
 				// The pager advances only on a bare space, never on a newline.
 				paused = false
 				io.WriteString(ch, "\r\nPAGE-TWO-CONTENT\r\nR1#")
-			case b == '\r':
-			case b == '\n':
+			case b == '\n' && line.Len() == 0:
+				// the LF of a CR LF pair: already handled on the CR
+			case b == '\r' || b == '\n':
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
 				if cmd == "show interfaces" {
@@ -233,8 +234,9 @@ func promptInOutputShell(ch ssh.Channel, record func(string)) {
 				// one does — this is how the lost character happens.
 				paused = false
 				io.WriteString(ch, "\r\nTAIL-OF-PROCESSES\r\nR1#")
-			case b == '\r':
-			case b == '\n':
+			case b == '\n' && line.Len() == 0:
+				// the LF of a CR LF pair: already handled on the CR
+			case b == '\r' || b == '\n':
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
 				record(cmd)

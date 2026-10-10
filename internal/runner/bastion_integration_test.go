@@ -87,7 +87,10 @@ func bastionShell(ch ssh.Channel) {
 		n, err := ch.Read(buf)
 		for i := 0; i < n; i++ {
 			b := buf[i]
-			if b == '\n' {
+			if b == '\n' && line.Len() == 0 {
+				continue // the LF of a CR LF pair: already handled on the CR
+			}
+			if b == '\r' || b == '\n' {
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
 				if strings.HasPrefix(cmd, "telnet ") {
@@ -97,7 +100,7 @@ func bastionShell(ch ssh.Channel) {
 				} else {
 					io.WriteString(ch, "\r\njump-host$ ")
 				}
-			} else if b != '\r' {
+			} else {
 				line.WriteByte(b)
 			}
 		}
@@ -152,7 +155,10 @@ func telnetDeviceConn(c net.Conn) {
 		n, err := c.Read(buf)
 		for i := 0; i < n; i++ {
 			b := buf[i]
-			if b == '\n' {
+			if b == '\n' && line.Len() == 0 {
+				continue // the LF of a CR LF pair: already handled on the CR
+			}
+			if b == '\r' || b == '\n' {
 				line.Reset()
 				switch stage {
 				case 0:
@@ -164,7 +170,7 @@ func telnetDeviceConn(c net.Conn) {
 				default:
 					io.WriteString(c, "\r\nok\r\ndev1#")
 				}
-			} else if b != '\r' {
+			} else {
 				line.WriteByte(b)
 			}
 		}
