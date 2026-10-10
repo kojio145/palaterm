@@ -102,14 +102,21 @@ func Diff(a, b string, ignoreNoise bool) DiffResult {
 	return out
 }
 
+// splitLines breaks a capture into screen lines: "\r\n" and "\n" end a
+// line, a bare "\r" is a return to column 0 inside the line, and every line
+// goes through ResolveLineEdits, so what is compared, counted or shown is
+// what was on the screen — not the device's line-editing bytes.
 func splitLines(s string) []string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
 	s = strings.TrimSuffix(s, "\n")
 	if s == "" {
 		return nil
 	}
-	return strings.Split(s, "\n")
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		lines[i] = ResolveLineEdits(l)
+	}
+	return lines
 }
 
 type editOp struct {

@@ -74,11 +74,11 @@ func (t *Term) startup(ctx context.Context) { t.ctx = ctx }
 // behind it (or without keyboard focus), so the first keystrokes went to the
 // main window and the user had to click into the terminal before typing
 // (2026-10-10). The paste and diff windows already do the same.
-func (t *Term) domReady(ctx context.Context) { go focusWindowByTitle("PalaTerm - " + t.deviceArg) }
+func (t *Term) domReady(ctx context.Context) { go focusOwnWindow() }
 
 // Focus is called by the page once the session is connected: a second nudge
 // for the case where the window became visible only after domReady.
-func (t *Term) Focus() { go focusWindowByTitle("PalaTerm - " + t.deviceArg) }
+func (t *Term) Focus() { go focusOwnWindow() }
 
 func (t *Term) shutdown(ctx context.Context) {
 	t.mu.Lock()
@@ -209,7 +209,11 @@ func (t *Term) connect(pw string) {
 	runDir := logstore.RunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
 	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
 		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
-	slog := newStreamLog(logPath, runpkg.SecretsOf(&d))
+	var secrets []string
+	if settings.MaskLogSecrets {
+		secrets = runpkg.SecretsOf(&d)
+	}
+	slog := newStreamLog(logPath, secrets)
 	sink := func(b []byte) {
 		slog.Write(b)
 		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.deviceArg, Data: base64.StdEncoding.EncodeToString(b)})
@@ -348,7 +352,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		_ = cmd.Wait()
 		// Hand the keyboard back to this window: closing the paste window
 		// does not reliably re-activate the terminal underneath.
-		focusWindowByTitle("PalaTerm - " + t.deviceArg)
+		focusOwnWindow()
 		if !res.OK {
 			runtime.EventsEmit(t.ctx, "term:paste-done", false)
 			return

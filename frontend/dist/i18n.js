@@ -37,7 +37,16 @@ function terr(e) {
 }
 
 // Backend messages that carry a dynamic value.
+const STAGE_LBL = { "作業前": "before", "作業中": "during", "作業後": "after", "指定なし": "not set" };
 const I18N_EN_PATTERNS = [
+  // ログ設定: 作業タイミングの付与文字列の検証（logstore.StageTokens.Validate）
+  [/^(作業前|作業中|作業後)の付与文字列が長すぎます（32文字まで）: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" is too long (max 32 chars): ${b}`],
+  [/^(作業前|作業中|作業後)の付与文字列にファイル名に使えない文字（.+）があります: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" has characters not allowed in a file name (space or \\ / : * ? " < > |): ${b}`],
+  [/^(作業前|作業中|作業後)の付与文字列に制御文字が含まれています: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" contains control characters: ${b}`],
+  [/^(作業前|作業中|作業後)の付与文字列の末尾にドットは使えません: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" must not end with a dot: ${b}`],
+  [/^(作業前|作業中|作業後)の付与文字列 (.+) は Windows の予約名のため使えません$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" ${b} is a reserved name on Windows`],
+  [/^(作業前|作業中|作業後)と(作業前|作業中|作業後)の付与文字列が同じです: (.+)$/, (m, a, b, c) => `Stage words for "${STAGE_LBL[a]}" and "${STAGE_LBL[b]}" are the same: ${c}`],
+  [/^(作業前|作業中|作業後)の付与文字列 (.+) は「(作業前|作業中|作業後|指定なし)」の既定語なので使えません$/, (m, a, b, c) => `Stage word for "${STAGE_LBL[a]}" ${b} is the default word of "${STAGE_LBL[c]}" and cannot be used`],
   [/^「(.+)」は既に登録されています$/, '"$1" is already registered'],
   [/^同名のプロファイル「(.+)」が既にあります$/, 'A profile named "$1" already exists'],
   [/^機器「(.+)」がこのプロファイルを使用中のため削除できません$/, 'Cannot delete: device "$1" uses this profile'],
@@ -183,6 +192,12 @@ const I18N_EN = {
   "単独接続": "Interactive",
   "作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after。上の欄で変更可）。指定なしは Config。テンプレートに無いときはファイル名の末尾に自動で付きます": "Run stage word (defaults: before / work (during and interactive) / after; change them in the fields above). Not set → Config. Appended to the file name automatically when the template lacks it.",
   "作業タイミングの付与文字列 ⓘ": "Stage words for {stage} ⓘ",
+  "作業前（before）": "before",
+  "作業中（work）": "work",
+  "作業後（after）": "after",
+  "ログ内のパスワードをマスクする ⓘ": "Mask passwords in logs ⓘ",
+  "パスワードを **** に置き換えて保存（既定: オフ）": "Replace passwords with **** when saving (default: off)",
+  "オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません": "When on, every occurrence of the device's password, enable password and bastion passwords in a log is saved as ****. The same string inside a running-config (a username, say) is replaced too, so the log no longer matches the device — hence off by default. Devices do not echo a typed password, so the login leaves nothing in the log either way.",
   "作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます": "The word {stage} expands to for each run stage, used in folder and file names. Empty = default (before / work / after). Folders named with the old defaults are still recognised in the History tab after a rename.",
   "必須": "required",
   "の付いた項目以外は任意です（空欄のままで保存できます）": "marks the required fields; everything else is optional (may be left blank)",

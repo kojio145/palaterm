@@ -103,6 +103,15 @@ func (t StageTokens) Validate() error {
 		if sanitize(x.w) != x.w {
 			return fmt.Errorf("%sの付与文字列にファイル名に使えない文字（空白や \\ / : * ? \" < > |）があります: %q", x.label, x.w)
 		}
+		if strings.ContainsFunc(x.w, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return fmt.Errorf("%sの付与文字列に制御文字が含まれています: %q", x.label, x.w)
+		}
+		if strings.HasSuffix(x.w, ".") {
+			return fmt.Errorf("%sの付与文字列の末尾にドットは使えません: %q", x.label, x.w)
+		}
+		if reservedName(x.w) {
+			return fmt.Errorf("%sの付与文字列 %q は Windows の予約名のため使えません", x.label, x.w)
+		}
 		k := strings.ToLower(x.w)
 		if prev, dup := seen[k]; dup {
 			return fmt.Errorf("%sと%sの付与文字列が同じです: %q", prev, x.label, x.w)
@@ -136,10 +145,6 @@ const DefaultDirTemplate = "log_{date}_{time}_{stage}"
 // it is work being done by hand, so its logs read the same as a batch run
 // taken 作業中.
 const StageWork = "work"
-
-// StageToken is what {stage} expands to with the default words: see
-// StageTokens.Token.
-func StageToken(stage string) string { return DefaultStageTokens.Token(stage) }
 
 // Placeholders supported in the name template:
 //
@@ -254,6 +259,23 @@ func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) str
 		}
 		dir = fmt.Sprintf("%s_%d", base, i)
 	}
+}
+
+// reservedName reports whether w (with or without an extension) is a name
+// Windows refuses as a file or folder: CON, PRN, AUX, NUL, COM1–9, LPT1–9.
+func reservedName(w string) bool {
+	base := strings.ToUpper(w)
+	if i := strings.Index(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) && base[3] >= '1' && base[3] <= '9' {
+		return true
+	}
+	return false
 }
 
 func sanitize(s string) string {

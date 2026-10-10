@@ -800,13 +800,15 @@ function renderSettings() {
       </div>
       <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
-          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
-          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業後"))}</span><input id="set-st-after" style="flex:1" placeholder="after" value="${esc(s.stageTokenAfter || "after")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前（before）"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中（work）"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業後（after）"))}</span><input id="set-st-after" style="flex:1" placeholder="after" value="${esc(s.stageTokenAfter || "after")}"></div>
         </div></div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中はロックしません）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
           <input id="set-lock" type="number" min="0" value="${s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30)}"></div>
+        <div class="field"><label><span data-tip="${esc(t("オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません"))}">${esc(t("ログ内のパスワードをマスクする ⓘ"))}</span></label>
+          <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-mask" type="checkbox" ${s.maskLogSecrets ? "checked" : ""}> ${esc(t("パスワードを **** に置き換えて保存（既定: オフ）"))}</label></div>
       </div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
@@ -822,7 +824,7 @@ function renderSettings() {
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
@@ -850,6 +852,7 @@ function renderSettings() {
     const lockMin = parseInt(document.getElementById("set-lock").value, 10);
     out.autoLockOff = !(lockMin > 0);
     out.autoLockMin = lockMin > 0 ? lockMin : 30;
+    out.maskLogSecrets = !!document.getElementById("set-mask").checked;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };

@@ -839,9 +839,13 @@ func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings,
 	if res.Transcript == "" {
 		return
 	}
+	text := res.Transcript
+	if s.MaskLogSecrets {
+		text = RedactSecrets(text, dev)
+	}
 	path, err := logstore.Write(runDir, s.LogNameTemplate, logstore.Fields{
 		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Stage: string(stage), Tokens: s.StageTokens(),
-	}, RedactSecrets(res.Transcript, dev), now)
+	}, text, now)
 	if err == nil {
 		res.LogPath = path
 	}

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/kojio145/palaterm/internal/history"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -62,7 +63,7 @@ func spawnWindow(env []string, args ...string) error {
 
 func (v *Viewer) startup(ctx context.Context) { v.ctx = ctx }
 
-func (v *Viewer) domReady(ctx context.Context) { go focusWindowByTitle(v.title) }
+func (v *Viewer) domReady(ctx context.Context) { go focusOwnWindow() }
 
 // Load reads the file (also used by the page's reload / follow timer, so a
 // log that is still being written — an interactive session — stays current).
@@ -73,7 +74,10 @@ func (v *Viewer) Load() viewerDoc {
 		d.Err = err.Error()
 		return d
 	}
-	d.Text = string(b)
+	// Shown as it was on screen: an interactive capture keeps the device's
+	// line editing ("\b \b" from tab completion) and colour escapes, which
+	// read as garbage in a text view. The file itself is left as captured.
+	d.Text = history.CleanTranscript(string(b))
 	d.Live = v.live
 	return d
 }

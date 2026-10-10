@@ -343,6 +343,14 @@ type Settings struct {
 	// get it; AutoLockOff disables it outright.
 	AutoLockMin int  `json:"autoLockMin,omitempty"`
 	AutoLockOff bool `json:"autoLockOff,omitempty"`
+
+	// MaskLogSecrets replaces the device's passwords (and its bastions')
+	// with **** in saved logs. Off by default since v1.5.3: a password that
+	// also appears in a running-config (a username, a community string) was
+	// masked there too and the log no longer matched the device (user
+	// request 2026-10-10). Devices do not echo a typed password, so the
+	// login itself leaves nothing in the log either way.
+	MaskLogSecrets bool `json:"maskLogSecrets,omitempty"`
 }
 
 // StageTokens returns the stage words for log names, defaults filled in.

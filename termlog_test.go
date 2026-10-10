@@ -128,3 +128,16 @@ func TestStreamLogPauseResume(t *testing.T) {
 		t.Fatalf("empty-then-resume file: %q", got)
 	}
 }
+
+// With no secrets (masking off, the default since v1.5.3) the capture is
+// written byte for byte.
+func TestStreamLogNoSecrets(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "raw.txt")
+	l := newStreamLog(p, nil)
+	l.Write([]byte("login: admin\r\nusername admin password secret1\r\n"))
+	l.Close()
+	b, _ := os.ReadFile(p)
+	if string(b) != "login: admin\r\nusername admin password secret1\r\n" {
+		t.Fatalf("raw log altered: %q", b)
+	}
+}

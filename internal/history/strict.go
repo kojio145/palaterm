@@ -43,25 +43,42 @@ var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|tra
 
 var ws = regexp.MustCompile(`\s+`)
 
-// ansiSeq matches the terminal escape sequences a device or the local
-// terminal may leave in an interactive transcript: CSI (colour, cursor
-// movement, erase), OSC (window titles) and single-character ESC sequences.
-var ansiSeq = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
+// oscSeq matches an OSC sequence (window title etc.): ESC ] … BEL / ESC \.
+var oscSeq = regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`)
 
-// ResolveLineEdits turns one raw transcript line into what was on the screen
-// when the line was finished. An interactive session log is a byte capture:
-// tab completion and corrections arrive as backspace-space-backspace (the
-// device erases the partial word and echoes the full one, so "sho<TAB>" is
-// recorded as "sho\b \b\b \b\b \bshow "), a bare carriage return rewrites
-// the line from column 0, and colour or cursor escapes may be interleaved.
-// Comparing the raw bytes against a running-config made every completed
-// command look unreflected (2026-10-10, NEC IX log: "sho▯ ▯▯ ▯show run…").
+// ResolveLineEdits turns one raw transcript line into what was on the
+// screen when the line was finished. An interactive session log is a byte
+// capture: tab completion and corrections arrive as the device's own line
+// editing — backspace-space-backspace on NEC IX / Cisco ("sho\b \b\b \b\b
+// \bshow "), backspace plus erase-to-end-of-line (ESC[K) on readline-style
+// gear (Linux, Juniper, Arista), cursor moves (ESC[nD / ESC[nC / ESC[nG),
+// deletes (ESC[nP) — a bare carriage return rewrites the line from column
+// 0 (a pager's "--More--\r        \r"), and colour escapes may be
+// interleaved. Comparing the raw bytes against a running-config made every
+// completed command look unreflected (2026-10-10, NEC IX log). Editing
+// sequences are applied, everything else in ESC sequences is dropped, and a
+// line with no control characters at all is returned as it is.
 func ResolveLineEdits(line string) string {
-	line = ansiSeq.ReplaceAllString(line, "")
-	buf := make([]rune, 0, len(line))
+	if !strings.ContainsAny(line, "\b\x7f\r\x1b\x07\x00") {
+		return line
+	}
+	line = oscSeq.ReplaceAllString(line, "")
+	rs := []rune(line)
+	buf := make([]rune, 0, len(rs))
 	cur := 0 // cursor column in buf
-	for _, r := range line {
-		switch r {
+	put := func(r rune) {
+		for cur > len(buf) {
+			buf = append(buf, ' ')
+		}
+		if cur < len(buf) {
+			buf[cur] = r
+		} else {
+			buf = append(buf, r)
+		}
+		cur++
+	}
+	for i := 0; i < len(rs); i++ {
+		switch r := rs[i]; r {
 		case '\b', 0x7f:
 			if cur > 0 {
 				cur--
@@ -70,27 +87,87 @@ func ResolveLineEdits(line string) string {
 			cur = 0
 		case 0x07, 0x00:
 			// bell, NUL: nothing on screen
-		default:
-			if cur < len(buf) {
-				buf[cur] = r
-			} else {
-				buf = append(buf, r)
+		case 0x1b:
+			if i+1 >= len(rs) {
+				break
 			}
-			cur++
+			if rs[i+1] != '[' {
+				i++ // two-character ESC sequence (ESC 7, ESC =, …)
+				break
+			}
+			// CSI: parameter bytes, then one final byte in 0x40–0x7e.
+			j := i + 2
+			for j < len(rs) && (rs[j] < 0x40 || rs[j] > 0x7e) {
+				j++
+			}
+			if j >= len(rs) {
+				i = len(rs)
+				break
+			}
+			n, hasN := csiParam(rs[i+2 : j])
+			i = j
+			switch rs[j] {
+			case 'K': // erase in line
+				switch {
+				case !hasN || n == 0:
+					if cur < len(buf) {
+						buf = buf[:cur]
+					}
+				case n == 1:
+					for k := 0; k < cur && k < len(buf); k++ {
+						buf[k] = ' '
+					}
+				default:
+					buf = buf[:0]
+				}
+			case 'D': // cursor left
+				cur -= max(n, 1)
+				if cur < 0 {
+					cur = 0
+				}
+			case 'C': // cursor right
+				cur += max(n, 1)
+			case 'G': // cursor to column (1-based)
+				cur = max(n, 1) - 1
+			case 'P': // delete characters at the cursor
+				if cur < len(buf) {
+					e := cur + max(n, 1)
+					if e > len(buf) {
+						e = len(buf)
+					}
+					buf = append(buf[:cur], buf[e:]...)
+				}
+			}
+			// colour (m), modes (h/l), clears of the whole screen (J) and
+			// the rest leave the line's text alone
+		default:
+			put(r)
 		}
 	}
-	// Text right of the final cursor stays: a device erases only with
-	// "\b \b", so a bare backspace leaves the character visible.
 	return string(buf)
 }
 
-// CleanTranscript applies ResolveLineEdits to every line of a transcript.
-func CleanTranscript(log string) string {
-	lines := splitLines(log)
-	for i, l := range lines {
-		lines[i] = ResolveLineEdits(l)
+// csiParam reads the leading number of a CSI parameter string ("3;1" → 3,
+// "?25" → 25) and whether there was one.
+func csiParam(p []rune) (int, bool) {
+	n, has := 0, false
+	for _, r := range p {
+		if r >= '0' && r <= '9' {
+			n = n*10 + int(r-'0')
+			has = true
+			continue
+		}
+		if has {
+			break
+		}
 	}
-	return strings.Join(lines, "\n")
+	return n, has
+}
+
+// CleanTranscript returns a transcript as it was on the screen, line by
+// line (see splitLines).
+func CleanTranscript(log string) string {
+	return strings.Join(splitLines(log), "\n")
 }
 
 func normCmd(s string) string {
@@ -104,7 +181,6 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 	seen := map[string]bool{}
 	typed := 0
 	for _, raw := range splitLines(workLog) {
-		raw = ResolveLineEdits(raw)
 		m := promptLine.FindStringSubmatch(strings.TrimRight(raw, " \t"))
 		if m == nil {
 			continue
@@ -128,7 +204,7 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 func lineCounts(log string) map[string]int {
 	m := map[string]int{}
 	for _, l := range splitLines(log) {
-		if k := normCmd(ResolveLineEdits(l)); k != "" {
+		if k := normCmd(l); k != "" {
 			m[k]++
 		}
 	}

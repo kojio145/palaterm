@@ -57,12 +57,12 @@ func (p *Paste) startup(ctx context.Context) { p.ctx = ctx }
 // domReady brings the new window to the front with keyboard focus, so Enter
 // pastes the moment it appears instead of after a click into it.
 func (p *Paste) domReady(ctx context.Context) {
-	go focusWindowByTitle(p.title)
+	go focusOwnWindow()
 }
 
 // Focus is called by the page once its textarea is ready (a second nudge,
 // in case the window was found before it could take focus).
-func (p *Paste) Focus() { go focusWindowByTitle(p.title) }
+func (p *Paste) Focus() { go focusOwnWindow() }
 
 // Load hands the UI the text to show (empty if nothing arrived on stdin).
 func (p *Paste) Load() pasteReq {

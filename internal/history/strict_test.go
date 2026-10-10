@@ -133,3 +133,58 @@ func TestResolveLineEdits(t *testing.T) {
 		}
 	}
 }
+
+// The diff compares and shows what was on screen, not the raw line editing
+// bytes of an interactive capture.
+func TestDiffResolvesLineEdits(t *testing.T) {
+	a := "R1# sho\b \b\b \b\b \bshow run\r\nhostname R1\r\n"
+	b := "R1# show run\r\nhostname R1-NEW\r\n"
+	r := Diff(a, b, true)
+	for _, l := range r.Lines {
+		if strings.ContainsRune(l.A, '\b') || strings.ContainsRune(l.B, '\b') {
+			t.Fatalf("raw backspace in diff line: %+v", l)
+		}
+	}
+	if r.Added != 1 || r.Removed != 1 {
+		t.Fatalf("only the hostname should differ: %+v", r)
+	}
+	if CleanTranscript("a\b \bb\r\nc\x1b[0m\r\n") != "b\nc" {
+		t.Fatalf("CleanTranscript: %q", CleanTranscript("a\b \bb\r\nc\x1b[0m\r\n"))
+	}
+}
+
+// readline-style gear (Linux, Juniper, Arista) corrects with "\b" plus
+// erase-to-end-of-line, and pagers rewrite the line with a bare "\r".
+func TestResolveLineEditsCSI(t *testing.T) {
+	cases := map[string]string{
+		"abc\b\x1b[K":                     "ab",
+		"sho\b\b\b\x1b[Kshow":             "show",
+		"show vers\b\x1b[Ksion":           "show version",
+		"x\x1b[2Dab":                      "ab",
+		"abcd\x1b[3D\x1b[2P":              "ad",
+		"\x1b[?25l\x1b[1;32mR1#\x1b[0m x": "R1# x",
+		"abc\x1b[5Gz":                     "abc z",
+		"abc\x1b[2K":                      "",
+		"\x1b7text\x1b8":                  "text",
+	}
+	for in, want := range cases {
+		if got := ResolveLineEdits(in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+	// Through the real path (splitLines): the pager line is overwritten,
+	// not split into extra lines.
+	if got := CleanTranscript(" --More-- \r         \rhostname R1\r\nx\r\n"); got != "hostname R1\nx" {
+		t.Errorf("pager via splitLines: %q", got)
+	}
+	r := Diff(" --More-- \r         \rhostname R1\r\n", "hostname R1\r\n", true)
+	if r.Added != 0 || r.Removed != 0 {
+		t.Errorf("pager rewrite should not count as a difference: %+v", r)
+	}
+	// Strict verification with readline-style editing.
+	work := "host(config)# ntp serv\b\b\b\b\x1b[Kserver 10.0.0.9\r\n"
+	cmds, _ := ExtractConfigCommands(work)
+	if len(cmds) != 1 || cmds[0] != "ntp server 10.0.0.9" {
+		t.Errorf("readline edit: %q", cmds)
+	}
+}

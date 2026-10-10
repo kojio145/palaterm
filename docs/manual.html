@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.2</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.3</div>
   </header>
 
   <nav class="toc">
@@ -484,7 +484,7 @@
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
       <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>、またはツールバーの<strong>「貼り付け…」</strong>。いずれも Tera Term と同じく<strong>貼り付ける内容の確認が別ウィンドウ</strong>で開きます（端末の手前に出て、自由に動かしたり広げたりできます）。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。<kbd>Alt</kbd>+<kbd>V</kbd> のときは「最後に Enter を送る」が最初からオンです。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
       <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入り、上部バーに「コピーしました」と短く表示されます（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
-      <li>上部バーの<strong>「ログフォルダ」</strong>でログの保存先フォルダを開けます。対話接続のログは Tera Term と同様に<strong>画面に出た内容がそのままリアルタイムでファイルへ書かれます</strong>（パスワードはマスク。ウィンドウが落ちても直前までの内容が残ります）。ツールバーの<strong>「ログ停止」</strong>で記録を止め、<strong>「ログ開始」</strong>で同じファイルに続きを記録します（停止・再開の時刻がファイルに記されます。保存先は切断時に画面末尾にも表示）。</li>
+      <li>上部バーの<strong>「ログフォルダ」</strong>でログの保存先フォルダを開けます。対話接続のログは Tera Term と同様に<strong>画面に出た内容がそのままリアルタイムでファイルへ書かれます</strong>（既定ではそのまま記録。ウィンドウが落ちても直前までの内容が残ります）。ツールバーの<strong>「ログ停止」</strong>で記録を止め、<strong>「ログ開始」</strong>で同じファイルに続きを記録します（停止・再開の時刻がファイルに記されます。保存先は切断時に画面末尾にも表示）。</li>
       <li><strong>文字サイズ</strong>は上部バーの「A−」「A＋」、<kbd>Ctrl</kbd>+ホイール、<kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> で変更できます（<kbd>Ctrl</kbd>+<kbd>0</kbd> で既定に戻す。次回のウィンドウにも引き継がれます）。</li>
       <li><strong>検索</strong>は <kbd>Ctrl</kbd>+<kbd>F</kbd> または「検索」ボタン。画面に流れた内容（スクロールバック含む）から大文字小文字を区別せずに探し、<kbd>Enter</kbd> で次、<kbd>Shift</kbd>+<kbd>Enter</kbd> で前、<kbd>Esc</kbd> で閉じます。</li>
       <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。</li>
@@ -631,7 +631,7 @@
         <tr><td>保存データの暗号化</td><td>機器のパスワード類はすべて <strong>AES-256-GCM</strong> で暗号化して保存します（鍵はマスターパスワードから scrypt で導出）。平文保存モードはありません。</td></tr>
         <tr><td>SSHホストキーの記録と検証</td><td>SSH接続先のホストキーは<strong>初回接続時に記録され、以後の接続で一致を検証</strong>します（なりすまし・中間者攻撃対策）。キーが変わると接続を拒否し、<strong>「ホストキーが前回と異なります」の確認</strong>が出ます（対話接続ではウィンドウ内に、一括実行ではその機器の行に「鍵を許可して再実行」）。機器の交換・OS再インストールで正当に変わった場合だけ「機器を交換したので許可」を選ぶと、記録を更新して接続し直します。<strong>心当たりがないのにキーが変わった場合は許可せず、ネットワーク管理者に確認を。</strong></td></tr>
         <tr><td>強い暗号方式が既定</td><td>SSHの鍵交換・暗号は既定で強い方式のみを使います。SHA-1系・CBC・3DESなどの旧方式は、対応していない古い機器のためだけに機器ごとの<strong>「レガシー暗号を許可」</strong>で有効化できます（通常はオフのまま）。</td></tr>
-        <tr><td>ログのパスワード自動マスク</td><td>機器がパスワードを画面にエコーバックした場合でも、ログ保存時に <code>****</code> へ自動マスクされます（一括実行・対話接続とも）。</td></tr>
+        <tr><td>ログのパスワードマスク（任意）</td><td>「ログ設定」の<strong>ログ内のパスワードをマスクする</strong>をオンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログに現れた箇所を <code>****</code> に置き換えて保存します（一括実行・対話接続とも）。show running-config 内に同じ文字列（ユーザー名など）があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません。</td></tr>
       </tbody>
     </table></div>
 
@@ -676,7 +676,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.2 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.3 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

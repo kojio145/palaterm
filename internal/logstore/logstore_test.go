@@ -143,3 +143,23 @@ func TestStageTokensJapanese(t *testing.T) {
 		t.Fatalf("canonical of Japanese words")
 	}
 }
+
+func TestStageTokensValidateFileNames(t *testing.T) {
+	for _, bad := range []StageTokens{
+		{Before: "a\tb"},    // control character
+		{Work: "post."},     // trailing dot
+		{After: "CON"},      // reserved
+		{After: "nul.txt"},  // reserved with extension
+		{Before: "com1"},    // reserved serial name
+		{Before: "\x7fabc"}, // DEL
+	} {
+		if bad.Validate() == nil {
+			t.Errorf("%+v should be rejected", bad)
+		}
+	}
+	for _, ok := range []StageTokens{{Before: "com"}, {Work: "console"}, {After: "v1.2"}, {Before: "事前"}} {
+		if err := ok.Validate(); err != nil {
+			t.Errorf("%+v rejected: %v", ok, err)
+		}
+	}
+}

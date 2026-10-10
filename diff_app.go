@@ -38,7 +38,7 @@ func NewDiffWin(a, b, label, title string) *DiffWin {
 
 func (d *DiffWin) startup(ctx context.Context) { d.ctx = ctx }
 
-func (d *DiffWin) domReady(ctx context.Context) { go focusWindowByTitle(d.title) }
+func (d *DiffWin) domReady(ctx context.Context) { go focusOwnWindow() }
 
 // Load compares the two files (re-run when the noise option changes).
 func (d *DiffWin) Load(ignoreNoise bool) diffDoc {
