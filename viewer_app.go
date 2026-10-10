@@ -61,7 +61,7 @@ func spawnWindow(env []string, args ...string) error {
 	return nil
 }
 
-func (v *Viewer) startup(ctx context.Context) { v.ctx = ctx }
+func (v *Viewer) startup(ctx context.Context) { v.ctx = ctx; viewerWin.fit(ctx) }
 
 func (v *Viewer) domReady(ctx context.Context) { go focusOwnWindow() }
 

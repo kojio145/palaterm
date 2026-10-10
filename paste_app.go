@@ -52,7 +52,7 @@ func NewPaste(title string) *Paste {
 	return p
 }
 
-func (p *Paste) startup(ctx context.Context) { p.ctx = ctx }
+func (p *Paste) startup(ctx context.Context) { p.ctx = ctx; pasteWin.fit(ctx) }
 
 // domReady brings the new window to the front with keyboard focus, so Enter
 // pastes the moment it appears instead of after a click into it.

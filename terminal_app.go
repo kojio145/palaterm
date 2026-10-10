@@ -67,7 +67,7 @@ func NewTerm(device string) *Term {
 	return t
 }
 
-func (t *Term) startup(ctx context.Context) { t.ctx = ctx }
+func (t *Term) startup(ctx context.Context) { t.ctx = ctx; termWin.fit(ctx) }
 
 // domReady brings this window to the front and gives the WebView2 the
 // keyboard. A window spawned from the main window's "接続" button appeared

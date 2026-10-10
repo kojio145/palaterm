@@ -69,6 +69,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	mainWin.fit(ctx)
 	// Materialize the tool's folder layout next to the exe so users can find
 	// everything: logs / export destinations / internal parts (data).
 	for _, d := range []string{"logs", filepath.Join("export", "bundles"), filepath.Join("export", "command-sets"), filepath.Join("export", "os-profiles"), "data"} {
@@ -396,9 +397,9 @@ func (a *App) Unlock(password string) error {
 			seed = true
 		}
 	}
-	// Vaults still on the original default log name move to the current one
-	// (site and stage in the name); a template the user changed is theirs.
-	if inv.Settings.LogNameTemplate == "" || inv.Settings.LogNameTemplate == logstore.OldDefaultTemplate {
+	// Vaults still on an earlier default log name move to the current one
+	// (site, role and stage in the name); a template the user changed is theirs.
+	if inv.Settings.LogNameTemplate == "" || logstore.IsOldDefaultTemplate(inv.Settings.LogNameTemplate) {
 		inv.Settings.LogNameTemplate = logstore.DefaultTemplate
 		seed = true
 	}
@@ -1626,7 +1627,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.7"
+const appVersion = "1.5.8"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
