@@ -228,11 +228,12 @@ func (a *App) CreateVault(password string) error {
 	inv := &model.Inventory{
 		Version:        1,
 		Settings:       model.DefaultSettings(),
-		CommandSets:    model.DefaultCommandSets(),
-		DeviceGroups:   []model.DeviceGroup{{Name: "サンプルグループ"}},
-		CustomProfiles: profile.Defaults(),
-		ProfilesSeeded: true,
-		ProfileSeedGen: profile.SeedGen,
+		CommandSets:       model.DefaultCommandSets(),
+		CommandSetSeedGen: model.CommandSetSeedGen,
+		DeviceGroups:      []model.DeviceGroup{{Name: "サンプルグループ"}},
+		CustomProfiles:    profile.Defaults(),
+		ProfilesSeeded:    true,
+		ProfileSeedGen:    profile.SeedGen,
 	}
 	if err := vault.Save(a.vaultPath, password, inv); err != nil {
 		return err
@@ -257,6 +258,24 @@ func (a *App) Unlock(password string) error {
 	seed := false
 	if len(inv.CommandSets) == 0 || onlyLegacyDefaultSets(inv.CommandSets) {
 		inv.CommandSets = model.DefaultCommandSets()
+		inv.CommandSetSeedGen = model.CommandSetSeedGen
+		seed = true
+	}
+	// Sample sets added by a later release (ALAXALA_L2SW in generation 1) are
+	// appended to an older vault once, by name: a set the user already has
+	// under that name is left alone, and one deleted afterwards stays deleted
+	// because the vault remembers the generation.
+	if inv.CommandSetSeedGen < model.CommandSetSeedGen {
+		have := map[string]bool{}
+		for _, cs := range inv.CommandSets {
+			have[cs.Name] = true
+		}
+		for _, cs := range model.CommandSetsAddedAfter(inv.CommandSetSeedGen) {
+			if !have[cs.Name] {
+				inv.CommandSets = append(inv.CommandSets, cs)
+			}
+		}
+		inv.CommandSetSeedGen = model.CommandSetSeedGen
 		seed = true
 	}
 	// A vault with no groups and no devices also gets the starter group.
@@ -1607,7 +1626,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.5"
+const appVersion = "1.5.6"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

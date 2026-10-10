@@ -67,7 +67,10 @@ func alaxalaConn(c net.Conn, record func(string)) {
 			case 2:
 				if cmd == "enable" {
 					stage = 3
-					io.WriteString(c, "\r\nAX2530S# ")
+					// The real switch follows the first "#" with an access log
+					// line of its own, so the prompt is not the last thing on
+					// screen (seen on an AX2530S in the field, 2026-10-10).
+					io.WriteString(c, "\r\nAX2530S# \r\n2026/10/10 21:54:20 01S E3 ACCESS 00030001 0209:000000000000 Local authentication succeeded.\r\n")
 				} else if cmd == "exit" || cmd == "logout" {
 					return
 				} else {
@@ -93,6 +96,7 @@ func alaxalaConn(c net.Conn, record func(string)) {
 
 // The built-in alaxala-ax profile must log in over Telnet, escalate with
 // "enable" (skipping the enable-password row the device never asks for),
+// get past the unsolicited log line the switch prints after that prompt,
 // disable the pager and run a command — the sequence the legacy macro used.
 func TestAlaxalaProfileEndToEnd(t *testing.T) {
 	addr, cmds, stop := fakeAlaxala(t)

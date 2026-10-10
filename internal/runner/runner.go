@@ -696,6 +696,15 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 	// into "how logging".
 	tail := "(?:" + prof.Prompt + `)[ \t]*\z`
 	deadline := time.Now().Add(timeout)
+	// A device that prints something on its own after the prompt leaves the
+	// tail on that line instead: ALAXALA AX logs "… Local authentication
+	// succeeded." right after the first "#", and syslog-to-terminal does the
+	// same on many others. The device is idle and ready, yet the wait here
+	// would run out. So after a second of silence with no pager showing, a
+	// bare Enter asks for the prompt again — twice at most, spaced apart, so
+	// a device that is genuinely busy is not spammed.
+	nudges := 0
+	var nudgedAt time.Time
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -717,9 +726,19 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 		// already returned to its prompt is echoed into the next command line.
 		if err := exp.Expect(ctx, more, 150*time.Millisecond); err == nil && !exp.Seen(tail) {
 			_ = exp.SendRaw(" ")
+			continue
+		}
+		if nudges < 2 && exp.Idle() >= promptNudgeAfter && time.Since(nudgedAt) >= promptNudgeAfter {
+			nudges++
+			nudgedAt = time.Now()
+			_ = exp.Send("")
 		}
 	}
 }
+
+// promptNudgeAfter is how long the far end must stay silent, with no prompt
+// at the tail, before waitPrompt types a bare Enter to get the prompt back.
+const promptNudgeAfter = time.Second
 
 // expectOrReady waits for pattern, reporting ready=true instead if the device
 // reaches its operational prompt first. Both are polled in short slices so a
