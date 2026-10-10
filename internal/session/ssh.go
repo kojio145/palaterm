@@ -180,6 +180,9 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 		if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
 			return nil, fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
 		}
+		if hint := authFailureHint(err, user, auth); hint != "" {
+			return nil, fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
+		}
 		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
 	}
 	sess, err := client.NewSession()
@@ -216,6 +219,51 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	return &sshSession{client: client, sess: sess, stdin: stdin, stdout: stdout}, nil
 }
 
+// authFailureHint turns x/crypto's "unable to authenticate, attempted methods
+// [...]" into something the user can act on. The attempted list is the tell:
+//
+//   - only "none" tried: the server never offered password at all (a
+//     public-key-only jump server, say) — pick 公開鍵 and point at the key;
+//   - password / keyboard-interactive tried and refused: wrong credentials;
+//   - publickey tried and refused: the key is not registered for that user.
+//
+// Without this, a password-only setup against a key-only host reads as a
+// generic handshake failure and nothing says which field to change.
+func authFailureHint(err error, user string, auth model.AuthMethod) string {
+	msg := err.Error()
+	if !strings.Contains(msg, "unable to authenticate") {
+		return ""
+	}
+	const marker = "attempted methods ["
+	i := strings.Index(msg, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := msg[i+len(marker):]
+	j := strings.Index(rest, "]")
+	if j < 0 {
+		return ""
+	}
+	var triedPassword, triedKey bool
+	for _, m := range strings.Fields(rest[:j]) {
+		switch m {
+		case "password", "keyboard-interactive":
+			triedPassword = true
+		case "publickey":
+			triedKey = true
+		}
+	}
+	switch {
+	case triedKey:
+		return fmt.Sprintf("公開鍵が受け付けられませんでした。この秘密鍵に対応する公開鍵がサーバのユーザー「%s」に登録されているか、ユーザー名が合っているかを確認してください", user)
+	case triedPassword:
+		return "ユーザー名またはパスワードが違います"
+	case auth != model.AuthPublicKey:
+		return "サーバがパスワード認証を受け付けていません（公開鍵認証のみ）。編集画面の SSH認証を「公開鍵」にして、秘密鍵ファイル（Tera Term などで使っていた鍵）を指定してください"
+	}
+	return ""
+}
+
 func loadPrivateKey(keyFile, passphrase string) (ssh.Signer, error) {
 	if keyFile == "" {
 		return nil, fmt.Errorf("public-key auth selected but no key file given")
@@ -232,24 +280,44 @@ func loadPrivateKey(keyFile, passphrase string) (ssh.Signer, error) {
 		return nil, fmt.Errorf("この鍵はPuTTY形式（.ppk）です。PuTTYgenで開き「Conversions → Export OpenSSH key」で変換したファイルを指定してください: %s", keyFile)
 	}
 	// Supports Ed25519, RSA, ECDSA (PEM/OpenSSH keys, passphrase-protected or
-	// not). DSA is not supported by design.
+	// not) and the classic PEM "DSA PRIVATE KEY" that older tooling (Tera
+	// Term, PuTTYgen exports, ssh-keygen before 9.x) wrote as id_dsa. DSA is
+	// weak and modern servers refuse ssh-dss, but the jump servers people
+	// still carry such keys for are exactly the ones that only accept it;
+	// the library signs ssh-dss when the server offers nothing else.
 	if passphrase != "" {
-		signer, err := ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+		signer, err := parseKey(data, passphrase)
 		if err != nil {
 			if errors.Is(err, x509.IncorrectPasswordError) || strings.Contains(err.Error(), "incorrect passphrase") || strings.Contains(err.Error(), "decryption password incorrect") {
 				return nil, fmt.Errorf("秘密鍵のパスフレーズが違います: %s", keyFile)
 			}
-			return nil, fmt.Errorf("parse private key (Ed25519/RSA/ECDSA expected): %w", err)
+			return nil, fmt.Errorf("parse private key (Ed25519/RSA/ECDSA/DSA expected): %w", err)
 		}
 		return signer, nil
 	}
-	signer, err := ssh.ParsePrivateKey(data)
+	signer, err := parseKey(data, "")
 	if err != nil {
 		var missing *ssh.PassphraseMissingError
 		if errors.As(err, &missing) {
 			return nil, fmt.Errorf("この秘密鍵はパスフレーズで保護されています。編集画面の「秘密鍵のパスフレーズ」を入力してください: %s", keyFile)
 		}
-		return nil, fmt.Errorf("parse private key (Ed25519/RSA/ECDSA expected): %w", err)
+		return nil, fmt.Errorf("parse private key (Ed25519/RSA/ECDSA/DSA expected): %w", err)
 	}
 	return signer, nil
+}
+
+// parseKey hands the file to x/crypto and, for the one shape it declines —
+// a DSA key in OpenSSH's own container format — to parseOpenSSHDSA.
+func parseKey(data []byte, passphrase string) (ssh.Signer, error) {
+	var signer ssh.Signer
+	var err error
+	if passphrase != "" {
+		signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+	} else {
+		signer, err = ssh.ParsePrivateKey(data)
+	}
+	if isOpenSSHDSAUnhandled(err) {
+		return parseOpenSSHDSA(data, passphrase)
+	}
+	return signer, err
 }

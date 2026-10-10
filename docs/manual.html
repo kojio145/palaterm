@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.4</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.5</div>
   </header>
 
   <nav class="toc">
@@ -377,7 +377,7 @@
         <tr><td>ユーザー名</td><td>ログインユーザー。</td></tr>
         <tr><td>パスワード</td><td>ログインパスワード。目のマークで表示/非表示を切替できます。</td></tr>
         <tr><td>enable / 昇格パスワード（任意）</td><td>特権モードへ上がるためのパスワード（Cisco の enable など）。不要な機器は空欄でかまいません。</td></tr>
-        <tr><td>SSH認証方式</td><td>SSH接続時のみ。<code>パスワード</code> か <code>公開鍵</code>（Ed25519 / RSA / ECDSA対応）を選択。公開鍵では<strong>「参照…」で鍵ファイルを選択</strong>でき、前回使ったパスが自動入力されます。パスフレーズ付きの鍵は「秘密鍵のパスフレーズ」欄に入力してください（暗号化保存）。</td></tr>
+        <tr><td>SSH認証方式</td><td>SSH接続時のみ。<code>パスワード</code> か <code>公開鍵</code>（Ed25519 / RSA / ECDSA に加え、古い踏み台向けの DSA（PEM 形式 / OpenSSH 形式とも）も可）を選択。公開鍵では<strong>「参照…」で鍵ファイルを選択</strong>でき、前回使ったパスが自動入力されます。パスフレーズ付きの鍵は「秘密鍵のパスフレーズ」欄に入力してください（暗号化保存）。Tera Term マクロの <code>/auth=publickey /keyfile=… /passwd=…</code> と同じ設定で、<code>/passwd</code> の値はパスワード欄ではなく「鍵のパスフレーズ」欄に入ります。接続先が公開鍵しか受け付けないのにパスワードを選んでいると「サーバがパスワード認証を受け付けていません」と表示されます。</td></tr>
         <tr><td>認証情報の扱い</td><td>グループに所属する機器にだけ出ます。<strong>「グループ既定を使う」</strong>にすると、ユーザー名・パスワード・enable パスワードは<strong>グループ既定の認証情報</strong>（下記）が使われ、この機器の欄は使われません。同じグループでもパスワードが違う機器は<strong>「この機器に個別に設定」</strong>のままにします。</td></tr>
       </tbody>
     </table></div>
@@ -679,7 +679,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.5 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>
