@@ -50,7 +50,9 @@ func TestDefaultsArePlainText(t *testing.T) {
 			all = append(all, s.Expect)
 		}
 		for _, pat := range all {
-			if strings.Contains(pat, `\`) || strings.Contains(pat, "(?i)") || strings.Contains(pat, "$") {
+			// A "$" on its own is the Linux shell prompt, a literal like every
+			// other; one closing a longer pattern would be a regexp anchor.
+			if strings.Contains(pat, `\`) || strings.Contains(pat, "(?i)") || (pat != "$" && strings.Contains(pat, "$")) {
 				t.Errorf("%s: %q looks like a regexp, defaults must be plain text", p.Key, pat)
 			}
 		}
@@ -58,9 +60,9 @@ func TestDefaultsArePlainText(t *testing.T) {
 }
 
 func TestExpectedDefaultCount(t *testing.T) {
-	// 14 concrete OS families + 1 generic fallback.
-	if got := len(Defaults()); got != 15 {
-		t.Fatalf("expected 15 default profiles, got %d", got)
+	// 14 network OS families + Linux (user / root) + 1 generic fallback.
+	if got := len(Defaults()); got != 17 {
+		t.Fatalf("expected 17 default profiles, got %d", got)
 	}
 }
 

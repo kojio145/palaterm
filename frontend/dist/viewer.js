@@ -39,10 +39,15 @@ async function bootViewerWindow() {
   function show(d, keepPos) {
     const atBottom = ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 4;
     const top = ta.scrollTop;
+    // A selection survives the reload (自動更新 rewrites the text every few
+    // seconds while a live log grows, which used to drop it mid-copy).
+    const selA = ta.selectionStart, selB = ta.selectionEnd;
+    const hadSel = keepPos && selB > selA;
     ta.value = d.err ? t("ログを開けません") + ": " + terr(d.err) : d.text;
+    if (hadSel) { ta.setSelectionRange(selA, selB); keepPos = true; }
     const lines = d.text ? d.text.split(/\r\n|\r|\n/).length : 0;
     status.textContent = d.err ? "" : t("{n} 行 / {b} バイト", { n: lines, b: d.text.length }) + "　" + d.path;
-    if (!keepPos || atBottom) ta.scrollTop = ta.scrollHeight; else ta.scrollTop = top;
+    if (!keepPos || (atBottom && !hadSel)) ta.scrollTop = ta.scrollHeight; else ta.scrollTop = top;
   }
   show(doc, false);
   async function reload(auto) {
@@ -57,7 +62,10 @@ async function bootViewerWindow() {
   follow.checked = !!doc.live;
   setInterval(() => { if (follow.checked) reload(true); }, 2000);
   document.getElementById("lv-folder").onclick = () => V().OpenFolder().catch(e => flash(terr(e)));
-  document.getElementById("lv-copy").onclick = () => { ta.select(); document.execCommand("copy"); flash(t("コピーしました")); ta.setSelectionRange(0, 0); };
+  const copyAll = () => { ta.select(); document.execCommand("copy"); flash(t("コピーしました")); ta.setSelectionRange(0, 0); };
+  document.getElementById("lv-copy").onclick = copyAll;
+  // Right-click: 選択した文字をコピー (app.js) plus 全文コピー.
+  ctxExtraItems = () => [[t("全文コピー"), copyAll]];
 
   // Font size (shared key with the terminal window's setting).
   const FONT_DEF = 12, FONT_MIN = 8, FONT_MAX = 32;

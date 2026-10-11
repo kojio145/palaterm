@@ -1553,6 +1553,7 @@ func (a *App) SpawnTerminal(id string, manual bool) error {
 		args = append(args, "--manual")
 	}
 	cmd := exec.Command(exe, args...)
+	cmd.Env = childEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -1708,7 +1709,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.13"
+const appVersion = "1.5.14"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

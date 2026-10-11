@@ -41,7 +41,10 @@ async function bootPasteWindow() {
   document.body.appendChild(wrap);
   const ta = document.getElementById("pw-text"), cr = document.getElementById("pw-cr");
   ta.value = req.text || "";
-  cr.checked = !!req.cr;
+  // 最後に Enter を送る: on by default, then whatever was last chosen here
+  // (Alt+V always asks for the Enter, without changing what is remembered).
+  cr.checked = !!req.cr || pasteCrPref();
+  cr.addEventListener("change", () => setPasteCrPref(cr.checked));
   // Font size: same controls as the terminal window, remembered separately.
   const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
   let fontSize = FONT_DEF;
@@ -78,6 +81,16 @@ async function bootPasteWindow() {
   // asking for the foreground and refocusing until it sticks.
   [100, 400, 900].forEach(ms => setTimeout(() => { if (document.activeElement !== ta) grab(); }, ms));
   P().Focus().catch(() => {});
+}
+
+// The paste confirmation's 最後に Enter を送る: on until the user turns it
+// off, and from then on what they last chose (shared by every window: they
+// all use the same WebView2 profile).
+function pasteCrPref() {
+  try { return localStorage.getItem("palaterm_paste_cr") !== "0"; } catch (e) { return true; }
+}
+function setPasteCrPref(on) {
+  try { localStorage.setItem("palaterm_paste_cr", on ? "1" : "0"); } catch (e) {}
 }
 
 async function bootTerminalWindow() {
@@ -218,7 +231,7 @@ async function bootTerminalWindow() {
   function openPasteDialogInline(text, withCR) {
     if (closed) return;
     pasteText.value = text;
-    pasteCr.checked = !!withCR;
+    pasteCr.checked = !!withCR || pasteCrPref();
     const n = text.split(/\r\n|\r|\n/).length;
     pasteInfo.textContent = t("{n} 行。各行の末尾は Enter として機器へ送られます。内容はここで編集できます。", { n });
     pasteDlg.classList.remove("hidden");
@@ -251,6 +264,7 @@ async function bootTerminalWindow() {
     Term().GetClipboard().then(txt => { if (txt) pasteOrConfirm(txt, withCR); }).catch(() => {});
   }
   document.getElementById("tw-paste-ok").onclick = confirmPaste;
+  pasteCr.addEventListener("change", () => setPasteCrPref(pasteCr.checked));
   document.getElementById("tw-paste-cancel").onclick = closePasteDialog;
   pasteText.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); confirmPaste(); }

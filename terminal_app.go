@@ -90,7 +90,11 @@ func NewTerm(device, label string, manual bool) *Term {
 	return t
 }
 
-func (t *Term) startup(ctx context.Context) { t.ctx = ctx; termWin.fit(ctx) }
+func (t *Term) startup(ctx context.Context) {
+	t.ctx = ctx
+	termWin.fit(ctx)
+	placeNearParent(ctx, termWin)
+}
 
 // domReady brings this window to the front and gives the WebView2 the
 // keyboard. A window spawned from the main window's "接続" button appeared
@@ -484,6 +488,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		return err
 	}
 	cmd := exec.Command(exe, "--paste", t.label)
+	cmd.Env = childEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.pasteDone()

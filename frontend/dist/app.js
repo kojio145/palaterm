@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.13";
+const APP_VERSION = "1.5.14";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -369,25 +369,37 @@ const ctxMenu = document.createElement("div");
 ctxMenu.className = "ctx-menu hidden";
 document.body.appendChild(ctxMenu);
 function closeCtxMenu() { ctxMenu.classList.add("hidden"); ctxMenu.innerHTML = ""; }
+// Pages can add their own entries (the log viewer adds 全文コピー): a
+// function returning [label, action] pairs for the element right-clicked.
+let ctxExtraItems = null;
 document.addEventListener("contextmenu", e => {
   closeCtxMenu();
   if (e.defaultPrevented) return; // e.g. 接続 (right-click = no automatic login)
-  const td = e.target.closest("td");
-  const table = td && td.closest("table");
-  if (!table || !table.tBodies.length || !table.tBodies[0].contains(td)) return;
-  e.preventDefault();
-  const tr = td.parentElement;
-  const cols = dataCols(table);
-  // Text selected on the page, or inside the input that was right-clicked.
+  // Text selected on the page, or inside the input / textarea that was
+  // right-clicked (its selection is not part of the page selection).
   let picked = "";
   const el = document.activeElement;
-  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && td.contains(el) && el.selectionEnd > el.selectionStart) {
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && (el === e.target || el.contains(e.target) || e.target.contains(el)) && el.selectionEnd > el.selectionStart) {
     picked = el.value.slice(el.selectionStart, el.selectionEnd);
   } else {
-    picked = String(window.getSelection() || "").trim();
+    picked = String(window.getSelection() || "");
+    if (!picked.trim()) picked = "";
   }
   const items = [];
   if (picked) items.push([t("選択した文字をコピー"), () => copyText(picked, t("コピーしました"))]);
+  const td = e.target.closest("td");
+  const table = td && td.closest("table");
+  if (!table || !table.tBodies.length || !table.tBodies[0].contains(td)) {
+    // Outside a list: copy the selection, plus whatever the page adds.
+    if (ctxExtraItems) items.push(...(ctxExtraItems(e.target) || []));
+    if (!items.length) return;
+    e.preventDefault();
+    showCtxMenu(items, e);
+    return;
+  }
+  e.preventDefault();
+  const tr = td.parentElement;
+  const cols = dataCols(table);
   const cell = cellText(td);
   if (cell && cols.includes(td.cellIndex)) items.push([t("このセルをコピー"), () => copyText(cell, t("{v} をコピーしました", { v: cell.length > 40 ? cell.slice(0, 40) + "…" : cell }))]);
   if (cols.length) {
@@ -401,6 +413,9 @@ document.addEventListener("contextmenu", e => {
     items.push([t("表示中の表をすべてコピー（Excel に貼れる形式）"), () => copyText(all, t("{n} 行をコピーしました", { n: rows.length }))]);
   }
   if (!items.length) return;
+  showCtxMenu(items, e);
+});
+function showCtxMenu(items, e) {
   items.forEach(([label, fn]) => {
     const b = document.createElement("button");
     b.type = "button";
@@ -412,9 +427,15 @@ document.addEventListener("contextmenu", e => {
   const w = ctxMenu.offsetWidth, h = ctxMenu.offsetHeight;
   ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - w - 4) + "px";
   ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - h - 4) + "px";
-});
+}
 document.addEventListener("mousedown", e => { if (!ctxMenu.contains(e.target)) closeCtxMenu(); }, true);
-document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtxMenu(); });
+// Esc closes only the menu while it is open (in the log viewer Esc would
+// otherwise close the whole window).
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || ctxMenu.classList.contains("hidden")) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  closeCtxMenu();
+}, true);
 window.addEventListener("blur", closeCtxMenu);
 document.addEventListener("scroll", closeCtxMenu, true);
 

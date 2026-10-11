@@ -239,6 +239,35 @@ var defaults = []Profile{
 		},
 	},
 	{
+		// Linux servers (generation 2). A shell prompt ends in "$" for an
+		// ordinary user and "#" for root, and a profile has one literal
+		// prompt, so there are two: this one, and linux-root below. Logging
+		// in over SSH needs no rows (SSH authenticates); the two rows serve
+		// Telnet, a serial console, or a jump host. The pager rows stop the
+		// commands that page by themselves (systemctl, journalctl, git, man)
+		// from waiting at a "less" screen, which has no "--More--" to answer.
+		Key:    "linux",
+		Name:   "Linux server",
+		Prompt: "$",
+		Login: []Step{
+			{Expect: "ogin:", Send: "{user}"},
+			{Expect: "assword:", Send: "{password}"},
+		},
+		Pager:      []Step{{Send: "export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat"}},
+		Disconnect: []Step{{Send: "exit"}},
+	},
+	{
+		Key:    "linux-root",
+		Name:   "Linux server (root)",
+		Prompt: "#",
+		Login: []Step{
+			{Expect: "ogin:", Send: "{user}"},
+			{Expect: "assword:", Send: "{password}"},
+		},
+		Pager:      []Step{{Send: "export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat"}},
+		Disconnect: []Step{{Send: "exit"}},
+	},
+	{
 		Key:    "generic",
 		Name:   "Generic (no automation)",
 		Prompt: "#",
@@ -269,12 +298,14 @@ func Defaults() []Profile {
 // introduced in a later generation is added to it exactly once on unlock, so
 // an existing vault picks up new OS types without resurrecting defaults the
 // user deleted. Bump it together with introducedIn when adding a default.
-const SeedGen = 1
+const SeedGen = 2
 
 // introducedIn maps a default's key to the generation that added it; keys
 // absent here belong to the original set (generation 0).
 var introducedIn = map[string]int{
 	"alaxala-ax": 1,
+	"linux":      2,
+	"linux-root": 2,
 }
 
 // AddedAfter returns deep copies of the defaults introduced after generation

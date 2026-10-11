@@ -53,7 +53,7 @@ func spawnWindow(env []string, args ...string) error {
 		return err
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = childEnv(env...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -61,7 +61,11 @@ func spawnWindow(env []string, args ...string) error {
 	return nil
 }
 
-func (v *Viewer) startup(ctx context.Context) { v.ctx = ctx; viewerWin.fit(ctx) }
+func (v *Viewer) startup(ctx context.Context) {
+	v.ctx = ctx
+	viewerWin.fit(ctx)
+	placeNearParent(ctx, viewerWin)
+}
 
 func (v *Viewer) domReady(ctx context.Context) { go focusOwnWindow() }
 
