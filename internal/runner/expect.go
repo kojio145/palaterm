@@ -14,6 +14,11 @@ import (
 // ErrExpectTimeout means the pattern was not seen before the deadline.
 var ErrExpectTimeout = errors.New("expect timeout")
 
+// Expecter is the handle callers outside this package hold on a session
+// returned by Connect or Open: something to pass back into StartInteractive
+// or Close, nothing more.
+type Expecter = expecter
+
 // expecter reads a session in the background, mirrors everything into a
 // transcript, and lets callers wait for regexps against the live output.
 type expecter struct {
@@ -190,8 +195,31 @@ func (e *expecter) Transcript() string {
 	return e.transcript.String()
 }
 
+// TakeTranscript returns the captured output so far and forgets it, in one
+// step, so nothing arriving in between is lost. The interactive terminal
+// uses it when a failed automatic login is handed over to the user: the
+// transcript was already shown on screen with the error, so StartRaw must
+// not replay it there — but it still belongs in the session log, which the
+// caller writes from the returned string.
+func (e *expecter) TakeTranscript() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.transcript.String()
+	e.transcript.Reset()
+	return s
+}
+
 func (e *expecter) Close() error {
 	return e.sess.Close()
+}
+
+// Transport names the open transport when it can describe itself (a serial
+// session: "COM3 @ 9600"); "" otherwise.
+func (e *expecter) Transport() string {
+	if d, ok := e.sess.(session.Describer); ok {
+		return d.Describe()
+	}
+	return ""
 }
 
 // Resize forwards a terminal resize to the underlying session if it supports

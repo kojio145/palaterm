@@ -20,9 +20,12 @@ import (
 var assets embed.FS
 
 func main() {
-	// Standalone terminal window mode: "PalaTerm.exe --connect <device>".
+	// Standalone terminal window mode: "PalaTerm.exe --connect <device> [--manual]".
+	// --manual opens the line without the automatic login (initial setup
+	// over serial, a device with no password yet, an unexpected screen).
 	if len(os.Args) >= 3 && os.Args[1] == "--connect" {
-		runTerminalWindow(os.Args[2])
+		manual := len(os.Args) >= 4 && os.Args[3] == "--manual"
+		runTerminalWindow(os.Args[2], manual)
 		return
 	}
 	// Log-viewer window: "--view <file>" (opened from the main window's and the
@@ -163,10 +166,14 @@ func runMainApp() {
 	}
 }
 
-func runTerminalWindow(device string) {
-	t := NewTerm(device)
+func runTerminalWindow(device string, manual bool) {
+	t := NewTerm(device, manual)
+	title := "PalaTerm - " + device
+	if manual {
+		title += " - 手動接続"
+	}
 	err := wails.Run(&options.App{
-		Title:     "PalaTerm - " + device,
+		Title:     title,
 		Width:     termWin.W,
 		Height:    termWin.H,
 		MinWidth:  termWin.MinW,

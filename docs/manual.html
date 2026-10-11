@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.8</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.9</div>
   </header>
 
   <nav class="toc">
@@ -364,7 +364,7 @@
         <tr><td>IPアドレス <span class="must">必須</span></td><td>接続先のIPアドレスまたはホスト名。（シリアル接続時は不要）</td></tr>
         <tr><td>拠点名（任意）</td><td>本社／東京DC など。ログファイル名（<code>{site}</code>）にも使えます。</td></tr>
         <tr><td>役割（任意）</td><td>コア／エッジ／FW など、機器の役割を表す自由なラベル。ログファイル名（<code>{role}</code>）にも使えます。</td></tr>
-        <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポート自動検出＋ボーレート（既定9600）。</td></tr>
+        <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポートをドロップダウンで選択＋ボーレート（既定9600）。「自動検出」のままで動くのは USB シリアル変換が 1 本だけ（または COM ポートが 1 つだけ）のとき。変換ケーブルが 2 本以上あるときは「COMポートを指定してください」と止まるので、機器ごとに別の COM ポートを指定します（指定すれば複数本を同時に使えます）。</td></tr>
         <tr><td>OSタイプ</td><td>ログイン自動化のプロファイル（<a href="#ostype">OSタイプ設定</a>参照）。enable昇格やページャ無効化を機種に合わせて自動で行います。</td></tr>
         <tr><td>コマンドセット</td><td>STEP3で作ったセットを割り当てます。</td></tr>
       </tbody>
@@ -498,6 +498,20 @@
     <figure class="shot" data-shot="21_terminal_closed"><img src="img/manual/21_terminal_closed.png" alt="切断時。保存したログのパスが画面末尾に出る" loading="lazy"><figcaption>切断時。保存したログのパスが画面末尾に出る</figcaption></figure>
 
     <div class="callout tip"><span class="ic">i</span><p><strong>複数の機器へ同時に別々のウィンドウで接続できます。</strong> それぞれ独立したウィンドウなので、並べて同時作業が可能です。踏み台（最大5段）経由でも自動で通り抜けます。対話接続の内容も<strong>ログファイルに保存</strong>されます（切断時に保存先が画面末尾に表示）。</p></div>
+
+    <h3>自動ログインなしで開く（シリアルでの初期設定など）</h3>
+    <p>次のような機器では、OSプロファイルの自動ログインが進みません。</p>
+    <ul>
+      <li>シリアルでの<strong>初期キッティング</strong>（工場出荷状態の初期設定ダイアログ、パスワード未設定の機器）</li>
+      <li>初回ログイン時にパスワード変更を強制される機器</li>
+      <li>OSプロファイルが想定しない画面で止まる機器</li>
+    </ul>
+    <p>そのための入口が 3 つあります。いずれもログは通常の対話接続と同じく保存されます。</p>
+    <ol class="steps">
+      <li><strong>「接続」を <kbd>Shift</kbd>+クリック（または右クリック）</strong> — 回線（シリアルポート / SSH / Telnet）を開くだけで<strong>何も自動では打たない</strong>端末が開きます。Tera Term で普通に接続したときと同じ状態です（踏み台がある機器では 1 段目だけ接続し、その先は手で進めます）。</li>
+      <li>対話窓の接続中に出る<strong>「手動に切り替え」</strong>ボタン — 自動ログインをその場で打ち切り、機器が出している画面のまま手で操作に入ります。機器が想定外の画面で止まっているのが見えたら、タイムアウトを待たずに押せます。</li>
+      <li>自動ログインに<strong>失敗しても回線は切りません</strong>。画面に機器の応答とエラーを表示したうえで、上部に<strong>「手動で続ける」／「切断する」</strong>のバーが出ます。「手動で続ける」で、その画面にそのまま手で答えられます。</li>
+    </ol>
   </section>
 
   <section id="history">
@@ -680,7 +694,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.8 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.9 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

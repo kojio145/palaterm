@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.8";
+const APP_VERSION = "1.5.9";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -139,6 +139,24 @@ function wireRowReorder(tbody, onReorder) {
 // The ⓘ tooltip every drag handle carries.
 function dragHandleTip() {
   return esc(t("ドラッグで並び替え。クリック=選択 / Ctrl+クリック=追加選択 / Shift+クリック=範囲選択 — 選択した複数行はまとめてドラッグで移動できます"));
+}
+
+// The 接続 button's tooltip, and its two ways of opening the terminal: a
+// plain click logs in automatically; Shift+click or a right-click opens the
+// line with no automatic login at all (initial setup over a serial console,
+// a device with no password yet, a screen no OS profile anticipates).
+const CONNECT_TIP = t("自動でログインした端末を開きます。Shift+クリック（または右クリック）で自動ログインなしの端末（シリアルでの初期設定・パスワード未設定の機器・想定外の画面で止まる機器に）");
+function wireConnectButtons(root) {
+  const open = async (name, manual) => {
+    try {
+      await App().SpawnTerminal(name, manual);
+      toast(manual ? t("自動ログインなしの端末を開きました") : t("対話接続ウィンドウを開きました"), "ok");
+    } catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
+  };
+  root.querySelectorAll("[data-term]").forEach(b => {
+    b.onclick = e => open(b.dataset.term, !!e.shiftKey);
+    b.oncontextmenu = e => { e.preventDefault(); open(b.dataset.term, true); };
+  });
 }
 
 // Click-to-copy for .ph-table variable cells inside scope.

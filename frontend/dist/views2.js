@@ -272,7 +272,7 @@ function renderRun() {
       <td style="text-align:right;white-space:nowrap">
         ${st.logPath ? `<span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
         ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.name)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
-        <button class="btn sm act-conn" data-term="${esc(d.name)}">${esc(t("接続"))}</button>
+        <button class="btn sm act-conn" data-term="${esc(d.name)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
   }).join("");
@@ -324,14 +324,14 @@ function renderRun() {
       ${runSort.key ? `<button class="btn sm" id="run-sort-clear">${esc(t("並び順を戻す"))}</button>` : ""}
       ${hiddenChecked ? `<span style="font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:5px 10px">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。この実行には含まれません（含めるには絞り込みを解除）", { n: hiddenChecked }))}</span>` : ""}
     </div>` : ""}
-    <div class="panel">
+    <div class="panel scrollx">
       ${devs.length === 0 ? `<div class="empty">${esc(runGroupSel ? t("このグループに実行対象の機器がありません。機器一覧でチェックしてください。") : t("「グループで対象を選択…」から実行するグループを選んでください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
         : `<table class="fixed"><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
-           ${th("phase", t("状態"), "150px")}${th("name", t("ホスト名"), "170px")}${th("host", t("IPアドレス"), "130px")}
-           ${th("site", t("拠点名"), "100px")}${th("role", t("役割"), "100px")}${th("commandSet", t("コマンドセット"), "160px")}
-           <th>${esc(t("メッセージ"))}</th><th style="width:230px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
+           ${th("phase", t("状態"), "126px")}${th("name", t("ホスト名"), "132px")}${th("host", t("IPアドレス"), "112px")}
+           ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
+           <th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
 
   // Filter / sort wiring. The text box re-renders on every keystroke and the
@@ -427,10 +427,7 @@ function renderRun() {
   if (runChkAll) runChkAll.onclick = () => applyEnable(visible.map(d => d.name), runChkAll.checked);
   wireShiftRange("run:" + runGroupSel, [...root.querySelectorAll("[data-enable]")], applyEnable);
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
-  root.querySelectorAll("[data-term]").forEach(b => b.onclick = async () => {
-    try { await App().SpawnTerminal(b.dataset.term); toast(t("対話接続ウィンドウを開きました"), "ok"); }
-    catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
-  });
+  wireConnectButtons(root);
   updateCounts();
 }
 

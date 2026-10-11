@@ -88,10 +88,16 @@ table { width: 100%; border-collapse: collapse; }
    column) claims the width and squeezes the status column down to a few pixels,
    stacking its text vertically and shrinking the progress bar to a dot. */
 table.fixed { table-layout: fixed; }
-th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+th, td { text-align: left; padding: 10px 10px; border-bottom: 1px solid var(--border); }
 th { color: var(--text-dim); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
 tr:hover td { background: var(--bg-2); }
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+/* A panel holding a wide table (devices / run) scrolls sideways instead of
+   letting the browser squeeze a column to nothing: at the 1280px default the
+   tables fit, and a narrower window (or the wider English buttons) gets a
+   scrollbar rather than a hostname column a few pixels wide. */
+.panel.scrollx { overflow-x: auto; }
+.panel.scrollx > table { min-width: 1000px; }
 .muted { color: var(--text-dim); }
 .empty { padding: 40px; text-align: center; color: var(--text-dim); }
 

@@ -399,24 +399,8 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	}
 
 	bastions := dev.ActiveBastions()
-	var sess session.Session
-	var err error
-	if len(bastions) > 0 {
-		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("踏み台%d段経由 %s", len(bastions), dev.Host))
-		sess, err = dialCtx(ctx, func() (session.Session, error) {
-			return session.DialBastionHead(&bastions[0], connTimeout, r.dialOpts(dev))
-		})
-	} else {
-		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("%s %s", dev.Conn, dev.Host))
-		sess, err = dialCtx(ctx, func() (session.Session, error) { return session.DialDirect(dev, connTimeout, r.dialOpts(dev)) })
-	}
+	sess, err := r.dialTransport(ctx, dev, bastions, connTimeout, emit)
 	if err != nil {
-		// A dial that fails on a method/port pairing that cannot work is worth
-		// saying so about: the transport error alone reads as an unreachable
-		// device. Nothing has been received yet, so the port is the evidence.
-		if hint := wrongPortHint(dev, ""); hint != "" && len(bastions) == 0 {
-			return nil, prof, fmt.Errorf("%w — %s", err, errors.New(hint))
-		}
 		return nil, prof, err
 	}
 	exp := newExpecter(sess)
@@ -484,6 +468,56 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 		}
 	}
 	return exp, prof, nil
+}
+
+// dialTransport opens the device's transport: the serial port, the direct
+// SSH/Telnet connection, or — behind a jump-host chain — the connection to
+// the first hop. Nothing is read or sent; the caller owns the session.
+func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions []model.Bastion, connTimeout time.Duration, emit EmitFunc) (session.Session, error) {
+	var sess session.Session
+	var err error
+	if len(bastions) > 0 {
+		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("踏み台%d段経由 %s", len(bastions), dev.Host))
+		sess, err = dialCtx(ctx, func() (session.Session, error) {
+			return session.DialBastionHead(&bastions[0], connTimeout, r.dialOpts(dev))
+		})
+	} else {
+		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("%s %s", dev.Conn, dev.Host))
+		sess, err = dialCtx(ctx, func() (session.Session, error) { return session.DialDirect(dev, connTimeout, r.dialOpts(dev)) })
+	}
+	if err != nil {
+		// A dial that fails on a method/port pairing that cannot work is worth
+		// saying so about: the transport error alone reads as an unreachable
+		// device. Nothing has been received yet, so the port is the evidence.
+		if hint := wrongPortHint(dev, ""); hint != "" && len(bastions) == 0 {
+			return nil, fmt.Errorf("%w — %s", err, errors.New(hint))
+		}
+		return nil, err
+	}
+	return sess, nil
+}
+
+// Open dials the device's transport and returns the expecter untouched:
+// nothing is typed, no prompt is awaited, no jump host is traversed. It is
+// the interactive terminal's 手動接続 — a plain console the way Tera Term
+// opens one — for the situations the OS profile cannot anticipate: a
+// factory-fresh device on the serial port still in its initial setup
+// dialog, a device with no password yet, a first login that forces a
+// password change, a prompt no profile knows. The caller owns exp and must
+// Close it.
+//
+// Behind a jump-host chain only the first hop is connected; the user types
+// the rest of the way, which is the point of the mode.
+func (r *Runner) Open(ctx context.Context, dev *model.Device, s model.Settings) (*expecter, error) {
+	connTimeout := time.Duration(s.ConnectTimeout) * time.Second
+	if connTimeout <= 0 {
+		connTimeout = 20 * time.Second
+	}
+	sess, err := r.dialTransport(ctx, dev, dev.ActiveBastions(), connTimeout, nil)
+	if err != nil {
+		return nil, err
+	}
+	return newExpecter(sess), nil
 }
 
 // StartInteractive hands a connected expecter over to raw pass-through mode:
