@@ -39,6 +39,9 @@ function terr(e) {
 // Backend messages that carry a dynamic value.
 const STAGE_LBL = { "作業前": "before", "作業中": "during", "作業後": "after", "指定なし": "not set" };
 const I18N_EN_PATTERNS = [
+  // 対話窓: 回線が開かないときの「手動に切り替え」（terminal_app.manualUnavailable）
+  [/回線がつながっていないため、手動に切り替えられません（SSH はユーザー名・パスワード・鍵の確認を回線を開くときに行うため、合っていないと手動でも入れません）: /, "Cannot switch to manual: the line itself is not open (SSH checks the username, password or key while opening the connection, so wrong credentials cannot be worked around by hand): "],
+  [/回線がつながっていないため、手動に切り替えられません: /, "Cannot switch to manual: the line itself is not open: "],
   // シリアル: COM ポート空欄時の自動選択（session.pickPort）
   [/USBシリアル変換が (\d+) 本あります（(.+?)）。機器の編集でCOMポートを指定してください/, (m, n, l) => `${n} USB serial adapters found (${l}). Choose the COM port in the device editor`],
   [/USBシリアル変換が見つからず、COMポートが複数あります（(.+?)）。機器の編集でCOMポートを指定してください/, (m, l) => `No USB serial adapter found and several COM ports exist (${l}). Choose the COM port in the device editor`],

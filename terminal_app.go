@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -219,22 +220,36 @@ func (t *Term) connect(pw string) {
 	// Connect returns the still-open session, which then goes to the keyboard.
 	ctx, cancel := context.WithCancel(context.Background())
 	t.mu.Lock()
-	t.cancelLogin, t.switched = cancel, false
+	t.cancelLogin = cancel
+	// 「手動に切り替え」 pressed before this point (while the vault was
+	// opening) counts too: cancel right away so Connect gives the line
+	// back as soon as it is up.
+	if t.switched {
+		cancel()
+	}
 	t.mu.Unlock()
 	exp, _, err := t.runner.Connect(ctx, dev, inv.Settings, nil)
 	close(progressDone)
 	t.mu.Lock()
 	t.cancelLogin = nil
 	switched := t.switched
+	t.switched = false
 	t.mu.Unlock()
 	cancel()
 	if switched {
 		// Cancelled mid-dial (before any session existed): open the line
-		// afresh, with no login, which is what was asked for.
+		// afresh, with no login, which is what was asked for. If the line
+		// itself cannot be opened, say so plainly — "manual" cannot help
+		// there: SSH authenticates while opening the connection, so wrong
+		// credentials or an unreachable host fail before any screen exists.
 		if exp == nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: manualUnavailable(dev, err)})
+				return
+			}
 			exp, err = t.runner.Open(context.Background(), dev, inv.Settings)
 			if err != nil {
-				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: err.Error()})
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: manualUnavailable(dev, err)})
 				return
 			}
 		}
@@ -278,16 +293,27 @@ func (t *Term) connect(pw string) {
 // past; this spares them the timeout.
 func (t *Term) SwitchToManual() error {
 	t.mu.Lock()
+	t.switched = true
 	cancel := t.cancelLogin
-	if cancel != nil {
-		t.switched = true
-	}
 	t.mu.Unlock()
-	if cancel == nil {
-		return fmt.Errorf("自動ログイン中ではありません")
+	// No login running yet (the vault is still opening): the request is
+	// remembered and honoured the moment connect reaches the login.
+	if cancel != nil {
+		cancel()
 	}
-	cancel()
 	return nil
+}
+
+// manualUnavailable explains a 「手動に切り替え」 that could not be honoured
+// because the line itself never opened. The raw dial error alone reads as
+// if the switch had failed; the point is that there is no screen to hand
+// over, and for SSH that the credentials are checked while opening.
+func manualUnavailable(dev *model.Device, err error) string {
+	why := "回線がつながっていないため、手動に切り替えられません"
+	if dev.Conn == model.ConnSSH || len(dev.ActiveBastions()) > 0 {
+		why += "（SSH はユーザー名・パスワード・鍵の確認を回線を開くときに行うため、合っていないと手動でも入れません）"
+	}
+	return why + ": " + err.Error()
 }
 
 // Takeover hands a session whose automatic login failed to the keyboard, as

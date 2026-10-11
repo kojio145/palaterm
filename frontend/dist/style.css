@@ -96,8 +96,12 @@ tr:hover td { background: var(--bg-2); }
    letting the browser squeeze a column to nothing: at the 1280px default the
    tables fit, and a narrower window (or the wider English buttons) gets a
    scrollbar rather than a hostname column a few pixels wide. */
-.panel.scrollx { overflow-x: auto; }
+.panel.scrollx { overflow: auto; }
 .panel.scrollx > table { min-width: 1000px; }
+/* The list panels scroll inside themselves (fitPanels caps their height to
+   the window), so the page title, toolbar and filter row stay put and the
+   header row sticks to the top of the panel while the rows scroll under it. */
+.panel.scrollx > table thead th { position: sticky; top: 0; background: var(--panel); z-index: 3; }
 .muted { color: var(--text-dim); }
 .empty { padding: 40px; text-align: center; color: var(--text-dim); }
 

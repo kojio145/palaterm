@@ -36,7 +36,7 @@ function renderCommands() {
       </div>
     </div>
     ${sets.length ? listViewBar(LV, t("絞り込み（セット名・コマンド）")) : ""}
-    <div class="panel">
+    <div class="panel scrollx">
       ${sets.length === 0
         ? `<div class="empty">${esc(t("コマンドセットがありません。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
@@ -908,7 +908,7 @@ function renderOSTypes() {
       </div>
     </div>
     ${profiles.length ? listViewBar(LV, t("絞り込み（名前・完了の目印）")) : ""}
-    <div class="panel">
+    <div class="panel scrollx">
       ${profiles.length === 0
         ? `<div class="muted" style="font-size:13px;padding:14px">${esc(t("プロファイルがありません。「ファイル読込」で export\\os-profiles\\ のJSONから復元するか、「＋ 追加」で作成してください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するプロファイルがありません"))}</div>`
