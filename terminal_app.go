@@ -30,7 +30,8 @@ import (
 // password arrives on stdin from the parent; if absent, the window prompts.
 type Term struct {
 	ctx       context.Context
-	deviceArg string
+	deviceArg string // device ID to connect to (a name from older callers)
+	label     string // what the window shows for the device: its name
 	// manual opens the transport and hands it straight to the keyboard: no
 	// profile login, no pager step, no jump-host traversal — the console the
 	// way Tera Term opens one. For initial setup over serial, a device with
@@ -66,10 +67,14 @@ type Term struct {
 
 // NewTerm builds the terminal-window backend and starts reading the password
 // line from stdin in the background.
-func NewTerm(device string, manual bool) *Term {
+func NewTerm(device, label string, manual bool) *Term {
 	reg := profile.NewRegistry()
+	if label == "" {
+		label = device
+	}
 	t := &Term{
 		deviceArg: device,
+		label:     label,
 		manual:    manual,
 		vaultPath: defaultVaultPath(),
 		profiles:  reg,
@@ -124,9 +129,9 @@ func (t *Term) Start() TermStart {
 	select {
 	case pw := <-t.pwCh:
 		go t.connect(pw)
-		return TermStart{NeedPassword: false, Name: t.deviceArg, Manual: t.manual}
+		return TermStart{NeedPassword: false, Name: t.label, Manual: t.manual}
 	case <-time.After(500 * time.Millisecond):
-		return TermStart{NeedPassword: true, Name: t.deviceArg, Manual: t.manual}
+		return TermStart{NeedPassword: true, Name: t.label, Manual: t.manual}
 	}
 }
 
@@ -144,7 +149,7 @@ type termReady struct {
 func (t *Term) connect(pw string) {
 	inv, err := vault.Load(t.vaultPath, pw)
 	if err != nil {
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: "マスターパスワードが違うか、vaultを開けません"})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "マスターパスワードが違うか、vaultを開けません"})
 		return
 	}
 	inv.NormalizeGroups()
@@ -156,18 +161,15 @@ func (t *Term) connect(pw string) {
 	hk := newMemHostKeys(inv.KnownHostKeys)
 	t.runner.HostKeys = hk
 	var dev *model.Device
-	for i := range inv.Devices {
-		if inv.Devices[i].Name == t.deviceArg {
-			d := inv.ResolveCredentials(inv.Devices[i])
-			dev = &d
-			break
-		}
+	if i := inv.DeviceIndex(t.deviceArg); i >= 0 {
+		d := inv.ResolveCredentials(inv.Devices[i])
+		dev = &d
 	}
 	t.mu.Lock()
 	t.pw, t.dev, t.hostKeys = pw, dev, hk
 	t.mu.Unlock()
 	if dev == nil {
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: "機器が見つかりません"})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "機器が見つかりません"})
 		return
 	}
 
@@ -208,7 +210,7 @@ func (t *Term) connect(pw string) {
 		exp, err := t.runner.Open(context.Background(), dev, inv.Settings)
 		close(progressDone)
 		if err != nil {
-			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: err.Error()})
+			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
 			return
 		}
 		t.attach(exp, dev, inv.Settings, false)
@@ -244,12 +246,12 @@ func (t *Term) connect(pw string) {
 		// credentials or an unreachable host fail before any screen exists.
 		if exp == nil {
 			if err != nil && !errors.Is(err, context.Canceled) {
-				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: manualUnavailable(dev, err)})
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
 				return
 			}
 			exp, err = t.runner.Open(context.Background(), dev, inv.Settings)
 			if err != nil {
-				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: manualUnavailable(dev, err)})
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
 				return
 			}
 		}
@@ -259,7 +261,7 @@ func (t *Term) connect(pw string) {
 	}
 	if err != nil {
 		if exp == nil {
-			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: err.Error()})
+			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
 			return
 		}
 		// Show what the device said before the error line, the way a
@@ -267,7 +269,7 @@ func (t *Term) connect(pw string) {
 		// 失敗しました") leaves the reader guessing which prompt the
 		// device was really at; the transcript is the evidence.
 		if tr := exp.Transcript(); tr != "" {
-			runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.deviceArg,
+			runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label,
 				Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(tr, dev)))})
 		}
 		// The line itself is still open: the device is sitting at whatever
@@ -281,7 +283,7 @@ func (t *Term) connect(pw string) {
 		}
 		t.pending, t.pendingDev, t.pendingSet = exp, dev, inv.Settings
 		t.mu.Unlock()
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, Error: err.Error(), Takeover: true})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Takeover: true})
 		return
 	}
 	t.attach(exp, dev, inv.Settings, false)
@@ -339,7 +341,7 @@ func (t *Term) Discard() {
 	if exp != nil {
 		exp.Close()
 	}
-	runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg})
+	runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label})
 }
 
 // attach starts the session log and hands the open session to the terminal.
@@ -368,7 +370,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	}
 	sink := func(b []byte) {
 		slog.Write(b)
-		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.deviceArg, Data: base64.StdEncoding.EncodeToString(b)})
+		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label, Data: base64.StdEncoding.EncodeToString(b)})
 	}
 	t.mu.Lock()
 	t.logDir = settings.LogDir
@@ -387,7 +389,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 					LogFile: filepath.Base(p), ElapsedSec: time.Since(started).Seconds()}},
 			})
 		}
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.deviceArg, LogPath: p})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, LogPath: p})
 	}
 	send, resize, closeFn := t.runner.StartInteractive(exp, sink, onClose)
 	t.mu.Lock()
@@ -400,7 +402,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	if tr := exp.Transport(); tr != "" {
 		host = tr
 	}
-	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.deviceArg, Host: host, Conn: string(d.Conn), Manual: t.manual})
+	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Host: host, Conn: string(d.Conn), Manual: t.manual})
 }
 
 // AllowHostKeyChange is the answer to the host-key-mismatch prompt: the
@@ -422,7 +424,7 @@ func (t *Term) AllowHostKeyChange() error {
 		}
 		hk.Delete(fmt.Sprintf("%s:%d", b.Host, p))
 	}
-	fmt.Fprintln(os.Stdout, termEventClearHostKey+" "+dev.Name)
+	fmt.Fprintln(os.Stdout, termEventClearHostKey+" "+dev.ID)
 	go t.connect(pw)
 	return nil
 }
@@ -481,7 +483,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		t.pasteDone()
 		return err
 	}
-	cmd := exec.Command(exe, "--paste", t.deviceArg)
+	cmd := exec.Command(exe, "--paste", t.label)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.pasteDone()
@@ -497,7 +499,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		return err
 	}
 	go func() {
-		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.deviceArg, Text: string(raw), CR: withCR})
+		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR})
 		_ = stdin.Close()
 	}()
 	go func() {

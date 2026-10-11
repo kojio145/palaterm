@@ -102,14 +102,16 @@ function renderGroupChooser() {
 }
 
 // 複製: a new group with the same default credentials and copies of every
-// device (names get a suffix — they name the log files, so they stay unique).
+// device. Names only have to be unique within a group, so they stay as they
+// are unless a suffix is typed.
 function duplicateGroupDialog(name) {
   const n = groupCount(name);
   const node = h(`<div>
     <h3>${esc(t("グループを複製"))} <span class="muted" style="font-size:14px;font-weight:400">/ ${esc(name)}</span></h3>
-    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("グループ「{g}」の既定の認証情報と機器 {n} 台をコピーして新しいグループを作ります。機器名はログファイル名になるため重複できず、接尾辞を付けて複製します。", { g: name, n }))}</p>
+    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("グループ「{g}」の既定の認証情報と機器 {n} 台をコピーして新しいグループを作ります。機器名はグループが違えば同じままで構いません。", { g: name, n }))}</p>
     <div class="field"><label>${esc(t("新しいグループ名"))} <span class="req">${esc(t("必須"))}</span></label><input id="dg-name" value="${esc(name + "_copy")}" autofocus></div>
-    <div class="field"><label>${esc(t("機器名の接尾辞"))} <span class="req">${esc(t("必須"))}</span></label><input id="dg-suffix" value="_copy"></div>
+    <div class="field"><label>${esc(t("機器名の接尾辞（任意）"))}</label><input id="dg-suffix" value="" placeholder="${esc(t("例: _new（空欄なら同じ機器名のまま）"))}">
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("入力すると、コピーした機器名の末尾に付きます（例: sw01 → sw01_new）"))}</div></div>
     <div class="modal-actions">
       <button class="btn" id="dg-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="dg-ok">${esc(t("複製する"))}</button>
@@ -121,7 +123,6 @@ function duplicateGroupDialog(name) {
     const nn = node.querySelector("#dg-name").value.trim();
     const suffix = node.querySelector("#dg-suffix").value;
     if (!nn) { toast(t("グループ名を入力してください"), "err"); return; }
-    if (n > 0 && !suffix) { toast(t("機器名の接尾辞を入力してください"), "err"); return; }
     try {
       const cnt = await App().CopyDeviceGroup(name, nn, suffix);
       closeModal(); await refreshInventory();
@@ -133,40 +134,72 @@ function duplicateGroupDialog(name) {
 }
 
 // Drag-and-drop reordering of group cards; persists the new order.
+// The cards do not move while dragging: moving them under the pointer (the
+// earlier way) made the grid reflow, put another card under the pointer and
+// moved again, so where a card landed was hit-and-miss. Instead a bar marks
+// the slot, the whole card area (gaps included) accepts the drop, and the
+// order changes once, on drop.
 function wireGroupDrag(root) {
-  let dragEl = null;
-  const cards = root.querySelectorAll("[data-grp]");
-  cards.forEach(card => {
+  const area = root.querySelector(".chooser");
+  if (!area) return;
+  const cards = () => [...area.querySelectorAll("[data-grp]")];
+  let dragEl = null, target = null, before = true;
+  const clearMark = () => area.querySelectorAll(".drop-before, .drop-after").forEach(c => c.classList.remove("drop-before", "drop-after"));
+  // The card nearest the pointer, and which side of it: cards sit in rows,
+  // so left/right of its centre decides (above/below for a pointer outside
+  // every row).
+  const locate = (x, y) => {
+    let best = null, bestD = Infinity;
+    for (const c of cards()) {
+      const r = c.getBoundingClientRect();
+      const dx = x < r.left ? r.left - x : x > r.right ? x - r.right : 0;
+      const dy = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0;
+      const d = dx * dx + dy * dy * 4; // prefer the pointer's own row
+      if (d < bestD) { bestD = d; best = c; }
+    }
+    if (!best) return null;
+    const r = best.getBoundingClientRect();
+    const inRow = y >= r.top && y <= r.bottom;
+    return { card: best, before: inRow ? x < r.left + r.width / 2 : y < r.top };
+  };
+  cards().forEach(card => {
     card.addEventListener("dragstart", e => {
-      dragEl = card; card.classList.add("dragging");
+      dragEl = card; card.classList.add("dragging"); area.classList.add("drag-active");
       // Some WebViews need data set for the drag to start at all.
       if (e.dataTransfer) { e.dataTransfer.setData("text/plain", card.dataset.grp); e.dataTransfer.effectAllowed = "move"; }
     });
-    card.addEventListener("dragend", async () => {
-      card.classList.remove("dragging");
-      root.querySelectorAll(".dragover").forEach(c => c.classList.remove("dragover"));
-      const order = [...root.querySelectorAll("[data-grp]")].map(c => c.dataset.grp);
-      const was = (INV.deviceGroups || []).map(g => g.name);
-      dragEl = null;
-      if (order.join("\u0000") === was.join("\u0000")) return; // dropped where it was
-      try {
-        await App().ReorderDeviceGroups(order); await refreshInventory();
-        toast(t("並び順を保存しました"), "ok");
-      } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+    card.addEventListener("dragend", () => {
+      card.classList.remove("dragging"); area.classList.remove("drag-active");
+      clearMark(); dragEl = target = null;
     });
-    // Cards are laid out in a grid, so the drop side follows the pointer's
-    // position within the card both ways (left/top half = before it).
-    card.addEventListener("dragover", e => {
-      e.preventDefault();
-      if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
-      if (!dragEl || dragEl === card) return;
-      card.classList.add("dragover");
-      const box = card.getBoundingClientRect();
-      const before = (e.clientX - box.left) / box.width + (e.clientY - box.top) / box.height < 1;
-      card.parentNode.insertBefore(dragEl, before ? card : card.nextSibling);
-    });
-    card.addEventListener("dragleave", () => card.classList.remove("dragover"));
-    card.addEventListener("drop", e => { e.preventDefault(); card.classList.remove("dragover"); });
+  });
+  area.addEventListener("dragover", e => {
+    if (!dragEl) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    const hit = locate(e.clientX, e.clientY);
+    if (!hit) return;
+    if (hit.card === target && hit.before === before) return;
+    clearMark();
+    target = hit.card; before = hit.before;
+    if (target !== dragEl) target.classList.add(before ? "drop-before" : "drop-after");
+  });
+  area.addEventListener("drop", async e => {
+    if (!dragEl) return;
+    e.preventDefault();
+    const moving = dragEl, at = target, side = before;
+    clearMark();
+    if (!at || at === moving) return;
+    const order = cards().map(c => c.dataset.grp).filter(n => n !== moving.dataset.grp);
+    let i = order.indexOf(at.dataset.grp);
+    if (!side) i++;
+    order.splice(i, 0, moving.dataset.grp);
+    const was = (INV.deviceGroups || []).map(g => g.name);
+    if (order.join("\u0000") === was.join("\u0000")) return; // dropped where it was
+    try {
+      await App().ReorderDeviceGroups(order); await refreshInventory();
+      toast(t("並び順を保存しました"), "ok");
+    } catch (err) { toast(t("保存失敗") + ": " + terr(err), "err"); }
   });
 }
 
@@ -220,24 +253,24 @@ function renderDeviceList() {
   const rows = visible.map(d => {
     const nb = (d.bastions || []).length || (d.bastion && d.bastion.host ? 1 : 0);
     return `
-    <tr data-row="${esc(d.name)}" data-key="${esc(d.name)}">
+    <tr data-row="${esc(d.id)}" data-key="${esc(d.id)}">
       ${listViewDragCell(LV)}
-      <td><input class="cell inl-name" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600" data-tip="${esc(d.name)}"></td>
-      <td><input class="cell inl-host mono" data-name="${esc(d.name)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
-      <td><input class="cell inl-site" data-name="${esc(d.name)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
-      <td><input class="cell inl-role" data-name="${esc(d.name)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
+      <td><input class="cell inl-name" data-id="${esc(d.id)}" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600" data-tip="${esc(scopeGroup || !d.group ? d.name : d.name + "  /  " + t("グループ「{g}」", { g: d.group }))}"></td>
+      <td><input class="cell inl-host mono" data-id="${esc(d.id)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
+      <td><input class="cell inl-site" data-id="${esc(d.id)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
+      <td><input class="cell inl-role" data-id="${esc(d.id)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
       <td>
-        <select class="cell inl-conn" data-name="${esc(d.name)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) : ""))}">${connOptions(d.conn)}</select>
+        <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) : ""))}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
-      <td><select class="cell inl-os" data-name="${esc(d.name)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
-      <td><select class="cell inl-set" data-name="${esc(d.name)}" data-tip="${esc(d.commandSet || t("(なし)"))}">${cmdSetOptions(d.commandSet)}</select></td>
+      <td><select class="cell inl-os" data-id="${esc(d.id)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
+      <td><select class="cell inl-set" data-id="${esc(d.id)}" data-tip="${esc(d.commandSet || t("(なし)"))}">${cmdSetOptions(d.commandSet)}</select></td>
       <td style="text-align:right;white-space:nowrap">
-        <button class="btn sm act-conn" data-term="${esc(d.name)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
-        <button class="btn sm act-edit" data-edit="${esc(d.name)}">${esc(t("編集"))}</button>
-        <button class="btn sm act-copy" data-copy="${esc(d.name)}">${esc(t("複製"))}</button>
-        <button class="btn sm act-del" data-del="${esc(d.name)}">${esc(t("削除"))}</button>
+        <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
+        <button class="btn sm act-edit" data-edit="${esc(d.id)}">${esc(t("編集"))}</button>
+        <button class="btn sm act-copy" data-copy="${esc(d.id)}">${esc(t("複製"))}</button>
+        <button class="btn sm act-del" data-del="${esc(d.id)}">${esc(t("削除"))}</button>
       </td>
     </tr>`;
   }).join("");
@@ -311,7 +344,7 @@ function renderDeviceList() {
   document.getElementById("imp-csv").onclick = () => importDialog(scopeGroup ? scopeGroup.name : "");
 
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
-    editDevice(INV.devices.find(d => d.name === b.dataset.edit)));
+    editDevice(devById(b.dataset.edit)));
   wireConnectButtons(root);
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = () => delDevice(b.dataset.del));
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
@@ -324,7 +357,7 @@ function renderDeviceList() {
     const old = el.dataset.name;
     if (!nn || nn === old) { el.value = old; return; }
     try {
-      await App().RenameDevice(old, nn);
+      await App().RenameDevice(el.dataset.id, nn);
       await refreshInventory();
       toast(t("ホスト名を変更しました"), "ok");
     } catch (e) {
@@ -338,9 +371,9 @@ function renderDeviceList() {
     try { await App().ReorderDevices(order); await refreshInventory(); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); await refreshInventory(); }
   });
-  root.querySelectorAll(".inl-host").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { host: el.value.trim() }));
-  root.querySelectorAll(".inl-site").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { site: el.value.trim() }));
-  root.querySelectorAll(".inl-role").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { role: el.value.trim() }));
+  root.querySelectorAll(".inl-host").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { host: el.value.trim() }));
+  root.querySelectorAll(".inl-site").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { site: el.value.trim() }));
+  root.querySelectorAll(".inl-role").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { role: el.value.trim() }));
   // Switching the method here must carry the port with it, the way the editor
   // dialog already does: leaving 22 behind on a switch to Telnet points a
   // Telnet client at the SSH port, where it reads the "SSH-2.0-..." banner and
@@ -348,15 +381,15 @@ function renderDeviceList() {
   // (anything but the two standard ones) survives the switch.
   root.querySelectorAll(".inl-conn").forEach(el => el.onchange = () => {
     const patch = { conn: el.value };
-    const dev = (INV.devices || []).find(x => x.name === el.dataset.name) || {};
+    const dev = devById(el.dataset.id) || {};
     const port = dev.port || 0;
     if (el.value !== "serial" && (!port || port === 22 || port === 23)) {
       patch.port = el.value === "ssh" ? 22 : 23;
     }
-    inlineSave(el.dataset.name, patch);
+    inlineSave(el.dataset.id, patch);
   });
-  root.querySelectorAll(".inl-os").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { osType: el.value }));
-  root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.name, { commandSet: el.value }));
+  root.querySelectorAll(".inl-os").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { osType: el.value }));
+  root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { commandSet: el.value }));
 }
 
 // グループ既定の認証情報: one username / password / enable password shared by
@@ -401,8 +434,8 @@ function groupCredsDialog(groupName) {
 
 // inlineSave merges a patch into an existing device and saves it, showing a
 // validation error (and reverting the table) if the edit is rejected.
-async function inlineSave(name, patch) {
-  const cur = (INV.devices || []).find(d => d.name === name);
+async function inlineSave(id, patch) {
+  const cur = devById(id);
   if (!cur) return;
   const updated = { ...cur, ...patch };
   try {
@@ -414,9 +447,12 @@ async function inlineSave(name, patch) {
   }
 }
 
-async function delDevice(name) {
-  if (!(await uiConfirm({ title: t("機器を削除"), message: t("機器「<b>{n}</b>」を削除しますか？", { n: esc(name) }), okLabel: t("削除"), danger: true }))) return;
-  await App().DeleteDevice(name); await refreshInventory(); toast(t("削除しました"), "ok");
+async function delDevice(id) {
+  const d = devById(id);
+  if (!d) return;
+  if (!(await uiConfirm({ title: t("機器を削除"), message: t("機器「<b>{n}</b>」を削除しますか？", { n: esc(d.name) }), okLabel: t("削除"), danger: true }))) return;
+  try { await App().DeleteDevice(id); await refreshInventory(); toast(t("削除しました"), "ok"); }
+  catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
 }
 
 // 一式書出: pick a group (or all) → export\bundles\<group>\ holding devices.csv
@@ -457,7 +493,7 @@ function importDialog(defaultGroup) {
   const opts = groups.map(g => `<option value="${esc(g.name)}" ${g.name === defaultGroup ? "selected" : ""}>${esc(g.name)}</option>`).join("");
   const node = h(`<div>
     <h3>${esc(t("読み込み"))}</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は機器名をキーに、既存は上書き・新規は追加です。"))}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は「グループ名＋機器名」で照合し、既存は上書き・新規は追加です。"))}</div>
     <div class="field"><label>${esc(t("読み込んだ機器の所属グループ"))}</label>
       <select id="ci-mode">
         <option value="keep">${esc(t("ファイルのグループをそのまま使う"))}</option>
@@ -779,6 +815,7 @@ function editDevice(dev, preGroup) {
   node.querySelector("#save").onclick = async () => {
     const conn = node.querySelector("#f-conn").value;
     const out = {
+      id: dev ? dev.id : "",
       name: node.querySelector("#f-name").value.trim(),
       group: node.querySelector("#f-group").value.trim(),
       site: node.querySelector("#f-site").value.trim(),
@@ -807,9 +844,11 @@ function editDevice(dev, preGroup) {
     if (chain.length) out.bastions = chain.slice(0, 5);
     if (!out.name) { toast(t("ホスト名は必須です"), "err"); return; }
     if (conn !== "serial" && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
-    // New device: refuse a name that already exists.
-    if (!dev && await App().DeviceNameExists(out.name)) {
-      toast(t("「{n}」は既に登録されています。別のホスト名にしてください", { n: out.name }), "err");
+    // A name only has to be unique within its group (it names the log
+    // files; a run is one group). The backend checks again on save.
+    if (await App().DeviceNameExists(out.name, out.group, out.id)) {
+      toast(out.group ? t("グループ「{g}」に「{n}」は既に登録されています。別のホスト名にしてください", { g: out.group, n: out.name })
+        : t("グループ未設定の機器に「{n}」は既に登録されています。別のホスト名にしてください", { n: out.name }), "err");
       return;
     }
     try { await App().SaveDevice(out); closeModal(); await refreshInventory(); toast(t("保存しました"), "ok"); }

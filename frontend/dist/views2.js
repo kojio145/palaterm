@@ -76,6 +76,40 @@ function renderCommands() {
   });
 }
 
+// The small window of まとめて追加: a text box over the set editor (the
+// editor is itself the modal, so this sits on top of it rather than
+// replacing it). onAdd receives the non-empty lines, trimmed.
+function bulkCommandsDialog(onAdd) {
+  const ov = h(`<div class="sub-overlay">
+    <div class="sub-modal">
+      <h3>${esc(t("コマンドをまとめて追加"))}</h3>
+      <div class="muted" style="font-size:12px;margin:-8px 0 10px">${esc(t("1 行に 1 コマンドを入力してください。待機秒はリモート・シリアルともすべて 1 秒で追加されます（追加後に個別に変更できます）。空行は無視します。"))}</div>
+      <div class="field" style="margin:0"><textarea id="bulk-text" style="min-height:220px" placeholder="show clock&#10;show running-config"></textarea></div>
+      <div class="modal-actions">
+        <span class="muted" style="font-size:12px;margin-right:auto;align-self:center">${esc(t("Ctrl+Enter で追加 / Esc で閉じる"))}</span>
+        <button class="btn" id="bulk-cancel" type="button">${esc(t("キャンセル"))}</button>
+        <button class="btn primary" id="bulk-ok" type="button">${esc(t("追加"))}</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(ov);
+  const ta = ov.querySelector("#bulk-text");
+  const close = () => ov.remove();
+  const ok = () => {
+    const lines = ta.value.split(/\r\n|\r|\n/).map(l => l.trim()).filter(l => l);
+    if (!lines.length) { toast(t("コマンドを入力してください"), "err"); ta.focus(); return; }
+    close();
+    onAdd(lines);
+  };
+  ov.querySelector("#bulk-cancel").onclick = close;
+  ov.querySelector("#bulk-ok").onclick = ok;
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); ok(); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+  });
+  ta.focus();
+}
+
 function editCommandSet(set) {
   const s = set || { name: "", commands: [] };
   // Working copy: one row per command, each with its own pause (sec).
@@ -96,6 +130,7 @@ function editCommandSet(set) {
       <tbody id="cmd-rows"></tbody>
     </table></div>
     <button class="btn sm" id="add-cmd" type="button" style="margin-top:8px">${esc(t("＋ 行を追加"))}</button>
+    <button class="btn sm" id="bulk-cmd" type="button" style="margin-top:8px" data-tip="${esc(t("複数のコマンドを 1 行 1 コマンドで入力して一度に追加します（待機はすべて 1 秒）"))}">${esc(t("＋ まとめて追加…"))}</button>
     <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
@@ -162,6 +197,14 @@ function editCommandSet(set) {
   node.querySelector("#add-cmd").onclick = () => {
     cmds = collect(); cmds.push({ text: "", pauseSec: 1, serialSec: 1 }); render();
   };
+  // まとめて追加: one command per line, each with a 1-second pause, appended
+  // after the existing rows (a lone empty row is replaced instead).
+  node.querySelector("#bulk-cmd").onclick = () => bulkCommandsDialog(lines => {
+    cmds = collect().filter((c, i, all) => !(all.length === 1 && !c.text.trim()));
+    cmds.push(...lines.map(text => ({ text, pauseSec: 1, serialSec: 1 })));
+    render();
+    toast(t("{n} 行を追加しました", { n: lines.length }), "ok");
+  });
   node.querySelector("#cancel").onclick = closeModal;
   node.querySelector("#save").onclick = async () => {
     const name = node.querySelector("#s-name").value.trim();
@@ -226,6 +269,11 @@ function runVisible(devs) {
 }
 // Devices the run buttons act on: the checked ones of the group, narrowed to
 // the visible rows while a filter is on.
+// A device of the run tab's group by name. The run (and its live events) is
+// keyed by name, which is unique within a group but not across groups.
+function runDev(name) {
+  return (INV.devices || []).find(x => x.name === name && (x.group || "") === runGroupSel);
+}
 function runTargetDevices() {
   const devs = runGroupSel ? (INV.devices || []).filter(d => (d.group || "") === runGroupSel) : [];
   return (runFilterActive() ? runVisible(devs) : devs).filter(d => d.enabled);
@@ -287,7 +335,7 @@ function renderRun() {
     const pbar = st.phase === "off" ? ""
       : `<div class="pbar" data-tip="${esc(tip)}"><i class="pf-${st.phase}" style="width:${pct}%"></i></div>${pnum}`;
     return `<tr>
-      <td><input type="checkbox" data-enable="${esc(d.name)}" ${d.enabled ? "checked" : ""} ${running ? "disabled" : ""}></td>
+      <td><input type="checkbox" data-enable="${esc(d.id)}" ${d.enabled ? "checked" : ""} ${running ? "disabled" : ""}></td>
       <td><span class="dot st-${st.phase === "off" ? "queued" : st.phase}"></span>${statusLabel(st.phase)}${pbar}</td>
       <td><div class="clip" data-tip="${esc(d.name)}"><b>${esc(d.name)}</b></div></td>
       <td class="mono"><div class="clip" data-tip="${esc(d.host)}">${esc(d.host)}</div></td>
@@ -297,8 +345,8 @@ function renderRun() {
       <td class="muted mono"><div class="clip" data-tip="${esc(fmtRunMsg(st.message))}">${esc(fmtRunMsg(st.message))}</div></td>
       <td style="text-align:right;white-space:nowrap">
         ${st.logPath ? `<span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
-        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.name)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
-        <button class="btn sm act-conn" data-term="${esc(d.name)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
+        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.id)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
+        <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
   }).join("");
@@ -382,7 +430,9 @@ function renderRun() {
   });
   wireColResize(root);
   root.querySelectorAll("[data-hk]").forEach(b => b.onclick = async () => {
-    const n = b.dataset.hk;
+    const dev = devById(b.dataset.hk);
+    if (!dev) return;
+    const n = dev.name;
     const ok = await uiConfirm({
       title: t("ホストキーが前回と異なります"),
       message: t("機器「<b>{n}</b>」のホストキーが前回接続時と変わっています。<br><b>機器を交換した／OSを再インストールした</b>場合だけ許可してください。心当たりがなければ、なりすましの可能性があるため許可せずネットワーク管理者に確認してください。", { n: esc(n) }),
@@ -390,7 +440,7 @@ function renderRun() {
       danger: true,
     });
     if (!ok) return;
-    try { await App().ClearHostKeys(n); doRun([n], lastRunDry, true); }
+    try { await App().ClearHostKeys(dev.id); doRun([n], lastRunDry, true); }
     catch (e) { toast(terr(e), "err"); }
   });
 
@@ -443,15 +493,15 @@ function renderRun() {
   };
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
-  const applyEnable = async (names, on) => {
-    const set = new Set(names);
-    (INV.devices || []).forEach(d => { if (set.has(d.name)) d.enabled = on; });
+  const applyEnable = async (ids, on) => {
+    const set = new Set(ids);
+    (INV.devices || []).forEach(d => { if (set.has(d.id)) d.enabled = on; });
     renderRun();
-    try { await App().SetAllDevicesEnabled(on, names); }
+    try { await App().SetAllDevicesEnabled(on, ids); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); await refreshInventory(); }
   };
   const runChkAll = document.getElementById("run-chk-all");
-  if (runChkAll) runChkAll.onclick = () => applyEnable(visible.map(d => d.name), runChkAll.checked);
+  if (runChkAll) runChkAll.onclick = () => applyEnable(visible.map(d => d.id), runChkAll.checked);
   wireShiftRange("run:" + runGroupSel, [...root.querySelectorAll("[data-enable]")], applyEnable);
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   wireConnectButtons(root);
@@ -487,7 +537,7 @@ async function startRun(dryRun) {
   }
   // A command set that changes the device (conf t / write / reload …) gets
   // its own warning with an explicit acknowledgement before anything runs.
-  const warnings = await App().CheckDangerousCommands(targets).catch(() => []);
+  const warnings = await App().CheckDangerousCommands(targets, runGroupSel).catch(() => []);
   if (warnings && warnings.length) {
     if (!(await dangerConfirm(warnings, targets.length, scope))) return;
   } else {
@@ -551,7 +601,7 @@ async function doRun(names, dryRun, partial) {
   runTargets = targets.slice();
   runTotals = {};
   targets.forEach(n => {
-    const d = (INV.devices || []).find(x => x.name === n);
+    const d = runDev(n);
     const cs = d && (INV.commandSets || []).find(s => s.name === d.commandSet);
     runTotals[n] = cs ? (cs.commands || []).length : 0;
   });
@@ -647,7 +697,7 @@ function updateEta() {
 // Configured pauses of a device's command set, one per command (serial
 // devices use the serial column).
 function devPauses(name) {
-  const d = (INV.devices || []).find(x => x.name === name);
+  const d = runDev(name);
   const cs = d && (INV.commandSets || []).find(s => s.name === d.commandSet);
   if (!cs) return [];
   return (cs.commands || []).map(c => d.conn === "serial" ? (c.serialSec || 0) : (c.pauseSec || 0));
@@ -696,7 +746,7 @@ async function retryUnfinished() {
 function updateRunRow(name) {
   const body = document.getElementById("run-body");
   if (!body) return;
-  const d = (INV.devices || []).find(x => x.name === name);
+  const d = runDev(name);
   if (!d) return;
   const st = runState[name] || {};
   // Re-render just the run tab to reflect the change (simple + robust).

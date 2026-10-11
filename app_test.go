@@ -572,8 +572,12 @@ func TestReorderDevicesWithinScope(t *testing.T) {
 	add("a2", "A")
 	add("b2", "B")
 	add("a3", "A")
+	id := map[string]string{}
+	for _, d := range a.GetInventory().Devices {
+		id[d.Name] = d.ID
+	}
 	// Reorder group A (a3, a1, a2) — B devices must not move.
-	if err := a.ReorderDevices([]string{"a3", "a1", "a2"}); err != nil {
+	if err := a.ReorderDevices([]string{id["a3"], id["a1"], id["a2"]}); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
@@ -587,7 +591,7 @@ func TestReorderDevicesWithinScope(t *testing.T) {
 		}
 	}
 	// A stale order (unknown name) must be ignored, not corrupt the list.
-	if err := a.ReorderDevices([]string{"nosuch", "a1"}); err != nil {
+	if err := a.ReorderDevices([]string{"nosuch", id["a1"]}); err != nil {
 		t.Fatal(err)
 	}
 	if a.GetInventory().Devices[0].Name != "a3" {

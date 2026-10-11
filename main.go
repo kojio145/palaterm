@@ -20,12 +20,25 @@ import (
 var assets embed.FS
 
 func main() {
-	// Standalone terminal window mode: "PalaTerm.exe --connect <device> [--manual]".
+	// Standalone terminal window mode:
+	// "PalaTerm.exe --connect <device ID> [--manual] [--label <name>]".
 	// --manual opens the line without the automatic login (initial setup
-	// over serial, a device with no password yet, an unexpected screen).
+	// over serial, a device with no password yet, an unexpected screen);
+	// --label is the name the window shows (the ID means nothing to a person).
 	if len(os.Args) >= 3 && os.Args[1] == "--connect" {
-		manual := len(os.Args) >= 4 && os.Args[3] == "--manual"
-		runTerminalWindow(os.Args[2], manual)
+		manual, label := false, ""
+		for i := 3; i < len(os.Args); i++ {
+			switch os.Args[i] {
+			case "--manual":
+				manual = true
+			case "--label":
+				if i+1 < len(os.Args) {
+					label = os.Args[i+1]
+					i++
+				}
+			}
+		}
+		runTerminalWindow(os.Args[2], label, manual)
 		return
 	}
 	// Log-viewer window: "--view <file>" (opened from the main window's and the
@@ -166,9 +179,9 @@ func runMainApp() {
 	}
 }
 
-func runTerminalWindow(device string, manual bool) {
-	t := NewTerm(device, manual)
-	title := "PalaTerm - " + device
+func runTerminalWindow(device, label string, manual bool) {
+	t := NewTerm(device, label, manual)
+	title := "PalaTerm - " + t.label
 	if manual {
 		title += " - 手動接続"
 	}

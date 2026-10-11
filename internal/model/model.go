@@ -3,6 +3,8 @@
 package model
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -77,7 +79,11 @@ func (b *Bastion) Configured() bool {
 
 // Device is a single network device in the inventory.
 type Device struct {
-	// Identity
+	// Identity. ID is the internal key every edit, delete, reorder and
+	// terminal launch goes by; it is never shown. Name only has to be unique
+	// within its group (it names the log files, and a run is one group), so
+	// two companies can both have a "core-sw1".
+	ID   string `json:"id,omitempty"`
 	Name string `json:"name"` // hostname / label, used in log filenames
 	Host string `json:"host"` // IP address or DNS name
 
@@ -259,6 +265,60 @@ func (s Stage) Valid() bool {
 	switch s {
 	case StageNone, StageBefore, StageDuring, StageAfter:
 		return true
+	}
+	return false
+}
+
+// NewDeviceID returns a fresh random device ID.
+func NewDeviceID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand does not fail on supported platforms
+	}
+	return hex.EncodeToString(b[:])
+}
+
+// EnsureDeviceIDs gives every device without an ID (vaults from before IDs,
+// CSV imports, new devices) — or with one another device already holds — a
+// fresh one.
+func (inv *Inventory) EnsureDeviceIDs() {
+	seen := map[string]bool{}
+	for i := range inv.Devices {
+		if id := inv.Devices[i].ID; id == "" || seen[id] {
+			inv.Devices[i].ID = NewDeviceID()
+		}
+		seen[inv.Devices[i].ID] = true
+	}
+}
+
+// DeviceIndex finds a device by ID. A key no device has as ID is tried as a
+// name, so a caller still holding a name (an older terminal argument) keeps
+// working while names are unique; -1 if neither matches.
+func (inv *Inventory) DeviceIndex(key string) int {
+	if key == "" {
+		return -1
+	}
+	for i := range inv.Devices {
+		if inv.Devices[i].ID == key {
+			return i
+		}
+	}
+	for i := range inv.Devices {
+		if inv.Devices[i].Name == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// DeviceNameTaken reports whether another device (ID other than exceptID)
+// already has name in group.
+func (inv *Inventory) DeviceNameTaken(group, name, exceptID string) bool {
+	for i := range inv.Devices {
+		d := &inv.Devices[i]
+		if d.Group == group && d.Name == name && (exceptID == "" || d.ID != exceptID) {
+			return true
+		}
 	}
 	return false
 }

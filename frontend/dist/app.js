@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.12";
+const APP_VERSION = "1.5.13";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -298,11 +298,17 @@ function dragHandleTip() {
 // plain click logs in automatically; Shift+click or a right-click opens the
 // line with no automatic login at all (initial setup over a serial console,
 // a device with no password yet, a screen no OS profile anticipates).
+// Devices are addressed by their internal ID: a name is unique only within
+// its group, so two groups may each have a "core-sw1".
+function devById(id) {
+  return (INV.devices || []).find(d => d.id === id);
+}
+
 const CONNECT_TIP = t("自動でログインした端末を開きます。Shift+クリック（または右クリック）で自動ログインなしの端末（シリアルでの初期設定・パスワード未設定の機器・想定外の画面で止まる機器に）");
 function wireConnectButtons(root) {
-  const open = async (name, manual) => {
+  const open = async (id, manual) => {
     try {
-      await App().SpawnTerminal(name, manual);
+      await App().SpawnTerminal(id, manual);
       toast(manual ? t("自動ログインなしの端末を開きました") : t("対話接続ウィンドウを開きました"), "ok");
     } catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
   };
@@ -326,6 +332,91 @@ function wireCopyCells(scope) {
     }
   });
 }
+
+// ---- right-click copy menu for tables ----
+// The production build has no browser context menu, so the lists had no way
+// to copy what they show. A right-click on any table row offers: the selected
+// text, the cell, the row, or the whole table as shown (tab-separated, so it
+// pastes into Excel as cells). Only columns with a heading are copied — the
+// checkbox, drag-handle and button columns are not data.
+async function copyText(v, okMsg) {
+  try { await navigator.clipboard.writeText(v); }
+  catch (e) {
+    // Fallback: Wails runtime clipboard (navigator.clipboard needs a secure context).
+    try { await rt().ClipboardSetText(v); }
+    catch (e2) { toast(t("コピーできませんでした"), "err"); return; }
+  }
+  toast(okMsg, "ok");
+}
+function cellText(td) {
+  const inp = td.querySelector("input:not([type=checkbox]), textarea");
+  if (inp) return inp.value.trim();
+  const sel = td.querySelector("select");
+  if (sel) return sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : "";
+  return td.innerText.replace(/\s+/g, " ").trim();
+}
+function headText(th) {
+  return th.innerText.replace(/\s*[▲▼]\s*$/, "").replace(/\s+/g, " ").trim();
+}
+// Indexes of the columns that carry data (a non-empty heading).
+function dataCols(table) {
+  const ths = table.tHead ? [...table.tHead.rows[0].cells] : [];
+  return ths.map((th, i) => headText(th) ? i : -1).filter(i => i >= 0);
+}
+const rowTSV = (tr, cols) => cols.map(i => tr.cells[i] ? cellText(tr.cells[i]).replace(/\t/g, " ") : "").join("\t");
+
+const ctxMenu = document.createElement("div");
+ctxMenu.className = "ctx-menu hidden";
+document.body.appendChild(ctxMenu);
+function closeCtxMenu() { ctxMenu.classList.add("hidden"); ctxMenu.innerHTML = ""; }
+document.addEventListener("contextmenu", e => {
+  closeCtxMenu();
+  if (e.defaultPrevented) return; // e.g. 接続 (right-click = no automatic login)
+  const td = e.target.closest("td");
+  const table = td && td.closest("table");
+  if (!table || !table.tBodies.length || !table.tBodies[0].contains(td)) return;
+  e.preventDefault();
+  const tr = td.parentElement;
+  const cols = dataCols(table);
+  // Text selected on the page, or inside the input that was right-clicked.
+  let picked = "";
+  const el = document.activeElement;
+  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && td.contains(el) && el.selectionEnd > el.selectionStart) {
+    picked = el.value.slice(el.selectionStart, el.selectionEnd);
+  } else {
+    picked = String(window.getSelection() || "").trim();
+  }
+  const items = [];
+  if (picked) items.push([t("選択した文字をコピー"), () => copyText(picked, t("コピーしました"))]);
+  const cell = cellText(td);
+  if (cell && cols.includes(td.cellIndex)) items.push([t("このセルをコピー"), () => copyText(cell, t("{v} をコピーしました", { v: cell.length > 40 ? cell.slice(0, 40) + "…" : cell }))]);
+  if (cols.length) {
+    // Taken now, not on click: the run table is redrawn on every progress
+    // event, which would leave these rows detached by the time of the click.
+    const row = rowTSV(tr, cols);
+    const rows = [...table.tBodies[0].rows].filter(r => r.offsetParent !== null);
+    const head = cols.map(i => headText(table.tHead.rows[0].cells[i])).join("\t");
+    const all = [head, ...rows.map(r => rowTSV(r, cols))].join("\r\n");
+    items.push([t("この行をコピー"), () => copyText(row, t("1 行をコピーしました"))]);
+    items.push([t("表示中の表をすべてコピー（Excel に貼れる形式）"), () => copyText(all, t("{n} 行をコピーしました", { n: rows.length }))]);
+  }
+  if (!items.length) return;
+  items.forEach(([label, fn]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.onclick = () => { closeCtxMenu(); fn(); };
+    ctxMenu.appendChild(b);
+  });
+  ctxMenu.classList.remove("hidden");
+  const w = ctxMenu.offsetWidth, h = ctxMenu.offsetHeight;
+  ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - w - 4) + "px";
+  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - h - 4) + "px";
+});
+document.addEventListener("mousedown", e => { if (!ctxMenu.contains(e.target)) closeCtxMenu(); }, true);
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeCtxMenu(); });
+window.addEventListener("blur", closeCtxMenu);
+document.addEventListener("scroll", closeCtxMenu, true);
 
 // ---- instant styled tooltip (data-tip) ----
 const tipEl = document.createElement("div");

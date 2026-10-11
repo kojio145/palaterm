@@ -399,8 +399,9 @@ func Preview(inv *model.Inventory, c Contents, opt Options) Summary {
 	return s
 }
 
-// Apply merges c into inv. Devices match by name and are replaced whole (a
-// CSV row is a complete device). Command sets match by name; profiles by key,
+// Apply merges c into inv. Devices match by group + name (a name only has to
+// be unique within its group) and are replaced whole (a CSV row is a complete
+// device), keeping the existing device's internal ID. Command sets match by name; profiles by key,
 // or failing that by name — in which case the existing key is kept and the
 // imported devices are re-pointed at it, so nothing ends up orphaned. Existing
 // shared items are left alone unless opt.OverwriteShared. Returns the summary
@@ -518,9 +519,10 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 			cur.Username, cur.Password, cur.EnablePassword = g.Username, g.Password, g.EnablePassword
 		}
 	}
-	devByName := map[string]int{}
+	devKey := func(d model.Device) string { return d.Group + "\x00" + d.Name }
+	devByKey := map[string]int{}
 	for i, d := range inv.Devices {
-		devByName[d.Name] = i
+		devByKey[devKey(d)] = i
 	}
 	missingSet := map[string]bool{}
 	missingProf := map[string]bool{}
@@ -545,14 +547,17 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 				s.MissingProfiles = append(s.MissingProfiles, d.OSType)
 			}
 		}
-		if i, ok := devByName[d.Name]; ok {
+		if i, ok := devByKey[devKey(d)]; ok {
+			d.ID = inv.Devices[i].ID
 			inv.Devices[i] = d
 			s.DevicesUpdated++
 		} else {
-			devByName[d.Name] = len(inv.Devices)
+			d.ID = ""
+			devByKey[devKey(d)] = len(inv.Devices)
 			inv.Devices = append(inv.Devices, d)
 			s.DevicesNew++
 		}
 	}
+	inv.EnsureDeviceIDs()
 	return s, changed
 }

@@ -121,23 +121,18 @@ func (a *App) SetHostKey(addr, fingerprint string) {
 // ClearHostKeys drops the pinned host keys for one device (its own address
 // and its bastions'), so a legitimately replaced device can be re-pinned on
 // the next connection.
-func (a *App) ClearHostKeys(deviceName string) error {
+func (a *App) ClearHostKeys(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	var dev *model.Device
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == deviceName {
-			dev = &a.inv.Devices[i]
-			break
-		}
-	}
-	if dev == nil {
+	idx := a.inv.DeviceIndex(id)
+	if idx < 0 {
 		a.mu.Unlock()
-		return fmt.Errorf("device %q not found", deviceName)
+		return fmt.Errorf("機器が見つかりません")
 	}
+	dev := &a.inv.Devices[idx]
 	addrs := []string{fmt.Sprintf("%s:%d", dev.Host, dev.EffectivePort())}
 	for _, b := range dev.ActiveBastions() {
 		p := b.Port
@@ -253,10 +248,19 @@ func (a *App) Unlock(password string) error {
 		return err
 	}
 	inv.NormalizeGroups()
+	seed := false
+	// Devices from before IDs get one now, saved at once: the terminal window
+	// loads the vault on its own and must find the same IDs.
+	for _, d := range inv.Devices {
+		if d.ID == "" {
+			inv.EnsureDeviceIDs()
+			seed = true
+			break
+		}
+	}
 	// Seed the built-in command sets into vaults created before they existed.
 	// A vault still holding only the pre-【サンプル】 sample sets (all names
 	// untouched, so nothing user-made) is reseeded under the new names.
-	seed := false
 	if len(inv.CommandSets) == 0 || onlyLegacyDefaultSets(inv.CommandSets) {
 		inv.CommandSets = model.DefaultCommandSets()
 		inv.CommandSetSeedGen = model.CommandSetSeedGen
@@ -499,6 +503,8 @@ func (a *App) persist() error {
 	if a.inv == nil {
 		return fmt.Errorf("vault is locked")
 	}
+	// Safety net: whatever path added a device, it is saved with an ID.
+	a.inv.EnsureDeviceIDs()
 	return vault.Save(a.vaultPath, a.password, a.inv)
 }
 
@@ -644,9 +650,20 @@ func (a *App) ListSerialPorts() []string {
 	return ports
 }
 
-// ---- Device CRUD (keyed by unique Name) ----
+// ---- Device CRUD (keyed by the internal Device.ID) ----
 
-// SaveDevice inserts or updates a device by name (after validation).
+// errDeviceNameTaken is the refusal for a name already used in the group.
+func errDeviceNameTaken(group, name string) error {
+	if group == "" {
+		return fmt.Errorf("機器名「%s」はグループ未設定の機器に既にあります", name)
+	}
+	return fmt.Errorf("機器名「%s」はグループ「%s」に既にあります", name, group)
+}
+
+// SaveDevice inserts (no ID, or an ID nobody has) or updates (by ID) a
+// device after validation. A name only has to be unique within its group;
+// the check runs when the name or group changes, so a device left as it was
+// always saves.
 func (a *App) SaveDevice(d model.Device) error {
 	if err := d.Validate(); err != nil {
 		return err
@@ -656,15 +673,27 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	found := false
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == d.Name {
-			a.inv.Devices[i] = d
-			found = true
-			break
+	idx := -1
+	if d.ID != "" {
+		for i := range a.inv.Devices {
+			if a.inv.Devices[i].ID == d.ID {
+				idx = i
+				break
+			}
 		}
 	}
-	if !found {
+	if idx < 0 || a.inv.Devices[idx].Name != d.Name || a.inv.Devices[idx].Group != d.Group {
+		if a.inv.DeviceNameTaken(d.Group, d.Name, d.ID) {
+			a.mu.Unlock()
+			return errDeviceNameTaken(d.Group, d.Name)
+		}
+	}
+	if idx >= 0 {
+		a.inv.Devices[idx] = d
+	} else {
+		if d.ID == "" {
+			d.ID = model.NewDeviceID()
+		}
 		a.inv.Devices = append(a.inv.Devices, d)
 	}
 	a.ensureGroupExists(d.Group)
@@ -689,57 +718,54 @@ func (a *App) ensureGroupExists(name string) {
 	a.inv.DeviceGroups = append(a.inv.DeviceGroups, model.DeviceGroup{Name: name})
 }
 
-// DeleteDevice removes a device by name.
-func (a *App) DeleteDevice(name string) error {
+// DeleteDevice removes one device by ID.
+func (a *App) DeleteDevice(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	out := a.inv.Devices[:0]
-	for _, d := range a.inv.Devices {
-		if d.Name != name {
-			out = append(out, d)
-		}
+	idx := a.inv.DeviceIndex(id)
+	if idx < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("機器が見つかりません")
 	}
-	a.inv.Devices = out
+	a.inv.Devices = append(a.inv.Devices[:idx], a.inv.Devices[idx+1:]...)
 	a.mu.Unlock()
 	return a.persist()
 }
 
-// SetDeviceEnabled toggles a device's inclusion in batch runs.
-func (a *App) SetDeviceEnabled(name string, enabled bool) error {
+// SetDeviceEnabled toggles one device's (by ID) inclusion in batch runs.
+func (a *App) SetDeviceEnabled(id string, enabled bool) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == name {
-			a.inv.Devices[i].Enabled = enabled
-		}
+	if i := a.inv.DeviceIndex(id); i >= 0 {
+		a.inv.Devices[i].Enabled = enabled
 	}
 	a.mu.Unlock()
 	return a.persist()
 }
 
 // SetAllDevicesEnabled enables or disables every device in one shot (bulk
-// check / uncheck). If names is non-empty, only those devices are affected.
-func (a *App) SetAllDevicesEnabled(enabled bool, names []string) error {
+// check / uncheck). If ids is non-empty, only those devices are affected.
+func (a *App) SetAllDevicesEnabled(enabled bool, ids []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
 	var only map[string]bool
-	if len(names) > 0 {
-		only = make(map[string]bool, len(names))
-		for _, n := range names {
-			only[n] = true
+	if len(ids) > 0 {
+		only = make(map[string]bool, len(ids))
+		for _, id := range ids {
+			only[id] = true
 		}
 	}
 	for i := range a.inv.Devices {
-		if only == nil || only[a.inv.Devices[i].Name] {
+		if only == nil || only[a.inv.Devices[i].ID] {
 			a.inv.Devices[i].Enabled = enabled
 		}
 	}
@@ -747,40 +773,35 @@ func (a *App) SetAllDevicesEnabled(enabled bool, names []string) error {
 	return a.persist()
 }
 
-// CopyDevice duplicates a device under a new unique name and returns that name.
-func (a *App) CopyDevice(name string) (string, error) {
+// CopyDevice duplicates a device (by ID) in its own group under a name free
+// there ("<名前>_copy", then _copy2, …) and returns that name.
+func (a *App) CopyDevice(id string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return "", fmt.Errorf("vault is locked")
 	}
-	var src *model.Device
-	existing := map[string]bool{}
-	for i := range a.inv.Devices {
-		existing[a.inv.Devices[i].Name] = true
-		if a.inv.Devices[i].Name == name {
-			d := a.inv.Devices[i]
-			src = &d
-		}
-	}
-	if src == nil {
+	idx := a.inv.DeviceIndex(id)
+	if idx < 0 {
 		a.mu.Unlock()
-		return "", fmt.Errorf("device %q not found", name)
+		return "", fmt.Errorf("機器が見つかりません")
 	}
-	newName := name + "_copy"
-	for i := 2; existing[newName]; i++ {
-		newName = fmt.Sprintf("%s_copy%d", name, i)
+	dup := a.inv.Devices[idx]
+	newName := dup.Name + "_copy"
+	for i := 2; a.inv.DeviceNameTaken(dup.Group, newName, ""); i++ {
+		newName = fmt.Sprintf("%s_copy%d", dup.Name, i)
 	}
-	dup := *src
+	dup.ID = model.NewDeviceID()
 	dup.Name = newName
+	dup.Bastions = append([]model.Bastion(nil), dup.Bastions...)
 	a.inv.Devices = append(a.inv.Devices, dup)
 	a.mu.Unlock()
 	return newName, a.persist()
 }
 
-// RenameDevice changes a device's name (its key) in place, e.g. from the
-// inline name cell in the device list.
-func (a *App) RenameDevice(oldName, newName string) error {
+// RenameDevice changes a device's name in place, e.g. from the inline name
+// cell in the device list. The new name must be free within the group.
+func (a *App) RenameDevice(id, newName string) error {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("名前は必須です")
@@ -790,39 +811,34 @@ func (a *App) RenameDevice(oldName, newName string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	idx := -1
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == newName {
-			a.mu.Unlock()
-			return fmt.Errorf("「%s」は既に登録されています", newName)
-		}
-		if a.inv.Devices[i].Name == oldName {
-			idx = i
-		}
-	}
+	idx := a.inv.DeviceIndex(id)
 	if idx < 0 {
 		a.mu.Unlock()
-		return fmt.Errorf("device %q not found", oldName)
+		return fmt.Errorf("機器が見つかりません")
 	}
-	a.inv.Devices[idx].Name = newName
+	d := &a.inv.Devices[idx]
+	if d.Name == newName {
+		a.mu.Unlock()
+		return nil
+	}
+	if a.inv.DeviceNameTaken(d.Group, newName, d.ID) {
+		a.mu.Unlock()
+		return errDeviceNameTaken(d.Group, newName)
+	}
+	d.Name = newName
 	a.mu.Unlock()
 	return a.persist()
 }
 
-// DeviceNameExists reports whether a device name is already taken (used by the
-// UI to prevent duplicate names when adding).
-func (a *App) DeviceNameExists(name string) bool {
+// DeviceNameExists reports whether name is already taken in group by a
+// device other than exceptID (the UI's check before saving).
+func (a *App) DeviceNameExists(name, group, exceptID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
 		return false
 	}
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == name {
-			return true
-		}
-	}
-	return false
+	return a.inv.DeviceNameTaken(group, name, exceptID)
 }
 
 // ---- Device groups (named device selections) ----
@@ -853,9 +869,9 @@ func (a *App) SaveDeviceGroup(g model.DeviceGroup) error {
 }
 
 // CopyDeviceGroup duplicates a group — its default credentials and every
-// one of its devices — under newName. Device names must stay unique (they
-// name the log files), so each copy gets suffix appended; the copy is
-// refused whole if any resulting name is taken. Returns the device count.
+// one of its devices — under newName. Names only have to be unique within a
+// group, so the copies keep their names unless suffix is given (then each
+// gets it appended). Returns the device count.
 func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
@@ -875,24 +891,16 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 		a.mu.Unlock()
 		return 0, fmt.Errorf("同名のグループ「%s」が既にあります", newName)
 	}
-	taken := map[string]bool{}
-	for _, d := range a.inv.Devices {
-		taken[d.Name] = true
-	}
 	var copies []model.Device
 	for _, d := range a.inv.Devices {
 		if d.Group != name {
 			continue
 		}
 		c := d
+		c.ID = model.NewDeviceID()
 		c.Name = d.Name + suffix
 		c.Group = newName
 		c.Bastions = append([]model.Bastion(nil), d.Bastions...)
-		if taken[c.Name] {
-			a.mu.Unlock()
-			return 0, fmt.Errorf("機器名「%s」は既に使われています。別の接尾辞を指定してください", c.Name)
-		}
-		taken[c.Name] = true
 		copies = append(copies, c)
 	}
 	g := *src
@@ -929,6 +937,7 @@ func (a *App) DeleteDeviceGroup(name string) error {
 
 // RenameDeviceGroup renames a group and updates its devices' Group field.
 func (a *App) RenameDeviceGroup(oldName, newName string) error {
+	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("新しいグループ名を入力してください")
 	}
@@ -936,6 +945,12 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
+	}
+	// Renaming onto another group would merge the two, and with it any
+	// device names they share.
+	if newName != oldName && a.inv.Group(newName) != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("同名のグループ「%s」が既にあります", newName)
 	}
 	for i := range a.inv.DeviceGroups {
 		if a.inv.DeviceGroups[i].Name == oldName {
@@ -1104,7 +1119,7 @@ func (a *App) SaveSettings(s model.Settings) error {
 // RunRequest is what the run tab sends to start a batch.
 type RunRequest struct {
 	Names  []string `json:"names"`  // devices to run (checkbox state is left alone)
-	Group  string   `json:"group"`  // group shown in the run tab (recorded in the run summary)
+	Group  string   `json:"group"`  // group shown in the run tab: only its devices run (names are unique within a group, not across groups); recorded in the run summary
 	Stage  string   `json:"stage"`  // "" / before / during / after
 	DryRun bool     `json:"dryRun"` // connect + login only, no commands, no logs
 }
@@ -1155,6 +1170,9 @@ func (a *App) run(req RunRequest) error {
 	}
 	var sel []model.Device
 	for _, d := range a.inv.Devices {
+		if req.Group != "" && d.Group != req.Group {
+			continue
+		}
 		if want != nil {
 			if !want[d.Name] {
 				continue
@@ -1235,7 +1253,7 @@ type DangerWarning struct {
 // configuration-changing commands, so the run tab can warn before starting.
 // Devices sharing a command set are each listed (the user reads it per
 // device), but the scan itself runs once per set.
-func (a *App) CheckDangerousCommands(names []string) []DangerWarning {
+func (a *App) CheckDangerousCommands(names []string, group string) []DangerWarning {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := []DangerWarning{}
@@ -1252,7 +1270,7 @@ func (a *App) CheckDangerousCommands(names []string) []DangerWarning {
 	}
 	scanned := map[string][]guard.Hit{}
 	for _, d := range a.inv.Devices {
-		if !want[d.Name] || d.CommandSet == "" {
+		if !want[d.Name] || d.Group != group || d.CommandSet == "" {
 			continue
 		}
 		hits, ok := scanned[d.CommandSet]
@@ -1509,19 +1527,28 @@ type termClosed struct {
 // each window resizes freely. The master password is handed to the child on
 // stdin so it never appears in the process arguments. manual opens the line
 // without the automatic login (see Term.manual).
-func (a *App) SpawnTerminal(name string, manual bool) error {
+func (a *App) SpawnTerminal(id string, manual bool) error {
 	a.mu.Lock()
 	locked := a.inv == nil
 	pw := a.password
+	label := ""
+	if !locked {
+		if i := a.inv.DeviceIndex(id); i >= 0 {
+			label = a.inv.Devices[i].Name
+		}
+	}
 	a.mu.Unlock()
 	if locked {
 		return fmt.Errorf("vault is locked")
+	}
+	if label == "" {
+		return fmt.Errorf("機器が見つかりません")
 	}
 	exe, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	args := []string{"--connect", name}
+	args := []string{"--connect", id, "--label", label}
 	if manual {
 		args = append(args, "--manual")
 	}
@@ -1557,7 +1584,7 @@ func (a *App) SpawnTerminal(name string, manual bool) error {
 }
 
 // termEventClearHostKey is the stdout line a terminal window prints when the
-// user accepted a changed host key, followed by the device name.
+// user accepted a changed host key, followed by the device ID.
 const termEventClearHostKey = "PALATERM clear-hostkey"
 
 // ConnectInteractive logs into a single device (running the OS profile login
@@ -1570,12 +1597,9 @@ func (a *App) ConnectInteractive(name string) error {
 		return fmt.Errorf("vault is locked")
 	}
 	var dev *model.Device
-	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Name == name {
-			d := a.inv.ResolveCredentials(a.inv.Devices[i])
-			dev = &d
-			break
-		}
+	if i := a.inv.DeviceIndex(name); i >= 0 {
+		d := a.inv.ResolveCredentials(a.inv.Devices[i])
+		dev = &d
 	}
 	settings := a.inv.Settings
 	a.mu.Unlock()
@@ -1684,7 +1708,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.12"
+const appVersion = "1.5.13"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -1979,15 +2003,15 @@ func reorderSlots[T any](items []T, keyOf func(T) string, order []string) {
 	}
 }
 
-// ReorderDevices rewrites the relative order of the named devices (typically
-// one group's rows) without moving any other device.
+// ReorderDevices rewrites the relative order of the listed devices (by ID;
+// typically one group's rows) without moving any other device.
 func (a *App) ReorderDevices(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	reorderSlots(a.inv.Devices, func(d model.Device) string { return d.Name }, order)
+	reorderSlots(a.inv.Devices, func(d model.Device) string { return d.ID }, order)
 	a.mu.Unlock()
 	return a.persist()
 }

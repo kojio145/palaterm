@@ -193,7 +193,7 @@ async function bootTerminalWindow() {
 
   // ---- 貼り付けの確認（Tera Term 風）----
   // すべての貼り付け経路（Ctrl+V / Shift+Insert / Ctrl+Shift+V / Win+V の注入 / Alt+V /
-  // 右クリック / ツールバー）を一つのダイアログに集約する。キーボード経路はブラウザ既定の
+  // 右クリック / ツールバー）を pasteOrConfirm に集約する（1 行はそのまま、2 行以上はダイアログ）。キーボード経路はブラウザ既定の
   // 貼り付けが xterm の textarea に paste イベントとして届くので、xterm より先（capture）で
   // 止めて本文を取り出す。Alt+V・右クリック・ボタンはクリップボードを Go 側から読む。
   // 送る内容はダイアログで編集でき、改行は xterm と同じく CR に正規化して機器へ送る。
@@ -232,8 +232,23 @@ async function bootTerminalWindow() {
     closePasteDialog();
     sendText(s);
   }
+  // One line goes straight to the device without the confirmation, as in
+  // Tera Term, and without Enter: the user reads it at the prompt and decides
+  // whether to run it. A line copied whole carries a trailing newline, which
+  // is dropped for the same reason. Alt+V (貼り付け<CR>) asks for the Enter,
+  // so it gets one. Two or more lines still open the confirmation.
+  function pasteOrConfirm(text, withCR) {
+    const one = text.replace(/(\r\n|\r|\n)$/, "");
+    if (one && !/[\r\n]/.test(one)) {
+      term.clearSelection();
+      sendText(withCR ? one + "\r" : one);
+      term.focus();
+      return;
+    }
+    openPasteDialog(text, withCR);
+  }
   function pasteFromClipboard(withCR) {
-    Term().GetClipboard().then(txt => { if (txt) openPasteDialog(txt, withCR); }).catch(() => {});
+    Term().GetClipboard().then(txt => { if (txt) pasteOrConfirm(txt, withCR); }).catch(() => {});
   }
   document.getElementById("tw-paste-ok").onclick = confirmPaste;
   document.getElementById("tw-paste-cancel").onclick = closePasteDialog;
@@ -244,7 +259,7 @@ async function bootTerminalWindow() {
   term.textarea.addEventListener("paste", e => {
     const txt = (e.clipboardData || window.clipboardData || {}).getData ? (e.clipboardData || window.clipboardData).getData("text") : "";
     e.preventDefault(); e.stopImmediatePropagation();
-    if (txt) openPasteDialog(txt, false);
+    if (txt) pasteOrConfirm(txt, false);
   }, true);
   document.getElementById("tw-host").addEventListener("contextmenu", e => { e.preventDefault(); pasteFromClipboard(false); });
   document.getElementById("tw-paste").onclick = () => pasteFromClipboard(false);

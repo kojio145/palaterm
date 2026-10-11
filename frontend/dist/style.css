@@ -166,14 +166,19 @@ tr:hover td { background: var(--bg-2); }
 /* Unmasked: the accent border says the password is currently readable. */
 .eye-btn.on { opacity: 1; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 
-/* Draggable group cards */
+/* Draggable group cards: the cards stay put while dragging; a bar beside the
+   card under the pointer shows where the dragged one will land. */
 .choice.dragging { opacity: .4; }
-.choice.dragover { border-color: var(--accent); border-style: dashed; }
+.chooser.drag-active .choice { transform: none; transition: none; }
+.choice.drop-before::before, .choice.drop-after::after { content: ""; position: absolute;
+  top: 6px; bottom: 6px; width: 4px; border-radius: 2px; background: var(--accent); }
+.choice.drop-before::before { left: -9px; }
+.choice.drop-after::after { right: -9px; }
 
 /* Device scope chooser (step 1 of the devices tab) */
 .chooser { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
 .choice { text-align: left; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 12px; padding: 20px; cursor: pointer; transition: .15s; color: var(--text); }
+  border-radius: 12px; padding: 20px; cursor: pointer; transition: .15s; color: var(--text); position: relative; }
 .choice:hover { border-color: var(--accent); transform: translateY(-1px); }
 .choice.all { border-color: var(--accent); }
 .choice.new { border-style: dashed; color: var(--text-dim); }
@@ -211,6 +216,13 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   max-width: 60vw; word-break: break-all; white-space: pre-wrap;
   box-shadow: 0 10px 28px rgba(0, 0, 0, .55); pointer-events: none; }
 .tip.hidden { display: none; }
+/* Right-click copy menu on tables (app.js) */
+.ctx-menu { position: fixed; z-index: 10000; background: var(--bg-3); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.45); min-width: 200px; }
+.ctx-menu.hidden { display: none; }
+.ctx-menu button { display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--text); font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 6px; cursor: pointer; }
+.ctx-menu button:hover { background: var(--accent); color: #fff; }
 
 /* Help block: heading + indented body (見出し＋字下げ説明) */
 .help { font-size: 12px; color: var(--text-dim); line-height: 1.8; margin: 2px 0 12px; }
@@ -346,3 +358,10 @@ th.sortable:hover { color: var(--text); }
 .modal.xwide { width: min(1400px, 96vw); }
 .warn-box { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px; }
 .warn-box .mono { font-family: "Consolas", monospace; }
+
+/* A small window over the open modal (コマンドをまとめて追加). */
+.sub-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 60;
+  display: flex; align-items: center; justify-content: center; }
+.sub-modal { width: min(560px, 90vw); background: var(--panel); border: 1px solid var(--accent);
+  border-radius: 12px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.sub-modal h3 { margin: 0 0 14px; font-size: 16px; }

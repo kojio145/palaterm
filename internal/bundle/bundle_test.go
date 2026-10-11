@@ -187,19 +187,37 @@ func TestApplyOverwriteSharedAndTargetGroup(t *testing.T) {
 	c.Profiles[0].Prompt = "#>"
 	c.Devices[0].Host = "192.0.2.100"
 	s, changed := Apply(inv, c, Options{TargetGroup: "C社", OverwriteShared: true})
-	if s.DevicesUpdated != 2 || s.DevicesNew != 0 || s.SetsUpdated != 2 || s.ProfilesUpd != 2 {
+	// Devices match by group + name, so importing A社's rows into C社 adds them
+	// there; A社's own devices stay as they were.
+	if s.DevicesUpdated != 0 || s.DevicesNew != 2 || s.SetsUpdated != 2 || s.ProfilesUpd != 2 {
 		t.Errorf("summary = %+v", s)
 	}
 	if len(changed) != 2 {
 		t.Errorf("changed = %d", len(changed))
 	}
+	inC, inA := 0, 0
 	for _, d := range inv.Devices {
-		if (d.Name == "a-rt1" || d.Name == "a-fw1") && d.Group != "C社" {
-			t.Errorf("%s group = %q, want C社", d.Name, d.Group)
+		if d.Name != "a-rt1" && d.Name != "a-fw1" {
+			continue
 		}
-		if d.Name == "a-rt1" && d.Host != "192.0.2.100" {
-			t.Errorf("device not replaced: %+v", d)
+		switch d.Group {
+		case "C社":
+			inC++
+			if d.Name == "a-rt1" && d.Host != "192.0.2.100" {
+				t.Errorf("imported row not applied: %+v", d)
+			}
+		case "A社":
+			inA++
+			if d.Name == "a-rt1" && d.Host == "192.0.2.100" {
+				t.Errorf("A社's device was overwritten: %+v", d)
+			}
 		}
+		if d.ID == "" {
+			t.Errorf("%s has no ID", d.Name)
+		}
+	}
+	if inC != 2 || inA != 2 {
+		t.Errorf("devices in C社 = %d, A社 = %d; want 2 and 2", inC, inA)
 	}
 	if inv.CommandSets[0].Commands[0].Text != "show run brief" || inv.CustomProfiles[0].Prompt != "#>" {
 		t.Error("shared items not overwritten")
@@ -273,5 +291,37 @@ func TestGroupCredentialsTravelInBundle(t *testing.T) {
 	Apply(tg, c, Options{TargetGroup: "C社"})
 	if g := tg.Group("C社"); g == nil || g.Password != "gp" {
 		t.Fatalf("target group creds: %+v", tg.DeviceGroups)
+	}
+}
+
+// An all-devices CSV can hold the same name in two groups: both rows import
+// as their own devices, and re-importing updates each in place.
+func TestApplySameNameInTwoGroups(t *testing.T) {
+	inv := &model.Inventory{}
+	row := func(group, host string) model.Device {
+		return model.Device{Name: "sw1", Group: group, Host: host, Conn: model.ConnSSH, OSType: "cisco-ios"}
+	}
+	c := Contents{Devices: []model.Device{row("A社", "192.0.2.1"), row("B社", "192.0.2.2")}}
+	if s, _ := Apply(inv, c, Options{}); s.DevicesNew != 2 || s.DevicesUpdated != 0 {
+		t.Fatalf("first import = %+v", s)
+	}
+	ids := map[string]string{}
+	for _, d := range inv.Devices {
+		ids[d.Group] = d.ID
+	}
+	c.Devices[1].Host = "192.0.2.22"
+	if s, _ := Apply(inv, c, Options{}); s.DevicesNew != 0 || s.DevicesUpdated != 2 {
+		t.Fatalf("re-import = %+v", s)
+	}
+	if len(inv.Devices) != 2 {
+		t.Fatalf("devices = %d", len(inv.Devices))
+	}
+	for _, d := range inv.Devices {
+		if d.ID != ids[d.Group] || d.ID == "" {
+			t.Errorf("%s/%s ID changed: %q → %q", d.Group, d.Name, ids[d.Group], d.ID)
+		}
+		if d.Group == "B社" && d.Host != "192.0.2.22" || d.Group == "A社" && d.Host != "192.0.2.1" {
+			t.Errorf("wrong device updated: %+v", d)
+		}
 	}
 }
