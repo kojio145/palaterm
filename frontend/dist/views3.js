@@ -132,7 +132,7 @@ function renderHistoryView() {
       { id: "group", label: t("グループ: すべて"), values: groupsSeen },
       { id: "stage", label: t("作業: すべて"), values: [...new Set(stagesSeen.map(s => stageLabel(s)))] },
     ]) : ""}
-    <div class="panel">
+    <div class="panel scrollx">
       ${runs.length === 0 ? `<div class="empty">${esc(t("実行履歴がありません。一括実行するとここに記録されます。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する実行がありません"))}</div>`
         : `<table class="fixed" data-colw="history"><thead><tr><th style="width:36px"></th>${listViewTh(LV, "time", t("開始日時"), "width:170px")}${listViewTh(LV, "stage", t("作業"), "width:110px")}${listViewTh(LV, "group", t("グループ"))}${listViewTh(LV, "result", t("成功 / 失敗"), "width:130px")}<th style="width:120px"></th><th style="width:260px"></th></tr></thead>

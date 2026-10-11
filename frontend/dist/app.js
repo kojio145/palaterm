@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.10";
+const APP_VERSION = "1.5.11";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -173,7 +173,21 @@ function loadColWidths(key) {
 function saveColWidths(key, w) {
   try { localStorage.setItem(colWidthsKey(key), JSON.stringify(w)); } catch (e) { }
 }
+// fitPanels caps every scrolling list panel at the window's bottom edge, so
+// the panel (not the page) scrolls: the title, toolbar and filter row above
+// it stay where they are, and the sticky header row stays in view. Called
+// after each render (from wireColResize) and on window resize.
+function fitPanels(root) {
+  (root || document).querySelectorAll(".panel.scrollx").forEach(p => {
+    const top = p.getBoundingClientRect().top;
+    const h = Math.max(160, Math.floor(window.innerHeight - top - 28));
+    p.style.maxHeight = h + "px";
+  });
+}
+window.addEventListener("resize", () => fitPanels(document));
+
 function wireColResize(root) {
+  fitPanels(root);
   root.querySelectorAll("table[data-colw]").forEach(table => {
     const key = table.dataset.colw;
     const ths = [...table.querySelectorAll("thead th")];
