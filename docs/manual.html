@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.9</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.10</div>
   </header>
 
   <nav class="toc">
@@ -310,7 +310,7 @@
 
     <ol class="steps">
       <li>左サイドバーの<strong>「コマンドセット」</strong>を開きます。</li>
-      <li><strong>「＋ セットを追加」</strong>を押します（既存セットの<strong>「複製」</strong>から作るのも便利です）。</li>
+      <li><strong>「＋ セットを追加」</strong>を押します（既存セットの<strong>「複製」</strong>から作るのも便利です。複製すると <code>_copy</code> 付きの名前で編集画面がすぐ開くので、その場で名前を付け直せます）。セット名は後からでも編集画面で変更でき、そのセットを割り当てている機器はそのまま新しい名前を使います。</li>
       <li><strong>セット名</strong>を付けます（例: <code>config-backup</code>）。</li>
       <li><strong>コマンドの表</strong>に、1行1コマンドで入力します。「＋ 行を追加」で末尾に、各行の<strong>「＋」</strong>でその行の直後に挿入できます。</li>
       <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。</li>
@@ -399,6 +399,7 @@
     <p>機器一覧の表では、<strong>ホスト名（機器名）・IPアドレス・拠点名・役割・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存）。
     認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>で機器をコピー、<strong>「削除」</strong>で削除します。
     行の順序は左端の <strong>⠿ ドラッグ</strong>で入れ替えられます（複数選択も可・<a href="#flow">共通操作参照</a>。グループ内の並びだけが変わり、他グループの機器は動きません）。</p>
+    <p><strong>並び替え・絞り込み・列幅</strong>（機器一覧・グループ一覧・コマンドセット・OSタイプ設定・実行履歴で共通。実行タブと同じ操作）: <strong>見出しをクリック</strong>すると、その列で並び替え（再クリックで逆順、「並び順を戻す」で登録順に戻る）。表の上の<strong>絞り込み欄</strong>に文字を入れると一致する行だけが残り（コマンドセットはコマンド本文も対象）、拠点やグループのセレクトでも絞れます。どちらも表示だけの操作で保存順は変わりませんが、並び替え・絞り込み中は ⠿ のドラッグができません。<strong>見出しの境目をドラッグすると列幅</strong>を変えられ（ダブルクリックで既定幅・この PC に記憶されます）、切れている文字は<strong>セルにカーソルを合わせる</strong>と全文がチップで出ます。</p>
 
     <figure class="shot" data-shot="02b_group_creds"><img src="img/manual/02b_group_creds.png" alt="グループ既定の認証情報。グループで共通のユーザー名・パスワードを一度だけ登録" loading="lazy"><figcaption>グループ既定の認証情報。グループで共通のユーザー名・パスワードを一度だけ登録</figcaption></figure>
     <figure class="shot" data-shot="03c_device_edit_groupcreds"><img src="img/manual/03c_device_edit_groupcreds.png" alt="「グループ既定を使う」にした機器の編集画面。ユーザー名・パスワード欄は出ない" loading="lazy"><figcaption>「グループ既定を使う」にした機器の編集画面。ユーザー名・パスワード欄は出ない</figcaption></figure>
@@ -694,7 +695,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.9 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.10 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

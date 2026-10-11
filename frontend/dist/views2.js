@@ -4,13 +4,22 @@
 // ---- Command sets tab ----
 function renderCommands() {
   const root = document.getElementById("tab-commands");
-  const rows = (INV.commandSets || []).map(s => `
+  // Sort / filter (display only; see listView in app.js). The text box
+  // also searches the commands themselves, so "show arp" finds every set
+  // that runs it.
+  const LV = "commands";
+  const focus = listViewFocus();
+  const sets = INV.commandSets || [];
+  const visible = listViewApply(LV, sets,
+    s => [s.name, ...(s.commands || []).map(c => c.text)],
+    (s, k) => k === "count" ? (s.commands || []).length : s.name);
+  const rows = visible.map(s => `
     <tr data-key="${esc(s.name)}">
-      <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
-      <td><b>${esc(s.name)}</b></td>
+      ${listViewDragCell(LV)}
+      <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}</td>
-      <td class="mono muted">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</td>
-      <td style="text-align:right">
+      <td class="mono muted"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
+      <td style="text-align:right;white-space:nowrap">
         <button class="btn sm act-edit" data-edit="${esc(s.name)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-copy="${esc(s.name)}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(s.name)}">${esc(t("削除"))}</button>
@@ -26,14 +35,18 @@ function renderCommands() {
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
       </div>
     </div>
+    ${sets.length ? listViewBar(LV, t("絞り込み（セット名・コマンド）")) : ""}
     <div class="panel">
-      ${(INV.commandSets || []).length === 0
+      ${sets.length === 0
         ? `<div class="empty">${esc(t("コマンドセットがありません。"))}</div>`
-        : `<table><thead><tr><th style="width:30px"></th><th>${esc(t("名前"))}</th><th>${esc(t("コマンド数"))}</th><th>${esc(t("プレビュー"))}</th><th></th></tr></thead>
+        : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
+        : `<table class="fixed" data-colw="commands"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:260px")}${listViewTh(LV, "count", t("コマンド数"), "width:120px")}<th>${esc(t("プレビュー"))}</th><th style="width:200px"></th></tr></thead>
            <tbody id="cs-body">${rows}</tbody></table>`}
     </div>`;
+  listViewWire(LV, root, renderCommands, focus);
+  wireColResize(root);
 
-  wireRowReorder(root.querySelector("#cs-body"), async order => {
+  if (!listViewActive(LV)) wireRowReorder(root.querySelector("#cs-body"), async order => {
     try { await App().ReorderCommandSets(order); await refreshInventory(); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); await refreshInventory(); }
   });
@@ -47,7 +60,14 @@ function renderCommands() {
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editCommandSet(INV.commandSets.find(s => s.name === b.dataset.edit)));
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
-    try { const nm = await App().CopyCommandSet(b.dataset.copy); await refreshInventory(); toast(t("複製しました: {n}", { n: nm }), "ok"); }
+    try {
+      const nm = await App().CopyCommandSet(b.dataset.copy); await refreshInventory();
+      toast(t("複製しました: {n}", { n: nm }), "ok");
+      // The copy gets a placeholder name (…_copy); open it right away so the
+      // real name can be typed without hunting for the row.
+      const copy = (INV.commandSets || []).find(s => s.name === nm);
+      if (copy) { editCommandSet(copy); const inp = document.getElementById("s-name"); if (inp) { inp.focus(); inp.select(); } }
+    }
     catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
   });
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
@@ -66,7 +86,7 @@ function editCommandSet(set) {
 
   const node = h(`<div>
     <h3>${esc(set ? t("コマンドセットを編集") : t("コマンドセットを追加"))}</h3>
-    <div class="field"><label>${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label><input id="s-name" value="${esc(s.name)}" ${set ? "readonly" : ""}></div>
+    <div class="field"><label>${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label><input id="s-name" value="${esc(s.name)}" ${set ? `data-tip="${esc(t("名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います"))}"` : ""}></div>
     <label style="font-size:12px;color:var(--text-dim)">${esc(t("コマンド（1行1コマンド・待機秒はコマンドごとに指定）"))}</label>
     <div class="scroll"><table style="margin-top:6px">
       <thead><tr>
@@ -148,7 +168,13 @@ function editCommandSet(set) {
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
     const commands = collect().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec }));
-    try { await App().SaveCommandSet({ name, commands }); closeModal(); await refreshInventory(); toast(t("保存しました"), "ok"); }
+    try {
+      // An edited set may have been renamed: move it (and the devices that
+      // use it) to the new name first, then save the commands under it.
+      if (set && name !== set.name) await App().RenameCommandSet(set.name, name);
+      await App().SaveCommandSet({ name, commands });
+      closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
+    }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
 }
@@ -327,7 +353,7 @@ function renderRun() {
     <div class="panel scrollx">
       ${devs.length === 0 ? `<div class="empty">${esc(runGroupSel ? t("このグループに実行対象の機器がありません。機器一覧でチェックしてください。") : t("「グループで対象を選択…」から実行するグループを選んでください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
-        : `<table class="fixed"><thead><tr>
+        : `<table class="fixed" data-colw="run"><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
            ${th("phase", t("状態"), "126px")}${th("name", t("ホスト名"), "132px")}${th("host", t("IPアドレス"), "112px")}
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
@@ -354,6 +380,7 @@ function renderRun() {
     runSort = runSort.key === k ? { key: k, dir: -runSort.dir } : { key: k, dir: 1 };
     renderRun();
   });
+  wireColResize(root);
   root.querySelectorAll("[data-hk]").forEach(b => b.onclick = async () => {
     const n = b.dataset.hk;
     const ok = await uiConfirm({
@@ -865,6 +892,12 @@ function renderSettings() {
 function renderOSTypes() {
   const root = document.getElementById("tab-ostypes");
   const profiles = INV.customProfiles || [];
+  // Sort / filter (display only; see listView in app.js).
+  const LV = "ostypes";
+  const focus = listViewFocus();
+  const visible = listViewApply(LV, profiles,
+    p => [p.name, p.key, p.prompt],
+    (p, k) => k === "login" ? (p.login || []).length : p[k]);
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("OSタイプ設定"))}</div>
@@ -874,13 +907,15 @@ function renderOSTypes() {
         <button class="btn primary" id="prof-add">${esc(t("＋ 追加"))}</button>
       </div>
     </div>
+    ${profiles.length ? listViewBar(LV, t("絞り込み（名前・完了の目印）")) : ""}
     <div class="panel">
       ${profiles.length === 0
         ? `<div class="muted" style="font-size:13px;padding:14px">${esc(t("プロファイルがありません。「ファイル読込」で export\\os-profiles\\ のJSONから復元するか、「＋ 追加」で作成してください。"))}</div>`
-        : `<table><thead><tr><th style="width:30px"></th><th>${esc(t("名前"))}</th><th>${esc(t("完了の目印"))}</th><th style="width:110px">${esc(t("ログイン手順"))}</th><th style="width:220px"></th></tr></thead><tbody id="prof-body">
-        ${profiles.map(p => `<tr data-key="${esc(p.key)}">
-          <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
-          <td><b>${esc(p.name)}</b></td>
+        : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するプロファイルがありません"))}</div>`
+        : `<table class="fixed" data-colw="ostypes"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:280px")}${listViewTh(LV, "prompt", t("完了の目印"))}${listViewTh(LV, "login", t("ログイン手順"), "width:110px")}<th style="width:220px"></th></tr></thead><tbody id="prof-body">
+        ${visible.map(p => `<tr data-key="${esc(p.key)}">
+          ${listViewDragCell(LV)}
+          <td><div class="clip" data-tip="${esc(p.name)}"><b>${esc(p.name)}</b></div></td>
           <td class="mono muted"><div class="clip" data-tip="${esc(p.prompt)}">${esc(p.prompt)}</div></td>
           <td class="muted">${esc(t("{n} 行", { n: (p.login || []).length }))}</td>
           <td style="text-align:right;white-space:nowrap">
@@ -889,7 +924,9 @@ function renderOSTypes() {
             <button class="btn sm act-del" data-pdel="${esc(p.key)}">${esc(t("削除"))}</button>
           </td></tr>`).join("")}</tbody></table>`}
     </div>`;
-  wireRowReorder(root.querySelector("#prof-body"), async order => {
+  listViewWire(LV, root, renderOSTypes, focus);
+  wireColResize(root);
+  if (!listViewActive(LV)) wireRowReorder(root.querySelector("#prof-body"), async order => {
     try {
       await App().ReorderProfiles(order);
       INV = await App().GetInventory();

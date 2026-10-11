@@ -34,6 +34,14 @@ async function renderHistory() {
   try { runs = await App().ListRunHistory() || []; }
   catch (e) { root.innerHTML = `<div class="empty">${esc(t("履歴を読めません")) + ": " + esc(terr(e))}</div>`; return; }
   histState.runs = runs;
+  renderHistoryView();
+}
+
+// Draws the tab from the runs already read (histState.runs). A sort or
+// filter change re-draws without re-reading the log root.
+function renderHistoryView() {
+  const root = document.getElementById("tab-history");
+  const runs = histState.runs;
   // Default comparison: the newest 作業前 and the newest 作業後 (same group
   // when one exists), so the common case is one click.
   if (!histState.a || !runs.some(r => r.dir === histState.a)) {
@@ -58,7 +66,18 @@ async function renderHistory() {
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
     `<option value="${esc(r.dir)}" ${r.dir === histState.c ? "selected" : ""}>${esc(runTitle(r) + (r.interactive ? "  " + t("単独接続") : ""))}</option>`).join("");
 
-  const rows = runs.map(r => {
+  // Sort / filter of the run rows (display only; see listView in app.js).
+  // The comparison selects above the table always list every run.
+  const LV = "history";
+  const focus = listViewFocus();
+  const groupsSeen = [...new Set(runs.map(r => r.group || "").filter(Boolean))].sort();
+  const stagesSeen = [...new Set(runs.map(r => r.stage || "").filter(Boolean))];
+  const stageName = r => r.stage ? stageLabel(r.stage) + (r.interactive ? " " + t("単独接続") : "") : "";
+  const visible = listViewApply(LV, runs,
+    r => [fmtRunTime(r.startedAt), r.group, stageName(r), ...r.devices.map(d => d.name)],
+    (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? r.failed * 100000 + r.ok : -1) : (r.group || ""),
+    { group: r => r.group || "", stage: r => stageLabel(r.stage || "") });
+  const rows = visible.map(r => {
     const open = !!histState.open[r.dir];
     const counts = r.hasSummary
       ? `<span style="color:var(--ok)">${r.ok}</span> / <span style="color:var(--err)">${r.failed}</span>${r.canceled ? ` / <span style="color:var(--warn)">${r.canceled}</span>` : ""}`
@@ -109,15 +128,24 @@ async function renderHistory() {
       </div>
       <div id="cmp-result"></div>
     </div>
+    ${runs.length ? listViewBar(LV, t("絞り込み（日時・グループ・作業・機器名）"), [
+      { id: "group", label: t("グループ: すべて"), values: groupsSeen },
+      { id: "stage", label: t("作業: すべて"), values: [...new Set(stagesSeen.map(s => stageLabel(s)))] },
+    ]) : ""}
     <div class="panel">
       ${runs.length === 0 ? `<div class="empty">${esc(t("実行履歴がありません。一括実行するとここに記録されます。"))}</div>`
-        : `<table class="fixed"><thead><tr><th style="width:36px"></th><th style="width:170px">${esc(t("開始日時"))}</th><th style="width:110px">${esc(t("作業"))}</th><th>${esc(t("グループ"))}</th><th style="width:130px">${esc(t("成功 / 失敗"))}</th><th style="width:120px"></th><th style="width:260px"></th></tr></thead>
+        : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する実行がありません"))}</div>`
+        : `<table class="fixed" data-colw="history"><thead><tr><th style="width:36px"></th>${listViewTh(LV, "time", t("開始日時"), "width:170px")}${listViewTh(LV, "stage", t("作業"), "width:110px")}${listViewTh(LV, "group", t("グループ"))}${listViewTh(LV, "result", t("成功 / 失敗"), "width:130px")}<th style="width:120px"></th><th style="width:260px"></th></tr></thead>
           <tbody>${rows}</tbody></table>`}
     </div>`;
 
+  // Re-rendering for a sort / filter change must not re-read the log root:
+  // the rows come from the runs already in hand.
+  listViewWire(LV, root, renderHistoryView, focus);
+  wireColResize(root);
   document.getElementById("hist-refresh").onclick = renderHistory;
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
-  root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistory(); });
+  root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistoryView(); });
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   root.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => App().OpenRunFolder(b.dataset.folder).catch(e => toast(terr(e), "err")));
   root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { histState.a = b.dataset.cmpA; renderHistory(); });

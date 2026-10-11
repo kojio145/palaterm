@@ -969,6 +969,49 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 	return a.persist()
 }
 
+// RenameCommandSet gives a command set a new name and points every device
+// that used the old name at the new one, so the assignment survives the
+// rename. Devices refer to sets by name (CSV, bundles and the run tab all
+// do), which is why the set editor could not simply save under a new name:
+// that would have left the devices on a set that no longer existed.
+func (a *App) RenameCommandSet(oldName, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("セット名は必須です")
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	if oldName == newName {
+		a.mu.Unlock()
+		return nil
+	}
+	idx := -1
+	for i := range a.inv.CommandSets {
+		if a.inv.CommandSets[i].Name == newName {
+			a.mu.Unlock()
+			return fmt.Errorf("「%s」は既にあります", newName)
+		}
+		if a.inv.CommandSets[i].Name == oldName {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("command set %q not found", oldName)
+	}
+	a.inv.CommandSets[idx].Name = newName
+	for i := range a.inv.Devices {
+		if a.inv.Devices[i].CommandSet == oldName {
+			a.inv.Devices[i].CommandSet = newName
+		}
+	}
+	a.mu.Unlock()
+	return a.persist()
+}
+
 // CopyCommandSet duplicates a command set under a new unique name and returns
 // that name.
 func (a *App) CopyCommandSet(name string) (string, error) {
@@ -1635,7 +1678,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.9"
+const appVersion = "1.5.10"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

@@ -372,6 +372,53 @@ func TestCopyCommandSet(t *testing.T) {
 	if orig.Commands[0].Text != "show run" {
 		t.Error("copy shares the command slice with the original")
 	}
+}
+
+// A renamed set keeps the devices that were assigned to it: they refer to
+// the set by name, so the reference moves with it. A name already taken is
+// refused, and renaming to itself is a no-op.
+func TestRenameCommandSetFollowsDeviceAssignments(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"backup_copy", "other"} {
+		if err := a.SaveCommandSet(model.CommandSet{Name: n, Commands: []model.Command{{Text: "show run"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, d := range []model.Device{
+		{Name: "sw1", Host: "192.0.2.1", Conn: model.ConnSSH, OSType: "cisco-ios", CommandSet: "backup_copy", Enabled: true},
+		{Name: "sw2", Host: "192.0.2.2", Conn: model.ConnSSH, OSType: "cisco-ios", CommandSet: "other", Enabled: true},
+	} {
+		if err := a.SaveDevice(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.RenameCommandSet("backup_copy", "other"); err == nil {
+		t.Fatal("renaming onto an existing set must be refused")
+	}
+	if err := a.RenameCommandSet("backup_copy", "backup_copy"); err != nil {
+		t.Fatalf("rename to itself: %v", err)
+	}
+	if err := a.RenameCommandSet("backup_copy", "拠点バックアップ"); err != nil {
+		t.Fatal(err)
+	}
+	inv := a.GetInventory()
+	names := map[string]bool{}
+	for _, cs := range inv.CommandSets {
+		names[cs.Name] = true
+	}
+	if names["backup_copy"] || !names["拠点バックアップ"] {
+		t.Fatalf("set names after rename: %v", names)
+	}
+	got := map[string]string{}
+	for _, d := range inv.Devices {
+		got[d.Name] = d.CommandSet
+	}
+	if got["sw1"] != "拠点バックアップ" || got["sw2"] != "other" {
+		t.Fatalf("device assignments after rename = %v", got)
+	}
 	if _, err := a.CopyCommandSet("nosuch"); err == nil {
 		t.Error("copying a missing set should fail")
 	}
