@@ -12,7 +12,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.5.8 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.5.9 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 ![Run tab: four devices executing a command set in parallel](docs/img/run-en.png)
 
@@ -36,7 +36,8 @@ Windows exe — no installation required.
 - 🏢 **Group default credentials** — one shared account per group, with per-device overrides
 - 🔒 **Encrypted credential vault** — AES-256-GCM protected by a master password (nothing stored in plain text)
 - 💻 **Interactive terminal** — automate the login to a single device, then take over
-  manually in a built-in terminal (xterm.js)
+  manually in a built-in terminal (xterm.js); or skip the automatic login (Shift+click, or
+  "Switch to manual" while connecting) for initial setup over a serial console
 - 🌐 **English / Japanese UI**
 - 🚫 **Zero external communication** — no telemetry, no auto-update; designed for use inside closed networks
 

@@ -39,6 +39,10 @@ function terr(e) {
 // Backend messages that carry a dynamic value.
 const STAGE_LBL = { "作業前": "before", "作業中": "during", "作業後": "after", "指定なし": "not set" };
 const I18N_EN_PATTERNS = [
+  // シリアル: COM ポート空欄時の自動選択（session.pickPort）
+  [/USBシリアル変換が (\d+) 本あります（(.+?)）。機器の編集でCOMポートを指定してください/, (m, n, l) => `${n} USB serial adapters found (${l}). Choose the COM port in the device editor`],
+  [/USBシリアル変換が見つからず、COMポートが複数あります（(.+?)）。機器の編集でCOMポートを指定してください/, (m, l) => `No USB serial adapter found and several COM ports exist (${l}). Choose the COM port in the device editor`],
+  [/COMポートが見つかりません。USBシリアル変換ケーブルの接続を確認してください/, "no COM port found. Check that the USB serial cable is plugged in"],
   // ログ設定: 作業タイミングの付与文字列の検証（logstore.StageTokens.Validate）
   [/^(作業前|作業中|作業後)の付与文字列が長すぎます（32文字まで）: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" is too long (max 32 chars): ${b}`],
   [/^(作業前|作業中|作業後)の付与文字列にファイル名に使えない文字（.+）があります: (.+)$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" has characters not allowed in a file name (space or \\ / : * ? " < > |): ${b}`],
@@ -613,6 +617,23 @@ const I18N_EN = {
   "[接続エラー] ": "[connection error] ",
   "[切断されました]": "[disconnected]",
   "[ログ保存] ": "[log saved] ",
+
+  // ---- v1.5.9: manual connection (no automatic login) / takeover ----
+  "自動でログインした端末を開きます。Shift+クリック（または右クリック）で自動ログインなしの端末（シリアルでの初期設定・パスワード未設定の機器・想定外の画面で止まる機器に）": "Opens a terminal logged in for you. Shift+click (or right-click) opens it with no automatic login — for initial setup over serial, devices with no password yet, or devices stuck at a screen the profile does not expect",
+  "自動ログインなしの端末を開きました": "Terminal opened with no automatic login",
+  "手動に切り替え": "Switch to manual",
+  "自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）": "Stops the automatic login right now and hands you the line as it is (for a device stuck at an unexpected screen)",
+  "[手動に切り替えました。自動ログインは打ち切り、以後の入力はそのまま機器へ送られます]": "[switched to manual; the automatic login was stopped and what you type now goes straight to the device]",
+  "接続済み（手動）": "Connected (manual)",
+  "[{p} を開きました。何も表示されなければ Enter を押して機器の応答を確認してください。応答が無ければ COM ポート・ボーレート・結線を確認]": "[{p} opened. If nothing shows, press Enter to see whether the device answers; if it does not, check the COM port, baud rate and cabling]",
+  "（自動ログインなし）": "(no automatic login)",
+  "自動ログイン失敗": "Auto-login failed",
+  "自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。": "The automatic login failed, but the line is still open. You can take over from here and answer whatever the device is showing.",
+  "手動で続ける": "Continue manually",
+  "切断する": "Disconnect",
+  "[手動操作に切り替えました。以後の入力はそのまま機器へ送られます]": "[switched to manual operation; what you type now goes straight to the device]",
+  "[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]": "[the line is still open; use \"Continue manually\" above to carry on by hand]",
+  "引き継げる接続がありません": "There is no connection to take over",
 
   // ---- v1.5: group default credentials ----
   "グループ既定の認証情報でログインします": "Logs in with the group's default credentials",

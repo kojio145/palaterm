@@ -23,6 +23,13 @@ type Resizer interface {
 	Resize(cols, rows int) error
 }
 
+// Describer is implemented by transports that can name what they opened
+// better than the device record does — a serial session says "COM3 @ 9600",
+// which matters when the port was auto-detected.
+type Describer interface {
+	Describe() string
+}
+
 // LineEnder is implemented by transports that end a line with something other
 // than the CRLF the network protocols use. The transport owns this because it
 // is a property of how the far end reads bytes, not of what is being sent.

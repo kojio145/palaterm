@@ -199,7 +199,7 @@ function renderDeviceList() {
       <td><select class="cell inl-os" data-name="${esc(d.name)}">${osOptions(d.osType)}</select></td>
       <td><select class="cell inl-set" data-name="${esc(d.name)}">${cmdSetOptions(d.commandSet)}</select></td>
       <td style="text-align:right;white-space:nowrap">
-        <button class="btn sm act-conn" data-term="${esc(d.name)}">${esc(t("接続"))}</button>
+        <button class="btn sm act-conn" data-term="${esc(d.name)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
         <button class="btn sm act-edit" data-edit="${esc(d.name)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-copy="${esc(d.name)}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(d.name)}">${esc(t("削除"))}</button>
@@ -225,12 +225,12 @@ function renderDeviceList() {
         <button class="btn primary" id="add-dev">${esc(t("＋ 機器を追加"))}</button>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel scrollx">
       ${devs.length === 0
         ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
         : `<table><thead><tr><th style="width:30px"></th>
-            <th>${esc(t("ホスト名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:100px">${esc(t("拠点名"))}</th><th style="width:100px">${esc(t("役割"))}</th><th style="width:100px">${esc(t("接続"))}</th>
-            <th style="width:170px">OS</th><th style="width:170px">${esc(t("コマンドセット"))}</th><th style="width:240px"></th></tr></thead>
+            <th style="min-width:130px">${esc(t("ホスト名"))}</th><th style="width:112px">${esc(t("IPアドレス"))}</th><th style="width:84px">${esc(t("拠点名"))}</th><th style="width:84px">${esc(t("役割"))}</th><th style="width:84px">${esc(t("接続"))}</th>
+            <th style="width:126px">OS</th><th style="width:126px">${esc(t("コマンドセット"))}</th><th></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
 
@@ -273,10 +273,7 @@ function renderDeviceList() {
 
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editDevice(INV.devices.find(d => d.name === b.dataset.edit)));
-  root.querySelectorAll("[data-term]").forEach(b => b.onclick = async () => {
-    try { await App().SpawnTerminal(b.dataset.term); toast(t("対話接続ウィンドウを開きました"), "ok"); }
-    catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
-  });
+  wireConnectButtons(root);
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = () => delDevice(b.dataset.del));
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
     try { const nm = await App().CopyDevice(b.dataset.copy); await refreshInventory(); toast(t("複製しました: {n}", { n: nm }), "ok"); }

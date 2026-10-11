@@ -227,8 +227,8 @@ func (a *App) CreateVault(password string) error {
 		return fmt.Errorf("master password required")
 	}
 	inv := &model.Inventory{
-		Version:        1,
-		Settings:       model.DefaultSettings(),
+		Version:           1,
+		Settings:          model.DefaultSettings(),
 		CommandSets:       model.DefaultCommandSets(),
 		CommandSetSeedGen: model.CommandSetSeedGen,
 		DeviceGroups:      []model.DeviceGroup{{Name: "サンプルグループ"}},
@@ -1450,13 +1450,17 @@ type termClosed struct {
 	Device  string `json:"device"`
 	Error   string `json:"error,omitempty"`
 	LogPath string `json:"logPath,omitempty"`
+	// Takeover: the automatic login failed but the line is still open, and
+	// the window offers to hand it to the keyboard (Term.Takeover).
+	Takeover bool `json:"takeover,omitempty"`
 }
 
 // SpawnTerminal opens the interactive terminal for a device in a separate,
 // independent OS window (a child PalaTerm process). Several can run at once, and
 // each window resizes freely. The master password is handed to the child on
-// stdin so it never appears in the process arguments.
-func (a *App) SpawnTerminal(name string) error {
+// stdin so it never appears in the process arguments. manual opens the line
+// without the automatic login (see Term.manual).
+func (a *App) SpawnTerminal(name string, manual bool) error {
 	a.mu.Lock()
 	locked := a.inv == nil
 	pw := a.password
@@ -1468,7 +1472,11 @@ func (a *App) SpawnTerminal(name string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(exe, "--connect", name)
+	args := []string{"--connect", name}
+	if manual {
+		args = append(args, "--manual")
+	}
+	cmd := exec.Command(exe, args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -1627,7 +1635,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.8"
+const appVersion = "1.5.9"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

@@ -97,8 +97,14 @@ async function bootTerminalWindow() {
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
         <button class="btn sm" id="tw-logview" data-tip="${esc(t("このセッションのログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
         <button class="btn sm" id="tw-logdir">${esc(t("ログフォルダ"))}</button>
+        <button class="btn sm hidden" id="tw-switch" style="color:#fcd34d;border-color:#b45309" data-tip="${esc(t("自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）"))}">${esc(t("手動に切り替え"))}</button>
         <span id="tw-state" class="pill run">${esc(t("接続中…"))}</span>
       </div>
+    </div>
+    <div id="tw-takeover" class="hidden" style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#2a2412;border-bottom:1px solid #b45309;font-family:'Segoe UI',sans-serif;font-size:12px;color:#fcd34d">
+      <span style="flex:1">${esc(t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。"))}</span>
+      <button class="btn sm" id="tw-takeover-ok" style="color:#fcd34d;border-color:#b45309">${esc(t("手動で続ける"))}</button>
+      <button class="btn sm" id="tw-takeover-close">${esc(t("切断する"))}</button>
     </div>
     <div id="tw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid #2a3442;font-family:'Segoe UI',sans-serif;font-size:12px">
       <input id="tw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:#e6ecf3;border:1px solid #2a3442;border-radius:6px;padding:4px 8px;font-size:12px">
@@ -400,10 +406,31 @@ async function bootTerminalWindow() {
       ? t("接続中… ({a}秒)", { a: ev.elapsed })
       : t("接続中… ({a}/{b}秒)", { a: ev.elapsed, b: ev.total });
   });
+  // While the automatic login runs, the device's screen is visible only to
+  // the login logic — the user sees "接続中…". If they already know the
+  // device is at a screen no profile will get past (initial setup dialog,
+  // forced password change), this button stops the login right away and
+  // hands them the line, instead of waiting out the timeout.
+  const switchBtn = document.getElementById("tw-switch");
+  switchBtn.onclick = () => {
+    switchBtn.disabled = true;
+    term.write("\x1b[33m" + t("[手動に切り替えました。自動ログインは打ち切り、以後の入力はそのまま機器へ送られます]") + "\x1b[0m\r\n");
+    Term().SwitchToManual().catch(e => { switchBtn.disabled = false; term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); });
+  };
+  function showSwitch(on) { switchBtn.classList.toggle("hidden", !on); switchBtn.disabled = false; }
   rt().EventsOn("term:ready", ev => {
     connecting = false;
-    stateEl.textContent = t("接続済み"); stateEl.className = "pill ok";
-    titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}`;
+    closed = false;
+    showSwitch(false);
+    takeoverBar.classList.add("hidden"); doFit();
+    stateEl.textContent = ev.manual ? t("接続済み（手動）") : t("接続済み"); stateEl.className = "pill ok";
+    titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}` + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
+    // A console opened by hand shows nothing until the device answers; say
+    // which port this is and what to do, so a wrong COM port or baud rate
+    // is the first thing checked rather than the last.
+    if (ev.manual && ev.conn === "serial") {
+      term.write("\x1b[33m" + t("[{p} を開きました。何も表示されなければ Enter を押して機器の応答を確認してください。応答が無ければ COM ポート・ボーレート・結線を確認]", { p: ev.host }) + "\x1b[0m\r\n");
+    }
     term.focus(); doFit();
     // The OS window may still be behind the main window: ask for the
     // foreground once more now that there is something to type into.
@@ -418,13 +445,28 @@ async function bootTerminalWindow() {
     hkDlg.classList.add("hidden");
     closed = false; connecting = true;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
+    showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[ホストキーを更新して再接続します]") + "\x1b[0m\r\n");
     Term().AllowHostKeyChange().catch(e => { closed = true; term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); });
+  };
+  // A failed automatic login whose line is still open (ev.takeover): the
+  // device is at a screen the profile could not get past, and the user can
+  // read it now. Offer the keyboard instead of hanging up.
+  const takeoverBar = document.getElementById("tw-takeover");
+  document.getElementById("tw-takeover-ok").onclick = () => {
+    takeoverBar.classList.add("hidden"); doFit();
+    term.write("\x1b[33m" + t("[手動操作に切り替えました。以後の入力はそのまま機器へ送られます]") + "\x1b[0m\r\n");
+    Term().Takeover().then(() => term.focus()).catch(e => { term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); });
+  };
+  document.getElementById("tw-takeover-close").onclick = () => {
+    takeoverBar.classList.add("hidden"); doFit();
+    Term().Discard().catch(() => {});
   };
   rt().EventsOn("term:closed", ev => {
     closed = true;
     connecting = false;
-    stateEl.textContent = ev.error ? t("接続失敗") : t("切断");
+    showSwitch(false);
+    stateEl.textContent = ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断");
     stateEl.className = "pill err";
     if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
       document.getElementById("tw-hk-msg").textContent = terr(ev.error);
@@ -433,17 +475,24 @@ async function bootTerminalWindow() {
     if (ev.error) term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(ev.error) + "\x1b[0m\r\n");
     else term.write("\r\n\x1b[33m" + t("[切断されました]") + "\x1b[0m\r\n");
     if (ev.logPath) term.write("\x1b[36m" + t("[ログ保存] ") + ev.logPath + "\x1b[0m\r\n");
+    if (ev.takeover) {
+      term.write("\x1b[33m" + t("[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]") + "\x1b[0m\r\n");
+      takeoverBar.classList.remove("hidden"); doFit();
+    }
   });
 
   term.onData(d => {
     if (closed) return;
     Term().Send(bytesToB64(new TextEncoder().encode(d))).catch(() => {});
   });
-  window.addEventListener("beforeunload", () => { if (!closed) Term().Close(); });
+  // Close drops the live session; Discard drops a line held for takeover.
+  window.addEventListener("beforeunload", () => { if (!closed) Term().Close(); else Term().Discard().catch(() => {}); });
 
   // Kick off: use the stdin password if present, else prompt in-window.
   const res = await Term().Start();
   if (titleEl.textContent === t("対話接続")) titleEl.textContent = res.name || t("対話接続");
+  // Only an automatic login can be switched away from.
+  showSwitch(!res.manual);
   if (res.needPassword) {
     const pwOverlay = document.getElementById("tw-pw");
     pwOverlay.classList.remove("hidden");

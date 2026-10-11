@@ -21,11 +21,17 @@ const (
 type serialSession struct {
 	port serial.Port
 	name string
+	baud int
 }
 
 func (s *serialSession) Read(p []byte) (int, error)  { return s.port.Read(p) }
 func (s *serialSession) Write(p []byte) (int, error) { return s.port.Write(p) }
 func (s *serialSession) Close() error                { return s.port.Close() }
+
+// Describe names the port actually opened — "COM3 @ 9600" — which the
+// terminal window shows in its title. With an auto-detected port this is
+// the only place the user learns which COM port they are talking to.
+func (s *serialSession) Describe() string { return fmt.Sprintf("%s @ %d", s.name, s.baud) }
 
 // LineEnding is a bare CR on a console line.
 //
@@ -57,7 +63,7 @@ func dialSerial(name string, baud int) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open serial %s @ %d: %w", name, baud, err)
 	}
-	return &serialSession{port: port, name: name}, nil
+	return &serialSession{port: port, name: name, baud: baud}, nil
 }
 
 // openBusyAware opens the port, waiting out a "busy" that is only the
@@ -86,15 +92,4 @@ func openBusyAware(name string, mode *serial.Mode) (serial.Port, error) {
 // ListSerialPorts returns the COM ports currently present (for the GUI).
 func ListSerialPorts() ([]string, error) {
 	return serial.GetPortsList()
-}
-
-func autoDetectPort() (string, error) {
-	ports, err := serial.GetPortsList()
-	if err != nil {
-		return "", err
-	}
-	if len(ports) == 0 {
-		return "", fmt.Errorf("no serial ports found")
-	}
-	return ports[0], nil
 }
