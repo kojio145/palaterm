@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.11</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.12</div>
   </header>
 
   <nav class="toc">
@@ -518,7 +518,7 @@
   <section id="history">
     <h2 class="step"><span class="num">★</span>実行履歴と作業前後の比較</h2>
     <p class="lead">過去の一括実行を一覧し、作業前と作業後のログの違いを機器ごとに確認します。</p>
-    <p>一括実行のたびに、ログフォルダ内の <code>log_日時[_作業タイミング]/</code> に <code>palaterm-run.json</code>（グループ・作業タイミング・機器ごとの成否とログファイル名）が残り、左サイドバーの<strong>「実行履歴」</strong>に新しい順で並びます。</p>
+    <p>一括実行のたびに、ログフォルダ内の <code>日時[_グループ][_作業タイミング]/</code>（既定）に <code>palaterm-run.json</code>（グループ・作業タイミング・機器ごとの成否とログファイル名）が残り、左サイドバーの<strong>「実行履歴」</strong>に新しい順で並びます。</p>
     <ol class="steps">
       <li>行頭の <strong>▸</strong> で機器ごとの結果が開き、<strong>「ログ表示」</strong>でその場でログを見られます。<strong>「フォルダ」</strong>はその実行のフォルダをエクスプローラーで開きます。</li>
       <li>比較したい 2 回を<strong>「比較元(A)」「比較先(B)」</strong>（または上部の A / B の選択）で選び、<strong>「比較する」</strong>を押します。作業後の実行が終わった直後は、最新の作業前・作業後が自動で A / B に入っています。</li>
@@ -541,13 +541,13 @@
 
     <figure class="shot" data-shot="25_log_window"><img src="img/manual/25_log_window.png" alt="ログ表示ウィンドウ。検索・文字サイズ・全文コピー" loading="lazy"><figcaption>ログ表示ウィンドウ。検索・文字サイズ・全文コピー</figcaption></figure>
     <h3>保存先とファイル名</h3>
-    <p>実行するたびに、ログフォルダの中に実行ごとのフォルダ（既定 <code>log_日付_時刻[_作業タイミング]/</code>）が作られ、その中に機器ごとのログが入ります。フォルダ名も「ログ設定」の<strong>ログフォルダ名テンプレート</strong>で変えられます（使える変数: <code>{date} {time} {hhmm} {group} {stage}</code>。例: <code>{date}_{group}_{stage}</code> → <code>20261009_A社_before</code>。同名のフォルダが既にあれば <code>_2</code>, <code>_3</code> … が付きます）。ファイル名の既定は次の形式です。</p>
+    <p>実行するたびに、ログフォルダの中に実行ごとのフォルダ（既定 <code>日付_時刻[_グループ][_作業タイミング]/</code>。例: <code>20261011_211445_A社_before</code>）が作られ、その中に機器ごとのログが入ります。フォルダ名も「ログ設定」の<strong>ログフォルダ名テンプレート</strong>で変えられます（使える変数: <code>{date} {time} {hhmm} {group} {stage}</code>。例: <code>{date}_{group}_{stage}</code> → <code>20261009_A社_before</code>。同名のフォルダが既にあれば <code>_2</code>, <code>_3</code> … が付きます）。ファイル名の既定は次の形式です。</p>
     <div class="term">{host}_{site}_{role}_{stage}_{date}_{time}.txt<br>
 <span class="c"># 例: core-sw1_本社_コア_Config_20260827_183000.txt（作業タイミング指定なし）</span><br>
 <span class="c"># 例: core-sw1_本社_コア_before_20260827_183000.txt（作業前）</span><br>
 <span class="c"># 例: core-sw1_本社_before_20260827_183000.txt（役割が空の機器）</span></div>
     <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Config</code>、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。この 3 語は「ログ設定」の<strong>作業タイミングの付与文字列</strong>で変えられます（空欄なら既定。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点・役割が空の機器では <code>{site}</code> / <code>{role}</code> の分は詰められます。以前の既定（<code>{host}_Config_{date}_{time}.txt</code>・<code>{host}_{site}_{stage}_{date}_{time}.txt</code>）のままの設定は、ロック解除時に自動で新しい既定へ移行します（変更済みのテンプレートは触りません）。
-    対話接続（1台に手動ログイン）のログも同じ名前で <code>log_日付_時刻_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「単独接続」として並びます。</p>
+    対話接続（1台に手動ログイン）のログも同じ名前で <code>日付_時刻_グループ_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「単独接続」として並びます。</p>
     <p>ファイル名テンプレートは「ログ設定」タブで変更でき、次の部品が使えます（クリックでコピーできます）。</p>
     <div class="scroll"><table>
       <thead><tr><th>部品</th><th>意味</th></tr></thead>
@@ -576,7 +576,7 @@
         <tr><td>接続タイムアウト</td><td>接続確立を待つ秒数。既定20秒。</td></tr>
         <tr><td>コマンドタイムアウト</td><td>1コマンドの応答（プロンプト復帰）を待つ秒数。既定30秒。</td></tr>
         <tr><td>ログ保存フォルダ</td><td>ログの出力先。既定 <code>logs</code>。<strong>「参照…」</strong>でフォルダ選択もできます。相対パスは <code>PalaTerm.exe</code> と同じフォルダが基準です。</td></tr>
-        <tr><td>ログフォルダ名テンプレート</td><td>実行ごとのフォルダ名。<code>{date} {time} {hhmm} {group} {stage}</code> が使えます（既定 <code>log_{date}_{time}_{stage}</code>）。</td></tr>
+        <tr><td>ログフォルダ名テンプレート</td><td>実行ごとのフォルダ名。<code>{date} {time} {hhmm} {group} {stage}</code> が使えます（既定 <code>{date}_{time}_{group}_{stage}</code>。旧既定 <code>log_{date}_{time}_{stage}</code> のままの場合はロック解除時に自動で新既定へ。自分で変えたテンプレートはそのまま）。実行履歴はフォルダ内の記録ファイルで実行を判別するので、フォルダ名を自由に変えても一覧に出ます。</td></tr>
         <tr><td>作業タイミングの付与文字列</td><td><code>{stage}</code> に入る語を作業前／作業中／作業後ごとに指定します（既定 <code>before</code> / <code>work</code> / <code>after</code>。空欄なら既定）。空白や <code>\ / : * ? " &lt; &gt; |</code> は使えず、3 語は互いに異なる必要があります。</td></tr>
         <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
         <tr><td>アイドル時の自動ロック</td><td>マウス・キーボード操作がこの分数なければ自動でロック画面に戻ります。既定 30 分、<code>0</code> で無効。一括実行中はロックしません（対話接続ウィンドウは別プロセスのため影響しません）。</td></tr>
@@ -695,7 +695,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.11 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.12 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

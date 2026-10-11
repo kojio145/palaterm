@@ -109,10 +109,15 @@ func List(root string, tok logstore.StageTokens) ([]Run, error) {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		// A run folder is one the app named (log_…, the default template) or
-		// one that carries a summary (any folder-name template).
-		if _, err := os.Stat(filepath.Join(dir, SummaryName)); err != nil && !strings.HasPrefix(e.Name(), "log_") {
-			continue
+		// A run folder is one that carries a summary — whatever the folder-
+		// name template made of its name — or, for a folder without one (a
+		// run from before summaries, an interactive window that crashed),
+		// one whose name starts the way the app's templates do: the old
+		// "log_" prefix, or the date and time the current default opens with.
+		if _, err := os.Stat(filepath.Join(dir, SummaryName)); err != nil {
+			if _, _, ok := parseDirName(e.Name()); !ok {
+				continue
+			}
 		}
 		r := readRun(dir, tok)
 		if r.StartedAt == "" {
@@ -190,7 +195,11 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 	return r
 }
 
-// parseDirName reads log_<yyyymmdd_hhmmss>[_<stage>].
+// parseDirName reads [log_]<yyyymmdd_hhmmss>[_<group>][_<stage>]: the old
+// default (log_ prefix, stage only) and the current one (no prefix, group
+// then stage). The stage is the last "_" field after the time — a group
+// name may itself contain "_", but the stage word cannot (see
+// StageTokens.Validate), so the last field is the only safe reading.
 func parseDirName(name string) (time.Time, string, bool) {
 	rest := strings.TrimPrefix(name, "log_")
 	if len(rest) < 15 {
@@ -200,6 +209,10 @@ func parseDirName(name string) (time.Time, string, bool) {
 	if err != nil {
 		return time.Time{}, "", false
 	}
-	stage := strings.TrimPrefix(rest[15:], "_")
+	tail := strings.TrimPrefix(rest[15:], "_")
+	stage := tail
+	if i := strings.LastIndex(tail, "_"); i >= 0 {
+		stage = tail[i+1:]
+	}
 	return ts, stage, true
 }

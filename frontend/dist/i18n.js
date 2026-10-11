@@ -723,7 +723,7 @@ const I18N_EN = {
   "比較元(A)": "A (base)",
   "比較先(B)": "B (target)",
   "フォルダ": "Folder",
-  "ログフォルダ内の実行ごとのフォルダ（log_日時[_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます": "One row per run folder (log_<time>[_<stage>]) under the log folder. ▸ shows each device's result; pick two runs as A and B and press Compare to see what changed per device between before and after.",
+  "ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます": "One row per run folder (default: <time>[_<group>][_<stage>]) under the log folder. ▸ shows each device's result; pick two runs as A and B and press Compare to see what changed per device between before and after.",
   "再読込": "Reload",
   "比較": "Compare",
   "比較する": "Compare",

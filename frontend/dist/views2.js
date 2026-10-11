@@ -819,7 +819,7 @@ function renderSettings() {
       </div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("実行ごとに作るフォルダの名前です。使える変数は {date} {time} {hhmm} {group} {stage}（例: {date}_{group}_{stage}）。同名のフォルダが既にあれば _2, _3 … が付きます"))}">${esc(t("ログフォルダ名テンプレート ⓘ"))}</span></label>
-          <input id="set-dtmpl" value="${esc(s.logDirTemplate || "log_{date}_{time}_{stage}")}"></div>
+          <input id="set-dtmpl" value="${esc(s.logDirTemplate || "{date}_{time}_{group}_{stage}")}"></div>
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
@@ -869,7 +869,7 @@ function renderSettings() {
       commandTimeout: parseInt(document.getElementById("set-cmt").value, 10) || 30,
       logDir: document.getElementById("set-dir").value || "logs",
       logNameTemplate: document.getElementById("set-tmpl").value || "{host}_{site}_{role}_{stage}_{date}_{time}.txt",
-      logDirTemplate: document.getElementById("set-dtmpl").value.trim() || "log_{date}_{time}_{stage}",
+      logDirTemplate: document.getElementById("set-dtmpl").value.trim() || "{date}_{time}_{group}_{stage}",
       // Empty = default (before / work / after); the backend validates.
       stageTokenBefore: document.getElementById("set-st-before").value.trim(),
       stageTokenWork: document.getElementById("set-st-work").value.trim(),

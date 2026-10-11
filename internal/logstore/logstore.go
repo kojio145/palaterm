@@ -155,10 +155,27 @@ func IsOldDefaultTemplate(tmpl string) bool {
 	return false
 }
 
-// DefaultDirTemplate names the per-run folder: log_<date>_<time>[_<stage>].
-// Placeholders: {date} {time} {hhmm} {group} {stage}; a run with no stage
-// leaves {stage} empty and it is dropped with one neighbouring separator.
-const DefaultDirTemplate = "log_{date}_{time}_{stage}"
+// DefaultDirTemplate names the per-run folder:
+// <date>_<time>[_<group>][_<stage>]. Placeholders: {date} {time} {hhmm}
+// {group} {stage}; an empty group or stage is dropped with one neighbouring
+// separator. The group joined (and the "log_" prefix left) in v1.5.12, at
+// the user's request: folders sort by time and say whose run it was.
+const DefaultDirTemplate = "{date}_{time}_{group}_{stage}"
+
+// OldDefaultDirTemplates are the folder-name defaults of earlier releases.
+// A vault still on one moves to DefaultDirTemplate on unlock.
+var OldDefaultDirTemplates = []string{"log_{date}_{time}_{stage}"}
+
+// IsOldDefaultDirTemplate reports whether tmpl is an earlier release's
+// folder-name default (and so safe to move to DefaultDirTemplate).
+func IsOldDefaultDirTemplate(tmpl string) bool {
+	for _, t := range OldDefaultDirTemplates {
+		if tmpl == t {
+			return true
+		}
+	}
+	return false
+}
 
 // StageWork is the stage recorded for an interactive (single-device) session:
 // it is work being done by hand, so its logs read the same as a batch run
@@ -305,11 +322,11 @@ func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) str
 		"{hhmm}":  now.Format("1504"),
 	}
 	// An empty {group} / {stage} drops out with one neighbouring separator
-	// (see dropEmpty), so "log_{date}_{time}_{stage}" with no stage is
-	// "log_20261009_123456".
+	// (see dropEmpty), so "{date}_{time}_{group}_{stage}" with neither is
+	// "20261009_123456".
 	name := strings.Trim(expand(dropEmpty(tmpl, vals), vals), "_. ")
 	if name == "" {
-		name = fmt.Sprintf("log_%s", now.Format("20060102_150405"))
+		name = now.Format("20060102_150405")
 	}
 	base := filepath.Join(ResolveRoot(root), name)
 	dir := base

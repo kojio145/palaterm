@@ -28,11 +28,20 @@ func TestStageInNames(t *testing.T) {
 	}
 	root := t.TempDir()
 	d := RunDir(root, "", "A社", "after", StageTokens{}, now)
-	if filepath.Base(d) != "log_20261009_123456_after" {
+	if filepath.Base(d) != "20261009_123456_A社_after" {
 		t.Errorf("run dir: %q", d)
 	}
-	if filepath.Base(RunDir(root, "", "", "during", StageTokens{}, now)) != "log_20261009_123456_work" {
+	if filepath.Base(RunDir(root, "", "", "during", StageTokens{}, now)) != "20261009_123456_work" {
 		t.Errorf("during run dir should say work: %q", RunDir(root, "", "", "during", StageTokens{}, now))
+	}
+	if filepath.Base(RunDir(root, "", "", "", StageTokens{}, now)) != "20261009_123456" {
+		t.Errorf("no group, no stage: %q", RunDir(root, "", "", "", StageTokens{}, now))
+	}
+	if filepath.Base(RunDir(root, "log_{date}_{time}_{stage}", "A社", "after", StageTokens{}, now)) != "log_20261009_123456_after" {
+		t.Error("the old default must still work when set explicitly")
+	}
+	if !IsOldDefaultDirTemplate("log_{date}_{time}_{stage}") || IsOldDefaultDirTemplate(DefaultDirTemplate) {
+		t.Error("IsOldDefaultDirTemplate")
 	}
 	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "before", StageTokens{}, now)); got != "20261009_A社_before" {
 		t.Errorf("custom dir template: %q", got)
@@ -131,7 +140,7 @@ func TestStageTokens(t *testing.T) {
 		t.Errorf("default before: %q", got)
 	}
 	root := t.TempDir()
-	if got := filepath.Base(RunDir(root, "", "", "after", tok, now)); got != "log_20261009_123456_post" {
+	if got := filepath.Base(RunDir(root, "", "", "after", tok, now)); got != "20261009_123456_post" {
 		t.Errorf("custom run dir: %q", got)
 	}
 	// Canonical reads both the custom and the default words.
@@ -171,7 +180,7 @@ func TestStageTokensJapanese(t *testing.T) {
 	}
 	root := t.TempDir()
 	dir := RunDir(root, "", "A社", "before", tok, now)
-	if filepath.Base(dir) != "log_20261010_173000_事前" {
+	if filepath.Base(dir) != "20261010_173000_A社_事前" {
 		t.Fatalf("run dir: %q", dir)
 	}
 	p, err := Write(dir, DefaultTemplate, Fields{Host: "r1", Site: "本社", Stage: "before", Tokens: tok}, "x", now)

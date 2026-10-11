@@ -403,6 +403,12 @@ func (a *App) Unlock(password string) error {
 		inv.Settings.LogNameTemplate = logstore.DefaultTemplate
 		seed = true
 	}
+	// The same for the run-folder name (log_{date}_{time}_{stage} before
+	// v1.5.12). Empty already means the current default.
+	if logstore.IsOldDefaultDirTemplate(inv.Settings.LogDirTemplate) {
+		inv.Settings.LogDirTemplate = logstore.DefaultDirTemplate
+		seed = true
+	}
 	if seed {
 		if err := vault.Save(a.vaultPath, password, inv); err != nil {
 			return err
@@ -1678,7 +1684,7 @@ func (a *App) CloseInteractive(name string) {
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.11"
+const appVersion = "1.5.12"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

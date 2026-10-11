@@ -124,6 +124,44 @@ func TestListReadsSummaryAndLegacy(t *testing.T) {
 	}
 }
 
+// The folder-name template is the user's to change, so the history must not
+// depend on the "log_" prefix. A folder with a summary is a run whatever it
+// is called; one without (a crashed interactive window) still counts when
+// it opens with the date and time, as the current default does — group and
+// stage after it, the stage read as the last field even if the group name
+// has "_" in it. Folders that are neither are left alone.
+func TestListFindsRunsWhateverTheFolderTemplate(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "A社_作業前取得")
+	os.MkdirAll(custom, 0o755)
+	if err := Write(custom, Summary{StartedAt: "2026-10-11T09:00:00+09:00", Group: "A社", Stage: "before",
+		Devices: []DeviceSummary{{Name: "r1", Success: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	noSummary := filepath.Join(root, "20261011_100000_SHIFT_東京_work")
+	os.MkdirAll(noSummary, 0o755)
+	os.WriteFile(filepath.Join(noSummary, "sw1_work_20261011_100000.txt"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(root, "backup-old"), 0o755) // not a run
+
+	runs, err := List(root, logstore.StageTokens{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]Run{}
+	for _, r := range runs {
+		got[r.Name] = r
+	}
+	if len(runs) != 2 {
+		t.Fatalf("want 2 runs, got %d: %+v", len(runs), runs)
+	}
+	if r := got["A社_作業前取得"]; !r.HasSummary || r.Stage != "before" {
+		t.Errorf("custom-named run with a summary: %+v", r)
+	}
+	if r := got["20261011_100000_SHIFT_東京_work"]; r.HasSummary || r.Stage != "work" || r.StartedAt == "" || len(r.Devices) != 1 {
+		t.Errorf("date-first run without a summary: %+v", r)
+	}
+}
+
 // Folders named with renamed stage words (and with the defaults from before
 // the rename) sort into their stage.
 func TestListCustomStageWords(t *testing.T) {

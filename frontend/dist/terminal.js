@@ -113,7 +113,7 @@ async function bootTerminalWindow() {
       <button class="btn sm" id="tw-find-next">▼</button>
       <button class="btn sm" id="tw-find-close">✕</button>
     </div>
-    <div id="tw-host" style="flex:1;min-height:0;background:#000;padding:6px"></div>
+    <div id="tw-host" style="flex:1;min-height:0;background:#000;padding:6px 6px 12px 6px"></div>
     <div id="tw-paste-dlg" class="hidden" style="position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6)">
       <div style="display:flex;flex-direction:column;width:calc(100vw - 32px);height:calc(100vh - 80px);background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:16px 22px;font-family:'Segoe UI',sans-serif">
         <div style="color:#e6ecf3;font-size:14px;font-weight:600;margin-bottom:6px">${esc(t("貼り付けの確認"))} <span class="muted" style="font-size:11px;font-weight:400">${esc(t("（ウィンドウを広げると編集欄も広がります）"))}</span></div>
@@ -387,8 +387,25 @@ async function bootTerminalWindow() {
   });
   document.getElementById("tw-host").addEventListener("mouseup", () => setTimeout(copySelection, 0));
 
+  // Fit the terminal to the window, then make sure the last row really is
+  // inside it. FitAddon's row count can come out one row too many (measured:
+  // the last row ran 1–5px past the window bottom, eating the padding — and
+  // worse at 125% display scaling), which cut the prompt line in half at the
+  // bottom of the window (2026-10-11, field report). Drop rows until the
+  // screen ends above the host's bottom padding.
   function doFit() {
-    try { fit.fit(); Term().Resize(term.cols, term.rows).catch(() => {}); } catch (e) {}
+    try {
+      fit.fit();
+      const host = document.getElementById("tw-host");
+      const screen = host.querySelector(".xterm-screen");
+      if (screen) {
+        const limit = host.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(host).paddingBottom) || 0);
+        for (let i = 0; i < 4 && term.rows > 2 && screen.getBoundingClientRect().bottom > limit + 0.5; i++) {
+          term.resize(term.cols, term.rows - 1);
+        }
+      }
+      Term().Resize(term.cols, term.rows).catch(() => {});
+    } catch (e) {}
   }
   setTimeout(doFit, 0);
   new ResizeObserver(() => doFit()).observe(document.getElementById("tw-host"));

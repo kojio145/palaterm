@@ -109,7 +109,7 @@ function renderHistoryView() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行履歴"))}</div>
-        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（log_日時[_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}</div></div>
+        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読込"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>

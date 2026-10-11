@@ -374,6 +374,32 @@ func TestCopyCommandSet(t *testing.T) {
 	}
 }
 
+// A vault still on the old run-folder default (log_{date}_{time}_{stage})
+// moves to the new one on unlock; a folder template the user wrote stays.
+func TestOldDefaultLogDirTemplateMigrates(t *testing.T) {
+	for _, tc := range []struct{ have, want string }{
+		{"log_{date}_{time}_{stage}", logstore.DefaultDirTemplate},
+		{"{date}_{group}", "{date}_{group}"},
+	} {
+		a := newTestApp(t)
+		if err := a.CreateVault("master"); err != nil {
+			t.Fatal(err)
+		}
+		a.inv.Settings.LogDirTemplate = tc.have
+		if err := a.persist(); err != nil {
+			t.Fatal(err)
+		}
+		a2 := NewApp()
+		a2.vaultPath = a.vaultPath
+		if err := a2.Unlock("master"); err != nil {
+			t.Fatal(err)
+		}
+		if got := a2.GetInventory().Settings.LogDirTemplate; got != tc.want {
+			t.Errorf("%q after unlock = %q, want %q", tc.have, got, tc.want)
+		}
+	}
+}
+
 // A renamed set keeps the devices that were assigned to it: they refer to
 // the set by name, so the reference moves with it. A name already taken is
 // refused, and renaming to itself is a no-op.
