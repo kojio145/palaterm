@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.9";
+const APP_VERSION = "1.5.10";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -71,6 +71,145 @@ function wireShiftRange(key, boxes, apply) {
     });
     // Shift+クリックの巻き添えでテキスト選択が走るのを防ぐ。
     cb.addEventListener("mousedown", e => { if (e.shiftKey) e.preventDefault(); });
+  });
+}
+
+// ---- Excel-like sort / filter for the list tabs ----
+// One state per list (devices, groups, command sets, OS types, history),
+// kept across re-renders. Display only: the stored order — the one drag-
+// reorder edits and the backend runs in — is never touched. While a sort or
+// a filter is on, the rows no longer show the stored order, so the drag
+// handles are switched off until 「並び順を戻す」 / 「絞り込み解除」.
+const listViews = {};
+function listView(key) {
+  return listViews[key] || (listViews[key] = { sort: { key: "", dir: 1 }, text: "", sel: {} });
+}
+function listViewActive(key) {
+  const v = listView(key);
+  return !!(v.sort.key || v.text.trim() || Object.values(v.sel).some(Boolean));
+}
+// items → the rows to show. searchOf(item) lists the strings the text box
+// matches against; sortVal(item, sortKey) gives the value a column sorts
+// by; selOf maps each select's id to item → value for exact matching.
+function listViewApply(key, items, searchOf, sortVal, selOf) {
+  const v = listView(key);
+  const q = v.text.trim().toLowerCase();
+  let out = items.filter(it => {
+    if (q && !searchOf(it).some(s => String(s ?? "").toLowerCase().includes(q))) return false;
+    for (const id of Object.keys(v.sel)) {
+      if (v.sel[id] && selOf && selOf[id] && String(selOf[id](it) ?? "") !== v.sel[id]) return false;
+    }
+    return true;
+  });
+  if (v.sort.key) {
+    const val = it => { const x = sortVal(it, v.sort.key); return typeof x === "number" ? x : String(x ?? "").toLowerCase(); };
+    out = out.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * v.sort.dir; });
+  }
+  return out;
+}
+// A sortable column header (click = sort, click again = reverse).
+function listViewTh(key, col, label, style) {
+  const v = listView(key);
+  const arrow = v.sort.key === col ? (v.sort.dir > 0 ? " ▲" : " ▼") : "";
+  return `<th ${style ? `style="${style}"` : ""} class="sortable" data-lv="${esc(key)}" data-sort="${esc(col)}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${arrow}</th>`;
+}
+// The filter row: a text box, optional selects ({id, label, values}), and
+// the clear buttons that appear while something is on.
+function listViewBar(key, placeholder, selects) {
+  const v = listView(key);
+  const sels = (selects || []).map(s => `<select class="btn lv-sel" data-lv="${esc(key)}" data-sel="${esc(s.id)}" style="padding-right:8px">
+      <option value="">${esc(s.label)}</option>${s.values.map(x => `<option value="${esc(x)}" ${v.sel[s.id] === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>`).join("");
+  const filtered = !!(v.text.trim() || Object.values(v.sel).some(Boolean));
+  return `<div class="row-inline lv-bar" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <input id="lv-text-${esc(key)}" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(placeholder)}" value="${esc(v.text)}">
+      ${sels}
+      ${filtered ? `<button class="btn sm lv-clear" data-lv="${esc(key)}">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
+      ${v.sort.key ? `<button class="btn sm lv-sort-clear" data-lv="${esc(key)}">${esc(t("並び順を戻す"))}</button>` : ""}
+    </div>`;
+}
+// The ⠿ cell of a drag-reorderable row: live, or switched off while the
+// list is sorted or filtered.
+function listViewDragCell(key) {
+  if (listViewActive(key)) {
+    return `<td class="drag-handle off" data-tip="${esc(t("並び替え・絞り込み中はドラッグで順序を変えられません（「並び順を戻す」「絞り込み解除」で戻ります）"))}">⠿</td>`;
+  }
+  return `<td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>`;
+}
+// Call before rebuilding the tab's HTML, and pass the result to listViewWire:
+// the text box re-renders the list on every keystroke, and this puts the
+// caret back where it was.
+function listViewFocus() {
+  const el = document.activeElement;
+  return el && el.id && el.id.startsWith("lv-text-") ? { id: el.id, pos: el.selectionStart } : null;
+}
+function listViewWire(key, root, rerender, focus) {
+  const v = listView(key);
+  const txt = root.querySelector(`#lv-text-${CSS.escape(key)}`);
+  if (txt) {
+    txt.addEventListener("input", () => { v.text = txt.value; rerender(); });
+    if (focus && focus.id === txt.id) { txt.focus(); try { txt.setSelectionRange(focus.pos, focus.pos); } catch (e) { } }
+  }
+  root.querySelectorAll(`.lv-sel[data-lv="${CSS.escape(key)}"]`).forEach(s => s.onchange = () => { v.sel[s.dataset.sel] = s.value; rerender(); });
+  root.querySelectorAll(`.lv-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.text = ""; v.sel = {}; rerender(); });
+  root.querySelectorAll(`.lv-sort-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.sort = { key: "", dir: 1 }; rerender(); });
+  root.querySelectorAll(`th.sortable[data-lv="${CSS.escape(key)}"]`).forEach(el => el.onclick = () => {
+    const k = el.dataset.sort;
+    v.sort = v.sort.key === k ? { key: k, dir: -v.sort.dir } : { key: k, dir: 1 };
+    rerender();
+  });
+}
+
+// ---- Excel-like column resizing ----
+// A table marked data-colw="<key>" gets a drag handle on the right edge of
+// every header cell but the last: drag to resize that column, double-click
+// to give it its default width back. Widths are remembered per table in
+// localStorage (a per-PC convenience, like the font size), and put back by
+// wireColResize on every render. Tables must use table-layout: fixed for a
+// header width to hold, which these all do.
+function colWidthsKey(key) { return "palaterm_colw_" + key; }
+function loadColWidths(key) {
+  try { return JSON.parse(localStorage.getItem(colWidthsKey(key)) || "{}") || {}; } catch (e) { return {}; }
+}
+function saveColWidths(key, w) {
+  try { localStorage.setItem(colWidthsKey(key), JSON.stringify(w)); } catch (e) { }
+}
+function wireColResize(root) {
+  root.querySelectorAll("table[data-colw]").forEach(table => {
+    const key = table.dataset.colw;
+    const ths = [...table.querySelectorAll("thead th")];
+    const saved = loadColWidths(key);
+    ths.forEach((th, i) => {
+      // The template's own width is the default a double-click returns to.
+      th.dataset.defw = th.style.width || "";
+      if (saved[i]) th.style.width = saved[i] + "px";
+      if (i === ths.length - 1) return;
+      const grip = document.createElement("div");
+      grip.className = "col-resizer";
+      grip.dataset.tip = t("ドラッグで列幅を変更（ダブルクリックで既定に戻す）");
+      th.appendChild(grip);
+      grip.addEventListener("click", e => e.stopPropagation());
+      grip.addEventListener("dblclick", e => {
+        e.stopPropagation();
+        delete saved[i]; saveColWidths(key, saved);
+        th.style.width = th.dataset.defw || "";
+      });
+      grip.addEventListener("pointerdown", e => {
+        e.preventDefault(); e.stopPropagation();
+        const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
+        grip.setPointerCapture(e.pointerId);
+        table.classList.add("resizing");
+        const move = ev => { th.style.width = Math.max(40, Math.round(w0 + ev.clientX - x0)) + "px"; };
+        const up = () => {
+          grip.removeEventListener("pointermove", move);
+          grip.removeEventListener("pointerup", up);
+          table.classList.remove("resizing");
+          saved[i] = Math.round(th.getBoundingClientRect().width);
+          saveColWidths(key, saved);
+        };
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener("pointerup", up);
+      });
+    });
   });
 }
 

@@ -280,12 +280,19 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .drag-handle { cursor: grab; color: var(--text-dim); text-align: center;
   user-select: none; font-size: 13px; }
 .drag-handle:hover { color: var(--text); }
+.drag-handle.off { cursor: not-allowed; opacity: .35; }
+.drag-handle.off:hover { color: var(--text-dim); }
 tr.row-sel td { background: rgba(59, 130, 246, .13); }
 tr.dragging { opacity: .45; }
 
 /* Danger zone (reset) on the settings tab */
 .danger-zone { border-color: color-mix(in srgb, var(--err) 45%, transparent); }
 
+/* Column resizing: the grip sits on the right edge of each header cell */
+table[data-colw] th { position: relative; }
+.col-resizer { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 2; }
+.col-resizer:hover, table.resizing .col-resizer { border-right: 2px solid var(--accent); }
+table.resizing { user-select: none; cursor: col-resize; }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 

@@ -36,6 +36,14 @@ function renderGroupChooser() {
   const root = document.getElementById("tab-devices");
   const devs = INV.devices || [];
   const groups = INV.deviceGroups || [];
+  // Sort / filter of the cards. Sorting is a select here (cards have no
+  // column headers); the stored card order is what drag-reorder edits, and
+  // dragging is off while the cards are sorted or filtered.
+  const LV = "groups";
+  const focus = listViewFocus();
+  const v = listView(LV);
+  const visible = listViewApply(LV, groups, g => [g.name], (g, k) => k === "count" ? groupCount(g.name) : g.name);
+  const active = listViewActive(LV);
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("機器グループを選択"))}</div>
@@ -45,19 +53,38 @@ function renderGroupChooser() {
         <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
       </div>
     </div>
+    ${groups.length ? `<div class="row-inline lv-bar" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <input id="lv-text-${LV}" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（グループ名）"))}" value="${esc(v.text)}">
+      <select id="grp-sort" class="btn" style="padding-right:8px">
+        <option value="" ${!v.sort.key ? "selected" : ""}>${esc(t("並び順: 手動（ドラッグ）"))}</option>
+        <option value="name:1" ${v.sort.key === "name" && v.sort.dir > 0 ? "selected" : ""}>${esc(t("並び順: 名前 ▲"))}</option>
+        <option value="name:-1" ${v.sort.key === "name" && v.sort.dir < 0 ? "selected" : ""}>${esc(t("並び順: 名前 ▼"))}</option>
+        <option value="count:-1" ${v.sort.key === "count" && v.sort.dir < 0 ? "selected" : ""}>${esc(t("並び順: 台数が多い順"))}</option>
+        <option value="count:1" ${v.sort.key === "count" && v.sort.dir > 0 ? "selected" : ""}>${esc(t("並び順: 台数が少ない順"))}</option>
+      </select>
+      ${v.text.trim() ? `<button class="btn sm lv-clear" data-lv="${LV}">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
+    </div>` : ""}
     <div class="chooser">
       <button class="choice new" id="choice-new">
         <div class="choice-t">${esc(t("＋ 新規グループ作成"))}</div>
         <div class="choice-n">${esc(t("会社・拠点などの単位で作成"))}</div>
       </button>
-      ${groups.map(g => `<div class="choice" role="button" tabindex="0" draggable="true" data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
+      ${visible.map(g => `<div class="choice" role="button" tabindex="0" ${active ? "" : 'draggable="true"'} data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
         <div class="row-inline" style="justify-content:space-between;align-items:flex-start">
-          <div class="choice-t">${esc(g.name)}</div>
+          <div class="choice-t clip" data-tip="${esc(g.name)}">${esc(g.name)}</div>
           <button class="btn sm act-copy" type="button" data-dup="${esc(g.name)}" title="${esc(t("グループを複製"))}">${esc(t("複製"))}</button>
         </div>
-        <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(t("⠿ ドラッグで並替"))}</span></div>
+        <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(active ? t("（並び替え・絞り込み中はドラッグ不可）") : t("⠿ ドラッグで並替"))}</span></div>
       </div>`).join("")}
+      ${groups.length && !visible.length ? `<div class="empty" style="grid-column:1/-1">${esc(t("絞り込みに一致するグループがありません"))}</div>` : ""}
     </div>`;
+  listViewWire(LV, root, renderGroupChooser, focus);
+  const gs = document.getElementById("grp-sort");
+  if (gs) gs.onchange = () => {
+    const [k, d] = gs.value.split(":");
+    v.sort = k ? { key: k, dir: parseInt(d, 10) || 1 } : { key: "", dir: 1 };
+    renderGroupChooser();
+  };
 
   document.getElementById("exp-csv").onclick = () => exportBundleDialog("");
   document.getElementById("imp-csv").onclick = () => importDialog("");
@@ -71,7 +98,7 @@ function renderGroupChooser() {
     b.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); b.onclick(e); } };
   });
   root.querySelectorAll("[data-dup]").forEach(b => b.onclick = e => { e.stopPropagation(); duplicateGroupDialog(b.dataset.dup); });
-  wireGroupDrag(root);
+  if (!active) wireGroupDrag(root);
 }
 
 // 複製: a new group with the same default credentials and copies of every
@@ -182,22 +209,30 @@ function renderDeviceList() {
   if (scopeGroup) {
     devs = devs.filter(d => (d.group || "") === scopeGroup.name);
   }
-  const rows = devs.map(d => {
+  // Sort / filter (display only; see listView in app.js).
+  const LV = "devices";
+  const focus = listViewFocus();
+  const visible = listViewApply(LV, devs,
+    d => [d.name, d.host, d.site, d.role, d.conn, profileName(d.osType), d.commandSet],
+    (d, k) => k === "os" ? profileName(d.osType) : d[k],
+    { site: d => d.site || "" });
+  const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
+  const rows = visible.map(d => {
     const nb = (d.bastions || []).length || (d.bastion && d.bastion.host ? 1 : 0);
     return `
     <tr data-row="${esc(d.name)}" data-key="${esc(d.name)}">
-      <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
-      <td><input class="cell inl-name" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600"></td>
-      <td><input class="cell inl-host mono" data-name="${esc(d.name)}" value="${esc(d.host)}"></td>
-      <td><input class="cell inl-site" data-name="${esc(d.name)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}"></td>
-      <td><input class="cell inl-role" data-name="${esc(d.name)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}"></td>
+      ${listViewDragCell(LV)}
+      <td><input class="cell inl-name" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600" data-tip="${esc(d.name)}"></td>
+      <td><input class="cell inl-host mono" data-name="${esc(d.name)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
+      <td><input class="cell inl-site" data-name="${esc(d.name)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
+      <td><input class="cell inl-role" data-name="${esc(d.name)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
       <td>
-        <select class="cell inl-conn" data-name="${esc(d.name)}">${connOptions(d.conn)}</select>
+        <select class="cell inl-conn" data-name="${esc(d.name)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) : ""))}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
-      <td><select class="cell inl-os" data-name="${esc(d.name)}">${osOptions(d.osType)}</select></td>
-      <td><select class="cell inl-set" data-name="${esc(d.name)}">${cmdSetOptions(d.commandSet)}</select></td>
+      <td><select class="cell inl-os" data-name="${esc(d.name)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
+      <td><select class="cell inl-set" data-name="${esc(d.name)}" data-tip="${esc(d.commandSet || t("(なし)"))}">${cmdSetOptions(d.commandSet)}</select></td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn sm act-conn" data-term="${esc(d.name)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
         <button class="btn sm act-edit" data-edit="${esc(d.name)}">${esc(t("編集"))}</button>
@@ -225,14 +260,18 @@ function renderDeviceList() {
         <button class="btn primary" id="add-dev">${esc(t("＋ 機器を追加"))}</button>
       </div>
     </div>
+    ${devs.length ? listViewBar(LV, t("絞り込み（ホスト名・IP・拠点・役割・接続・OS・コマンドセット）"), [{ id: "site", label: t("拠点: すべて"), values: sites }]) : ""}
     <div class="panel scrollx">
       ${devs.length === 0
         ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
-        : `<table><thead><tr><th style="width:30px"></th>
-            <th style="min-width:130px">${esc(t("ホスト名"))}</th><th style="width:112px">${esc(t("IPアドレス"))}</th><th style="width:84px">${esc(t("拠点名"))}</th><th style="width:84px">${esc(t("役割"))}</th><th style="width:84px">${esc(t("接続"))}</th>
-            <th style="width:126px">OS</th><th style="width:126px">${esc(t("コマンドセット"))}</th><th></th></tr></thead>
+        : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
+        : `<table class="fixed" data-colw="devices"><thead><tr><th style="width:30px"></th>
+            ${listViewTh(LV, "name", t("ホスト名"), "width:140px")}${listViewTh(LV, "host", t("IPアドレス"), "width:110px")}${listViewTh(LV, "site", t("拠点名"), "width:84px")}${listViewTh(LV, "role", t("役割"), "width:84px")}${listViewTh(LV, "conn", t("接続"), "width:84px")}
+            ${listViewTh(LV, "os", "OS", "width:120px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:120px")}<th style="width:250px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
+  listViewWire(LV, root, renderDeviceList, focus);
+  wireColResize(root);
 
   document.getElementById("back-choose").onclick = () => { deviceView = { mode: "select", group: null }; renderDevices(); };
   // Adding inside a group scope pre-assigns that group to the new device.
@@ -294,7 +333,8 @@ function renderDeviceList() {
     }
   });
   // Drag-reorder rows (multi-select on the ⠿ handle); persists the order.
-  wireRowReorder(root.querySelector("#dev-body"), async order => {
+  // Off while sorted or filtered: the rows do not show the stored order then.
+  if (!listViewActive(LV)) wireRowReorder(root.querySelector("#dev-body"), async order => {
     try { await App().ReorderDevices(order); await refreshInventory(); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); await refreshInventory(); }
   });

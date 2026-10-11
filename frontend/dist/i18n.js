@@ -319,6 +319,27 @@ const I18N_EN = {
     "A free-text label for the device's role. Like the site, it is available as {role} in the log name templates.",
   "役割（機器編集の「役割（任意）」。空なら詰められます）": "Role (\"Role (optional)\" in the device editor; squeezed out when blank)",
   "絞り込み（ホスト名・IP・拠点・役割・コマンドセット）": "Filter (host, IP, site, role, command set)",
+  // ---- v1.5.10: sort / filter on every list, full text on hover ----
+  "並び替え・絞り込み中はドラッグで順序を変えられません（「並び順を戻す」「絞り込み解除」で戻ります）": "Rows cannot be dragged while sorted or filtered (use \"Reset order\" / \"Clear filter\")",
+  "絞り込み（ホスト名・IP・拠点・役割・接続・OS・コマンドセット）": "Filter (host, IP, site, role, connection, OS, command set)",
+  "絞り込み（グループ名）": "Filter (group name)",
+  "並び順: 手動（ドラッグ）": "Order: manual (drag)",
+  "並び順: 名前 ▲": "Order: name ▲",
+  "並び順: 名前 ▼": "Order: name ▼",
+  "並び順: 台数が多い順": "Order: most devices first",
+  "並び順: 台数が少ない順": "Order: fewest devices first",
+  "（並び替え・絞り込み中はドラッグ不可）": "(no dragging while sorted or filtered)",
+  "絞り込みに一致するグループがありません": "No group matches the filter",
+  "絞り込み（セット名・コマンド）": "Filter (set name, commands)",
+  "絞り込みに一致するコマンドセットがありません": "No command set matches the filter",
+  "絞り込み（名前・完了の目印）": "Filter (name, prompt)",
+  "絞り込みに一致するプロファイルがありません": "No profile matches the filter",
+  "絞り込み（日時・グループ・作業・機器名）": "Filter (time, group, stage, device name)",
+  "グループ: すべて": "Group: all",
+  "作業: すべて": "Stage: all",
+  "絞り込みに一致する実行がありません": "No run matches the filter",
+  "踏み台 {n} 段": "{n} jump host(s)",
+  "ドラッグで列幅を変更（ダブルクリックで既定に戻す）": "Drag to resize the column (double-click to reset)",
   "OS": "OS",
   "グループを削除": "Delete Group",
   "グループ「<b>{g}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">所属機器は残り、グループ未設定になります</span>":
@@ -461,6 +482,7 @@ const I18N_EN = {
   "貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。":
     "Paste into any command cell; a multi-line paste splits into that many rows automatically.",
   "セット名は必須です": "Set name is required",
+  "名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います": "Renaming keeps the devices that use this set assigned to it under the new name",
 
   // ---- run tab ----
   "グループ「{g}」を選択しました": 'Group "{g}" selected',
