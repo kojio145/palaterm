@@ -35,6 +35,8 @@ type DeviceSummary struct {
 	Error      string  `json:"error,omitempty"`
 	LogFile    string  `json:"logFile,omitempty"` // file name inside the run folder
 	ElapsedSec float64 `json:"elapsedSec"`
+	// Warnings: commands the device refused (see runner.DeviceResult).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Summary is palaterm-run.json: what one batch did.
@@ -78,6 +80,8 @@ type Device struct {
 	Status  string `json:"status"` // ok / error / canceled / unknown
 	Error   string `json:"error,omitempty"`
 	LogPath string `json:"logPath,omitempty"` // absolute, "" when the file is gone
+	// Warnings: commands the device refused during that run.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Write stores s as dir/palaterm-run.json.
@@ -155,7 +159,7 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 			r.FinishedAt = s.FinishedAt
 			r.Group, r.Stage, r.DryRun, r.Interactive = s.Group, s.Stage, s.DryRun, s.Interactive
 			for _, d := range s.Devices {
-				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error}
+				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error, Warnings: d.Warnings}
 				switch {
 				case d.Success:
 					dv.Status = "ok"

@@ -174,6 +174,9 @@ func ParseCommandSet(data string) ([]model.Command, error) {
 	if len(cmds) == 0 {
 		return nil, fmt.Errorf("有効なコマンド行がありません")
 	}
+	if err := model.CheckCommands(cmds); err != nil {
+		return nil, err
+	}
 	return cmds, nil
 }
 
@@ -201,6 +204,9 @@ func ParseProfileJSON(data []byte) (profile.Profile, error) {
 	}
 	if strings.TrimSpace(p.Prompt) == "" {
 		return p, fmt.Errorf("「showコマンド完了の目印」（prompt）がありません")
+	}
+	if err := model.CheckProfileSends(p); err != nil {
+		return p, err
 	}
 	if p.Key == "" {
 		p.Key = "custom:" + p.Name
@@ -386,6 +392,17 @@ type Summary struct {
 	// imports; it runs with the generic profile / no command set).
 	MissingSets     []string `json:"missingSets"`
 	MissingProfiles []string `json:"missingProfiles"`
+	// Rows left out: Invalid failed the device checks ("name: reason" — a
+	// bad address, a username with shell syntax behind a jump host, a key
+	// on a network share); Duplicate repeat a group + name already earlier
+	// in the file (the first one is imported). Both used to go in silently,
+	// a later duplicate overwriting the earlier row.
+	Invalid   []string `json:"invalid"`
+	Duplicate []string `json:"duplicate"`
+	// JumpCommands lists imported rows whose jump host carries a hand-written
+	// jump command ("name: command"). That text is typed into the jump host's
+	// shell as it is, so the import screen shows it for a look first.
+	JumpCommands []string `json:"jumpCommands"`
 }
 
 // Preview reports what Apply would do without changing inv.
@@ -412,6 +429,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.GroupsCreated = []string{}
 	s.MissingSets = []string{}
 	s.MissingProfiles = []string{}
+	s.Invalid = []string{}
+	s.Duplicate = []string{}
+	s.JumpCommands = []string{}
 
 	// Profiles first: they may rename keys the devices use.
 	keyMap := map[string]string{}
@@ -526,11 +546,30 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	}
 	missingSet := map[string]bool{}
 	missingProf := map[string]bool{}
+	inFile := map[string]bool{}
 	for _, d := range c.Devices {
-		s.Devices++
 		if opt.TargetGroup != "" {
 			d.Group = opt.TargetGroup
 		}
+		label := d.Name
+		if d.Group != "" {
+			label = d.Group + " / " + d.Name
+		}
+		if err := d.Validate(); err != nil {
+			s.Invalid = append(s.Invalid, label+": "+err.Error())
+			continue
+		}
+		if inFile[devKey(d)] {
+			s.Duplicate = append(s.Duplicate, label)
+			continue
+		}
+		inFile[devKey(d)] = true
+		for _, b := range d.ActiveBastions() {
+			if strings.TrimSpace(b.JumpCommand) != "" {
+				s.JumpCommands = append(s.JumpCommands, label+": "+b.JumpCommand)
+			}
+		}
+		s.Devices++ // rows actually imported (skipped ones are listed apart)
 		if k, ok := keyMap[d.OSType]; ok {
 			d.OSType = k
 		}

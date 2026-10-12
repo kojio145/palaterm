@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/kojio145/palaterm/internal/model"
 )
@@ -23,15 +24,28 @@ func TestHostKeyPinSurvivesAVaultReopen(t *testing.T) {
 	if got := a.GetHostKey(addr); got != "" {
 		t.Fatalf("a fresh vault already pins %q", got)
 	}
+	// The pin is saved a moment later (persistSoon), batched with others
+	// pinned meanwhile — not inside the SSH handshake.
 	a.SetHostKey(addr, fp)
-
-	a2 := NewApp()
-	a2.vaultPath = a.vaultPath
-	if err := a2.Unlock("master"); err != nil {
-		t.Fatalf("unlock: %v", err)
+	time.Sleep(1500 * time.Millisecond)
+	reopen := func() *App {
+		a2 := NewApp()
+		a2.vaultPath = a.vaultPath
+		if err := a2.Unlock("master"); err != nil {
+			t.Fatalf("unlock: %v", err)
+		}
+		return a2
 	}
-	if got := a2.GetHostKey(addr); got != fp {
+	if got := reopen().GetHostKey(addr); got != fp {
 		t.Fatalf("pin after reopen = %q, want %q", got, fp)
+	}
+
+	// One still pending when the app exits (or locks) is written then.
+	const addr2 = "192.0.2.202:22"
+	a.SetHostKey(addr2, fp)
+	a.shutdown(nil)
+	if got := reopen().GetHostKey(addr2); got != fp {
+		t.Fatalf("pin pending at exit = %q, want %q", got, fp)
 	}
 }
 
@@ -70,5 +84,26 @@ func TestClearHostKeysReachesTheVault(t *testing.T) {
 		if got := a2.GetHostKey(addr); got != "" {
 			t.Errorf("%s still pinned after clear + reopen: %q", addr, got)
 		}
+	}
+}
+
+// A batch that pins a key while the vault is locked (ロック mid-run) keeps
+// it, and the vault gets it at the next unlock.
+func TestPinWhileLockedIsSavedAtUnlock(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	keys := &runHostKeys{mem: newMemHostKeys(nil), app: a}
+	a.Lock()
+	keys.SetHostKey("192.0.2.9:22", "ssh-ed25519 SHA256:x")
+	if keys.GetHostKey("192.0.2.9:22") == "" {
+		t.Fatal("the run's own copy lost the pin")
+	}
+	if err := a.Unlock("master"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.GetHostKey("192.0.2.9:22"); got != "ssh-ed25519 SHA256:x" {
+		t.Errorf("pin after unlock = %q", got)
 	}
 }

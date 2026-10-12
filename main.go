@@ -69,7 +69,7 @@ func main() {
 }
 
 func runViewerWindow(path string) {
-	title := "PalaTerm - ログ - " + filepath.Base(path)
+	title := "PalaTerm - " + winWord("ログ", "Log") + " - " + filepath.Base(path)
 	v := NewViewer(path, title)
 	err := wails.Run(&options.App{
 		Title:     title,
@@ -95,7 +95,7 @@ func runViewerWindow(path string) {
 }
 
 func runDiffWindow(a, b, label string) {
-	title := "PalaTerm - 差分"
+	title := "PalaTerm - " + winWord("差分", "Diff")
 	if label != "" {
 		title += " - " + label
 	}
@@ -124,7 +124,7 @@ func runDiffWindow(a, b, label string) {
 }
 
 func runPasteWindow(device string) {
-	title := "PalaTerm - 貼り付けの確認"
+	title := "PalaTerm - " + winWord("貼り付けの確認", "Paste")
 	if device != "" {
 		title += " - " + device
 	}
@@ -168,6 +168,8 @@ func runMainApp() {
 		},
 		BackgroundColour: &options.RGBA{R: 17, G: 21, B: 28, A: 1},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
+		OnBeforeClose:    app.beforeClose,
 		Bind:             []interface{}{app},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
@@ -183,7 +185,7 @@ func runTerminalWindow(device, label string, manual bool) {
 	t := NewTerm(device, label, manual)
 	title := "PalaTerm - " + t.label
 	if manual {
-		title += " - 手動接続"
+		title += " - " + winWord("手動接続", "manual")
 	}
 	err := wails.Run(&options.App{
 		Title:     title,
@@ -198,6 +200,7 @@ func runTerminalWindow(device, label string, manual bool) {
 		OnStartup:        t.startup,
 		OnDomReady:       t.domReady,
 		OnShutdown:       t.shutdown,
+		OnBeforeClose:    t.beforeClose,
 		Bind:             []interface{}{t},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,

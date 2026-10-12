@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"sync"
@@ -220,6 +221,14 @@ func (e *expecter) Transport() string {
 		return d.Describe()
 	}
 	return ""
+}
+
+// Break sends a serial break when the transport is a serial line.
+func (e *expecter) Break() error {
+	if b, ok := e.sess.(session.Breaker); ok {
+		return b.SendBreak()
+	}
+	return fmt.Errorf("ブレーク信号はシリアル接続でのみ送れます")
 }
 
 // Resize forwards a terminal resize to the underlying session if it supports

@@ -218,3 +218,20 @@ func TestStageTokensValidateFileNames(t *testing.T) {
 		}
 	}
 }
+
+// Two claims of the same run folder name in the same second get distinct
+// folders, both created.
+func TestClaimRunDirIsExclusive(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.Local)
+	a := ClaimRunDir(root, "", "A社", StageWork, DefaultStageTokens, now)
+	b := ClaimRunDir(root, "", "A社", StageWork, DefaultStageTokens, now)
+	if a == b || !strings.HasSuffix(b, "_2") {
+		t.Fatalf("a=%s b=%s", a, b)
+	}
+	for _, d := range []string{a, b} {
+		if st, err := os.Stat(d); err != nil || !st.IsDir() {
+			t.Errorf("%s not created: %v", d, err)
+		}
+	}
+}

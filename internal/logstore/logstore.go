@@ -307,6 +307,18 @@ func Path(dir, tmpl string, f Fields, now time.Time) string {
 // folder twice in a day, and the second run then gets "_2", "_3", … rather
 // than mixing its logs and overwriting the first run's summary.
 func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) string {
+	base := runDirBase(root, tmpl, group, stage, tok, now)
+	dir := base
+	for i := 2; ; i++ {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return dir
+		}
+		dir = fmt.Sprintf("%s_%d", base, i)
+	}
+}
+
+// runDirBase is the run folder's path before any "_2" is added.
+func runDirBase(root, tmpl, group, stage string, tok StageTokens, now time.Time) string {
 	if strings.TrimSpace(tmpl) == "" {
 		tmpl = DefaultDirTemplate
 	}
@@ -328,14 +340,32 @@ func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) str
 	if name == "" {
 		name = now.Format("20060102_150405")
 	}
-	base := filepath.Join(ResolveRoot(root), name)
+	return filepath.Join(ResolveRoot(root), name)
+}
+
+// ClaimRunDir is RunDir that also creates the folder, atomically: two
+// terminal windows to devices of one group opened in the same second both
+// found the name free and shared the folder, the second summary replacing
+// the first in 実行履歴. os.Mkdir fails for whichever comes second, which
+// then takes the next number. Falls back to RunDir's answer if the folder
+// cannot be created at all (the log write reports that error).
+func ClaimRunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) string {
+	base := runDirBase(root, tmpl, group, stage, tok, now)
+	if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
+		return base
+	}
 	dir := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
+	for i := 2; i < 1000; i++ {
+		err := os.Mkdir(dir, 0o755)
+		if err == nil {
+			return dir
+		}
+		if !os.IsExist(err) {
 			return dir
 		}
 		dir = fmt.Sprintf("%s_%d", base, i)
 	}
+	return dir
 }
 
 // reservedName reports whether w (with or without an extension) is a name

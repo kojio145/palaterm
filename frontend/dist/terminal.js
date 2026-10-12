@@ -110,6 +110,8 @@ async function bootTerminalWindow() {
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
         <button class="btn sm" id="tw-logview" data-tip="${esc(t("このセッションのログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
         <button class="btn sm" id="tw-logdir">${esc(t("ログフォルダ"))}</button>
+        <button class="btn sm hidden" id="tw-break" title="Alt+B" data-tip="${esc(t("シリアル回線にブレーク信号を送ります（Tera Term の Alt+B）。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）"))}">${esc(t("ブレーク"))}</button>
+        <button class="btn sm hidden" id="tw-reconnect" style="color:#86efac;border-color:#15803d" data-tip="${esc(t("同じ機器にもう一度接続します（切断後に Enter キーでも再接続できます）"))}">${esc(t("再接続"))}</button>
         <button class="btn sm hidden" id="tw-switch" style="color:#fcd34d;border-color:#b45309" data-tip="${esc(t("自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）"))}">${esc(t("手動に切り替え"))}</button>
         <span id="tw-state" class="pill run">${esc(t("接続中…"))}</span>
       </div>
@@ -151,6 +153,15 @@ async function bootTerminalWindow() {
         </div>
       </div>
     </div>
+    <div id="tw-lock" class="hidden" style="position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:#0b0e13">
+      <div style="width:360px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px;font-family:'Segoe UI',sans-serif">
+        <div style="color:#e6ecf3;font-size:15px;font-weight:600;margin-bottom:6px">🔒 ${esc(t("ロック中"))}</div>
+        <div class="muted" style="font-size:12px;line-height:1.7;margin-bottom:12px">${esc(t("接続は保たれています。マスターパスワードを入力すると画面に戻ります。"))}</div>
+        <input id="tw-lock-in" type="password" style="width:100%;background:#11151c;color:#e6ecf3;border:1px solid #2a3442;border-radius:8px;padding:9px">
+        <div id="tw-lock-err" style="color:#f87171;font-size:12px;min-height:18px;margin-top:6px"></div>
+        <button id="tw-lock-ok" style="width:100%;margin-top:6px;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:9px;cursor:pointer">${esc(t("ロック解除"))}</button>
+      </div>
+    </div>
     <div id="tw-pw" class="hidden" style="position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85)">
       <div style="width:340px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px">
         <div style="color:#e6ecf3;margin-bottom:12px">${esc(t("マスターパスワード"))}</div>
@@ -170,8 +181,10 @@ async function bootTerminalWindow() {
   const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
   let fontSize = FONT_DEF;
   try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
+  // Scrollback: 10,000 lines like Tera Term's default (xterm.js keeps 1,000,
+  // and a core switch's show running-config scrolled out of reach of Ctrl+F).
   const term = new Terminal({
-    convertEol: false, cursorBlink: true,
+    convertEol: false, cursorBlink: true, scrollback: 10000,
     fontFamily: '"Consolas", monospace', fontSize,
     theme: { background: "#000000", foreground: "#d6dee8", cursor: "#5b9bff" },
   });
@@ -180,6 +193,7 @@ async function bootTerminalWindow() {
   term.open(document.getElementById("tw-host"));
   term.focus();
   let closed = false;
+  let locked = false; // the lock overlay is up: keys go nowhere
 
   // 貼り付けキー。xterm.js の既定は Ctrl+V を制御文字 ^V として機器へ送り、Shift+Insert も
   // ESC[2~ を送ってしまい、どちらもブラウザ既定の貼り付けを抑止する（Ctrl+Shift+V だけが貼り付く）。
@@ -190,7 +204,11 @@ async function bootTerminalWindow() {
   // e.code が空になるため）。
   // Alt+V は Tera Term の「貼り付け<CR>」: 確認ダイアログを開き、末尾 Enter をオンにしておく。
   term.attachCustomKeyEventHandler(e => {
+    if (locked) return false;
     if (e.type !== "keydown" || e.metaKey) return true;
+    // Alt+B = break, on a serial line only; elsewhere it stays the shell's /
+    // IOS's "back one word" (Esc-B).
+    if (e.altKey && !e.ctrlKey && (e.code === "KeyB" || e.key === "b" || e.key === "B") && !breakBtn.classList.contains("hidden")) { sendBreak(); return false; }
     const isV = e.code === "KeyV" || e.key === "v" || e.key === "V";
     const isIns = e.code === "Insert" || e.key === "Insert";
     if (e.altKey && !e.ctrlKey && isV) { pasteFromClipboard(true); return false; }
@@ -251,6 +269,7 @@ async function bootTerminalWindow() {
   // is dropped for the same reason. Alt+V (貼り付け<CR>) asks for the Enter,
   // so it gets one. Two or more lines still open the confirmation.
   function pasteOrConfirm(text, withCR) {
+    if (locked) return; // every paste path ends here
     const one = text.replace(/(\r\n|\r|\n)$/, "");
     if (one && !/[\r\n]/.test(one)) {
       term.clearSelection();
@@ -470,6 +489,8 @@ async function bootTerminalWindow() {
     showSwitch(false);
     takeoverBar.classList.add("hidden"); doFit();
     stateEl.textContent = ev.manual ? t("接続済み（手動）") : t("接続済み"); stateEl.className = "pill ok";
+    reconnectBtn.classList.add("hidden");
+    breakBtn.classList.toggle("hidden", ev.conn !== "serial");
     titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}` + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
     // A console opened by hand shows nothing until the device answers; say
     // which port this is and what to do, so a wrong COM port or baud rate
@@ -512,6 +533,7 @@ async function bootTerminalWindow() {
     closed = true;
     connecting = false;
     showSwitch(false);
+    breakBtn.classList.add("hidden");
     stateEl.textContent = ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断");
     stateEl.className = "pill err";
     if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
@@ -521,14 +543,83 @@ async function bootTerminalWindow() {
     if (ev.error) term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(ev.error) + "\x1b[0m\r\n");
     else term.write("\r\n\x1b[33m" + t("[切断されました]") + "\x1b[0m\r\n");
     if (ev.logPath) term.write("\x1b[36m" + t("[ログ保存] ") + ev.logPath + "\x1b[0m\r\n");
+    // A session that ended (not a takeover offer, not a host-key question)
+    // can be opened again from here.
+    if (!ev.takeover && !(ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) && !/マスターパスワード/.test(ev.error || "")) {
+      reconnectBtn.classList.remove("hidden");
+      term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
+    }
     if (ev.takeover) {
       term.write("\x1b[33m" + t("[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]") + "\x1b[0m\r\n");
       takeoverBar.classList.remove("hidden"); doFit();
     }
   });
 
+  // ---- 再接続 / ブレーク / ロック ----
+  const reconnectBtn = document.getElementById("tw-reconnect");
+  const breakBtn = document.getElementById("tw-break");
+  let reconnecting = false;
+  function canReconnect() { return !reconnectBtn.classList.contains("hidden") && !reconnecting; }
+  function reconnect() {
+    reconnecting = true;
+    reconnectBtn.classList.add("hidden");
+    closed = false; connecting = true;
+    stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
+    showSwitch(!res.manual);
+    term.write("\r\n\x1b[33m" + t("[再接続します]") + "\x1b[0m\r\n");
+    Term().Reconnect().catch(e => { closed = true; term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); })
+      .finally(() => { reconnecting = false; });
+  }
+  reconnectBtn.onclick = () => { reconnect(); term.focus(); };
+  function sendBreak() {
+    if (breakBtn.classList.contains("hidden")) return;
+    Term().SendBreak().then(() => flashNote(t("ブレーク信号を送りました"))).catch(e => flashNote(terr(e)));
+    term.focus();
+  }
+  breakBtn.onclick = sendBreak;
+  // Lock: the main window's ロック (term:lock), or this window's own idle time
+  // (the vault's 自動ロック setting; keyboard and mouse here count, output
+  // from the device does not). The session stays up underneath.
+  const lockEl = document.getElementById("tw-lock"), lockIn = document.getElementById("tw-lock-in");
+  // Everything but the lock screen is inert while locked: Tab could otherwise
+  // reach the toolbar (貼り付け…, ログ停止) or the terminal's input behind it.
+  const setInert = on => [...wrap.children].forEach(el => { if (el !== lockEl) el.inert = on; });
+  function showLock() {
+    locked = true;
+    setInert(true);
+    lockEl.classList.remove("hidden");
+    document.getElementById("tw-lock-err").textContent = "";
+    lockIn.value = ""; setTimeout(() => lockIn.focus(), 50);
+  }
+  let unlocking = false;
+  async function tryUnlock() {
+    if (unlocking) return; // one attempt at a time (a wrong one is answered after a delay)
+    unlocking = true;
+    const okBtn = document.getElementById("tw-lock-ok");
+    okBtn.disabled = true;
+    try { await doUnlock(); } finally { unlocking = false; okBtn.disabled = false; }
+  }
+  async function doUnlock() {
+    if (await Term().Unlock(lockIn.value)) { locked = false; setInert(false); lockEl.classList.add("hidden"); lastInput = Date.now(); term.focus(); }
+    else { document.getElementById("tw-lock-err").textContent = t("マスターパスワードが違います"); lockIn.select(); }
+  }
+  document.getElementById("tw-lock-ok").onclick = tryUnlock;
+  lockIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); tryUnlock(); } });
+  rt().EventsOn("term:lock", showLock);
+  Term().IsLocked().then(v => { if (v) showLock(); }).catch(() => {});
+  let lastInput = Date.now();
+  ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) lastInput = Date.now(); }, { passive: true }));
+  setInterval(async () => {
+    if (locked) return;
+    const min = await Term().AutoLockMinutes().catch(() => 0);
+    if (min > 0 && Date.now() - lastInput >= min * 60000) { await Term().Lock().catch(() => {}); showLock(); }
+  }, 15000);
+  try { Term().SetLang(LANG); } catch (e) {}
+
   term.onData(d => {
-    if (closed) return;
+    if (locked) return;
+    // After a disconnect, Enter opens the session again (the 再接続 button).
+    if (closed) { if (d === "\r" && canReconnect()) reconnect(); return; }
     Term().Send(bytesToB64(new TextEncoder().encode(d))).catch(() => {});
   });
   // Close drops the live session; Discard drops a line held for takeover.

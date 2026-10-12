@@ -62,6 +62,9 @@ type DeviceResult struct {
 	// completed. Success is false; Error says whether it never ran or was
 	// interrupted.
 	Canceled bool `json:"canceled,omitempty"`
+	// Warnings name the commands the device refused ("show foo → % Invalid
+	// input detected at '^' marker."); the run itself still succeeded.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // CanceledMsg / CanceledNotRunMsg are the messages a stopped run leaves on
@@ -180,9 +183,28 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 			if emit != nil {
 				emit(Event{Device: dev.Name, Phase: PhaseRunning, Message: cmd.Text, Done: i, Total: total})
 			}
+			before := len(exp.Transcript())
 			if err := r.sendCommand(ctx, exp, prof, profile.Expand(cmd.Text, vars), cmdTimeout); err != nil {
 				res.Error = fmt.Sprintf("command %q: %v", cmd.Text, err)
+				// A timeout says nothing by itself; what the device was showing
+				// tells a question waiting for an answer from a long output.
+				if errors.Is(err, ErrExpectTimeout) {
+					if last := lastLine(exp.Transcript()[before:]); last != "" {
+						res.Error += fmt.Sprintf("（機器の最後の表示: %q。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）", RedactSecrets(last, dev))
+					}
+				}
 				break
+			}
+			// The device answered, but possibly with a refusal ("% Invalid
+			// input", "command not found"): the run still counts as done,
+			// with a warning naming the command, so a log missing what it was
+			// supposed to show is noticed now and not at the next outage.
+			if line := rejectedLine(exp.Transcript()[before:]); line != "" {
+				// The device's line may repeat a typed secret ("bash: Secr3t:
+				// command not found" after an unanswered su), and warnings go
+				// to the run table and the history file: passwords are always
+				// blanked here, whatever the log mask setting.
+				res.Warnings = append(res.Warnings, fmt.Sprintf("%s → %s", cmd.Text, RedactSecrets(line, dev)))
 			}
 			if p := pauseFor(cmd, dev.Conn); p > 0 {
 				if !countdown(ctx, p, func(left int) {
@@ -208,6 +230,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	res.Success = res.Error == ""
 	if !opts.DryRun {
 		r.saveLog(&res, dev, s, runDir, now, opts.Stage)
+		res.Success = res.Error == ""
 	}
 	res.Elapsed = time.Since(start)
 
@@ -594,7 +617,47 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 	if err := exp.Send(text); err != nil {
 		return fmt.Errorf("send %q: %w", text, err)
 	}
-	return r.waitPrompt(ctx, exp, prof, timeout)
+	return r.waitPromptAnswering(ctx, exp, prof, timeout, prof.Answers)
+}
+
+// maxAnswers bounds the questions answered for one command: a device that
+// keeps asking (or an Expect that matches its own echo) must not loop.
+const maxAnswers = 5
+
+// rejectMarkers are what devices print when they refuse a command, matched
+// case-insensitively on the output lines after the echoed command.
+var rejectMarkers = []string{
+	"% invalid", "invalid input detected", "invalid command", "% incomplete command",
+	"% ambiguous command", "% unknown command", "% unrecognized command", "unknown command",
+	"unrecognized command", "command not found", "command fail", "syntax error", "% error",
+}
+
+// rejectedLine returns the first line of a command's output that says the
+// device refused it, or "". The first line is the echoed command itself and
+// is skipped (a command may well contain the word "error").
+//
+// Only the first few lines after the echo count: a refusal is the device's
+// immediate answer ("^" marker line, then "% Invalid input …"), while a long
+// output such as show logging or journalctl can quote the same words from
+// history and is not a refusal.
+func rejectedLine(out string) string {
+	const firstLines = 3
+	seen := 0
+	for i, l := range strings.Split(strings.ReplaceAll(out, "\r", "\n"), "\n") {
+		if i == 0 || strings.TrimSpace(l) == "" {
+			continue
+		}
+		if seen++; seen > firstLines {
+			break
+		}
+		low := strings.ToLower(l)
+		for _, m := range rejectMarkers {
+			if strings.Contains(low, m) {
+				return strings.TrimSpace(l)
+			}
+		}
+	}
+	return ""
 }
 
 // genericMore matches the pager markers vendors actually print — "--More--",
@@ -718,6 +781,13 @@ const promptSettle = 120 * time.Millisecond
 
 // waitPrompt waits for the operational prompt, advancing through pager prompts.
 func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Profile, timeout time.Duration) error {
+	return r.waitPromptAnswering(ctx, exp, prof, timeout, nil)
+}
+
+// waitPromptAnswering is waitPrompt that also replies to the questions in
+// answers (Profile.Answers) when one is the tail of the output.
+func (r *Runner) waitPromptAnswering(ctx context.Context, exp *expecter, prof profile.Profile, timeout time.Duration, answers []profile.Step) error {
+	answered := 0
 	more := prof.MorePrompt
 	if more == "" {
 		more = genericMore
@@ -754,6 +824,22 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 			}
 			continue
 		}
+		// A question the profile answers ("Destination filename
+		// [startup-config]?"): reply once it has stayed the tail for a beat,
+		// then wait on, clean, for whatever comes next.
+		if a, ok := pendingAnswer(exp, answers); ok && answered < maxAnswers {
+			time.Sleep(promptSettle)
+			if a2, ok2 := pendingAnswer(exp, answers); ok2 && a2 == a {
+				answered++
+				exp.Drain()
+				if a.SendRaw != "" {
+					_ = exp.SendRaw(a.SendRaw)
+				} else {
+					_ = exp.Send(a.Send)
+				}
+				continue
+			}
+		}
 		// Not idle. If a pager is showing, advance it; the short wait doubles
 		// as this loop's poll interval. The marker and the last page can land
 		// in one read, so re-check first: a space typed at a device that has
@@ -762,13 +848,56 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 			_ = exp.SendRaw(" ")
 			continue
 		}
-		if nudges < 2 && exp.Idle() >= promptNudgeAfter && time.Since(nudgedAt) >= promptNudgeAfter {
+		// Not when the device is asking something ("…[]?", "Password:"): an
+		// Enter there answers it — and aborts a copy waiting for an address.
+		// Nor at a confirmation the profile leaves unanswered ("[confirm]",
+		// "[yes/no]", "(y/n)"): removing [confirm] from 確認への自動応答 must
+		// mean it is not confirmed — the nudge's Enter used to confirm it anyway.
+		if nudges < 2 && exp.Idle() >= promptNudgeAfter && time.Since(nudgedAt) >= promptNudgeAfter && !exp.Seen(reQuestionTail) {
 			nudges++
 			nudgedAt = time.Now()
 			_ = exp.Send("")
 		}
 	}
 }
+
+// pendingAnswer returns the answer whose (quoted) Expect is the tail of
+// what has arrived.
+//
+// An answer that is just Enter means "take the default the device offers";
+// a question offering none ("Address or name of remote host []?") is left
+// alone — Enter there would only abort the command, so it waits for the
+// command timeout like any question without an answer.
+func pendingAnswer(exp *expecter, answers []profile.Step) (profile.Step, bool) {
+	for _, a := range answers {
+		if a.Expect == "" || !exp.Seen("(?:"+a.Expect+`)[ \t]*\z`) {
+			continue
+		}
+		if a.Send == "" && a.SendRaw == "" && exp.Seen(`\[\]\?[ \t]*\z`) {
+			continue
+		}
+		return a, true
+	}
+	return profile.Step{}, false
+}
+
+// lastLine is the last non-blank line of out, trimmed and cut to 100 runes
+// (for an error message).
+func lastLine(out string) string {
+	lines := strings.Split(strings.ReplaceAll(out, "\r", "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			if r := []rune(l); len(r) > 100 {
+				l = string(r[:100]) + "…"
+			}
+			return l
+		}
+	}
+	return ""
+}
+
+// reQuestionTail is output ending in a question: no nudge Enter there.
+const reQuestionTail = `(?i)([?:]|\[confirm\]|\[y(es)?/no?\]|\(y(es)?/no?\))[ \t]*\z`
 
 // promptNudgeAfter is how long the far end must stay silent, with no prompt
 // at the tail, before waitPrompt types a bare Enter to get the prompt back.
@@ -952,9 +1081,19 @@ func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings,
 	path, err := logstore.Write(runDir, s.LogNameTemplate, logstore.Fields{
 		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Role: dev.Role, Stage: string(stage), Tokens: s.StageTokens(),
 	}, text, now)
-	if err == nil {
-		res.LogPath = path
+	if err != nil {
+		// A run whose log could not be written (disk full, a file locked by
+		// another program, a template producing a bad name) did not do its
+		// job: say so instead of showing 完了 with nothing behind it.
+		msg := "ログを保存できませんでした: " + err.Error()
+		if res.Error == "" {
+			res.Error = msg
+		} else {
+			res.Error += "／" + msg
+		}
+		return
 	}
+	res.LogPath = path
 }
 
 // DryRunOKMsg is the completion message of a device that passed a dry run
@@ -971,7 +1110,12 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 // folder the logs went to ("" for a dry run, which writes nothing).
 func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Options, emit EmitFunc) ([]DeviceResult, string) {
 	now := time.Now()
+	// A real run claims its folder now (created, so a concurrent run or
+	// terminal cannot take the same name); a dry run writes nothing.
 	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
+	if !opts.DryRun {
+		runDir = logstore.ClaimRunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
+	}
 	sets := indexSets(inv.CommandSets)
 
 	var targets []*model.Device

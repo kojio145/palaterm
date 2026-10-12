@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"golang.org/x/crypto/scrypt"
 
@@ -153,11 +154,58 @@ func atomicWrite(path string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	// On disk before the rename: without it a power cut can leave the
+	// renamed file empty, and the vault holds every credential there is.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
 	_ = os.Chmod(tmpName, 0o600)
-	return os.Rename(tmpName, path)
+	// One generation back, for the day the current file is damaged anyway
+	// (disk error, an antivirus quarantine): <vault>.bak, same encryption.
+	if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
+		_ = writeSynced(path+".bak", old)
+	}
+	// A terminal window reading the vault at that moment makes Windows
+	// refuse the replace (sharing violation); it lets go within moments.
+	for i := 0; i < 10; i++ {
+		if err = os.Rename(tmpName, path); err == nil {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
+}
+
+// RemoveBackups deletes the vault's backup (<path>.bak) and any temporary
+// file a failed save left next to it.
+func RemoveBackups(path string) {
+	_ = os.Remove(path + ".bak")
+	if tmps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".palaterm-*.tmp")); err == nil {
+		for _, t := range tmps {
+			_ = os.Remove(t)
+		}
+	}
+}
+
+// writeSynced writes data to path and flushes it to disk.
+func writeSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 var _ = io.Discard // reserved for future streaming API

@@ -40,6 +40,22 @@ var header = []string{
 // group name and site reads as mojibake. Import strips it again.
 const BOM = "\ufeff"
 
+// cellOut guards a value against spreadsheet formula injection: one that
+// starts like a formula (= + - @, a tab or CR) — say a device name or site
+// typed by someone else, opened later in Excel — gets a leading apostrophe,
+// so Excel shows it as text instead of running it. A value that itself
+// starts with an apostrophe gets one too, so cellIn can always strip exactly
+// one and every value reads back as it was written.
+func cellOut(v string) string {
+	if v != "" && strings.ContainsRune("=+-@\t\r'", rune(v[0])) {
+		return "'" + v
+	}
+	return v
+}
+
+// cellIn undoes cellOut.
+func cellIn(v string) string { return strings.TrimPrefix(v, "'") }
+
 // Export renders devices as CSV text with a header row.
 func Export(devices []model.Device) (string, error) {
 	var buf bytes.Buffer
@@ -57,6 +73,9 @@ func Export(devices []model.Device) (string, error) {
 			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
 			encodeBastions(d.Bastions), encodeBastionExtras(d.Bastions), boolStr(d.Enabled),
 			boolStr(d.UseGroupCreds), d.Role,
+		}
+		for i := range rec {
+			rec[i] = cellOut(rec[i])
 		}
 		if err := w.Write(rec); err != nil {
 			return "", err
@@ -89,7 +108,7 @@ func Import(text string) ([]model.Device, error) {
 
 	get := func(row []string, key string) string {
 		if i, ok := idx[key]; ok && i < len(row) {
-			return strings.TrimSpace(row[i])
+			return strings.TrimSpace(cellIn(row[i]))
 		}
 		return ""
 	}

@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.14";
+const APP_VERSION = "1.5.15";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -47,6 +47,50 @@ function openModal(node, sizeClass) {
   $("#modal-overlay").classList.remove("hidden");
 }
 function closeModal() { $("#modal-overlay").classList.add("hidden"); }
+
+// Esc closes the open dialog the way its own キャンセル button does (so an
+// editor's "discard changes?" check still runs). Not while a small window
+// sits on top of it (it handles Esc itself) or the copy menu is open.
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  if (document.querySelector(".sub-overlay") || $("#modal-overlay").classList.contains("hidden")) return;
+  const btn = [...document.querySelectorAll("#modal .modal-actions button")]
+    .find(b => !b.classList.contains("primary") && !b.classList.contains("danger") && !b.disabled);
+  if (btn) { e.preventDefault(); btn.click(); }
+});
+
+// subConfirm asks a yes/no question in a small window over the open dialog
+// (uiConfirm would replace the dialog itself). Resolves true for ok.
+function subConfirm(message, okLabel) {
+  return new Promise(resolve => {
+    const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(440px,90vw)">
+      <div style="font-size:14px;line-height:1.7">${message}</div>
+      <div class="modal-actions">
+        <button class="btn" id="sc-no" type="button">${esc(t("編集に戻る"))}</button>
+        <button class="btn danger" id="sc-ok" type="button">${esc(okLabel)}</button>
+      </div></div></div>`);
+    document.body.appendChild(ov);
+    const done = v => { ov.remove(); document.removeEventListener("keydown", onKey, true); resolve(v); };
+    const onKey = e => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); done(false); } };
+    document.addEventListener("keydown", onKey, true);
+    ov.querySelector("#sc-no").onclick = () => done(false);
+    ov.querySelector("#sc-ok").onclick = () => done(true);
+    ov.querySelector("#sc-no").focus();
+  });
+}
+
+// guardDiscard makes an editor's cancel button (and so Esc) ask before
+// throwing away edits: the form's values are compared with what they were
+// when the editor finished opening.
+function guardDiscard(node, cancelSel) {
+  const snap = () => JSON.stringify([...node.querySelectorAll("input, select, textarea")]
+    .map(el => el.type === "checkbox" || el.type === "radio" ? el.checked : el.value));
+  const start = snap();
+  node.querySelector(cancelSel).onclick = async () => {
+    if (snap() !== start && !(await subConfirm(esc(t("編集した内容は保存されていません。破棄して閉じますか？")), t("破棄して閉じる")))) return;
+    closeModal();
+  };
+}
 
 // Excel-like bulk toggling for enable-checkboxes: a plain click applies one
 // row; Shift+クリック applies the clicked state to the whole range since the
@@ -524,6 +568,8 @@ async function boot() {
     bootPasteWindow();
     return;
   }
+  App().SetLang(LANG).catch(() => {});
+  restoredTab = restoreUIState();
   const exists = await App().VaultExists();
   renderLock(exists);
 }
@@ -579,8 +625,55 @@ async function enterApp() {
   PROFILES = await App().ListProfiles();
   SERIAL = await App().ListSerialPorts() || [];
   await refreshInventory();
-  switchTab("devices");
+  switchTab(restoredTab || "devices");
+  restoredTab = null;
+  // Locked while a batch ran: it went on meanwhile. Still going -> keep
+  // following it (■ 中止 works); finished -> show the results it left.
+  if (running) {
+    const st = await App().GetRunStatus().catch(() => null);
+    if (st && st.active) {
+      clearInterval(etaTimer); etaTimer = setInterval(updateEta, 1000);
+      if (document.querySelector("#tab-run.active")) renderRun();
+    } else if (st && st.last) applyRunDone(st.last);
+    else { running = false; if (document.querySelector("#tab-run.active")) renderRun(); }
+  }
 }
+
+// Locking reloads the page, which used to drop the run tab's results (and
+// with them ↻ 失敗・中断のみ再実行) and the device list's place — a batch
+// left with failures over lunch came back to an empty table. They are kept
+// in sessionStorage across the lock (this window only, nothing secret: the
+// table's status and messages, the run choices, the open group) and put back
+// once, at the next unlock.
+const UI_STATE_KEY = "palaterm_ui_state";
+function saveUIState() {
+  try {
+    const tab = document.querySelector(".tab.active");
+    sessionStorage.setItem(UI_STATE_KEY, JSON.stringify({
+      tab: tab ? tab.id.replace("tab-", "") : "devices",
+      runState, runGroupSel, runStage, runSetSel, runAdHoc, lastRunReq, lastRunDry, deviceView,
+      // A batch still running goes on in the backend; its progress keeps
+      // arriving after the reload (and is checked again at unlock).
+      running, cancelling, runTargets, runTotals, runStartMs,
+    }));
+  } catch (e) { }
+}
+function restoreUIState() {
+  let v = null;
+  try { v = JSON.parse(sessionStorage.getItem(UI_STATE_KEY) || "null"); sessionStorage.removeItem(UI_STATE_KEY); } catch (e) { }
+  if (!v) return null;
+  for (const k in runState) delete runState[k];
+  Object.assign(runState, v.runState || {});
+  runGroupSel = v.runGroupSel || ""; runStage = v.runStage || ""; runSetSel = v.runSetSel || ""; runAdHoc = v.runAdHoc || "";
+  lastRunReq = v.lastRunReq || null; lastRunDry = !!v.lastRunDry;
+  if (v.deviceView) deviceView = v.deviceView;
+  running = !!v.running; cancelling = !!v.cancelling;
+  runTargets = v.runTargets || []; runTotals = v.runTotals || {}; runStartMs = v.runStartMs || 0;
+  return v.tab === "settings" ? "devices" : v.tab;
+}
+// The tab to open after the next unlock (restored at page load, so a batch's
+// events arriving while the lock screen shows land in the restored table).
+let restoredTab = null;
 
 async function refreshInventory() {
   INV = await App().GetInventory();
@@ -597,6 +690,11 @@ $("#btn-reset").onclick = resetVaultFlow;
 $("#btn-lock").onclick = async () => {
   // Unsaved settings edits would be lost by the reload — warn first.
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lock"))) return;
+  // The ロック button locks the terminal windows too (they stay connected
+  // behind their own lock screen); the idle auto-lock below does not, since
+  // a terminal can be in use while this window sits idle.
+  await App().LockTerminals().catch(() => {});
+  saveUIState();
   await App().Lock(); location.reload();
 };
 
@@ -705,6 +803,10 @@ async function switchTab(name) {
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach(el =>
     el.classList.toggle("active", el.id === "tab-" + name));
+  // Coming from a group's device list with no group chosen in the run tab
+  // yet: start on that group instead of an empty table.
+  if (name === "run" && !runGroupSel && !running && typeof deviceView !== "undefined" &&
+      deviceView.mode === "list" && deviceView.group) runGroupSel = deviceView.group;
   renderTab(name);
 }
 
@@ -732,6 +834,7 @@ setInterval(async () => {
   const min = s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30);
   if (!min || (typeof running !== "undefined" && running)) return;
   if (Date.now() - lastActivityMs < min * 60000) return;
+  saveUIState();
   try { await App().Lock(); } catch (e) { }
   location.reload();
 }, 15000);

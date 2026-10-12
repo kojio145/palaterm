@@ -106,27 +106,65 @@ type DialOpts struct {
 // what connect timeout the user had set. In a batch that is one worker stuck
 // on a typo.
 //
-// The deadline is cleared once the handshake is through: from there the
-// session is long-lived and must not expire mid-command.
-func dialSSHClient(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, error) {
+// The deadline stays on through opening the session, the pty and the shell
+// (a server that completes the handshake and then never answers a channel
+// request held the worker forever); the caller clears it once the shell is
+// up — from there the session is long-lived and must not expire mid-command.
+func dialSSHClient(addr string, cfg *ssh.ClientConfig, timeout time.Duration) (*ssh.Client, net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
 	if err != nil {
 		conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		c.Close()
-		return nil, err
-	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return ssh.NewClient(c, chans, reqs), conn, nil
+}
+
+// keepaliveEvery is how often an idle SSH session is poked. Firewalls and
+// NAT routers drop a TCP flow that is silent for a few minutes; a terminal
+// window left open while reading something else came back dead.
+var keepaliveEvery = 30 * time.Second
+
+// startKeepalive sends OpenSSH's keepalive request until the client closes,
+// and closes it after three unanswered in a row (the line is gone — better
+// to say so than to sit there).
+func startKeepalive(c *ssh.Client) {
+	go func() {
+		t := time.NewTicker(keepaliveEvery)
+		defer t.Stop()
+		misses := 0
+		for range t.C {
+			done := make(chan error, 1)
+			go func() {
+				_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				if err != nil && errors.Is(err, io.EOF) {
+					return // closed
+				}
+				if err != nil {
+					misses++
+				} else {
+					misses = 0
+				}
+			case <-time.After(keepaliveEvery):
+				misses++
+			}
+			if misses >= 3 {
+				c.Close()
+				return
+			}
+		}
+	}()
 }
 
 func dialSSH(host string, port int, user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (Session, error) {
@@ -182,7 +220,7 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	}
 
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	client, err := dialSSHClient(addr, cfg, timeout)
+	client, conn, err := dialSSHClient(addr, cfg, timeout)
 	if err != nil {
 		if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
 			return nil, fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
@@ -227,6 +265,12 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 		client.Close()
 		return nil, err
 	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		sess.Close()
+		client.Close()
+		return nil, err
+	}
+	startKeepalive(client)
 
 	return &sshSession{client: client, sess: sess, stdin: stdin, stdout: stdout}, nil
 }

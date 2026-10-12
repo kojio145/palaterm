@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -63,6 +64,27 @@ type Term struct {
 	// instead of reporting the cancellation as a failure.
 	cancelLogin context.CancelFunc
 	switched    bool
+	// locked covers the window until the master password is typed (the main
+	// window's ロック, or this window's own idle time); keys are not sent
+	// meanwhile. autoLockMin is the vault's idle setting (0 = off).
+	locked      bool
+	autoLockMin int
+	lang        string
+	exp         *runpkg.Expecter // the live session's line (SendBreak)
+	pasteProc   *os.Process      // the open paste-confirmation window (ended on Lock)
+	unlockFails int              // wrong passwords in a row at the lock screen
+	quitting    bool             // quitForParent: close without asking
+	unlockMu    sync.Mutex       // serialises Unlock attempts
+}
+
+// errLocked refuses what a locked window must not do.
+var errLocked = fmt.Errorf("ロック中です。マスターパスワードでロックを解除してください")
+
+// isLocked reports the lock (see Lock).
+func (t *Term) isLocked() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.locked
 }
 
 // NewTerm builds the terminal-window backend and starts reading the password
@@ -85,6 +107,23 @@ func NewTerm(device, label string, manual bool) *Term {
 		sc := bufio.NewScanner(os.Stdin)
 		if sc.Scan() {
 			t.pwCh <- sc.Text()
+		}
+		// The parent keeps the pipe open: LOCK (its ロック), PW <base64> (the
+		// master password was changed), CLOSE (PalaTerm is quitting).
+		for sc.Scan() {
+			line := sc.Text()
+			switch {
+			case line == termLockLine:
+				t.Lock()
+			case strings.HasPrefix(line, termPWLine+" "):
+				if pw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, termPWLine+" ")); err == nil && len(pw) > 0 {
+					t.mu.Lock()
+					t.pw, t.unlockFails = string(pw), 0
+					t.mu.Unlock()
+				}
+			case line == termCloseLine:
+				t.quitForParent()
+			}
 		}
 	}()
 	return t
@@ -171,6 +210,13 @@ func (t *Term) connect(pw string) {
 	}
 	t.mu.Lock()
 	t.pw, t.dev, t.hostKeys = pw, dev, hk
+	t.autoLockMin = inv.Settings.AutoLockMin
+	if t.autoLockMin <= 0 {
+		t.autoLockMin = model.DefaultAutoLockMin
+	}
+	if inv.Settings.AutoLockOff {
+		t.autoLockMin = 0
+	}
 	t.mu.Unlock()
 	if dev == nil {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "機器が見つかりません"})
@@ -298,6 +344,9 @@ func (t *Term) connect(pw string) {
 // connecting. The user can see the device is at a screen no profile will get
 // past; this spares them the timeout.
 func (t *Term) SwitchToManual() error {
+	if t.isLocked() {
+		return errLocked
+	}
 	t.mu.Lock()
 	t.switched = true
 	cancel := t.cancelLogin
@@ -325,6 +374,9 @@ func manualUnavailable(dev *model.Device, err error) string {
 // Takeover hands a session whose automatic login failed to the keyboard, as
 // it is. The answer to the 「手動で続ける」 button.
 func (t *Term) Takeover() error {
+	if t.isLocked() {
+		return errLocked
+	}
 	t.mu.Lock()
 	exp, dev, settings := t.pending, t.pendingDev, t.pendingSet
 	t.pending, t.pendingDev = nil, nil
@@ -338,6 +390,9 @@ func (t *Term) Takeover() error {
 
 // Discard hangs up a session held for Takeover. The answer to 「閉じる」.
 func (t *Term) Discard() {
+	if t.isLocked() {
+		return
+	}
 	t.mu.Lock()
 	exp := t.pending
 	t.pending, t.pendingDev = nil, nil
@@ -359,7 +414,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	// written as it arrives (Tera Term style) with the passwords masked —
 	// see streamLog.
 	started := time.Now()
-	runDir := logstore.RunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
+	runDir := logstore.ClaimRunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
 	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
 		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Role: d.Role, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
 	var secrets []string
@@ -383,8 +438,17 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	onClose := func() {
 		t.mu.Lock()
 		t.slog = nil
+		// Not live any more: closing the window needs no confirmation, and
+		// Reconnect may open the session again.
+		t.send, t.resizeFn, t.closeFn, t.exp = nil, nil, nil, nil
 		t.mu.Unlock()
 		p, _ := slog.Close()
+		if p == "" {
+			// Nothing was logged: drop the folder claimed at connect time, or
+			// it shows in 実行履歴 as a run with no devices. (Remove only
+			// succeeds on an empty folder.)
+			_ = os.Remove(runDir)
+		}
 		if p != "" {
 			_ = history.Write(runDir, history.Summary{
 				App: "PalaTerm " + appVersion, StartedAt: started.Format(time.RFC3339), FinishedAt: time.Now().Format(time.RFC3339),
@@ -397,7 +461,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	}
 	send, resize, closeFn := t.runner.StartInteractive(exp, sink, onClose)
 	t.mu.Lock()
-	t.send, t.resizeFn, t.closeFn = send, resize, closeFn
+	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
 	t.mu.Unlock()
 	// A serial device record has no host; the title shows the port and baud
 	// actually opened instead ("COM3 @ 9600"), so an auto-detected port is
@@ -414,6 +478,9 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 // bastions) are dropped here, the main window is told to drop them from the
 // vault (see SpawnTerminal), and the connection is tried again.
 func (t *Term) AllowHostKeyChange() error {
+	if t.isLocked() {
+		return errLocked
+	}
 	t.mu.Lock()
 	dev, hk, pw := t.dev, t.hostKeys, t.pw
 	t.mu.Unlock()
@@ -436,6 +503,9 @@ func (t *Term) AllowHostKeyChange() error {
 // OpenLogWindow shows this session's log in a viewer window that follows
 // the file as it grows. Whatever is still held back is written first.
 func (t *Term) OpenLogWindow() error {
+	if t.isLocked() {
+		return errLocked
+	}
 	t.mu.Lock()
 	l := t.slog
 	t.mu.Unlock()
@@ -457,6 +527,9 @@ func (t *Term) OpenLogWindow() error {
 // everything so far and ignores later output until started again, in the
 // same file. Returns the file path ("" while nothing has been written).
 func (t *Term) SetLogging(on bool) (string, error) {
+	if t.isLocked() {
+		return "", errLocked
+	}
 	t.mu.Lock()
 	l := t.slog
 	t.mu.Unlock()
@@ -476,6 +549,10 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		return err
 	}
 	t.mu.Lock()
+	if t.locked {
+		t.mu.Unlock()
+		return errLocked
+	}
 	if t.pasteOpen {
 		t.mu.Unlock()
 		return fmt.Errorf("貼り付けの確認ウィンドウが既に開いています")
@@ -503,6 +580,9 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		t.pasteDone()
 		return err
 	}
+	t.mu.Lock()
+	t.pasteProc = cmd.Process
+	t.mu.Unlock()
 	go func() {
 		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR})
 		_ = stdin.Close()
@@ -528,9 +608,9 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 			s += "\r"
 		}
 		t.mu.Lock()
-		send := t.send
+		send, locked := t.send, t.locked
 		t.mu.Unlock()
-		if send != nil && s != "" {
+		if send != nil && s != "" && !locked {
 			_ = send(s)
 		}
 		runtime.EventsEmit(t.ctx, "term:paste-done", true)
@@ -541,15 +621,16 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 func (t *Term) pasteDone() {
 	t.mu.Lock()
 	t.pasteOpen = false
+	t.pasteProc = nil
 	t.mu.Unlock()
 }
 
 // Send forwards keystrokes (base64) to the device.
 func (t *Term) Send(dataB64 string) error {
 	t.mu.Lock()
-	s := t.send
+	s, locked := t.send, t.locked
 	t.mu.Unlock()
-	if s == nil {
+	if s == nil || locked {
 		return nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(dataB64)
@@ -581,6 +662,9 @@ func (t *Term) SetClipboard(text string) error {
 // dialog (Alt+V / right-click / toolbar), read in Go for the same reason
 // SetClipboard writes in Go.
 func (t *Term) GetClipboard() (string, error) {
+	if t.isLocked() {
+		return "", errLocked
+	}
 	return runtime.ClipboardGetText(t.ctx)
 }
 
@@ -588,6 +672,9 @@ func (t *Term) GetClipboard() (string, error) {
 // window's ログフォルダを開く uses, so the interactive log saved on close is
 // one click away from this window too.
 func (t *Term) OpenLogDir() error {
+	if t.isLocked() {
+		return errLocked
+	}
 	t.mu.Lock()
 	dir := t.logDir
 	t.mu.Unlock()
@@ -596,7 +683,131 @@ func (t *Term) OpenLogDir() error {
 	}
 	abs := logstore.ResolveRoot(dir)
 	_ = os.MkdirAll(abs, 0o755)
-	return exec.Command("explorer", abs).Start()
+	return startExplorer(abs)
+}
+
+// Lock covers the window (the main window's ロック, or the page's own idle
+// timer). The session stays up; keys are dropped until Unlock.
+func (t *Term) Lock() {
+	t.mu.Lock()
+	t.locked = true
+	ctx, pp := t.ctx, t.pasteProc
+	t.mu.Unlock()
+	// A paste confirmation left open would otherwise still send to the device
+	// from its own window, lock or no lock.
+	if pp != nil {
+		_ = pp.Kill()
+	}
+	if ctx != nil {
+		runtime.EventsEmit(ctx, "term:lock")
+	}
+}
+
+// IsLocked lets the page show the lock screen for a lock that arrived before
+// it was listening for term:lock.
+func (t *Term) IsLocked() bool { return t.isLocked() }
+
+// Unlock lifts the lock when pw is the master password.
+//
+// The main window's unlock goes through the vault's key derivation and is
+// slow by nature; this compares against the password in memory, so wrong
+// guesses are slowed down here instead: 1 s after the first, growing by a
+// second each time up to 5 s.
+func (t *Term) Unlock(pw string) bool {
+	// One attempt at a time, its delay included: calls made in parallel from
+	// the page would otherwise each be checked at once.
+	t.unlockMu.Lock()
+	defer t.unlockMu.Unlock()
+	t.mu.Lock()
+	if t.pw != "" && subtle.ConstantTimeCompare([]byte(pw), []byte(t.pw)) == 1 {
+		t.locked, t.unlockFails = false, 0
+		t.mu.Unlock()
+		return true
+	}
+	t.unlockFails++
+	wait := time.Duration(min(t.unlockFails, 5)) * time.Second
+	t.mu.Unlock()
+	time.Sleep(wait)
+	return false
+}
+
+// AutoLockMinutes is the vault's idle-lock setting for this window (0 = off,
+// also before the vault is open).
+func (t *Term) AutoLockMinutes() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.autoLockMin
+}
+
+// Reconnect opens the session again after it ended (a reloaded device, a
+// dropped line), with the same device and mode — Tera Term's reconnect.
+func (t *Term) Reconnect() error {
+	if t.isLocked() {
+		return errLocked
+	}
+	t.mu.Lock()
+	pw, live := t.pw, t.send != nil
+	t.mu.Unlock()
+	if pw == "" {
+		return fmt.Errorf("vault is locked")
+	}
+	if live {
+		return nil
+	}
+	go t.connect(pw)
+	return nil
+}
+
+// SendBreak sends a serial break (Tera Term's Alt+B): on a Cisco during
+// boot, the way into ROMMON for password recovery.
+func (t *Term) SendBreak() error {
+	t.mu.Lock()
+	e, locked := t.exp, t.locked
+	t.mu.Unlock()
+	if e == nil || locked {
+		return fmt.Errorf("接続していません")
+	}
+	return e.Break()
+}
+
+// SetLang tells the backend the UI language for its own close dialog.
+func (t *Term) SetLang(lang string) {
+	t.mu.Lock()
+	t.lang = lang
+	uiLang.Store(lang)
+	t.mu.Unlock()
+}
+
+// beforeClose asks before closing a window whose session is still up, the
+// way Tera Term does: a stray click on × used to drop a device in the middle
+// of a configuration change.
+func (t *Term) beforeClose(ctx context.Context) bool {
+	t.mu.Lock()
+	live, en := t.send != nil && !t.quitting, t.lang == "en"
+	t.mu.Unlock()
+	if !live {
+		return false
+	}
+	title, msg := "接続中", "この機器に接続中です。切断してウィンドウを閉じますか？"
+	if en {
+		title, msg = "Connected", "This window is connected to the device. Disconnect and close it?"
+	}
+	return !confirmDialog(ctx, title, msg)
+}
+
+// quitForParent ends the session the normal way — so the log is closed and
+// its 実行履歴 summary written — then quits without the "disconnect?"
+// question: the main window is closing and already asked.
+func (t *Term) quitForParent() {
+	t.mu.Lock()
+	t.quitting = true
+	ctx := t.ctx
+	t.mu.Unlock()
+	t.Close()
+	time.Sleep(400 * time.Millisecond) // let onClose write the summary
+	if ctx != nil {
+		runtime.Quit(ctx)
+	}
 }
 
 // Close ends the session.

@@ -17,8 +17,8 @@ func TestParseRect(t *testing.T) {
 func TestCentreIn(t *testing.T) {
 	work := rect{1920, 0, 3840, 1040} // second monitor, right of the primary
 	for _, tc := range []struct {
-		parent     rect
-		w, h       int32
+		parent       rect
+		w, h         int32
 		wantX, wantY int32
 	}{
 		{rect{2200, 100, 3480, 900}, 980, 640, 2350, 180},  // centred over the main window

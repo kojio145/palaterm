@@ -27,6 +27,12 @@ function runTitle(r) {
   return `${fmtRunTime(r.startedAt)}${r.group ? "  " + r.group : ""}${r.stage ? "  [" + stageLabel(r.stage) + "]" : ""}`;
 }
 
+// A history row's message: its error, or the commands the device refused.
+function histMsg(d) {
+  if (d.warnings && d.warnings.length) return "⚠ " + d.warnings.join(" ／ ");
+  return fmtRunMsg(d.error || "");
+}
+
 async function renderHistory() {
   const root = document.getElementById("tab-history");
   root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
@@ -88,7 +94,7 @@ function renderHistoryView() {
         <td style="width:140px"><span class="dot st-${d.status === "ok" ? "done" : d.status === "unknown" ? "queued" : d.status}"></span>${esc(({ ok: t("完了"), error: t("エラー"), canceled: t("中止"), unknown: t("—") })[d.status] || d.status)}</td>
         <td style="width:200px"><b>${esc(d.name)}</b></td>
         <td class="mono" style="width:140px">${esc(d.host || "")}</td>
-        <td class="muted mono"><div class="clip" data-tip="${esc(fmtRunMsg(d.error || ""))}">${esc(fmtRunMsg(d.error || ""))}</div></td>
+        <td class="muted mono"><div class="clip" data-tip="${esc(histMsg(d))}">${esc(histMsg(d))}</div></td>
         <td style="text-align:right;width:120px">${d.logPath ? `<span class="link" data-log="${esc(d.logPath)}">${esc(t("ログ表示"))}</span>` : `<span class="muted">${esc(t("ログなし"))}</span>`}</td>
       </tr>`).join("") || `<tr><td class="muted" style="padding:8px 48px">${esc(t("ログファイルがありません"))}</td></tr>`}</tbody></table></td></tr>` : "";
     return `<tr>
@@ -228,7 +234,13 @@ async function compareRuns() {
     const lines = s.commands.map(c => `<div class="mono" style="font-size:11px;white-space:nowrap">${c.status === "missing" ? `<span style="color:var(--err)">✗</span>` : c.status === "already" ? `<span class="muted">＝</span>` : `<span style="color:var(--ok)">✓</span>`} ${esc(c.line)}${c.status === "already" ? ` <span class="muted">${esc(t("（作業前からあり）"))}</span>` : ""}</div>`).join("");
     return `<details ${s.missing ? "open" : ""}><summary style="cursor:pointer">${head}</summary><div style="margin-top:4px;max-height:160px;overflow:auto">${lines}</div></details>`;
   };
-  out.innerHTML = banner + `
+  // Names only have to be unique within a group, so runs of two groups pair
+  // different devices that happen to share a name: say so above the result.
+  const ga = a.group || "", gb = b.group || "";
+  const groupWarn = ga !== gb
+    ? `<div style="margin-top:10px;font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 12px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
+    : "";
+  out.innerHTML = groupWarn + banner + `
     <table style="margin-top:12px"><thead><tr><th>${esc(t("ホスト名"))}</th><th style="width:120px">${esc(t("差分"))}</th><th style="width:150px">${esc(t("追加 / 削除（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
       ${rows.map(r => `<tr>
         <td><b>${esc(r.name)}</b></td>

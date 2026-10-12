@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -36,10 +37,31 @@ type monitorInfo struct {
 	Flags   uint32
 }
 
+// uiLang is the UI language the page reported (App.SetLang / Term.SetLang),
+// handed to child windows so their OS titles match it.
+var uiLang atomic.Value // string
+
+// winWord picks a child window's title word for the language its parent
+// passed in PALATERM_LANG (the page is not loaded yet when the title is set).
+func winWord(ja, en string) string {
+	if os.Getenv("PALATERM_LANG") == "en" {
+		return en
+	}
+	return ja
+}
+
 // childEnv is the environment for a child window process: this process's,
-// plus where this process's window is (when it has one on screen).
+// plus where this process's window is (when it has one on screen) and the
+// UI language.
 func childEnv(extra ...string) []string {
 	env := os.Environ()
+	lang, _ := uiLang.Load().(string)
+	if lang == "" {
+		lang = os.Getenv("PALATERM_LANG")
+	}
+	if lang != "" {
+		env = append(env, "PALATERM_LANG="+lang)
+	}
 	if hwnd := ownTopLevelWindow(); hwnd != 0 {
 		var r rect
 		if ok, _, _ := pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok != 0 {

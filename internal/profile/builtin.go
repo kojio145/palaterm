@@ -1,5 +1,7 @@
 package profile
 
+import "sync"
+
 // Default profiles mirror the 15 OS types handled by the legacy TTL macro's
 // changeAccessAuthority routine, written as the same plain wait strings the
 // macro used (e.g. wait 'assword:' / wait '#'). No regular expressions:
@@ -29,6 +31,7 @@ var defaults = []Profile{
 		},
 		Pager:      []Step{{Send: "terminal length 0"}},
 		Disconnect: []Step{{Send: "exit"}},
+		Answers:    ciscoAnswers,
 	},
 	{
 		Key:    "cisco-asa",
@@ -42,6 +45,7 @@ var defaults = []Profile{
 		},
 		Pager:      []Step{{Send: "terminal pager 0"}},
 		Disconnect: []Step{{Send: "exit"}},
+		Answers:    ciscoAnswers,
 	},
 	{
 		Key:        "juniper-junos",
@@ -283,6 +287,32 @@ var defaults = []Profile{
 	},
 }
 
+// ciscoAnswers takes the default the device offers for the questions IOS
+// and ASA ask mid-command: "copy run start" → "Destination filename
+// [startup-config]?", "clear counters" → "Clear … [confirm]". A set
+// containing such a command means the user wants it done; the change
+// warning before the run lists what would change the device.
+var ciscoAnswers = []Step{
+	{Expect: "[confirm]", Enter: true},
+	{Expect: "]?", Enter: true},
+}
+
+// AnswersAddedIn is the seed generation that introduced the default
+// Answers: a vault seeded before it gets them, once, on profiles still
+// without any (see DefaultAnswers).
+const AnswersAddedIn = 3
+
+// DefaultAnswers returns a copy of the built-in Answers of the default
+// profile key (nil for none).
+func DefaultAnswers(key string) []Step {
+	for _, p := range defaults {
+		if p.Key == key && len(p.Answers) > 0 {
+			return append([]Step(nil), p.Answers...)
+		}
+	}
+	return nil
+}
+
 // Defaults returns deep copies of the default profiles, safe for the caller
 // to store and mutate (they become editable vault data).
 func Defaults() []Profile {
@@ -298,7 +328,7 @@ func Defaults() []Profile {
 // introduced in a later generation is added to it exactly once on unlock, so
 // an existing vault picks up new OS types without resurrecting defaults the
 // user deleted. Bump it together with introducedIn when adding a default.
-const SeedGen = 2
+const SeedGen = 3
 
 // introducedIn maps a default's key to the generation that added it; keys
 // absent here belong to the original set (generation 0).
@@ -325,13 +355,17 @@ func copyProfile(p Profile) Profile {
 	q.Login = append([]Step(nil), p.Login...)
 	q.Pager = append([]Step(nil), p.Pager...)
 	q.Disconnect = append([]Step(nil), p.Disconnect...)
+	q.Answers = append([]Step(nil), p.Answers...)
 	return q
 }
 
 // Registry indexes profiles by key. It starts empty; the app registers the
 // vault's profiles (defaults seeded at creation plus user-made ones), quoted
-// via Quote.
+// via Quote. Safe for concurrent use: a batch reads profiles from its
+// workers while the OSタイプ設定 tab may be saving one (an unguarded map
+// write during a read stops the whole process).
 type Registry struct {
+	mu    sync.RWMutex
 	byKey map[string]Profile
 	order []string
 }
@@ -344,6 +378,8 @@ func NewRegistry() *Registry {
 // Get returns the profile for key, falling back to the registered "generic"
 // profile, or to a minimal hardcoded one when even that has been deleted.
 func (r *Registry) Get(key string) Profile {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if p, ok := r.byKey[key]; ok {
 		return p
 	}
@@ -360,12 +396,16 @@ func (r *Registry) Get(key string) Profile {
 
 // Has reports whether key is a known profile.
 func (r *Registry) Has(key string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	_, ok := r.byKey[key]
 	return ok
 }
 
 // Add registers or overrides a profile.
 func (r *Registry) Add(p Profile) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.byKey[p.Key]; !ok {
 		r.order = append(r.order, p.Key)
 	}
@@ -374,6 +414,8 @@ func (r *Registry) Add(p Profile) {
 
 // Remove deletes a profile from the registry.
 func (r *Registry) Remove(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.byKey[key]; !ok {
 		return
 	}
@@ -388,6 +430,8 @@ func (r *Registry) Remove(key string) {
 
 // List returns profiles in registration order.
 func (r *Registry) List() []Profile {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]Profile, 0, len(r.order))
 	for _, k := range r.order {
 		out = append(out, r.byKey[k])

@@ -45,8 +45,26 @@ var rules = []rule{
 	{regexp.MustCompile(`(?i)^(reload|reboot|restart|shutdown\s*$|halt|poweroff|execute\s+(reboot|shutdown|factoryreset)|request\s+system\s+(reboot|halt|power-off))`), ReasonReload},
 	// Erase / delete / format / reset.
 	{regexp.MustCompile(`(?i)^(erase|format|delete\s|rm\s|clear\s+(config|startup|running)|write\s+erase|execute\s+(formatlogdisk|erase)|request\s+system\s+zeroize|cold\s+start|restart\s+factory|reset\s)`), ReasonErase},
+	// Cisco IOS accepts any unambiguous prefix of a command, and PalaTerm now
+	// answers "[confirm]" / "…]?" for it (Profile.Answers), so a short form
+	// that used to stop at the question would run unwarned: "rel", "del x",
+	// "era startup-config", "wri", "copy run start".
+	{regexp.MustCompile(`(?i)^rel(o(ad?)?)?(\s|$)`), ReasonReload},
+	{regexp.MustCompile(`(?i)^(del(e(te?)?)?|era(se?)?|form(at?)?)\s`), ReasonErase},
+	{regexp.MustCompile(`(?i)^(wr(i(te?)?)?\s+er(a(se?)?)?|squeeze)(\s|$)`), ReasonErase},
+	{regexp.MustCompile(`(?i)^wr(i(te?)?)?(\s+me(m(o(ry?)?)?)?)?$`), ReasonWrite},
+	// copy to the startup / running config (any prefix: "copy run sta"), or
+	// onto device storage — overwriting a file there (a boot image) is answered
+	// "[confirm]" like everything else.
+	{regexp.MustCompile(`(?i)^cop(y)?\s+\S+\s+(st(a(r(t)?)?)?|ru(n)?|nvram:|system:|(boot|sup-boot|usb)?flash\d*:|disk\d*:|slot\d*:|bootdisk:)`), ReasonWrite},
+	{regexp.MustCompile(`(?i)^archive\s+(download-sw|upload-sw|tar\s+/x)`), ReasonWrite},
+	// Linux / Unix servers (the "Linux server" profiles): reboot / power-off
+	// in their usual spellings.
+	{regexp.MustCompile(`(?i)^(shutdown\s+(-[hrPHk]|now|\+\d)|init\s+[06](\s|$)|systemctl\s+(reboot|poweroff|halt|kexec|kill)|telinit\s+[06])`), ReasonReload},
 	// Saving / overwriting configuration.
-	{regexp.MustCompile(`(?i)^(wr(ite)?(\s+mem(ory)?)?|write\s+file|save(\s|$)|copy\s+\S+\s+(startup|running)-config|copy\s+running-config)(\s|$)`), ReasonWrite},
+	// ("wr" / "write [memory]" is the short-form rule above; "write terminal"
+	// only shows the config.)
+	{regexp.MustCompile(`(?i)^(write\s+file|save(\s|$)|copy\s+\S+\s+(startup|running)-config|copy\s+running-config)(\s|$)`), ReasonWrite},
 	{regexp.MustCompile(`(?i)^(execute\s+backup|execute\s+restore)`), ReasonWrite},
 	// Change commands that are only legal inside config mode but betray intent
 	// even when listed alone (interface / no / set / unset / ip / vlan …).
@@ -66,7 +84,14 @@ func Check(cmds []string) []Hit {
 		if text == "" {
 			continue
 		}
-		probe := strings.TrimSpace(strings.TrimPrefix(text, "do "))
+		// "do " (any case: IOS accepts "Do reload") and "sudo " (Linux) only
+		// change who runs the command, not what it does.
+		probe := text
+		for _, pre := range []string{"do ", "sudo "} {
+			if len(probe) > len(pre) && strings.EqualFold(probe[:len(pre)], pre) {
+				probe = strings.TrimSpace(probe[len(pre):])
+			}
+		}
 		for _, r := range rules {
 			if r.re.MatchString(probe) {
 				hits = append(hits, Hit{Index: i, Text: text, Reason: r.reason})

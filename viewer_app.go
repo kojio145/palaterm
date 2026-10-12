@@ -41,9 +41,9 @@ func NewViewer(path, title string) *Viewer {
 // openInExplorer shows a file selected in Explorer (or opens a folder).
 func openInExplorer(path string) error {
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return exec.Command("explorer", path).Start()
+		return startExplorer(path)
 	}
-	return exec.Command("explorer", "/select,", path).Start()
+	return startExplorer("/select,", path)
 }
 
 // spawnWindow starts another PalaTerm window process detached from this one.
@@ -57,6 +57,8 @@ func spawnWindow(env []string, args ...string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	tieToMainWindow(cmd.Process.Pid)
+	trackChild(cmd.Process)
 	go func() { _ = cmd.Wait() }()
 	return nil
 }

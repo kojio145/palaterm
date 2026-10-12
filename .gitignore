@@ -14,6 +14,7 @@
 devices.enc
 vault.enc
 *_vault.enc
+*_vault.enc.bak
 *.local.yaml
 
 # Logs

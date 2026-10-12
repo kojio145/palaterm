@@ -77,6 +77,13 @@ type Profile struct {
 
 	// Disconnect logs out cleanly.
 	Disconnect []Step `json:"disconnect,omitempty"`
+
+	// Answers reply to questions a command asks before it finishes
+	// ("Destination filename [startup-config]?", "[confirm]"): while waiting
+	// for the prompt after a command, an Expect at the tail of the output
+	// gets its Send (empty = Enter). Without one such a command waits out
+	// the command timeout and the rest of the set is lost.
+	Answers []Step `json:"answers,omitempty"`
 }
 
 // Quote returns a copy of p with every prompt/expect treated as a literal
@@ -101,6 +108,7 @@ func Quote(p Profile) Profile {
 	q.Login = quoteSteps(p.Login)
 	q.Pager = quoteSteps(p.Pager)
 	q.Disconnect = quoteSteps(p.Disconnect)
+	q.Answers = quoteSteps(p.Answers)
 	return q
 }
 

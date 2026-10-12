@@ -95,6 +95,12 @@ const maxNegotiateRetries = 4
 // An OpenSSH "Unable to negotiate" refusal is answered by retrying with the
 // device's offered algorithms allowed (see reNegotiate).
 func jumpTo(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, timeout time.Duration) error {
+	// The user name is typed into the hop's shell. Checked here, on the value
+	// actually used — a device on its group's default credentials sends the
+	// group's name, which the device's own checks never see.
+	if !model.ShellSafeWord(user) {
+		return fmt.Errorf("踏み台で使うユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", user)
+	}
 	cmd := buildJumpCommand(template, method, host, user, port)
 	var extra []string
 	for attempt := 0; ; attempt++ {
@@ -154,8 +160,19 @@ func negotiateFix(transcript string) string {
 		return ""
 	}
 	last := m[len(m)-1]
+	// The offer is the far end's own words, typed back into the hop's shell:
+	// only algorithm names get through (a ";", "$(" or "|" in a forged offer
+	// would otherwise run on the jump host). Anything else ends the retry.
+	if !reAlgoList.MatchString(last[2]) {
+		return ""
+	}
 	return negotiateOption[last[1]] + "=+" + last[2]
 }
+
+// reAlgoList is a comma-separated list of SSH algorithm names
+// ("ssh-dss", "diffie-hellman-group1-sha1", "aes128-cbc,3des-cbc",
+// "hmac-sha1-96@openssh.com").
+var reAlgoList = regexp.MustCompile(`^[A-Za-z0-9@._+-]+(,[A-Za-z0-9@._+-]+)*$`)
 
 // withSSHOptions puts "-o k=v" options right after the ssh word of cmd, so
 // both the standard "ssh user@host" and a template like "ssh -p 2222 …" keep

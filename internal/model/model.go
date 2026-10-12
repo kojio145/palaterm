@@ -5,6 +5,7 @@ package model
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -269,6 +270,21 @@ func (s Stage) Valid() bool {
 	return false
 }
 
+// Clone returns a deep copy of the inventory (by a JSON round trip: every
+// field is persisted as JSON anyway, so the copy is exactly what the vault
+// would hold).
+func (inv *Inventory) Clone() *Inventory {
+	b, err := json.Marshal(inv)
+	if err != nil {
+		panic(err) // plain data: cannot fail
+	}
+	var out Inventory
+	if err := json.Unmarshal(b, &out); err != nil {
+		panic(err)
+	}
+	return &out
+}
+
 // NewDeviceID returns a fresh random device ID.
 func NewDeviceID() string {
 	var b [8]byte
@@ -475,9 +491,24 @@ func (d *Device) Validate() error {
 	default:
 		return fmt.Errorf("接続方式が不正です: %q", d.Conn)
 	}
-	for i, b := range d.ActiveBastions() {
+	if isUNCPath(d.KeyFile) {
+		return fmt.Errorf("秘密鍵にネットワーク上のパス（\\\\サーバー\\…）は指定できません: %q", d.KeyFile)
+	}
+	bastions := d.ActiveBastions()
+	// Behind a jump host the device's username is typed into the hop's shell
+	// ("ssh user@host"), so shell syntax in it would run there.
+	if len(bastions) > 0 && !ShellSafeWord(d.Username) {
+		return fmt.Errorf("ユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", d.Username)
+	}
+	for i, b := range bastions {
 		if !validHostOrIP(b.Host) {
 			return fmt.Errorf("踏み台%d段目のホスト形式が不正です: %q", i+1, b.Host)
+		}
+		if i > 0 && !ShellSafeWord(b.Username) {
+			return fmt.Errorf("踏み台%d段目のユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", i+1, b.Username)
+		}
+		if isUNCPath(b.KeyFile) {
+			return fmt.Errorf("踏み台%d段目の秘密鍵にネットワーク上のパスは指定できません: %q", i+1, b.KeyFile)
 		}
 		if b.Method != BastionSSH && b.Method != BastionTelnet {
 			return fmt.Errorf("踏み台%d段目の接続方式が不正です", i+1)
@@ -487,6 +518,32 @@ func (d *Device) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ShellSafeWord reports whether s can be typed into a shell as one plain
+// word: no whitespace, control characters or shell syntax. Empty is fine.
+func ShellSafeWord(s string) bool {
+	for _, r := range s {
+		if r <= ' ' || r == 0x7f || strings.ContainsRune(";|&$<>`'\"\\()*?!{}[]#~", r) {
+			return false
+		}
+	}
+	return true
+}
+
+// isUNCPath reports a Windows network path (\\server\share\… or //server/…):
+// opening one sends the user's Windows credentials to that server, so a key
+// path pointing there (say, from an imported file) would leak them.
+func isUNCPath(p string) bool {
+	p = strings.TrimSpace(p)
+	// Windows treats / and \ alike, so any two of them open a network path
+	// ("\/srv/share" too); NT-style "\??\UNC\…" and file: URLs get there as well.
+	sep := func(b byte) bool { return b == '\\' || b == '/' }
+	if len(p) >= 2 && sep(p[0]) && sep(p[1]) {
+		return true
+	}
+	low := strings.ToLower(p)
+	return strings.HasPrefix(low, `\??\`) || strings.HasPrefix(low, "file:")
 }
 
 // validHostOrIP accepts a valid IPv4/IPv6 literal or a plausible hostname.

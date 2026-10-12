@@ -30,6 +30,12 @@ type Describer interface {
 	Describe() string
 }
 
+// Breaker is implemented by transports that can send a line break signal
+// (a serial port).
+type Breaker interface {
+	SendBreak() error
+}
+
 // LineEnder is implemented by transports that end a line with something other
 // than the CRLF the network protocols use. The transport owns this because it
 // is a property of how the far end reads bytes, not of what is being sent.

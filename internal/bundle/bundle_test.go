@@ -229,7 +229,7 @@ func TestApplyOverwriteSharedAndTargetGroup(t *testing.T) {
 
 func TestApplyReportsMissingReferences(t *testing.T) {
 	inv := &model.Inventory{}
-	c := Contents{Devices: []model.Device{{Name: "x", OSType: "nope", CommandSet: "gone"}}}
+	c := Contents{Devices: []model.Device{{Name: "x", Host: "192.0.2.1", Conn: model.ConnSSH, OSType: "nope", CommandSet: "gone"}}}
 	s, _ := Apply(inv, c, Options{})
 	if strings.Join(s.MissingSets, ",") != "gone" || strings.Join(s.MissingProfiles, ",") != "nope" {
 		t.Errorf("missing = %+v", s)
@@ -323,5 +323,38 @@ func TestApplySameNameInTwoGroups(t *testing.T) {
 		if d.Group == "B社" && d.Host != "192.0.2.22" || d.Group == "A社" && d.Host != "192.0.2.1" {
 			t.Errorf("wrong device updated: %+v", d)
 		}
+	}
+}
+
+// Rows that fail the device checks, and a second row for the same group +
+// name (as an all-devices file imported into one target group produces), are
+// left out and listed instead of silently overwriting each other.
+func TestApplySkipsInvalidAndDuplicateRows(t *testing.T) {
+	inv := &model.Inventory{}
+	row := func(group, name, host string) model.Device {
+		return model.Device{Name: name, Group: group, Host: host, Conn: model.ConnSSH, OSType: "cisco-ios"}
+	}
+	bad := row("A社", "evil", "192.0.2.9")
+	bad.Bastions = []model.Bastion{{Host: "192.0.2.8", Method: model.BastionSSH}}
+	bad.Username = "x;reboot"
+	c := Contents{Devices: []model.Device{
+		row("A社", "sw1", "192.0.2.1"), row("B社", "sw1", "192.0.2.2"), bad, row("A社", "sw2", "999.1.1.1"),
+	}}
+	s, _ := Apply(inv, c, Options{TargetGroup: "C社"})
+	if s.DevicesNew != 1 || len(inv.Devices) != 1 || inv.Devices[0].Host != "192.0.2.1" {
+		t.Errorf("imported %d (%+v), want only the first sw1", s.DevicesNew, inv.Devices)
+	}
+	if strings.Join(s.Duplicate, ",") != "C社 / sw1" {
+		t.Errorf("duplicate = %v", s.Duplicate)
+	}
+	if len(s.Invalid) != 2 {
+		t.Errorf("invalid = %v", s.Invalid)
+	}
+}
+
+// A command file with a carriage return inside a line is refused.
+func TestParseCommandSetRefusesHiddenCR(t *testing.T) {
+	if _, err := ParseCommandSet("show clock\rreload,1,1\r\nshow version\r\n"); err == nil {
+		t.Error("hidden CR accepted")
 	}
 }

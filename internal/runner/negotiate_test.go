@@ -108,3 +108,26 @@ func TestNegotiateFixReadsTheNewestRefusal(t *testing.T) {
 		t.Errorf("negotiateFix on plain text = %q", got)
 	}
 }
+
+// A forged offer carrying shell syntax is never typed back into the hop.
+func TestNegotiateFixRejectsShellSyntax(t *testing.T) {
+	for _, offer := range []string{"ssh-dss;id", "ssh-dss$(reboot)", "a|b", "x`y`", "ssh-dss&&ls"} {
+		tr := "Unable to negotiate with 10.0.0.1 port 22: no matching host key type found. Their offer: " + offer + "\r\n"
+		if got := negotiateFix(tr); got != "" {
+			t.Errorf("offer %q produced option %q", offer, got)
+		}
+	}
+	tr := "Unable to negotiate with 10.0.0.1 port 22: no matching cipher found. Their offer: aes128-cbc,3des-cbc\r\n"
+	if got := negotiateFix(tr); got != "Ciphers=+aes128-cbc,3des-cbc" {
+		t.Errorf("valid offer → %q", got)
+	}
+}
+
+// The user name typed on a jump host is checked as actually used (a group's
+// default credentials included), before anything is typed.
+func TestJumpRefusesShellSyntaxInUser(t *testing.T) {
+	err := jumpTo(context.Background(), nil, "", model.BastionSSH, "192.0.2.1", "ops;reboot", 0, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "使えない文字") {
+		t.Errorf("err = %v", err)
+	}
+}

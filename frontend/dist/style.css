@@ -254,7 +254,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .toast.warn { border-color: var(--warn); }
 
 /* ---- Run view ---- */
-.run-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; }
+.run-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
 .run-stat { display: flex; gap: 18px; margin-left: auto; color: var(--text-dim); font-size: 13px; }
 .run-stat b { color: var(--text); }
 .log-view { background: #0b0e13; border: 1px solid var(--border); border-radius: 10px;

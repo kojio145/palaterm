@@ -28,6 +28,11 @@ func (s *serialSession) Read(p []byte) (int, error)  { return s.port.Read(p) }
 func (s *serialSession) Write(p []byte) (int, error) { return s.port.Write(p) }
 func (s *serialSession) Close() error                { return s.port.Close() }
 
+// SendBreak holds the line in the break state for 300 ms — what a Cisco
+// needs during boot to drop into ROMMON (password recovery), and what
+// Tera Term's Alt+B sends.
+func (s *serialSession) SendBreak() error { return s.port.Break(300 * time.Millisecond) }
+
 // Describe names the port actually opened — "COM3 @ 9600" — which the
 // terminal window shows in its title. With an auto-detected port this is
 // the only place the user learns which COM port they are talking to.

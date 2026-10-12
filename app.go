@@ -42,15 +42,24 @@ type App struct {
 	runCancel context.CancelFunc
 	runActive bool // a batch is in progress (blocks a second concurrent batch)
 
-	interMu      sync.Mutex
-	interactives map[string]*interactiveSession // device name -> live terminal
-}
+	// Host keys pinned during a batch are saved shortly after, together
+	// (persistSoon), not one vault write per device inside the handshake.
+	persistMu      sync.Mutex
+	persistTimer   *time.Timer
+	persistPending bool
+	persistRun     sync.Mutex // held while a pending save is written
 
-// interactiveSession is one open manual-operation terminal.
-type interactiveSession struct {
-	send   func(string) error
-	resize func(cols, rows int) error
-	close  func() error
+	// Open terminal windows → their stdin (LockTerminals).
+	termsMu sync.Mutex
+	terms   map[*exec.Cmd]io.WriteCloser
+
+	lang string // UI language, for the backend's own dialogs
+
+	// Host keys pinned by a batch while the vault was locked, saved at the
+	// next unlock.
+	pendingPins map[string]string
+
+	lastDone *RunDone // the last batch's results (GetRunStatus)
 }
 
 // NewApp constructs the backend with the vault stored next to the executable
@@ -58,10 +67,10 @@ type interactiveSession struct {
 func NewApp() *App {
 	reg := profile.NewRegistry()
 	a := &App{
-		profiles:     reg,
-		runner:       runpkg.New(reg),
-		vaultPath:    defaultVaultPath(),
-		interactives: make(map[string]*interactiveSession),
+		terms:     map[*exec.Cmd]io.WriteCloser{},
+		profiles:  reg,
+		runner:    runpkg.New(reg),
+		vaultPath: defaultVaultPath(),
 	}
 	a.runner.HostKeys = a // TOFU host key pinning backed by the vault
 	return a
@@ -107,6 +116,11 @@ func (a *App) GetHostKey(addr string) string {
 func (a *App) SetHostKey(addr, fingerprint string) {
 	a.mu.Lock()
 	if a.inv == nil {
+		// Locked while a batch runs: keep the pin for the next unlock.
+		if a.pendingPins == nil {
+			a.pendingPins = map[string]string{}
+		}
+		a.pendingPins[addr] = fingerprint
 		a.mu.Unlock()
 		return
 	}
@@ -115,7 +129,60 @@ func (a *App) SetHostKey(addr, fingerprint string) {
 	}
 	a.inv.KnownHostKeys[addr] = fingerprint
 	a.mu.Unlock()
-	_ = a.persist()
+	a.persistSoon()
+}
+
+// persistSoon saves the vault a moment from now, folding the requests that
+// arrive meanwhile into one write. Pinning a host key happens inside the SSH
+// handshake: saving the vault there (its key derivation takes a while) under
+// a.mu made a first run against many new devices queue every handshake
+// behind the previous save until connections timed out, and froze the UI.
+func (a *App) persistSoon() {
+	a.persistMu.Lock()
+	defer a.persistMu.Unlock()
+	a.persistPending = true
+	if a.persistTimer != nil {
+		return
+	}
+	a.persistTimer = time.AfterFunc(700*time.Millisecond, func() { a.writePending() })
+}
+
+// writePending saves if a save is still pending. persistRun is held through
+// the write, so flushPersist (before Lock clears the vault from memory, and
+// on exit) waits for a save already under way instead of returning while it
+// runs — the timer firing just as the vault was locked used to lose the pin.
+func (a *App) writePending() {
+	a.persistRun.Lock()
+	defer a.persistRun.Unlock()
+	a.persistMu.Lock()
+	pending := a.persistPending
+	a.persistPending = false
+	if a.persistTimer != nil {
+		a.persistTimer.Stop()
+		a.persistTimer = nil
+	}
+	a.persistMu.Unlock()
+	if pending {
+		_ = a.persist()
+	}
+}
+
+// flushPersist writes a save persistSoon still has pending, now.
+func (a *App) flushPersist() { a.writePending() }
+
+// shutdown runs when the main window closes.
+func (a *App) shutdown(ctx context.Context) {
+	a.flushPersist()
+	// Ask the terminal windows to close their sessions first, so each writes
+	// its log summary (killed outright, they left an empty or unsummarised
+	// run in 実行履歴); then end whatever is left.
+	if a.openTerminals() > 0 {
+		a.sendToTerminals(termCloseLine)
+		for i := 0; i < 20 && a.openTerminals() > 0; i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	endChildren()
 }
 
 // ClearHostKeys drops the pinned host keys for one device (its own address
@@ -153,6 +220,21 @@ func (a *App) ClearHostKeys(id string) error {
 type memHostKeys struct {
 	mu sync.Mutex
 	m  map[string]string
+}
+
+// runHostKeys is a batch's host-key store: checks go to the copy taken at
+// the start of the run, new pins to the copy and to the vault (held for the
+// next unlock if the vault is locked by then).
+type runHostKeys struct {
+	mem *memHostKeys
+	app *App
+}
+
+func (r *runHostKeys) GetHostKey(addr string) string { return r.mem.GetHostKey(addr) }
+
+func (r *runHostKeys) SetHostKey(addr, fp string) {
+	r.mem.SetHostKey(addr, fp)
+	r.app.SetHostKey(addr, fp)
 }
 
 func newMemHostKeys(seed map[string]string) *memHostKeys {
@@ -237,6 +319,7 @@ func (a *App) CreateVault(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	a.pendingPins = nil // a new vault starts with no pins from an old one
 	a.mu.Unlock()
 	return nil
 }
@@ -312,6 +395,17 @@ func (a *App) Unlock(password string) error {
 	// default. The new ones are placed before "generic" (the built-in order)
 	// when it is still there, else at the end.
 	if inv.ProfileSeedGen < profile.SeedGen {
+		// Default answers to mid-command questions (generation 3) go onto
+		// the default profiles that have none yet — an edited one keeps
+		// whatever its owner put there.
+		if inv.ProfileSeedGen < profile.AnswersAddedIn {
+			for i := range inv.CustomProfiles {
+				p := &inv.CustomProfiles[i]
+				if len(p.Answers) == 0 {
+					p.Answers = profile.DefaultAnswers(p.Key)
+				}
+			}
+		}
 		have := map[string]bool{}
 		for _, p := range inv.CustomProfiles {
 			have[p.Key] = true
@@ -421,7 +515,21 @@ func (a *App) Unlock(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	// Keys a batch pinned while the vault was locked (see runHostKeys).
+	pins := a.pendingPins
+	a.pendingPins = nil
+	if len(pins) > 0 {
+		if inv.KnownHostKeys == nil {
+			inv.KnownHostKeys = map[string]string{}
+		}
+		for addr, fp := range pins {
+			inv.KnownHostKeys[addr] = fp
+		}
+	}
 	a.mu.Unlock()
+	if len(pins) > 0 {
+		a.persistSoon()
+	}
 	return nil
 }
 
@@ -448,6 +556,7 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 
 // Lock forgets the password and inventory from memory.
 func (a *App) Lock() {
+	a.flushPersist()
 	a.mu.Lock()
 	a.password, a.inv = "", nil
 	a.mu.Unlock()
@@ -470,7 +579,14 @@ func (a *App) ChangeMasterPassword(current, next string) error {
 	if err := vault.Save(a.vaultPath, next, a.inv); err != nil {
 		return err
 	}
+	// The save just kept the old file as the backup — still readable with the
+	// old password, which may be the reason for the change. Drop it; the
+	// next save makes a new one under the new password.
+	vault.RemoveBackups(a.vaultPath)
 	a.password = next
+	// Open terminal windows unlock and reconnect with the master password;
+	// they get the new one too (the old one may be why it was changed).
+	a.sendToTerminals(termPWLine + " " + base64.StdEncoding.EncodeToString([]byte(next)))
 	return nil
 }
 
@@ -490,10 +606,14 @@ func (a *App) ResetVault(current string) error {
 		return fmt.Errorf("現在のマスターパスワードが違います")
 	}
 	a.password, a.inv = "", nil
+	a.pendingPins = nil // nothing of the old vault goes into the next one
 	a.mu.Unlock()
 	if err := os.Remove(a.vaultPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	// "Everything is deleted" must include the backup (the old credentials
+	// under the old password) and any half-written temporary file.
+	vault.RemoveBackups(a.vaultPath)
 	return nil
 }
 
@@ -510,11 +630,17 @@ func (a *App) persist() error {
 
 // ---- Inventory reads ----
 
-// GetInventory returns the decrypted inventory (locked => nil).
+// GetInventory returns a copy of the decrypted inventory (locked => nil).
+// A copy, taken under the lock: Wails turns the result into JSON after this
+// returns, and walking the live maps then raced a batch pinning a host key —
+// a concurrent map read and write stops the whole process.
 func (a *App) GetInventory() *model.Inventory {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.inv
+	if a.inv == nil {
+		return nil
+	}
+	return a.inv.Clone()
 }
 
 // ListProfiles returns the available OS profiles for dropdowns, in the
@@ -548,6 +674,20 @@ func (a *App) SaveProfile(p profile.Profile) error {
 	}
 	if strings.TrimSpace(p.Prompt) == "" {
 		return fmt.Errorf("「showコマンド完了の目印」は必須です")
+	}
+	if err := model.CheckProfileSends(p); err != nil {
+		return err
+	}
+	// Answers go to whatever question matches, mid-command: a credential
+	// there would be typed to any prompt that happens to look alike. So the
+	// variables are not expanded in them, and refused rather than sent as
+	// literal text.
+	for _, ans := range p.Answers {
+		for _, v := range []string{"{user}", "{password}", "{enable}"} {
+			if strings.Contains(ans.Send, v) {
+				return fmt.Errorf("確認への自動応答の「送る文字」に %s は使えません（パスワード等を想定外の質問へ送らないため）", v)
+			}
+		}
 	}
 	if p.Key == "" {
 		p.Key = "custom:" + p.Name
@@ -735,18 +875,109 @@ func (a *App) DeleteDevice(id string) error {
 	return a.persist()
 }
 
-// SetDeviceEnabled toggles one device's (by ID) inclusion in batch runs.
-func (a *App) SetDeviceEnabled(id string, enabled bool) error {
+// DevicePatch is a bulk edit from the device list: each non-nil field is set
+// on every selected device; nil leaves it as it is.
+type DevicePatch struct {
+	Group         *string `json:"group,omitempty"`
+	Site          *string `json:"site,omitempty"`
+	Role          *string `json:"role,omitempty"`
+	OSType        *string `json:"osType,omitempty"`
+	CommandSet    *string `json:"commandSet,omitempty"`
+	UseGroupCreds *bool   `json:"useGroupCreds,omitempty"`
+}
+
+// UpdateDevices applies p to the devices with the given IDs, all or none:
+// a move into a group that already has one of the names (or two selected
+// devices sharing a name) is refused whole, naming them.
+func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	if i := a.inv.DeviceIndex(id); i >= 0 {
-		a.inv.Devices[i].Enabled = enabled
+	sel := map[string]bool{}
+	for _, id := range ids {
+		sel[id] = true
+	}
+	next := append([]model.Device(nil), a.inv.Devices...)
+	for i := range next {
+		d := &next[i]
+		if !sel[d.ID] {
+			continue
+		}
+		if p.Group != nil {
+			d.Group = strings.TrimSpace(*p.Group)
+		}
+		if p.Site != nil {
+			d.Site = strings.TrimSpace(*p.Site)
+		}
+		if p.Role != nil {
+			d.Role = strings.TrimSpace(*p.Role)
+		}
+		if p.OSType != nil {
+			d.OSType = *p.OSType
+		}
+		if p.CommandSet != nil {
+			d.CommandSet = *p.CommandSet
+		}
+		if p.UseGroupCreds != nil {
+			d.UseGroupCreds = *p.UseGroupCreds && d.Group != ""
+		}
+		// A device moved out of every group has no group defaults to use.
+		if d.Group == "" {
+			d.UseGroupCreds = false
+		}
+		if err := d.Validate(); err != nil {
+			a.mu.Unlock()
+			return fmt.Errorf("%s: %w", d.Name, err)
+		}
+	}
+	if p.Group != nil {
+		seen := map[string]bool{}
+		var clash []string
+		for _, d := range next {
+			k := d.Group + "\x00" + d.Name
+			if seen[k] {
+				clash = append(clash, d.Name)
+			}
+			seen[k] = true
+		}
+		if len(clash) > 0 {
+			a.mu.Unlock()
+			return fmt.Errorf("移動先のグループに同じ機器名があるため移動できません: %s", strings.Join(clash, ", "))
+		}
+	}
+	a.inv.Devices = next
+	if p.Group != nil {
+		a.ensureGroupExists(strings.TrimSpace(*p.Group))
 	}
 	a.mu.Unlock()
 	return a.persist()
+}
+
+// DeleteDevices removes the devices with the given IDs; returns how many.
+func (a *App) DeleteDevices(ids []string) (int, error) {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return 0, fmt.Errorf("vault is locked")
+	}
+	sel := map[string]bool{}
+	for _, id := range ids {
+		sel[id] = true
+	}
+	out := a.inv.Devices[:0]
+	n := 0
+	for _, d := range a.inv.Devices {
+		if sel[d.ID] {
+			n++
+			continue
+		}
+		out = append(out, d)
+	}
+	a.inv.Devices = out
+	a.mu.Unlock()
+	return n, a.persist()
 }
 
 // SetAllDevicesEnabled enables or disables every device in one shot (bulk
@@ -912,12 +1143,15 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	return len(copies), a.persist()
 }
 
-// DeleteDeviceGroup removes a device group. Its devices are kept but ungrouped.
-func (a *App) DeleteDeviceGroup(name string) error {
+// DeleteDeviceGroup removes a device group. Its devices are kept but
+// ungrouped; one whose name an ungrouped device already has gets "_2" (or
+// the next free number), since names must stay unique within a group — the
+// ungrouped devices count as one. Returns those renames ("old → new").
+func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return nil, fmt.Errorf("vault is locked")
 	}
 	out := a.inv.DeviceGroups[:0]
 	for _, g := range a.inv.DeviceGroups {
@@ -926,13 +1160,25 @@ func (a *App) DeleteDeviceGroup(name string) error {
 		}
 	}
 	a.inv.DeviceGroups = out
+	renamed := []string{}
 	for i := range a.inv.Devices {
-		if a.inv.Devices[i].Group == name {
-			a.inv.Devices[i].Group = ""
+		d := &a.inv.Devices[i]
+		if d.Group != name {
+			continue
+		}
+		d.Group = ""
+		if a.inv.DeviceNameTaken("", d.Name, d.ID) {
+			n := 2
+			for a.inv.DeviceNameTaken("", fmt.Sprintf("%s_%d", d.Name, n), d.ID) {
+				n++
+			}
+			nn := fmt.Sprintf("%s_%d", d.Name, n)
+			renamed = append(renamed, d.Name+" → "+nn)
+			d.Name = nn
 		}
 	}
 	a.mu.Unlock()
-	return a.persist()
+	return renamed, a.persist()
 }
 
 // RenameDeviceGroup renames a group and updates its devices' Group field.
@@ -970,6 +1216,9 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 
 // SaveCommandSet inserts or updates a command set by name.
 func (a *App) SaveCommandSet(cs model.CommandSet) error {
+	if err := model.CheckCommands(cs.Commands); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1118,11 +1367,24 @@ func (a *App) SaveSettings(s model.Settings) error {
 
 // RunRequest is what the run tab sends to start a batch.
 type RunRequest struct {
-	Names  []string `json:"names"`  // devices to run (checkbox state is left alone)
-	Group  string   `json:"group"`  // group shown in the run tab: only its devices run (names are unique within a group, not across groups); recorded in the run summary
-	Stage  string   `json:"stage"`  // "" / before / during / after
-	DryRun bool     `json:"dryRun"` // connect + login only, no commands, no logs
+	Names []string `json:"names"` // devices to run, by name within the group (checkbox state is left alone)
+	// Group is the group shown in the run tab: only its devices run (names
+	// are unique within a group, not across groups). Recorded in the run
+	// summary. Ungrouped picks the devices without a group instead.
+	Group     string `json:"group"`
+	Ungrouped bool   `json:"ungrouped,omitempty"`
+	Stage     string `json:"stage"`  // "" / before / during / after
+	DryRun    bool   `json:"dryRun"` // connect + login only, no commands, no logs
+	// CommandSet, when set, is run on every target in place of its own
+	// assigned set — for this run only; nothing is saved. AdHoc, commands
+	// typed in the run tab, wins over it.
+	CommandSet string          `json:"commandSet,omitempty"`
+	AdHoc      []model.Command `json:"adHoc,omitempty"`
 }
+
+// AdHocSetName names the commands typed in the run tab for one run (in the
+// run summary and the change warning).
+const AdHocSetName = "（今回のみ入力したコマンド）"
 
 // RunDone is the "run:done" payload: the per-device results plus the folder
 // the logs were written to ("" for a dry run).
@@ -1132,20 +1394,78 @@ type RunDone struct {
 	DryRun  bool                  `json:"dryRun,omitempty"`
 }
 
-// RunBatch runs the currently enabled devices, emitting live progress events
-// ("run:event") and a final "run:done" with the results.
-func (a *App) RunBatch() error {
-	return a.run(RunRequest{})
-}
-
-// RunSelected runs a specific set of devices by name (ignores Enabled flag).
-func (a *App) RunSelected(names []string) error {
-	return a.run(RunRequest{Names: names})
-}
-
-// RunWith runs with the full set of per-run choices (stage, dry run).
+// RunWith runs with the full set of per-run choices (stage, dry run, group,
+// command set for this run).
 func (a *App) RunWith(req RunRequest) error {
 	return a.run(req)
+}
+
+// runSnapshot (caller holds a.mu) is the inventory a batch runs on: a deep
+// copy, so editing a command set or device while the batch is going cannot
+// change what the waiting devices are sent — a shallow copy shared the
+// command-set array with the vault, and deleting a set shifted another into
+// the slot a queued device pointed at. It holds only the request's devices,
+// with group credentials filled in and any per-run command set applied.
+func (a *App) runSnapshot(req RunRequest) (*model.Inventory, error) {
+	if req.Group == "" && !req.Ungrouped {
+		return nil, fmt.Errorf("実行するグループを選んでください")
+	}
+	snap := a.inv.Clone()
+	var want map[string]bool
+	if req.Names != nil {
+		want = make(map[string]bool, len(req.Names))
+		for _, n := range req.Names {
+			want[n] = true
+		}
+	}
+	var sel []model.Device
+	for _, d := range snap.Devices {
+		if d.Group != req.Group {
+			continue
+		}
+		if want != nil {
+			if !want[d.Name] {
+				continue
+			}
+			d.Enabled = true
+		}
+		sel = append(sel, snap.ResolveCredentials(d))
+	}
+	override := req.CommandSet
+	if len(req.AdHoc) > 0 {
+		var cmds []model.Command
+		for _, c := range req.AdHoc {
+			if c.Text = strings.TrimSpace(c.Text); c.Text != "" {
+				cmds = append(cmds, c)
+			}
+		}
+		if len(cmds) == 0 {
+			return nil, fmt.Errorf("今回実行するコマンドを入力してください")
+		}
+		if err := model.CheckCommands(cmds); err != nil {
+			return nil, err
+		}
+		snap.CommandSets = append(snap.CommandSets, model.CommandSet{Name: AdHocSetName, Commands: cmds})
+		override = AdHocSetName
+	} else if override != "" {
+		found := false
+		for _, cs := range snap.CommandSets {
+			if cs.Name == override {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("コマンドセット「%s」が見つかりません", override)
+		}
+	}
+	if override != "" {
+		for i := range sel {
+			sel[i].CommandSet = override
+		}
+	}
+	snap.Devices = sel
+	return snap, nil
 }
 
 func (a *App) run(req RunRequest) error {
@@ -1158,30 +1478,11 @@ func (a *App) run(req RunRequest) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	// Build a snapshot inventory for this run, with each device's group
-	// default credentials substituted where the device asks for them.
-	snap := *a.inv
-	var want map[string]bool
-	if req.Names != nil {
-		want = make(map[string]bool, len(req.Names))
-		for _, n := range req.Names {
-			want[n] = true
-		}
+	snap, err := a.runSnapshot(req)
+	if err != nil {
+		a.mu.Unlock()
+		return err
 	}
-	var sel []model.Device
-	for _, d := range a.inv.Devices {
-		if req.Group != "" && d.Group != req.Group {
-			continue
-		}
-		if want != nil {
-			if !want[d.Name] {
-				continue
-			}
-			d.Enabled = true
-		}
-		sel = append(sel, a.inv.ResolveCredentials(d))
-	}
-	snap.Devices = sel
 	if a.runActive {
 		a.mu.Unlock()
 		return fmt.Errorf("一括実行中です。完了または中止を待ってください")
@@ -1197,14 +1498,23 @@ func (a *App) run(req RunRequest) error {
 			runtime.EventsEmit(a.ctx, "run:event", ev)
 		}
 		started := time.Now()
-		results, runDir := a.runner.RunBatchOpts(ctx, &snap, runpkg.Options{Stage: stage, DryRun: req.DryRun, Group: req.Group}, emit)
+		// The batch checks host keys against a copy taken now, not the vault:
+		// the vault can be locked mid-run (ロック), and a locked vault knows no
+		// keys — every device would have looked new, a replaced one included.
+		a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
+		results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: stage, DryRun: req.DryRun, Group: req.Group}, emit)
+		// Back to the vault before the next batch may start (runActive below):
+		// restored later, it could undo the next batch's own copy.
+		a.runner.HostKeys = a
 		if runDir != "" {
-			writeRunSummary(runDir, &snap, req, started, results)
+			writeRunSummary(runDir, snap, req, started, results)
 		}
+		done := RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
 		a.mu.Lock()
 		a.runActive = false
+		a.lastDone = &done
 		a.mu.Unlock()
-		runtime.EventsEmit(a.ctx, "run:done", RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun})
+		runtime.EventsEmit(a.ctx, "run:done", done)
 	}()
 	return nil
 }
@@ -1231,7 +1541,7 @@ func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, starte
 		ds := history.DeviceSummary{
 			Name: r.Device, Host: d.Host, Site: d.Site, CommandSet: d.CommandSet,
 			Success: r.Success, Canceled: r.Canceled, Error: r.Error,
-			ElapsedSec: r.Elapsed.Seconds(),
+			ElapsedSec: r.Elapsed.Seconds(), Warnings: r.Warnings,
 		}
 		if r.LogPath != "" {
 			ds.LogFile = filepath.Base(r.LogPath)
@@ -1249,28 +1559,29 @@ type DangerWarning struct {
 	Hits       []guard.Hit `json:"hits"`
 }
 
-// CheckDangerousCommands scans the named devices' command sets for
+// CheckDangerousCommands scans what a run would send — each target's own
+// command set, or the set / typed commands chosen for this run — for
 // configuration-changing commands, so the run tab can warn before starting.
 // Devices sharing a command set are each listed (the user reads it per
 // device), but the scan itself runs once per set.
-func (a *App) CheckDangerousCommands(names []string, group string) []DangerWarning {
+func (a *App) CheckDangerousCommands(req RunRequest) []DangerWarning {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	out := []DangerWarning{}
 	if a.inv == nil {
 		return out
 	}
-	want := map[string]bool{}
-	for _, n := range names {
-		want[n] = true
+	snap, err := a.runSnapshot(req)
+	if err != nil {
+		return out
 	}
 	sets := map[string]*model.CommandSet{}
-	for i := range a.inv.CommandSets {
-		sets[a.inv.CommandSets[i].Name] = &a.inv.CommandSets[i]
+	for i := range snap.CommandSets {
+		sets[snap.CommandSets[i].Name] = &snap.CommandSets[i]
 	}
 	scanned := map[string][]guard.Hit{}
-	for _, d := range a.inv.Devices {
-		if !want[d.Name] || d.Group != group || d.CommandSet == "" {
+	for _, d := range snap.Devices {
+		if d.CommandSet == "" {
 			continue
 		}
 		hits, ok := scanned[d.CommandSet]
@@ -1338,7 +1649,7 @@ func (a *App) OpenRunFolder(dir string) error {
 	if err := a.underLogRoot(dir); err != nil {
 		return err
 	}
-	return exec.Command("explorer", dir).Start()
+	return startExplorer(dir)
 }
 
 // logRoot is the absolute log folder from the settings (locked: logs/).
@@ -1371,6 +1682,21 @@ func (a *App) underLogRoot(p string) error {
 }
 
 // CancelRun aborts an in-progress run.
+// RunStatus tells a page reloaded mid-run (the ロック button reloads it)
+// whether the batch is still going, and the last batch's results in case it
+// finished while nobody was listening.
+type RunStatus struct {
+	Active bool     `json:"active"`
+	Last   *RunDone `json:"last,omitempty"`
+}
+
+// GetRunStatus returns the RunStatus (it needs no unlocked vault).
+func (a *App) GetRunStatus() RunStatus {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return RunStatus{Active: a.runActive, Last: a.lastDone}
+}
+
 func (a *App) CancelRun() {
 	a.mu.Lock()
 	c := a.runCancel
@@ -1439,7 +1765,7 @@ func (a *App) OpenLogDir() error {
 	a.mu.Unlock()
 	abs := logstore.ResolveRoot(dir)
 	_ = os.MkdirAll(abs, 0o755)
-	return exec.Command("explorer", abs).Start()
+	return startExplorer(abs)
 }
 
 // StrictVerify picks the setting lines typed in the work log and reports
@@ -1493,15 +1819,6 @@ func (a *App) OpenLogWindow(path string) error {
 		return err
 	}
 	return spawnWindow(nil, "--view", path)
-}
-
-// ReadLogFile returns the contents of a saved log for the in-app viewer.
-func (a *App) ReadLogFile(path string) (string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
 // ---- Interactive terminal (single-device manual operation) ----
@@ -1568,10 +1885,16 @@ func (a *App) SpawnTerminal(id string, manual bool) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go func() {
-		_, _ = io.WriteString(stdin, pw+"\n")
-		_ = stdin.Close()
-	}()
+	tieToMainWindow(cmd.Process.Pid)
+	trackChild(cmd.Process)
+	// stdin stays open after the password: it is how the main window asks the
+	// terminal to lock (LockTerminals).
+	// The password goes first, then the window is registered: a LOCK line
+	// written in between would be read as the password.
+	_, _ = io.WriteString(stdin, pw+"\n")
+	a.termsMu.Lock()
+	a.terms[cmd] = stdin
+	a.termsMu.Unlock()
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
@@ -1580,136 +1903,84 @@ func (a *App) SpawnTerminal(id string, manual bool) error {
 			}
 		}
 		_ = cmd.Wait()
+		a.termsMu.Lock()
+		delete(a.terms, cmd)
+		a.termsMu.Unlock()
+		_ = stdin.Close()
 	}()
 	return nil
+}
+
+// termLockLine is what LockTerminals writes to a terminal window's stdin.
+const termLockLine = "LOCK"
+
+// LockTerminals locks every open terminal window (the ロック button): each
+// covers its screen until the master password is typed there. The sessions
+// stay connected. The idle auto-lock does not call this — a terminal in use
+// would lock because the main window sat idle; terminals time out on their
+// own inactivity instead.
+func (a *App) LockTerminals() { a.sendToTerminals(termLockLine) }
+
+// termPWLine prefixes the new master password (base64) sent to the terminal
+// windows after ChangeMasterPassword.
+const termPWLine = "PW"
+
+// termCloseLine asks a terminal window to end its session and quit (main
+// window exit), so it writes its log summary before it is ended.
+const termCloseLine = "CLOSE"
+
+// sendToTerminals writes one line to every open terminal window's stdin.
+func (a *App) sendToTerminals(line string) {
+	a.termsMu.Lock()
+	defer a.termsMu.Unlock()
+	for _, w := range a.terms {
+		_, _ = io.WriteString(w, line+"\n")
+	}
+}
+
+// openTerminals counts the terminal windows still running.
+func (a *App) openTerminals() int {
+	a.termsMu.Lock()
+	defer a.termsMu.Unlock()
+	return len(a.terms)
+}
+
+// SetLang tells the backend the UI language ("ja" / "en") for the few
+// messages it shows itself (the close confirmation).
+func (a *App) SetLang(lang string) {
+	a.mu.Lock()
+	a.lang = lang
+	uiLang.Store(lang)
+	a.mu.Unlock()
+}
+
+// beforeClose asks before closing the main window while terminal windows are
+// open: they close with it (see winjob.go).
+func (a *App) beforeClose(ctx context.Context) bool {
+	n := a.openTerminals()
+	if n == 0 {
+		return false
+	}
+	a.mu.Lock()
+	en := a.lang == "en"
+	a.mu.Unlock()
+	title, msg := "PalaTerm を終了", fmt.Sprintf("対話接続のウィンドウが %d 個開いています。PalaTerm を終了すると、これらも切断して閉じます。終了しますか？", n)
+	if en {
+		title, msg = "Quit PalaTerm", fmt.Sprintf("%d terminal window(s) are open. Quitting PalaTerm disconnects and closes them too. Quit?", n)
+	}
+	return !confirmDialog(ctx, title, msg)
 }
 
 // termEventClearHostKey is the stdout line a terminal window prints when the
 // user accepted a changed host key, followed by the device ID.
 const termEventClearHostKey = "PALATERM clear-hostkey"
 
-// ConnectInteractive logs into a single device (running the OS profile login
-// and pager-disable) and then hands the session to a live terminal. Device
-// output arrives on "term:data" events; the session ending fires "term:closed".
-func (a *App) ConnectInteractive(name string) error {
-	a.mu.Lock()
-	if a.inv == nil {
-		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
-	}
-	var dev *model.Device
-	if i := a.inv.DeviceIndex(name); i >= 0 {
-		d := a.inv.ResolveCredentials(a.inv.Devices[i])
-		dev = &d
-	}
-	settings := a.inv.Settings
-	a.mu.Unlock()
-	if dev == nil {
-		return fmt.Errorf("device %q not found", name)
-	}
-
-	a.interMu.Lock()
-	if _, ok := a.interactives[name]; ok {
-		a.interMu.Unlock()
-		return fmt.Errorf("%s は既に接続中です", name)
-	}
-	// Reserve the slot so a second click can't double-connect.
-	a.interactives[name] = &interactiveSession{}
-	a.interMu.Unlock()
-
-	go func() {
-		// nil emit: interactive connect must NOT post run:event, or it would
-		// mark the device "接続中" in the Run tab (and never clear on failure).
-		exp, _, err := a.runner.Connect(context.Background(), dev, settings, nil)
-		if err != nil {
-			if exp != nil {
-				exp.Close()
-			}
-			a.interMu.Lock()
-			delete(a.interactives, name)
-			a.interMu.Unlock()
-			runtime.EventsEmit(a.ctx, "term:closed", termClosed{Device: name, Error: err.Error()})
-			return
-		}
-
-		// Accumulate the whole session (login banner + everything typed/seen)
-		// so it can be written to a log file when the terminal closes.
-		var logMu sync.Mutex
-		var logBuf []byte
-		sink := func(b []byte) {
-			logMu.Lock()
-			logBuf = append(logBuf, b...)
-			logMu.Unlock()
-			runtime.EventsEmit(a.ctx, "term:data", termMsg{Device: name, Data: base64.StdEncoding.EncodeToString(b)})
-		}
-		onClose := func() {
-			a.interMu.Lock()
-			delete(a.interactives, name)
-			a.interMu.Unlock()
-			logMu.Lock()
-			data := append([]byte(nil), logBuf...)
-			logMu.Unlock()
-			logPath := ""
-			if len(data) > 0 {
-				if p, e := logstore.Write(settings.LogDir, "{host}_interactive_{date}_{time}.txt",
-					logstore.Fields{Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Role: dev.Role},
-					string(data), time.Now()); e == nil {
-					logPath = p
-				}
-			}
-			runtime.EventsEmit(a.ctx, "term:closed", termClosed{Device: name, LogPath: logPath})
-		}
-		send, resize, closeFn := a.runner.StartInteractive(exp, sink, onClose)
-		a.interMu.Lock()
-		a.interactives[name] = &interactiveSession{send: send, resize: resize, close: closeFn}
-		a.interMu.Unlock()
-		runtime.EventsEmit(a.ctx, "term:ready", name)
-	}()
-	return nil
-}
-
-// SendInteractive forwards keystrokes (base64-encoded) to a live terminal.
-func (a *App) SendInteractive(name, dataB64 string) error {
-	a.interMu.Lock()
-	s := a.interactives[name]
-	a.interMu.Unlock()
-	if s == nil || s.send == nil {
-		return fmt.Errorf("%s は接続していません", name)
-	}
-	raw, err := base64.StdEncoding.DecodeString(dataB64)
-	if err != nil {
-		return err
-	}
-	return s.send(string(raw))
-}
-
-// ResizeInteractive tells the device its terminal size changed (SSH only).
-func (a *App) ResizeInteractive(name string, cols, rows int) error {
-	a.interMu.Lock()
-	s := a.interactives[name]
-	a.interMu.Unlock()
-	if s == nil || s.resize == nil {
-		return nil
-	}
-	return s.resize(cols, rows)
-}
-
-// CloseInteractive ends a live terminal session.
-func (a *App) CloseInteractive(name string) {
-	a.interMu.Lock()
-	s := a.interactives[name]
-	a.interMu.Unlock()
-	if s != nil && s.close != nil {
-		_ = s.close()
-	}
-}
-
 // ---- command set file export / import (旧 Show_Command_Pattern_*.list 相当) ----
 
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.14"
+const appVersion = "1.5.15"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -1948,7 +2219,7 @@ func (a *App) OpenExportFolder(dir string) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("export フォルダの外は開けません")
 	}
-	return exec.Command("explorer", abs).Start()
+	return startExplorer(abs)
 }
 
 // ReorderDeviceGroups sets the display order of groups to match the given list
