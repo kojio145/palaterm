@@ -137,6 +137,23 @@ tr:hover td { background: var(--bg-2); }
   resize: horizontal; overflow: auto; min-width: 520px;
 }
 .modal.mid { width: min(680px, 92vw); }
+/* 予約: the date button + month calendar, and the 時 / 分 / 秒 selects. */
+.dp-wrap { position: relative; display: inline-block; }
+.dp-btn { font-variant-numeric: tabular-nums; }
+.dp-pop { position: fixed; z-index: 10001; width: 260px; background: var(--bg-3);
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.dp-wd { font-size: 11px; color: var(--text-dim); padding: 2px 0; }
+.dp-day { background: none; border: 0; color: var(--text); font: inherit; font-size: 13px; padding: 6px 0; border-radius: 6px; cursor: pointer; }
+.dp-day:hover:not(:disabled) { background: var(--bg-2); }
+.dp-day.today { outline: 1px solid var(--accent); }
+.dp-day.sel { background: var(--accent); color: #fff; }
+.dp-day:disabled { color: var(--border); cursor: default; }
+.dp-foot { display: flex; gap: 6px; margin-top: 8px; }
+.tp-wrap { display: inline-flex; align-items: center; gap: 3px; }
+.tp-wrap select { width: auto; padding-right: 6px; }
+.tp-wrap span { font-size: 12px; color: var(--text-dim); margin-right: 4px; }
 /* The command set editor: room for the command, its 待つ文字列 and pauses. */
 .modal.set-edit { width: min(900px, 94vw); }
 .modal h3 { margin: 0 0 18px; font-size: 17px; }

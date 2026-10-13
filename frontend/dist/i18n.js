@@ -472,6 +472,8 @@ const I18N_EN = {
   "{n} 台に固定": "{n} fixed devices",
   "重要なスリープ解除タイマーのみ": "important wake timers only",
   "不明": "unknown",
+  "{y}年{m}月": "{y}-{m}",
+  "今日": "Today", "明日": "Tomorrow", "時": "h", "分": "m", "秒": "s",
   "無効": "off",
   "この PC は電源オプションの「スリープ解除タイマーの許可」が無効です（電源接続時: {ac}・バッテリー: {dc}）。スリープ中は予約が動きません。予約の時刻には PC を起こしておくか、下の「予約がある間は PC を自動スリープさせない」をオンにしてください":
     "\"Allow wake timers\" is off in this PC's power options (plugged in: {ac}, on battery: {dc}). Schedules do not run while it sleeps. Keep the PC awake at the scheduled times, or turn on \"Keep the PC from sleeping while schedules are pending\" below.",

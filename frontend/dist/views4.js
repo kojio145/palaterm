@@ -223,8 +223,7 @@ function editSchedule(sc, prefill) {
       const i = +row.dataset.slot;
       const q = sel => row.querySelector(sel);
       slots[i].kind = q(".sl-kind").value;
-      slots[i].time = q(".sl-time").value.length === 5 ? q(".sl-time").value + ":00" : q(".sl-time").value;
-      if (q(".sl-date")) slots[i].date = q(".sl-date").value;
+      // Date and time are kept in slots[i] by their pickers as they change.
       if (q(".sl-hours")) slots[i].everyHours = parseInt(q(".sl-hours").value, 10) || 0;
       if (q(".sl-wd")) slots[i].weekdays = [...row.querySelectorAll(".sl-wd:checked")].map(x => +x.value);
     });
@@ -235,12 +234,20 @@ function editSchedule(sc, prefill) {
         <select class="sl-kind btn" style="width:auto">
           ${[["once", "1回"], ["daily", "毎日"], ["weekly", "毎週"], ["interval", "n時間おき"]].map(([k, l]) => `<option value="${k}" ${sl.kind === k ? "selected" : ""}>${esc(t(l))}</option>`).join("")}
         </select>
-        ${sl.kind === "once" || sl.kind === "interval" ? `<input class="sl-date" type="date" value="${esc(sl.date)}" style="width:auto">` : ""}
+        ${sl.kind === "once" || sl.kind === "interval" ? `<span class="sl-date-host" data-i="${i}"></span>` : ""}
         ${sl.kind === "weekly" ? WEEKDAYS.map((w, wi) => `<label class="row-inline" style="gap:3px;font-weight:normal;cursor:pointer;font-size:13px"><input type="checkbox" class="sl-wd" value="${wi}" style="width:auto" ${sl.weekdays.includes(wi) ? "checked" : ""}>${esc(t(w))}</label>`).join("") : ""}
-        <input class="sl-time" type="time" step="1" value="${esc(sl.time)}" style="width:auto">
+        <span class="sl-time-host" data-i="${i}"></span>
         ${sl.kind === "interval" ? `<span class="muted" style="font-size:12px">${esc(t("から"))}</span><input class="sl-hours" type="number" min="1" max="168" value="${sl.everyHours}" style="width:80px"><span class="muted" style="font-size:12px">${esc(t("時間おき"))}</span>` : ""}
         <button class="btn sm act-del" type="button" data-rm-slot="${i}" style="margin-left:auto">×</button>
       </div>`).join("");
+    slotBox.querySelectorAll(".sl-date-host").forEach(host => {
+      const sl = slots[+host.dataset.i];
+      mountDatePicker(host, sl.date, v => { sl.date = v; }, { noPast: sl.kind === "once" });
+    });
+    slotBox.querySelectorAll(".sl-time-host").forEach(host => {
+      const sl = slots[+host.dataset.i];
+      mountTimePicker(host, sl.time, v => { sl.time = v; });
+    });
     slotBox.querySelectorAll(".sl-kind").forEach(selEl => selEl.onchange = () => { collectSlots(); renderSlots(); });
     slotBox.querySelectorAll("[data-rm-slot]").forEach(b => b.onclick = () => { collectSlots(); slots.splice(+b.dataset.rmSlot, 1); renderSlots(); });
   }
@@ -266,6 +273,100 @@ function editSchedule(sc, prefill) {
       switchTab("schedule");
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
+}
+
+// ---- date / time pickers ----
+// WebView2 does not open the native popup of <input type="date">, and typing
+// into its segments changes only the one under the caret (the day, the
+// seconds), which reads as "the date cannot be changed". So: a calendar of
+// our own for the date, and 時 / 分 / 秒 drop-downs for the time.
+
+function ymd(d) {
+  const p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function parseYmd(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || "");
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date();
+}
+function dateLabel(s) {
+  const d = parseYmd(s);
+  return `${s}（${t(WEEKDAYS[d.getDay()])}）`;
+}
+
+// mountDatePicker puts a date button in host; a click opens a month
+// calendar under it. onChange gets "YYYY-MM-DD". noPast greys out days
+// before today (a once slot cannot be in the past).
+function mountDatePicker(host, value, onChange, opts) {
+  opts = opts || {};
+  let cur = value || ymd(new Date());
+  host.classList.add("dp-wrap");
+  host.innerHTML = `<button type="button" class="btn dp-btn">📅 <span class="dp-val"></span></button>`;
+  const btn = host.querySelector(".dp-btn");
+  const set = v => { cur = v; host.querySelector(".dp-val").textContent = dateLabel(v); onChange(v); };
+  host.querySelector(".dp-val").textContent = dateLabel(cur);
+  let pop = null;
+  const close = () => {
+    if (!pop) return;
+    pop.remove(); pop = null;
+    document.removeEventListener("mousedown", outside, true);
+    window.removeEventListener("resize", close);
+    document.removeEventListener("scroll", close, true);
+  };
+  const outside = e => { if (pop && !host.contains(e.target) && !pop.contains(e.target)) close(); };
+  // Fixed to the window, under the button — or above it when the window
+  // has no room below (inside a dialog it was cut off at the bottom).
+  const place = () => {
+    const r = btn.getBoundingClientRect(), ph = pop.offsetHeight, pw = pop.offsetWidth;
+    const below = r.bottom + 4 + ph <= window.innerHeight - 8;
+    pop.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - ph)) + "px";
+    pop.style.left = Math.min(r.left, window.innerWidth - pw - 8) + "px";
+  };
+  btn.onclick = () => {
+    if (pop) { close(); return; }
+    let view = parseYmd(cur); view.setDate(1);
+    pop = document.createElement("div");
+    pop.className = "dp-pop";
+    document.body.appendChild(pop);
+    const today = ymd(new Date());
+    const draw = () => {
+      const y = view.getFullYear(), m = view.getMonth();
+      const first = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+      let cells = "";
+      for (let i = 0; i < first; i++) cells += `<span></span>`;
+      for (let d = 1; d <= days; d++) {
+        const v = ymd(new Date(y, m, d));
+        const past = opts.noPast && v < today;
+        cells += `<button type="button" class="dp-day${v === cur ? " sel" : ""}${v === today ? " today" : ""}" data-v="${v}" ${past ? "disabled" : ""}>${d}</button>`;
+      }
+      pop.innerHTML = `
+        <div class="dp-head"><button type="button" class="btn sm" data-mv="-1">‹</button><b>${esc(t("{y}年{m}月", { y, m: m + 1 }))}</b><button type="button" class="btn sm" data-mv="1">›</button></div>
+        <div class="dp-grid">${WEEKDAYS.map(w => `<span class="dp-wd">${esc(t(w))}</span>`).join("")}${cells}</div>
+        <div class="dp-foot"><button type="button" class="btn sm" data-q="0">${esc(t("今日"))}</button><button type="button" class="btn sm" data-q="1">${esc(t("明日"))}</button></div>`;
+      pop.querySelectorAll("[data-mv]").forEach(b => b.onclick = () => { view.setMonth(view.getMonth() + +b.dataset.mv); draw(); });
+      pop.querySelectorAll(".dp-day").forEach(b => b.onclick = () => { set(b.dataset.v); close(); });
+      pop.querySelectorAll("[data-q]").forEach(b => b.onclick = () => { set(ymd(new Date(Date.now() + +b.dataset.q * 86400000))); close(); });
+    };
+    draw();
+    place();
+    document.addEventListener("mousedown", outside, true);
+    window.addEventListener("resize", close);
+    // Scrolling the dialog would leave the calendar behind: close it.
+    setTimeout(() => document.addEventListener("scroll", close, true), 0);
+  };
+}
+
+// mountTimePicker: 時 / 分 / 秒 drop-downs; onChange gets "HH:MM:SS".
+function mountTimePicker(host, value, onChange) {
+  const [h, m, s] = (value || "03:00:00").split(":").map(x => parseInt(x, 10) || 0);
+  const opt = (n, sel) => Array.from({ length: n }, (_, i) => `<option value="${i}" ${i === sel ? "selected" : ""}>${String(i).padStart(2, "0")}</option>`).join("");
+  host.classList.add("tp-wrap");
+  host.innerHTML = `<select class="btn tp-h">${opt(24, h)}</select><span>${esc(t("時"))}</span><select class="btn tp-m">${opt(60, m)}</select><span>${esc(t("分"))}</span><select class="btn tp-s">${opt(60, s)}</select><span>${esc(t("秒"))}</span>`;
+  const emit = () => {
+    const p = sel => String(host.querySelector(sel).value).padStart(2, "0");
+    onChange(`${p(".tp-h")}:${p(".tp-m")}:${p(".tp-s")}`);
+  };
+  host.querySelectorAll("select").forEach(x => x.onchange = emit);
 }
 
 // The run tab's ⏰ 予約…: a new schedule with the run tab's current choices.
