@@ -166,9 +166,35 @@ func TestLegacyAndBastionExtrasRoundTrip(t *testing.T) {
 	if b[1].KeyPassphrase != "" || b[1].LegacyAlgos || b[1].JumpCommand != "" {
 		t.Errorf("hop 2 should have no extras: %+v", b[1])
 	}
-	// A device with no extras writes an empty column, not "[{},{}]".
-	if strings.Contains(blob, "[{}") {
-		t.Errorf("empty extras should be omitted: %s", blob)
+	// One column per hop field, for as many hops as the devices use.
+	head := strings.SplitN(strings.TrimPrefix(blob, BOM), "\n", 2)[0]
+	for _, c := range []string{"bastion1KeyPassphrase", "bastion1LegacyAlgos", "bastion1JumpCommand", "bastion2JumpCommand"} {
+		if !strings.Contains(head, c) {
+			t.Errorf("header lacks %s: %s", c, head)
+		}
+	}
+	if strings.Contains(head, "bastion3") || strings.Contains(head, "bastionExtras") {
+		t.Errorf("header has unused hop / old JSON column: %s", head)
+	}
+	// Without any jump host there are no hop columns at all.
+	plain, _ := Export(in[1:])
+	if strings.Contains(plain, "bastion1") {
+		t.Errorf("hop columns written without jump hosts: %s", plain)
+	}
+	// The JSON column of v1.5.16 and before still imports.
+	oldJSON, err := Import("name,host,bastions,bastionExtras\n" +
+		`d,10.0.0.1,ssh:h1:22:u:p|telnet:h2::u2,"[{""keyPassphrase"":""pp"",""legacyAlgos"":true},{""jumpCommand"":""telnet {host}""}]"` + "\n")
+	if err != nil || len(oldJSON) != 1 || len(oldJSON[0].Bastions) != 2 {
+		t.Fatalf("old JSON extras CSV: %v %+v", err, oldJSON)
+	}
+	if ob := oldJSON[0].Bastions; ob[0].KeyPassphrase != "pp" || !ob[0].LegacyAlgos || ob[1].JumpCommand != "telnet {host}" {
+		t.Errorf("old JSON extras lost: %+v", ob)
+	}
+	// A per-hop column beats the JSON one, an empty cell included.
+	both, _ := Import("name,host,bastions,bastionExtras,bastion1KeyPassphrase\n" +
+		`d,10.0.0.1,ssh:h1:22:u:p,"[{""keyPassphrase"":""pp"",""legacyAlgos"":true}]",` + "\n")
+	if b := both[0].Bastions[0]; b.KeyPassphrase != "" || !b.LegacyAlgos {
+		t.Errorf("per-hop column should override JSON for its field only: %+v", b)
 	}
 	// An old CSV without the new columns still imports.
 	old, err := Import("name,host,bastions\nd,10.0.0.1,ssh:h1:22:u:p\n")

@@ -69,6 +69,7 @@ type Term struct {
 	// meanwhile. autoLockMin is the vault's idle setting (0 = off).
 	locked      bool
 	autoLockMin int
+	rightClick  string // Settings.RightClickPaste() once the vault is open
 	lang        string
 	exp         *runpkg.Expecter // the live session's line (SendBreak)
 	pasteProc   *os.Process      // the open paste-confirmation window (ended on Lock)
@@ -217,6 +218,7 @@ func (t *Term) connect(pw string) {
 	if inv.Settings.AutoLockOff {
 		t.autoLockMin = 0
 	}
+	t.rightClick = inv.Settings.RightClickPaste()
 	t.mu.Unlock()
 	if dev == nil {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "機器が見つかりません"})
@@ -737,6 +739,18 @@ func (t *Term) AutoLockMinutes() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.autoLockMin
+}
+
+// RightClickPaste is what a right-click in the terminal does: "paste"
+// (also before the vault is open), "menu" or "off". Read when the window
+// opens, so a changed setting applies to windows opened after it.
+func (t *Term) RightClickPaste() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.rightClick == "" {
+		return "paste"
+	}
+	return t.rightClick
 }
 
 // Reconnect opens the session again after it ended (a reloaded device, a

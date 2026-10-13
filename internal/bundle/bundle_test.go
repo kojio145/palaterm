@@ -237,11 +237,12 @@ func TestApplyReportsMissingReferences(t *testing.T) {
 }
 
 func TestParseCommandSetLegacyList(t *testing.T) {
-	cmds, err := ParseCommandSet("# comment\r\nshow run\r\nshow ip int brief,2,3\r\nterminal length 0, 1\r\n\r\n")
+	set, err := ParseCommandSet("# comment\r\nshow run\r\nshow ip int brief,2,3\r\nterminal length 0, 1\r\n\r\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmds) != 3 || cmds[0].PauseSec != 1 || cmds[1].PauseSec != 2 || cmds[1].SerialSec != 3 || cmds[2].Text != "terminal length 0, 1" {
+	cmds := set.Commands
+	if set.PauseOff || len(cmds) != 3 || cmds[0].PauseSec != 1 || cmds[1].PauseSec != 2 || cmds[1].SerialSec != 3 || cmds[2].Text != "terminal length 0, 1" {
 		t.Errorf("parsed = %+v", cmds)
 	}
 	if _, err := ParseCommandSet("# only comments\n"); err == nil {
@@ -356,5 +357,129 @@ func TestApplySkipsInvalidAndDuplicateRows(t *testing.T) {
 func TestParseCommandSetRefusesHiddenCR(t *testing.T) {
 	if _, err := ParseCommandSet("show clock\rreload,1,1\r\nshow version\r\n"); err == nil {
 		t.Error("hidden CR accepted")
+	}
+}
+
+// A 共有用 export carries no credentials at all, and reading it back over
+// the same devices keeps the credentials this PalaTerm already has.
+func TestSharedExportKeepsExistingCredentials(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[0].EnablePassword, inv.Devices[0].KeyFile, inv.Devices[0].KeyPassphrase = "en", `C:\k\id`, "kp"
+	inv.Devices[1].Bastions[0].Password, inv.Devices[1].Bastions[0].KeyPassphrase = "jp", "jkp"
+	inv.DeviceGroups[0].Username, inv.DeviceGroups[0].Password = "gu", "gp"
+	src := Select(inv, "A社")
+	src.StripCredentials()
+
+	dir := filepath.Join(t.TempDir(), "A社_share")
+	mp, err := Write(dir, src, "PalaTerm test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "devices.csv"))
+	for _, secret := range []string{"en", "kp", "jp", "jkp", `C:\k\id`} {
+		if strings.Contains(string(raw), ","+secret+",") || strings.Contains(string(raw), ":"+secret) {
+			t.Errorf("shared CSV still carries %q:\n%s", secret, raw)
+		}
+	}
+	got, err := Read(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Manifest.Shared || got.Manifest.Groups[0].HasCreds() {
+		t.Errorf("manifest not marked shared or group creds left: %+v", got.Manifest)
+	}
+	d0, b0 := got.Devices[0], got.Devices[1].Bastions[0]
+	if d0.Username != "" || d0.Password != "" || d0.EnablePassword != "" || d0.KeyFile != "" || d0.KeyPassphrase != "" ||
+		b0.Username != "" || b0.Password != "" || b0.KeyPassphrase != "" {
+		t.Errorf("credentials left in shared export: %+v / %+v", d0, b0)
+	}
+	// Everything else survives (jump command, legacy flag, set, host).
+	if b0.JumpCommand != "ssh -l {user} {host}" || !b0.LegacyAlgos || d0.CommandSet != "backup" || d0.Host != "192.0.2.1" {
+		t.Errorf("non-credential fields lost: %+v / %+v", d0, b0)
+	}
+	// Select must not have blanked the inventory itself.
+	if inv.Devices[0].Password != "p" || inv.Devices[1].Bastions[0].Password != "jp" {
+		t.Fatalf("StripCredentials touched the inventory")
+	}
+
+	// Read back over the same inventory: credentials stay, other fields update.
+	got.Devices[0].Host = "192.0.2.11"
+	s, _ := Apply(inv, got, Options{})
+	d, j := inv.Devices[0], inv.Devices[1].Bastions[0]
+	if d.Host != "192.0.2.11" {
+		t.Errorf("non-credential field not updated: %s", d.Host)
+	}
+	if d.Username != "u" || d.Password != "p" || d.EnablePassword != "en" || d.KeyFile != `C:\k\id` || d.KeyPassphrase != "kp" {
+		t.Errorf("device credentials lost: %+v", d)
+	}
+	if j.Username != "j" || j.Password != "jp" || j.KeyPassphrase != "jkp" {
+		t.Errorf("bastion credentials lost: %+v", j)
+	}
+	if inv.DeviceGroups[0].Username != "gu" || inv.DeviceGroups[0].Password != "gp" {
+		t.Errorf("group credentials lost: %+v", inv.DeviceGroups[0])
+	}
+	if !s.Shared || strings.Join(s.CredsKept, ",") != "A社 / a-rt1,A社 / a-fw1" {
+		t.Errorf("summary: shared=%v kept=%v", s.Shared, s.CredsKept)
+	}
+}
+
+// A row that does carry credentials still replaces them; a jump hop whose
+// host changed does not inherit the old hop's password.
+func TestApplyCredentialsInRowWin(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[1].Bastions[0].Password = "old"
+	c := Contents{Devices: []model.Device{
+		{Name: "a-rt1", Host: "192.0.2.1", Conn: model.ConnSSH, Group: "A社", Username: "u2", Password: "p2", Enabled: true},
+		{Name: "a-fw1", Host: "192.0.2.2", Conn: model.ConnSSH, Group: "A社", Enabled: true,
+			Bastions: []model.Bastion{{Host: "192.0.2.99", Method: model.BastionSSH}}},
+	}}
+	s, _ := Apply(inv, c, Options{})
+	if d := inv.Devices[0]; d.Username != "u2" || d.Password != "p2" {
+		t.Errorf("row credentials should win: %+v", d)
+	}
+	if b := inv.Devices[1].Bastions[0]; b.Password != "" || b.Username != "" {
+		t.Errorf("a different jump host must not inherit the old one's credentials: %+v", b)
+	}
+	if len(s.CredsKept) != 0 {
+		t.Errorf("nothing was kept, got %v", s.CredsKept)
+	}
+}
+
+// 待機秒を使う off and each command's 待つ文字列 survive the file round
+// trip as "# palaterm:" comment lines, which older readers skip.
+func TestCommandSetPauseOffAndWaitRoundTrip(t *testing.T) {
+	in := model.CommandSet{Name: "cfg", PauseOff: true, Commands: []model.Command{
+		{Text: "configure terminal", PauseSec: 3, SerialSec: 5, Wait: "(config)#"},
+		{Text: "interface Gi0/1", PauseSec: 1, SerialSec: 1, Wait: "(config-if)#"},
+		{Text: "show run, brief", PauseSec: 2, SerialSec: 2},
+	}}
+	text := FormatCommandSet(in)
+	got, err := ParseCommandSet(text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PauseOff || len(got.Commands) != 3 {
+		t.Fatalf("parsed = %+v", got)
+	}
+	for i, c := range in.Commands {
+		if got.Commands[i] != c {
+			t.Errorf("command %d = %+v, want %+v", i+1, got.Commands[i], c)
+		}
+	}
+	// Without the directives (an older PalaTerm's view) the commands and
+	// pauses are still all there.
+	var plain []string
+	for _, l := range strings.Split(strings.TrimPrefix(text, string(rune(0xfeff))), "\r\n") {
+		if !strings.HasPrefix(l, "#") {
+			plain = append(plain, l)
+		}
+	}
+	old, err := ParseCommandSet(strings.Join(plain, "\r\n"))
+	if err != nil || old.PauseOff || len(old.Commands) != 3 || old.Commands[0].Wait != "" || old.Commands[0].SerialSec != 5 {
+		t.Errorf("legacy view: %v %+v", err, old)
+	}
+	// A set with pauses on and no waits writes no directive at all.
+	if s := FormatCommandSet(model.CommandSet{Commands: []model.Command{{Text: "show clock", PauseSec: 1, SerialSec: 1}}}); strings.Contains(s, "palaterm") {
+		t.Errorf("unexpected directive: %q", s)
 	}
 }

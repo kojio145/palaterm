@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.16</div>
+    <div class="hero-tag">使い方マニュアル / v1.5.17</div>
   </header>
 
   <nav class="toc">
@@ -314,7 +314,9 @@
       <li><strong>「＋ セットを追加」</strong>を押します（既存セットの<strong>「複製」</strong>から作るのも便利です。複製すると <code>_copy</code> 付きの名前で編集画面がすぐ開くので、その場で名前を付け直せます）。セット名は後からでも編集画面で変更でき、そのセットを割り当てている機器はそのまま新しい名前を使います。</li>
       <li><strong>セット名</strong>を付けます（例: <code>config-backup</code>）。</li>
       <li><strong>コマンドの表</strong>に、1行1コマンドで入力します。「＋ 行を追加」で末尾に、各行の<strong>「＋」</strong>でその行の直後に挿入できます。<strong>「＋ まとめて追加…」</strong>を押すと小窓が開き、1 行 1 コマンドで入力して「追加」（<kbd>Ctrl</kbd>+<kbd>Enter</kbd>）すると、行数ぶんのコマンドが待機 1 秒で末尾に一度に追加されます。</li>
-      <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。</li>
+      <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。各コマンドは、送ったあと<strong>機器のプロンプトが出るのを待ってから</strong>待機秒だけ待って次へ進みます。</li>
+      <li><strong>待つ文字列（任意）</strong>: プロンプトの代わりに待つ文字をコマンドごとに指定できます（例: <code>configure terminal</code> の行に <code>(config)#</code>）。機器の今の行にその文字が出たら次のコマンドを送ります（文字そのまま・部分一致）。空欄なら OS タイプのプロンプトを待ちます。</li>
+      <li><strong>待機秒を使う</strong>（セット単位・既定オン）: オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または待つ文字列）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです（一覧に「待機秒なし」と出ます）。</li>
       <li><strong>「保存」</strong>を押します。</li>
     </ol>
 
@@ -335,6 +337,7 @@
     <h3>ファイルでの読込・書出</h3>
     <p><strong>「読込」</strong>で1ファイルを選んで取り込みます（<code>コマンド,リモート秒,シリアル秒</code> 形式。ファイル名がセット名になり、同名セットは置き換え）。
     CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイル（旧ツールの Show_Command_Pattern）もそのまま読み込めます。
+    待機秒を使わないセットはファイル先頭の <code># palaterm: pause=off</code>、待つ文字列はそのコマンドの直前の行の <code># palaterm: wait=(config)#</code> で表します（<code>#</code> で始まる行なので、旧版や旧ツールでは読み飛ばされます）。
     書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うセットが <code>export\bundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
   </section>
 
@@ -426,7 +429,10 @@
     別の PalaTerm へ持ち込むときは、そのフォルダをコピーして<strong>「読込」</strong>で中の <code>palaterm-bundle.json</code> を選びます。</p>
     <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読込」で CSV 単体を選べば機器だけを読み込めます（「グループ名＋機器名」で照合し、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
     読み込む前に<strong>確認画面</strong>で新規・上書き・既存のまま残す件数が表示されます。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。</p>
-    <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
+    <p><strong>共有用の書き出し</strong>: 一式書き出しで<strong>「共有用（認証情報を空にする）」</strong>にチェックを入れると、機器・踏み台・グループのユーザー名・パスワード・enable パスワード・鍵ファイル・パスフレーズを空にして <code>export\bundles\グループ名_share\</code> に書き出します（通常の書き出しフォルダは上書きしません）。ほかの人に機器一覧を渡すときに使います。</p>
+    <p><strong>読み込み時の認証情報</strong>: 既存の機器（グループ名＋機器名が一致）の行で認証情報の欄が<strong>空なら、その機器の今の認証情報を残します</strong>。共有用の一式を読み込んでも自分のパスワードは消えません（踏み台は同じ段・同じホストのときだけ引き継ぎます）。欄に値があればその値で上書きします。確認画面に、引き継ぐ機器の台数が表示されます。</p>
+    <p>CSV の踏み台は、接続先の並び（<code>bastions</code> 列: <code>method:host:port:user:pass:auth:keyfile</code> を <code>|</code> 区切り）に加え、段ごとの列 <code>bastion1KeyPassphrase</code>（鍵パスフレーズ）・<code>bastion1LegacyAlgos</code>（旧暗号）・<code>bastion1JumpCommand</code>（ジャンプコマンド）… に分かれています（使っている段数ぶんだけ出ます。v1.5.16 以前の <code>bastionExtras</code> 列の CSV もそのまま読めます）。</p>
+    <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>（共有用を除く）。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
   </section>
 
   <section id="run">
@@ -438,7 +444,7 @@
       <li>グループ内の機器が一覧表示されます。<strong>左端のチェックボックスが実行対象</strong>です。ヘッダーのチェックで全選択/全解除、<span class="kbd">Shift</span>＋クリックで<strong>範囲をまとめて切替</strong>できます。列見出しのクリックで<strong>並び替え</strong>、表の上の<strong>絞り込み</strong>（文字・拠点・状態）で表示を絞れます。<strong>絞り込み中は表示されている機器だけが実行対象</strong>で、非表示の行にチェックが残っていれば台数つきで警告が出ます（含めるには絞り込みを解除）。</li>
       <li>必要なら<strong>「作業タイミング」</strong>（指定なし / 作業前 / 作業中 / 作業後）を選びます。選ぶとログのフォルダ名とファイル名に <code>_before</code> / <code>_work</code> / <code>_after</code> が付き（この 3 語は<a href="#settings">設定</a>で変更できます）、<a href="#history">実行履歴</a>で作業前と作業後を比較できます。</li>
       <li>必要なら<strong>「コマンド: 機器ごとの設定どおり」</strong>を切り替えます。コマンドセットを選ぶと<strong>この実行だけ</strong>全機器でそのセットを使い（機器の割り当ては変わりません）、<strong>「今回だけ入力…」</strong>ではその場で 1 行 1 コマンドで打ったコマンドを流せます（待機は各 1 秒・保存されません）。</li>
-      <li><strong>「▶ 一括実行」</strong>を押します。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません）。</li>
+      <li><strong>「▶ 一括実行」</strong>を押します。確認画面には選んだ作業タイミングが大きく色分けで出ます（作業前=青・作業中=橙・作業後=緑、ボタンは「▶ 作業前として実行」など）。「指定なし」のときは、作業前後の比較で自動では選ばれない旨が警告色で出るので、取り違えに気づけます。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません）。</li>
       <li>各機器の状態がリアルタイムで更新されます。</li>
     </ol>
     <div class="callout tip"><span class="ic">i</span><p><strong>機器に拒否されたコマンド</strong>（<code>% Invalid input</code>、<code>Invalid command</code>、<code>command not found</code> など）があると、その機器は「完了」のまま状態列に<strong>「警告 n」</strong>が付き、メッセージ列に「コマンド → 機器の応答」が出ます（実行履歴にも残ります）。<br>
@@ -495,7 +501,7 @@
       <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
       <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
-      <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>、またはツールバーの<strong>「貼り付け…」</strong>。<strong>1 行だけなら確認なしでそのまま貼り付け</strong>、Enter は送りません（プロンプト上の内容を見てから自分で Enter。<kbd>Alt</kbd>+<kbd>V</kbd> のときだけ Enter も送ります）。<strong>2 行以上</strong>は Tera Term と同じく<strong>貼り付ける内容の確認が別ウィンドウ</strong>で開きます（端末の手前に出て、自由に動かしたり広げたりできます）。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。「最後に Enter を送る」は<strong>既定でオン</strong>で、切り替えた状態は次回以降も引き継がれます（<kbd>Alt</kbd>+<kbd>V</kbd> のときは常にオン）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
+      <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>（<a href="#settings">設定</a>で無効にしたり、メニューで確認してから貼り付けるようにもできます）、またはツールバーの<strong>「貼り付け…」</strong>。<strong>1 行だけなら確認なしでそのまま貼り付け</strong>、Enter は送りません（プロンプト上の内容を見てから自分で Enter。<kbd>Alt</kbd>+<kbd>V</kbd> のときだけ Enter も送ります）。<strong>2 行以上</strong>は Tera Term と同じく<strong>貼り付ける内容の確認が別ウィンドウ</strong>で開きます（端末の手前に出て、自由に動かしたり広げたりできます）。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。「最後に Enter を送る」は<strong>既定でオン</strong>で、切り替えた状態は次回以降も引き継がれます（<kbd>Alt</kbd>+<kbd>V</kbd> のときは常にオン）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
       <li>対話接続・貼り付けの確認・ログ表示・差分の各ウィンドウは、<strong>開いた元のウィンドウの上（同じモニタ）</strong>に開きます。デュアルモニタで本体をサブモニタに置いていても、メインモニタ側に飛ばずにそのまま使えます。</li>
       <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入り、上部バーに「コピーしました」と短く表示されます（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
       <li>上部バーの<strong>「ログフォルダ」</strong>でログの保存先フォルダを開けます。対話接続のログは Tera Term と同様に<strong>画面に出た内容がそのままリアルタイムでファイルへ書かれます</strong>（既定ではそのまま記録。ウィンドウが落ちても直前までの内容が残ります）。ツールバーの<strong>「ログ停止」</strong>で記録を止め、<strong>「ログ開始」</strong>で同じファイルに続きを記録します（停止・再開の時刻がファイルに記されます。保存先は切断時に画面末尾にも表示）。</li>
@@ -537,7 +543,7 @@
     <p>一括実行のたびに、ログフォルダ内の <code>日時[_グループ][_作業タイミング]/</code>（既定）に <code>palaterm-run.json</code>（グループ・作業タイミング・機器ごとの成否とログファイル名）が残り、左サイドバーの<strong>「実行履歴」</strong>に新しい順で並びます。</p>
     <ol class="steps">
       <li>行頭の <strong>▸</strong> で機器ごとの結果が開き、<strong>「ログ表示」</strong>でその場でログを見られます。<strong>「フォルダ」</strong>はその実行のフォルダをエクスプローラーで開きます。</li>
-      <li>比較したい 2 回を<strong>「比較元(A)」「比較先(B)」</strong>（または上部の A / B の選択）で選び、<strong>「比較する」</strong>を押します。作業後の実行が終わった直後は、最新の作業前・作業後が自動で A / B に入っています。</li>
+      <li>比較したい 2 回を<strong>「比較元(A)」「比較先(B)」</strong>（または上部の A / B の選択。選択肢はログフォルダ内の実行フォルダ名）で選び、<strong>「比較する」</strong>を押します。作業後の実行が終わった直後は、最新の作業前・作業後が自動で A / B に入っています。</li>
       <li>同じ機器名のログ同士が突き合わされ、機器ごとに<strong>差分なし／差分あり（追加・削除の行数）</strong>が表示されます。</li>
       <li><strong>「差分を開く」</strong>で、WinMerge 風の<strong>別ウィンドウ</strong>が開きます。左が A（作業前）、右が B（作業後）。変更された行は黄、A にだけある行は赤、B にだけある行は緑で、左端の位置バーが差分の場所を示します（クリックで移動）。「前の差分 / 次の差分」（<kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd>、F7/F8）で順に見られ、<strong>「時刻・カウンタの違いを無視」</strong>（既定オン）は <code>show clock</code> の時刻や uptime、トラフィック量のように取るたびに変わる値を差分扱いにしません。<strong>「差分の周辺だけ表示」</strong>で変わった行とその前後 3 行だけに絞れます。<kbd>Esc</kbd> で閉じます。</li>
       <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または単独接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗（＝は作業前からあった行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。</li>
@@ -597,6 +603,7 @@
         <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
         <tr><td>アイドル時の自動ロック</td><td>マウス・キーボード操作がこの分数なければ自動でロック画面に戻ります。既定 30 分、<code>0</code> で無効。一括実行中はロックしません。対話接続のウィンドウも、それぞれ自分の操作がこの分数なければロックします（接続は保たれます）。</td></tr>
         <tr><td>ログ内のパスワードをマスクする</td><td>オンにすると、ログに現れた機器・踏み台のパスワードを <code>****</code> に置き換えて保存します。既定はオフ（show running-config 内の同じ文字列まで置き換わり、設定と一致しなくなるため）。拒否されたコマンドの警告文では、設定に関係なく常に伏せます。</td></tr>
+        <tr><td>対話窓の右クリック</td><td>Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目です。<strong>マウス右ボタンでの貼り付けを無効にする</strong>: 右クリックしても何もしません。<strong>マウス右ボタンでの貼り付けを確認する</strong>: 右クリックで小さなメニューが出て、「貼り付け」を選んだときだけ貼り付けます（<kbd>Esc</kbd> で取消）。どちらもオフ（既定）なら右クリックですぐ貼り付け、「無効にする」がオンならもう一方は無視されます。変更は、このあと開く対話窓から反映されます。</td></tr>
       </tbody>
     </table></div>
     <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
@@ -719,7 +726,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.16 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.5.17 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

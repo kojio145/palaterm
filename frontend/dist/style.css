@@ -137,6 +137,8 @@ tr:hover td { background: var(--bg-2); }
   resize: horizontal; overflow: auto; min-width: 520px;
 }
 .modal.mid { width: min(680px, 92vw); }
+/* The command set editor: room for the command, its 待つ文字列 and pauses. */
+.modal.set-edit { width: min(900px, 94vw); }
 .modal h3 { margin: 0 0 18px; font-size: 17px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .section-label { font-size: 12px; color: var(--accent); text-transform: uppercase;
@@ -356,6 +358,15 @@ th.sortable:hover { color: var(--text); }
 .diff-wrap tr.d-add td.side-b { background: rgba(34,197,94,.18); }
 .diff-wrap tr.d-skip td { color: #475569; text-align: center; background: var(--bg-2); }
 .modal.xwide { width: min(1400px, 96vw); }
+/* 作業タイミング in the run confirmation (same hues as the stage badges). */
+.stage-banner { border: 2px solid var(--border); border-radius: 10px; padding: 10px 16px; margin: 4px 0 12px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; }
+.stage-banner .sb-label { font-size: 12px; color: var(--text-dim); }
+.stage-banner .sb-value { font-size: 24px; font-weight: 700; }
+.stage-banner .sb-note { flex-basis: 100%; font-size: 12px; line-height: 1.6; }
+.stage-banner.stage-before { border-color: #1d4ed8; background: rgba(29, 78, 216, .15); } .stage-banner.stage-before .sb-value { color: #93c5fd; }
+.stage-banner.stage-during { border-color: #b45309; background: rgba(180, 83, 9, .15); } .stage-banner.stage-during .sb-value { color: #fcd34d; }
+.stage-banner.stage-after { border-color: #15803d; background: rgba(21, 128, 61, .15); } .stage-banner.stage-after .sb-value { color: #86efac; }
+.stage-banner.stage-none { border-color: var(--warn); border-style: dashed; } .stage-banner.stage-none .sb-value, .stage-banner.stage-none .sb-note { color: var(--warn); }
 .warn-box { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px; }
 .warn-box .mono { font-family: "Consolas", monospace; }
 

@@ -26,6 +26,11 @@ func CheckCommands(cmds []Command) error {
 		if err := CheckCommandText(c.Text); err != nil {
 			return fmt.Errorf("%d 行目のコマンドに%w", i+1, err)
 		}
+		// Matched on one line of the device's output, so a line break in
+		// it could never match.
+		if err := CheckCommandText(c.Wait); err != nil {
+			return fmt.Errorf("%d 行目の待つ文字列に%w", i+1, err)
+		}
 	}
 	return nil
 }

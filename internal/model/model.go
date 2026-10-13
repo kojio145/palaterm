@@ -192,12 +192,20 @@ type Command struct {
 	Text      string `json:"text"`
 	PauseSec  int    `json:"pauseSec"`  // wait after this command (remote)
 	SerialSec int    `json:"serialSec"` // wait after this command (serial console)
+	// Wait is text the device shows once this command is done, such as
+	// "(config)#": the next command goes when the line the device is on
+	// contains it. Empty means the OS profile's prompt.
+	Wait string `json:"wait,omitempty"`
 }
 
 // CommandSet is a named, ordered list of commands (e.g. "config-backup").
 type CommandSet struct {
 	Name     string    `json:"name"`
 	Commands []Command `json:"commands"`
+	// PauseOff ignores every command's PauseSec / SerialSec (the values are
+	// kept for when it is turned back on): each command goes as soon as the
+	// prompt, or its Wait, shows. 待機秒を使う = !PauseOff.
+	PauseOff bool `json:"pauseOff,omitempty"`
 }
 
 // DeviceGroup is a named group that devices belong to (e.g. a company or site).
@@ -443,6 +451,25 @@ type Settings struct {
 	// request 2026-10-10). Devices do not echo a typed password, so the
 	// login itself leaves nothing in the log either way.
 	MaskLogSecrets bool `json:"maskLogSecrets,omitempty"`
+
+	// Right-click in the interactive window, as Tera Term's
+	// DisablePasteMouseRButton / ConfirmPasteMouseRButton: Off makes it do
+	// nothing; Confirm shows a small menu whose 貼り付け pastes. Both false
+	// (the default) pastes at once. Off wins over Confirm, as in Tera Term.
+	RightClickPasteOff     bool `json:"rightClickPasteOff,omitempty"`
+	RightClickPasteConfirm bool `json:"rightClickPasteConfirm,omitempty"`
+}
+
+// RightClickPaste returns what a right-click does in the interactive
+// window: "off", "menu" or "paste".
+func (s Settings) RightClickPaste() string {
+	switch {
+	case s.RightClickPasteOff:
+		return "off"
+	case s.RightClickPasteConfirm:
+		return "menu"
+	}
+	return "paste"
 }
 
 // StageTokens returns the stage words for log names, defaults filled in.

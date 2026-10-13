@@ -39,6 +39,8 @@ function terr(e) {
 // Backend messages that carry a dynamic value.
 const STAGE_LBL = { "作業前": "before", "作業中": "during", "作業後": "after", "指定なし": "not set" };
 const I18N_EN_PATTERNS = [
+  [/（待つ文字列 (".*?") が出ませんでした）/, " (the wait-for text $1 did not appear)"],
+  [/([0-9]+) 行目の待つ文字列に制御文字（改行・タブなど）が含まれています: /, "the wait-for text on line $1 contains control characters (line breaks, tabs…): "],
   [/（機器の最後の表示: (.+)。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）/, " (the device last showed $1. If it is asking a question, add an auto-answer in OS Types; if the output is just long, raise the command timeout in Settings)"],
   [/([0-9]+) 行目のコマンドに制御文字（改行・タブなど）が含まれています: /, "the command on line $1 contains control characters (line breaks, tabs…): "],
   [/^プロファイル「(.+?)」の送信文字に制御文字（改行・タブなど）が含まれています: /, 'Profile "$1" sends text with control characters (line breaks, tabs…): '],
@@ -448,6 +450,23 @@ const I18N_EN = {
   "コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）": "Command sets: {n} (new {a}, overwritten {b}, kept {c})",
   "OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）": "OS type profiles: {n} (new {a}, overwritten {b}, kept {c})",
   "新規グループ: {g}": "New groups: {g}",
+  "共有用（認証情報を空にする）": "For sharing (leave credentials out)",
+  "待機秒を使う ⓘ": "Use pauses ⓘ",
+  "オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または「待つ文字列」）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです":
+    "When off, no command of this set uses its pause: the next command goes as soon as the prompt (or the \"Wait for\" text) appears. The pause values are kept, so turning it back on restores them.",
+  "待つ文字列（任意） ⓘ": "Wait for (optional) ⓘ",
+  "このコマンドのあと、機器の今の行にこの文字列が出たら次のコマンドを送ります（例: (config)#）。文字そのまま・部分一致。空欄なら OS タイプのプロンプト（showコマンド完了の目印）を待ちます":
+    "After this command, the next one goes once this text appears on the device's current line (e.g. (config)#). Plain text, partial match. Empty waits for the OS type's prompt (the show-command completion marker).",
+  "（プロンプト）": "(prompt)",
+  "「待機秒を使う」がオフのため使いません": "Not used: \"Use pauses\" is off",
+  "「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）": "\"Use pauses\" is off for this set (each command goes as soon as the prompt appears)",
+  "待機秒なし": "no pauses",
+  "機器・踏み台・グループのユーザー名・パスワード・enable パスワード・鍵ファイル・パスフレーズを空にして、フォルダ名に _share を付けて書き出します。ほかの人に機器一覧を渡すときに。受け取った側で読み込むと、既にある機器の認証情報はそのまま残ります。":
+    "Usernames, passwords, enable passwords, key files and passphrases of devices, jump hosts and groups are left empty, and the folder name gets _share. Use it to hand the device list to someone else; reading it in keeps the credentials of devices that already exist there.",
+  "既存の機器で認証情報（ユーザー名・パスワード等）の欄が空の行は、その機器の今の認証情報を残します。":
+    "For existing devices, credential fields (username, password, etc.) left empty keep the device's current credentials.",
+  "共有用の一式です（認証情報は含まれていません）": "This is a bundle for sharing (no credentials included)",
+  "認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}": "Empty credential fields keep the existing devices' values ({n}): {g}",
   "⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}": "⚠ Command sets not found (devices import, but run with no set): {g}",
   "⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}": "⚠ OS types not found (devices import, but use the generic profile): {g}",
   "読み込み内容の確認": "Confirm import",
@@ -826,6 +845,14 @@ const I18N_EN = {
   "{s}<b>{n} 台</b>に一括実行します。次のコマンドは機器の設定や状態を<b>変更</b>します。実行前に内容を確認してください。": "About to run on {s}<b>{n} device(s)</b>. The following commands <b>change</b> device configuration or state. Review them before running.",
   "変更を伴うことを理解したうえで実行します": "I understand this changes the devices — run it",
   "▶ 変更を実行": "▶ Run changes",
+  "▶ {s}として変更を実行": "▶ Run changes (stage: {s})",
+  "▶ {s}として実行": "▶ Run (stage: {s})",
+  "作業タイミング": "Stage",
+  "対話窓の右クリック ⓘ": "Right-click in the terminal ⓘ",
+  "マウス右ボタンでの貼り付けを無効にする": "Disable pasting with the right mouse button",
+  "マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）": "Confirm pasting with the right mouse button (paste from the menu's \"Paste\")",
+  "対話窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます": "What a right-click does in the terminal window (the same 2 options as Tera Term's Additional settings > Copy and Paste). With both off, a right-click pastes at once (default). When \"Disable\" is on, the other is ignored. Changes apply to terminal windows opened afterwards.",
+  "作業前後の比較で自動では選ばれません。必要ならキャンセルして、実行タブの「作業タイミング」を選んでください": "The before/after comparison will not pick this run automatically. If needed, cancel and choose a stage on the Run tab.",
   "接続確認が完了しました（OK {a}・失敗 {b}）": "Connect check finished (OK {a}, failed {b})",
   "実行が完了しました。実行履歴タブで作業前のログと比較できます": "Run finished. Compare with the before logs in the History tab.",
   "接続・ログイン OK（コマンドは送っていません）": "Connect + login OK (no commands sent)",

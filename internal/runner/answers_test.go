@@ -96,6 +96,9 @@ func askingConn(c net.Conn, rec func(string)) {
 				io.WriteString(c, "\r\n        ^\r\n% Invalid input detected at '^' marker.\r\n"+prompt)
 			case cmd == "hang":
 				asking = "hang" // says nothing until ^C
+			case cmd == "boot":
+				// ends on a line the Cisco prompt does not match (待つ文字列 test)
+				io.WriteString(c, "\r\nbooting...\r\nREADY> ")
 			case cmd == "show clock":
 				io.WriteString(c, "\r\n*10:00:00.000 JST Mon Oct 12 2026"+prompt)
 			default:

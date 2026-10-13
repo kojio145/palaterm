@@ -62,6 +62,9 @@ type Manifest struct {
 	// in after the bundle is read elsewhere. Absent in bundles from before
 	// group credentials existed.
 	Groups []model.DeviceGroup `json:"groups,omitempty"`
+	// Shared marks a 共有用 export: every credential was left out on
+	// purpose (see Contents.StripCredentials).
+	Shared bool `json:"shared,omitempty"`
 }
 
 // Contents is what a bundle carries, in memory.
@@ -112,6 +115,58 @@ func Select(inv *model.Inventory, group string) Contents {
 	return c
 }
 
+// StripCredentials blanks every credential c carries — each device's and
+// jump host's username, password, enable password, key file and key
+// passphrase, and the groups' default credentials — so the bundle can be
+// handed to a colleague (共有用). Reading it back over existing devices keeps
+// their own credentials (see Apply). Marks the manifest Shared.
+func (c *Contents) StripCredentials() {
+	for i := range c.Devices {
+		d := &c.Devices[i]
+		d.Username, d.Password, d.EnablePassword, d.KeyFile, d.KeyPassphrase = "", "", "", "", ""
+		d.Bastions = append([]model.Bastion(nil), d.Bastions...)
+		for j := range d.Bastions {
+			b := &d.Bastions[j]
+			b.Username, b.Password, b.KeyFile, b.KeyPassphrase = "", "", "", ""
+		}
+	}
+	for i := range c.Manifest.Groups {
+		g := &c.Manifest.Groups[i]
+		g.Username, g.Password, g.EnablePassword = "", "", ""
+	}
+	c.Manifest.Shared = true
+}
+
+// keepCredentials fills the credentials d leaves empty from cur, the
+// device it replaces: a row written without them (a 共有用 export, or
+// cells blanked by hand) must not wipe what this PalaTerm already has. A
+// jump hop takes over only from the hop at the same position with the same
+// host. Reports whether anything was taken over.
+func keepCredentials(d *model.Device, cur model.Device) bool {
+	kept := false
+	fill := func(dst *string, src string) {
+		if *dst == "" && src != "" {
+			*dst, kept = src, true
+		}
+	}
+	fill(&d.Username, cur.Username)
+	fill(&d.Password, cur.Password)
+	fill(&d.EnablePassword, cur.EnablePassword)
+	fill(&d.KeyFile, cur.KeyFile)
+	fill(&d.KeyPassphrase, cur.KeyPassphrase)
+	for j := range d.Bastions {
+		if j >= len(cur.Bastions) || !strings.EqualFold(d.Bastions[j].Host, cur.Bastions[j].Host) {
+			continue
+		}
+		b, cb := &d.Bastions[j], cur.Bastions[j]
+		fill(&b.Username, cb.Username)
+		fill(&b.Password, cb.Password)
+		fill(&b.KeyFile, cb.KeyFile)
+		fill(&b.KeyPassphrase, cb.KeyPassphrase)
+	}
+	return kept
+}
+
 // FileNameSafe replaces the characters Windows forbids in file names.
 func FileNameSafe(s string) string {
 	return strings.Map(func(r rune) rune {
@@ -139,21 +194,47 @@ func uniqueFile(taken map[string]bool, base, ext string) string {
 func FormatCommandSet(s model.CommandSet) string {
 	var b strings.Builder
 	b.WriteString(csvio.BOM)
+	if s.PauseOff {
+		b.WriteString(directive + "pause=off\r\n")
+	}
 	for _, c := range s.Commands {
+		if c.Wait != "" {
+			fmt.Fprintf(&b, "%swait=%s\r\n", directive, c.Wait)
+		}
 		fmt.Fprintf(&b, "%s,%d,%d\r\n", c.Text, c.PauseSec, c.SerialSec)
 	}
 	return b.String()
 }
 
+// directive starts the comment lines that carry what the "command,pause,
+// pause" lines cannot: "pause=off" (待機秒を使わない) for the whole set, and
+// "wait=<text>" (待つ文字列) for the command on the next line. Being
+// comments, an older PalaTerm (and the legacy .list reader) skips them.
+const directive = "# palaterm: "
+
 // ParseCommandSet reads the command set file format. Blank lines and lines
 // starting with "#" are skipped. The command itself may contain commas: only
 // the last two fields are the pause seconds, and both are optional (default
 // 1 second each), so the legacy Show_Command_Pattern .list files load as-is.
-func ParseCommandSet(data string) ([]model.Command, error) {
+// The "# palaterm: " comment lines (see directive) set PauseOff and the next
+// command's Wait. The returned set has no name; the caller gives it one.
+func ParseCommandSet(data string) (model.CommandSet, error) {
+	var set model.CommandSet
 	var cmds []model.Command
+	wait := ""
 	data = strings.TrimPrefix(data, csvio.BOM)
 	for _, line := range strings.Split(data, "\n") {
 		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if d, ok := strings.CutPrefix(line, strings.TrimSpace(directive)); ok {
+			d = strings.TrimSpace(d)
+			switch {
+			case d == "pause=off":
+				set.PauseOff = true
+			case strings.HasPrefix(d, "wait="):
+				wait = strings.TrimSpace(strings.TrimPrefix(d, "wait="))
+			}
+			continue
+		}
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
@@ -169,15 +250,17 @@ func ParseCommandSet(data string) ([]model.Command, error) {
 		if text == "" {
 			continue
 		}
-		cmds = append(cmds, model.Command{Text: text, PauseSec: p1, SerialSec: p2})
+		cmds = append(cmds, model.Command{Text: text, PauseSec: p1, SerialSec: p2, Wait: wait})
+		wait = ""
 	}
 	if len(cmds) == 0 {
-		return nil, fmt.Errorf("有効なコマンド行がありません")
+		return set, fmt.Errorf("有効なコマンド行がありません")
 	}
 	if err := model.CheckCommands(cmds); err != nil {
-		return nil, err
+		return set, err
 	}
-	return cmds, nil
+	set.Commands = cmds
+	return set, nil
 }
 
 // WriteProfileJSON writes one profile to dir as <名前>.json and returns the
@@ -236,6 +319,7 @@ func Write(dir string, c Contents, app string) (string, error) {
 		CommandSets: []FileRef{},
 		OSProfiles:  []FileRef{},
 		Groups:      c.Manifest.Groups,
+		Shared:      c.Manifest.Shared,
 	}
 	text, err := csvio.Export(c.Devices)
 	if err != nil {
@@ -318,7 +402,7 @@ func Read(manifestPath string) (Contents, error) {
 		if err != nil {
 			return c, fmt.Errorf("コマンドセット「%s」が読めません: %w", ref.Name, err)
 		}
-		cmds, err := ParseCommandSet(string(text))
+		set, err := ParseCommandSet(string(text))
 		if err != nil {
 			return c, fmt.Errorf("コマンドセット「%s」: %w", ref.Name, err)
 		}
@@ -326,7 +410,8 @@ func Read(manifestPath string) (Contents, error) {
 		if name == "" {
 			name = strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 		}
-		c.CommandSets = append(c.CommandSets, model.CommandSet{Name: name, Commands: cmds})
+		set.Name = name
+		c.CommandSets = append(c.CommandSets, set)
 	}
 	for _, ref := range c.Manifest.OSProfiles {
 		p, err := in(ref.File)
@@ -403,6 +488,11 @@ type Summary struct {
 	// jump command ("name: command"). That text is typed into the jump host's
 	// shell as it is, so the import screen shows it for a look first.
 	JumpCommands []string `json:"jumpCommands"`
+	// CredsKept lists existing devices whose row left some credentials
+	// empty and that therefore kept their own (see keepCredentials).
+	CredsKept []string `json:"credsKept"`
+	// Shared: the file is a 共有用 export (credentials left out).
+	Shared bool `json:"shared"`
 }
 
 // Preview reports what Apply would do without changing inv.
@@ -418,7 +508,9 @@ func Preview(inv *model.Inventory, c Contents, opt Options) Summary {
 
 // Apply merges c into inv. Devices match by group + name (a name only has to
 // be unique within its group) and are replaced whole (a CSV row is a complete
-// device), keeping the existing device's internal ID. Command sets match by name; profiles by key,
+// device), keeping the existing device's internal ID — except credentials
+// the row leaves empty, which keep the existing device's (keepCredentials:
+// a 共有用 export carries none). Command sets match by name; profiles by key,
 // or failing that by name — in which case the existing key is kept and the
 // imported devices are re-pointed at it, so nothing ends up orphaned. Existing
 // shared items are left alone unless opt.OverwriteShared. Returns the summary
@@ -432,6 +524,8 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.Invalid = []string{}
 	s.Duplicate = []string{}
 	s.JumpCommands = []string{}
+	s.CredsKept = []string{}
+	s.Shared = c.Manifest.Shared
 
 	// Profiles first: they may rename keys the devices use.
 	keyMap := map[string]string{}
@@ -481,7 +575,7 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		s.Sets++
 		if i, ok := setByName[cs.Name]; ok {
 			if opt.OverwriteShared {
-				inv.CommandSets[i].Commands = cs.Commands
+				inv.CommandSets[i].Commands, inv.CommandSets[i].PauseOff = cs.Commands, cs.PauseOff
 				s.SetsUpdated++
 			} else {
 				s.SetsSkipped++
@@ -555,6 +649,12 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		if d.Group != "" {
 			label = d.Group + " / " + d.Name
 		}
+		// Credentials the row leaves empty stay as the existing device has
+		// them (checked before Validate, which looks at the username).
+		credsKept := false
+		if i, ok := devByKey[devKey(d)]; ok && !inFile[devKey(d)] {
+			credsKept = keepCredentials(&d, inv.Devices[i])
+		}
 		if err := d.Validate(); err != nil {
 			s.Invalid = append(s.Invalid, label+": "+err.Error())
 			continue
@@ -570,6 +670,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 			}
 		}
 		s.Devices++ // rows actually imported (skipped ones are listed apart)
+		if credsKept {
+			s.CredsKept = append(s.CredsKept, label)
+		}
 		if k, ok := keyMap[d.OSType]; ok {
 			d.OSType = k
 		}

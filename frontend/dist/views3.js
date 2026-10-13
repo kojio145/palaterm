@@ -23,6 +23,10 @@ function stageBadge(st) {
   return `<span class="badge stage-${esc(st === "work" ? "during" : st)}">${esc(stageLabel(st))}</span>`;
 }
 
+// The run's folder name: what the user sees in the log folder, so it names
+// the run in the comparison selects.
+function runDirName(r) { return r.name || runTitle(r); }
+
 function runTitle(r) {
   return `${fmtRunTime(r.startedAt)}${r.group ? "  " + r.group : ""}${r.stage ? "  [" + stageLabel(r.stage) + "]" : ""}`;
 }
@@ -60,7 +64,7 @@ function renderHistoryView() {
     histState.b = after ? after.dir : "";
   }
   const runOpt = sel => `<option value="">${esc(t("（選択）"))}</option>` + runs.map(r =>
-    `<option value="${esc(r.dir)}" ${r.dir === sel ? "selected" : ""}>${esc(runTitle(r))}</option>`).join("");
+    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === sel ? "selected" : ""}>${esc(runDirName(r))}</option>`).join("");
   // The work run (作業中 batch or interactive session) between A and B, same
   // group when known: it says what was done, so the compare can conclude
   // whether that work shows up in the after logs.
@@ -70,7 +74,7 @@ function renderHistoryView() {
     histState.c = mid ? mid.dir : "";
   }
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
-    `<option value="${esc(r.dir)}" ${r.dir === histState.c ? "selected" : ""}>${esc(runTitle(r) + (r.interactive ? "  " + t("単独接続") : ""))}</option>`).join("");
+    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("単独接続") : ""))}</option>`).join("");
 
   // Sort / filter of the run rows (display only; see listView in app.js).
   // The comparison selects above the table always list every run.

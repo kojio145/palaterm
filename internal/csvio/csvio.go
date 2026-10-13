@@ -9,12 +9,15 @@
 // omitted. The field order is fixed with keyfile last so a Windows path's own
 // colons survive the round trip, so new fields cannot simply be appended; the
 // per-hop extras that came later (key passphrase, legacy-cipher flag, jump
-// command) therefore travel in a separate "bastionExtras" column as a JSON
-// array aligned with the hops, empty when no hop uses them. Together with the
-// device-level "legacyAlgos" column this makes the CSV a complete copy of a
-// device. Older CSVs without these columns still import (the extras default to
-// empty). Passwords are written in clear text — treat exported CSV as
-// sensitive and delete it after re-import.
+// command) therefore travel in columns of their own per hop —
+// bastion1KeyPassphrase, bastion1LegacyAlgos, bastion1JumpCommand, then
+// bastion2… — written for as many hops as the exported devices use, so each
+// can be edited (or blanked) in Excel. Together with the device-level
+// "legacyAlgos" column this makes the CSV a complete copy of a device. Older
+// CSVs still import: without these columns the extras default to empty, and
+// the JSON "bastionExtras" column of v1.5.16 and before is still read.
+// Passwords are written in clear text — treat exported CSV as sensitive and
+// delete it after re-import.
 package csvio
 
 import (
@@ -32,7 +35,13 @@ var header = []string{
 	"name", "group", "site", "host", "conn", "port", "serialPort", "baud",
 	"osType", "commandSet", "authMethod", "keyFile", "keyPassphrase",
 	"username", "password", "enablePassword", "legacyAlgos",
-	"bastions", "bastionExtras", "enabled", "useGroupCreds", "role",
+	"bastions", "enabled", "useGroupCreds", "role",
+}
+
+// hopCols names hop n's (1-based) extras columns, in header order.
+func hopCols(n int) []string {
+	p := "bastion" + strconv.Itoa(n)
+	return []string{p + "KeyPassphrase", p + "LegacyAlgos", p + "JumpCommand"}
 }
 
 // BOM is the UTF-8 byte order mark every exported CSV starts with: without
@@ -61,7 +70,17 @@ func Export(devices []model.Device) (string, error) {
 	var buf bytes.Buffer
 	buf.WriteString(BOM)
 	w := csv.NewWriter(&buf)
-	if err := w.Write(header); err != nil {
+	hops := 0
+	for i := range devices {
+		d := devices[i]
+		d.NormalizeBastions()
+		hops = max(hops, len(d.Bastions))
+	}
+	head := append([]string(nil), header...)
+	for n := 1; n <= hops; n++ {
+		head = append(head, hopCols(n)...)
+	}
+	if err := w.Write(head); err != nil {
 		return "", err
 	}
 	for i := range devices {
@@ -71,8 +90,16 @@ func Export(devices []model.Device) (string, error) {
 			d.Name, d.Group, d.Site, d.Host, string(d.Conn), itoa(d.Port), d.SerialPort, itoa(d.Baud),
 			d.OSType, d.CommandSet, string(d.AuthMethod), d.KeyFile, d.KeyPassphrase,
 			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
-			encodeBastions(d.Bastions), encodeBastionExtras(d.Bastions), boolStr(d.Enabled),
+			encodeBastions(d.Bastions), boolStr(d.Enabled),
 			boolStr(d.UseGroupCreds), d.Role,
+		}
+		for n := 0; n < hops; n++ {
+			if n < len(d.Bastions) {
+				b := d.Bastions[n]
+				rec = append(rec, b.KeyPassphrase, boolStr(b.LegacyAlgos), b.JumpCommand)
+			} else {
+				rec = append(rec, "", "", "")
+			}
 		}
 		for i := range rec {
 			rec[i] = cellOut(rec[i])
@@ -143,6 +170,22 @@ func Import(text string) ([]model.Device, error) {
 			UseGroupCreds:  parseBool(get(row, "usegroupcreds"), false),
 		}
 		applyBastionExtras(d.Bastions, get(row, "bastionextras"))
+		// Per-hop columns win over the old JSON column: a column that is
+		// there is the file's word for that field, empty included.
+		for n := range d.Bastions {
+			c := hopCols(n + 1)
+			has := func(k string) bool { _, ok := idx[strings.ToLower(k)]; return ok }
+			b := &d.Bastions[n]
+			if has(c[0]) {
+				b.KeyPassphrase = get(row, strings.ToLower(c[0]))
+			}
+			if has(c[1]) {
+				b.LegacyAlgos = parseBool(get(row, strings.ToLower(c[1])), false)
+			}
+			if has(c[2]) {
+				b.JumpCommand = get(row, strings.ToLower(c[2]))
+			}
+		}
 		out = append(out, d)
 	}
 	return out, nil
@@ -204,29 +247,7 @@ type bastionExtra struct {
 	JumpCommand   string `json:"jumpCommand,omitempty"`
 }
 
-func encodeBastionExtras(bs []model.Bastion) string {
-	if len(bs) == 0 {
-		return ""
-	}
-	extras := make([]bastionExtra, len(bs))
-	any := false
-	for i, b := range bs {
-		extras[i] = bastionExtra{KeyPassphrase: b.KeyPassphrase, LegacyAlgos: b.LegacyAlgos, JumpCommand: b.JumpCommand}
-		if b.KeyPassphrase != "" || b.LegacyAlgos || b.JumpCommand != "" {
-			any = true
-		}
-	}
-	if !any {
-		return ""
-	}
-	data, err := json.Marshal(extras)
-	if err != nil {
-		return ""
-	}
-	return string(data)
-}
-
-// applyBastionExtras merges the JSON extras column into the decoded hops by
+// applyBastionExtras merges the old JSON "bastionExtras" column into the decoded hops by
 // position. A malformed or absent column leaves the hops as decoded.
 func applyBastionExtras(bs []model.Bastion, s string) {
 	s = strings.TrimSpace(s)

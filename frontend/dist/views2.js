@@ -17,7 +17,7 @@ function renderCommands() {
     <tr data-key="${esc(s.name)}">
       ${listViewDragCell(LV)}
       <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
-      <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}</td>
+      <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
       <td class="mono muted"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
       <td style="text-align:right;white-space:nowrap">
         <button class="btn sm act-edit" data-edit="${esc(s.name)}">${esc(t("編集"))}</button>
@@ -114,17 +114,21 @@ function editCommandSet(set) {
   const s = set || { name: "", commands: [] };
   // Working copy: one row per command, each with its own pause (sec).
   let cmds = (s.commands || []).map(c => ({
-    text: c.text || "", pauseSec: c.pauseSec ?? 1, serialSec: c.serialSec ?? 1,
+    text: c.text || "", pauseSec: c.pauseSec ?? 1, serialSec: c.serialSec ?? 1, wait: c.wait || "",
   }));
-  if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1 }];
+  if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }];
 
   const node = h(`<div>
     <h3>${esc(set ? t("コマンドセットを編集") : t("コマンドセットを追加"))}</h3>
     <div class="field"><label>${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label><input id="s-name" value="${esc(s.name)}" ${set ? `data-tip="${esc(t("名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います"))}"` : ""}></div>
-    <label style="font-size:12px;color:var(--text-dim)">${esc(t("コマンド（1行1コマンド・待機秒はコマンドごとに指定）"))}</label>
+    <div class="row-inline" style="gap:16px;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--text-dim)">${esc(t("コマンド（1行1コマンド・待機秒はコマンドごとに指定）"))}</label>
+      <label style="font-size:12px;font-weight:normal;display:flex;gap:6px;align-items:center;cursor:pointer" data-tip="${esc(t("オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または「待つ文字列」）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです"))}"><input type="checkbox" id="s-usepause" style="width:auto" ${s.pauseOff ? "" : "checked"}> ${esc(t("待機秒を使う ⓘ"))}</label>
+    </div>
     <div class="scroll"><table style="margin-top:6px">
       <thead><tr>
         <th style="width:26px"></th><th style="width:36px">#</th><th>${esc(t("コマンド"))}</th>
+        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行にこの文字列が出たら次のコマンドを送ります（例: (config)#）。文字そのまま・部分一致。空欄なら OS タイプのプロンプト（showコマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
         <th style="width:110px">${esc(t("待機(リモート)"))}</th><th style="width:110px">${esc(t("待機(シリアル)"))}</th><th style="width:76px"></th>
       </tr></thead>
       <tbody id="cmd-rows"></tbody>
@@ -137,7 +141,7 @@ function editCommandSet(set) {
       <button class="btn primary" id="save">${esc(t("保存"))}</button>
     </div>
   </div>`);
-  openModal(node);
+  openModal(node, "set-edit");
 
   const tbody = node.querySelector("#cmd-rows");
   function collect() {
@@ -147,15 +151,27 @@ function editCommandSet(set) {
       text: r.querySelector(".c-text").value,
       pauseSec: parseInt(r.querySelector(".c-pause").value, 10) || 0,
       serialSec: parseInt(r.querySelector(".c-spause").value, 10) || 0,
+      wait: r.querySelector(".c-wait").value,
     }));
     return arr;
   }
+  // 待機秒を使う off: the pause fields stay (their values are kept) but
+  // are greyed out, since the run ignores them.
+  const usePause = node.querySelector("#s-usepause");
+  function syncPause() {
+    tbody.querySelectorAll(".c-pause, .c-spause").forEach(inp => {
+      inp.disabled = !usePause.checked;
+      inp.title = usePause.checked ? "" : t("「待機秒を使う」がオフのため使いません");
+    });
+  }
+  usePause.onchange = syncPause;
   function render() {
     tbody.innerHTML = cmds.map((c, i) => `
       <tr data-key="${i}">
         <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
         <td class="muted">${i + 1}</td>
         <td><input class="c-text mono" style="width:100%" value="${esc(c.text)}" placeholder="show running-config"></td>
+        <td><input class="c-wait mono" style="width:100%" value="${esc(c.wait || "")}" placeholder="${esc(t("（プロンプト）"))}"></td>
         <td><input class="c-pause" type="number" style="width:100%" value="${c.pauseSec}"></td>
         <td><input class="c-spause" type="number" style="width:100%" value="${c.serialSec}"></td>
         <td style="white-space:nowrap">
@@ -165,14 +181,14 @@ function editCommandSet(set) {
       </tr>`).join("");
     tbody.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
       cmds = collect(); cmds.splice(parseInt(btn.dataset.rm, 10), 1);
-      if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1 }];
+      if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }];
       render();
     });
     // Insert a blank row directly below this one, and focus it.
     tbody.querySelectorAll("[data-ins]").forEach(btn => btn.onclick = () => {
       const i = parseInt(btn.dataset.ins, 10);
       cmds = collect();
-      cmds.splice(i + 1, 0, { text: "", pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec });
+      cmds.splice(i + 1, 0, { text: "", pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec, wait: "" });
       render();
       const inputs = tbody.querySelectorAll(".c-text");
       if (inputs[i + 1]) inputs[i + 1].focus();
@@ -184,24 +200,25 @@ function editCommandSet(set) {
         e.preventDefault();
         cmds = collect();
         const lines = txt.split("\n").map(l => l.trim()).filter(l => l);
-        const add = lines.map(text => ({ text, pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec }));
+        const add = lines.map(text => ({ text, pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec, wait: "" }));
         cmds.splice(i, 1, ...add);
         render();
       }
     }));
     // Drag-reorder rows; collect() reads the new DOM order.
     wireRowReorder(tbody, () => { cmds = collect(); render(); });
+    syncPause();
   }
   render();
 
   node.querySelector("#add-cmd").onclick = () => {
-    cmds = collect(); cmds.push({ text: "", pauseSec: 1, serialSec: 1 }); render();
+    cmds = collect(); cmds.push({ text: "", pauseSec: 1, serialSec: 1, wait: "" }); render();
   };
   // まとめて追加: one command per line, each with a 1-second pause, appended
   // after the existing rows (a lone empty row is replaced instead).
   node.querySelector("#bulk-cmd").onclick = () => bulkCommandsDialog(lines => {
     cmds = collect().filter((c, i, all) => !(all.length === 1 && !c.text.trim()));
-    cmds.push(...lines.map(text => ({ text, pauseSec: 1, serialSec: 1 })));
+    cmds.push(...lines.map(text => ({ text, pauseSec: 1, serialSec: 1, wait: "" })));
     render();
     toast(t("{n} 行を追加しました", { n: lines.length }), "ok");
   });
@@ -210,12 +227,12 @@ function editCommandSet(set) {
     const name = node.querySelector("#s-name").value.trim();
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
     const commands = collect().filter(c => c.text.trim().length > 0)
-      .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec }));
+      .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
     try {
       // An edited set may have been renamed: move it (and the devices that
       // use it) to the new name first, then save the commands under it.
       if (set && name !== set.name) await App().RenameCommandSet(set.name, name);
-      await App().SaveCommandSet({ name, commands });
+      await App().SaveCommandSet({ name, commands, pauseOff: !usePause.checked });
       closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
     }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
@@ -601,6 +618,16 @@ function statusLabel(p) {
     running: t("実行中"), saving: t("保存中"), done: t("完了"), error: t("エラー"), canceled: t("中止") }[p]) || p;
 }
 
+// The run's 作業タイミング, shown large and colour-coded in the run
+// confirmation: the comparison picks its A/B by it, so a run tagged wrong
+// (or not at all) is caught before it starts, not in the history tab.
+function stageBanner(st) {
+  if (!st) return `<span class="stage-banner stage-none"><span class="sb-label">${esc(t("作業タイミング"))}</span><span class="sb-value">${esc(t("指定なし"))}</span>
+    <span class="sb-note">${esc(t("作業前後の比較で自動では選ばれません。必要ならキャンセルして、実行タブの「作業タイミング」を選んでください"))}</span></span>`;
+  return `<span class="stage-banner stage-${esc(st === "work" ? "during" : st)}"><span class="sb-label">${esc(t("作業タイミング"))}</span><span class="sb-value">${esc(stageLabel(st))}</span></span>`;
+}
+function stageRunLabel(st) { return st ? t("▶ {s}として実行", { s: stageLabel(st) }) : t("▶ 実行"); }
+
 async function startRun(dryRun) {
   // Only the checked devices of the selected group run (RunSelected), so
   // checkbox states in other groups are never touched.
@@ -626,15 +653,14 @@ async function startRun(dryRun) {
   // its own warning with an explicit acknowledgement before anything runs.
   const warnings = await App().CheckDangerousCommands(runRequest(targets, false)).catch(() => []);
   if (warnings && warnings.length) {
-    if (!(await dangerConfirm(warnings, targets.length, scope))) return;
+    if (!(await dangerConfirm(warnings, targets.length, scope, runStage))) return;
   } else {
-    const stage = (runStage ? `<br><span class="muted" style="font-size:12px">${esc(t("作業タイミング: {s}", { s: stageLabel(runStage) }))}</span>` : "")
-      + (runSetSel ? `<br><span style="font-size:12px;color:var(--accent)">${esc(t("コマンド（今回のみ）: {s}", { s: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text).join(" / ") : runSetSel }))}</span>` : "")
+    const stage = (runSetSel ? `<br><span style="font-size:12px;color:var(--accent)">${esc(t("コマンド（今回のみ）: {s}", { s: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text).join(" / ") : runSetSel }))}</span>` : "")
       + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "");
     const ok = await uiConfirm({
       title: t("一括実行"),
-      message: t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage,
-      okLabel: t("▶ 実行"),
+      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage,
+      okLabel: stageRunLabel(runStage),
     });
     if (!ok) return;
   }
@@ -644,7 +670,7 @@ async function startRun(dryRun) {
 // The warning shown before a batch whose command sets contain
 // configuration-changing commands: every flagged command per device, and an
 // acknowledgement checkbox that gates the run button.
-function dangerConfirm(warnings, n, scope) {
+function dangerConfirm(warnings, n, scope, stage) {
   return new Promise(resolve => {
     const bySet = {};
     warnings.forEach(w => { (bySet[w.commandSet] = bySet[w.commandSet] || { hits: w.hits, devices: [] }).devices.push(w.device); });
@@ -657,12 +683,13 @@ function dangerConfirm(warnings, n, scope) {
       </div>`).join("");
     const node = h(`<div>
       <h3 style="color:var(--warn)">${esc(t("⚠ 設定を変更するコマンドが含まれています"))}</h3>
+      ${stageBanner(stage || "")}
       <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${t("{s}<b>{n} 台</b>に一括実行します。次のコマンドは機器の設定や状態を<b>変更</b>します。実行前に内容を確認してください。", { s: scope, n })}</p>
       ${blocks}
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px"><input type="checkbox" id="dg-ack" style="width:auto"> ${esc(t("変更を伴うことを理解したうえで実行します"))}</label>
       <div class="modal-actions">
         <button class="btn" id="dg-cancel">${esc(t("キャンセル"))}</button>
-        <button class="btn danger" id="dg-ok" disabled>${esc(t("▶ 変更を実行"))}</button>
+        <button class="btn danger" id="dg-ok" disabled>${esc(stage ? t("▶ {s}として変更を実行", { s: stageLabel(stage) }) : t("▶ 変更を実行"))}</button>
       </div>
     </div>`);
     openModal(node, "mid");
@@ -704,7 +731,7 @@ async function confirmRerun(names) {
   const warnings = await App().CheckDangerousCommands(req).catch(() => []);
   if (warnings && warnings.length) {
     const scope = runGroupSel ? t("グループ「<b>{g}</b>」の ", { g: esc(runGroupLabel()) }) : "";
-    return dangerConfirm(warnings, names.length, scope);
+    return dangerConfirm(warnings, names.length, scope, req.stage);
   }
   return null; // nothing to warn about: the caller asks its own question
 }
@@ -821,7 +848,7 @@ function devPauses(name) {
   const d = runDev(name);
   const cs = d && runSetOf(d);
   if (!cs) return [];
-  return (cs.commands || []).map(c => d.conn === "serial" ? (c.serialSec || 0) : (c.pauseSec || 0));
+  return (cs.commands || []).map(c => cs.pauseOff ? 0 : d.conn === "serial" ? (c.serialSec || 0) : (c.pauseSec || 0));
 }
 
 // Time until every remaining command of this device has finished. The
@@ -1019,6 +1046,9 @@ function renderSettings() {
         <div class="field"><label><span data-tip="${esc(t("オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません"))}">${esc(t("ログ内のパスワードをマスクする ⓘ"))}</span></label>
           <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-mask" type="checkbox" ${s.maskLogSecrets ? "checked" : ""}> ${esc(t("パスワードを **** に置き換えて保存（既定: オフ）"))}</label></div>
       </div>
+      <div class="field"><label><span data-tip="${esc(t("対話窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます"))}">${esc(t("対話窓の右クリック ⓘ"))}</span></label>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-rc-off" type="checkbox" ${s.rightClickPasteOff ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを無効にする"))}</label>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
         <tr><td class="mono">{host}</td><td>${esc(t("ホスト名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
@@ -1034,7 +1064,7 @@ function renderSettings() {
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
@@ -1063,6 +1093,8 @@ function renderSettings() {
     out.autoLockOff = !(lockMin > 0);
     out.autoLockMin = lockMin > 0 ? lockMin : 30;
     out.maskLogSecrets = !!document.getElementById("set-mask").checked;
+    out.rightClickPasteOff = !!document.getElementById("set-rc-off").checked;
+    out.rightClickPasteConfirm = !!document.getElementById("set-rc-confirm").checked;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };

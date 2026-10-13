@@ -304,7 +304,16 @@ async function bootTerminalWindow() {
     e.preventDefault(); e.stopImmediatePropagation();
     if (txt) pasteOrConfirm(txt, false);
   }, true);
-  document.getElementById("tw-host").addEventListener("contextmenu", e => { e.preventDefault(); pasteFromClipboard(false); });
+  // Right-click follows the 設定 tab, as Tera Term's 2 options: paste at
+  // once (default), a menu whose 貼り付け pastes, or nothing.
+  document.getElementById("tw-host").addEventListener("contextmenu", e => {
+    e.preventDefault();
+    if (locked) return;
+    Term().RightClickPaste().catch(() => "paste").then(mode => {
+      if (mode === "menu") showCtxMenu([[t("貼り付け"), () => pasteFromClipboard(false)]], e);
+      else if (mode !== "off") pasteFromClipboard(false);
+    });
+  });
   document.getElementById("tw-paste").onclick = () => pasteFromClipboard(false);
   document.getElementById("tw-logdir").onclick = () => {
     Term().OpenLogDir().catch(() => {});

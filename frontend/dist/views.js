@@ -576,17 +576,21 @@ function exportBundleDialog(defaultGroup) {
     <h3>${esc(t("一式書き出し"))}</h3>
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
     <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
-    <div class="muted" style="font-size:12px">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
+    <div class="field" style="margin-top:10px"><label style="font-weight:normal;display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="cx-share" style="width:auto;margin-top:3px"> <span>${esc(t("共有用（認証情報を空にする）"))}<br><span class="muted" style="font-size:12px">${esc(t("機器・踏み台・グループのユーザー名・パスワード・enable パスワード・鍵ファイル・パスフレーズを空にして、フォルダ名に _share を付けて書き出します。ほかの人に機器一覧を渡すときに。受け取った側で読み込むと、既にある機器の認証情報はそのまま残ります。"))}</span></span></label></div>
+    <div class="muted" style="font-size:12px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
   openModal(node, "mid");
+  const share = node.querySelector("#cx-share");
+  share.onchange = () => { node.querySelector("#cx-plain-note").style.display = share.checked ? "none" : ""; };
   node.querySelector("#cx-cancel").onclick = closeModal;
   node.querySelector("#cx-ok").onclick = async () => {
     const v = node.querySelector("#cx-grp").value;
+    const shared = share.checked;
     closeModal();
     try {
-      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v);
+      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v, shared);
       if (!dir) return;
       if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く") })) {
         try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
@@ -603,7 +607,7 @@ function importDialog(defaultGroup) {
   const opts = groups.map(g => `<option value="${esc(g.name)}" ${g.name === defaultGroup ? "selected" : ""}>${esc(g.name)}</option>`).join("");
   const node = h(`<div>
     <h3>${esc(t("読み込み"))}</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は「グループ名＋機器名」で照合し、既存は上書き・新規は追加です。"))}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は「グループ名＋機器名」で照合し、既存は上書き・新規は追加です。"))} ${esc(t("既存の機器で認証情報（ユーザー名・パスワード等）の欄が空の行は、その機器の今の認証情報を残します。"))}</div>
     <div class="field"><label>${esc(t("読み込んだ機器の所属グループ"))}</label>
       <select id="ci-mode">
         <option value="keep">${esc(t("ファイルのグループをそのまま使う"))}</option>
@@ -638,6 +642,8 @@ function importDialog(defaultGroup) {
       lines.push(t("コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.sets, a: s.setsNew, b: s.setsUpdated, c: s.setsSkipped }));
       lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
     }
+    if (s.shared) lines.push(t("共有用の一式です（認証情報は含まれていません）"));
+    if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
     if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
     if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
     if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));

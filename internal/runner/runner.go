@@ -184,11 +184,14 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 				emit(Event{Device: dev.Name, Phase: PhaseRunning, Message: cmd.Text, Done: i, Total: total})
 			}
 			before := len(exp.Transcript())
-			if err := r.sendCommand(ctx, exp, prof, profile.Expand(cmd.Text, vars), cmdTimeout); err != nil {
+			if err := r.sendCommand(ctx, exp, prof, profile.Expand(cmd.Text, vars), cmd.Wait, cmdTimeout); err != nil {
 				res.Error = fmt.Sprintf("command %q: %v", cmd.Text, err)
 				// A timeout says nothing by itself; what the device was showing
 				// tells a question waiting for an answer from a long output.
 				if errors.Is(err, ErrExpectTimeout) {
+					if cmd.Wait != "" {
+						res.Error += fmt.Sprintf("（待つ文字列 %q が出ませんでした）", cmd.Wait)
+					}
 					if last := lastLine(exp.Transcript()[before:]); last != "" {
 						res.Error += fmt.Sprintf("（機器の最後の表示: %q。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）", RedactSecrets(last, dev))
 					}
@@ -206,7 +209,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 				// blanked here, whatever the log mask setting.
 				res.Warnings = append(res.Warnings, fmt.Sprintf("%s → %s", cmd.Text, RedactSecrets(line, dev)))
 			}
-			if p := pauseFor(cmd, dev.Conn); p > 0 {
+			if p := pauseFor(cmd, dev.Conn); p > 0 && !set.PauseOff {
 				if !countdown(ctx, p, func(left int) {
 					if emit != nil {
 						emit(Event{Device: dev.Name, Phase: PhaseRunning, Message: cmd.Text,
@@ -485,7 +488,7 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 
 	// Disable paging (non-fatal: some devices have none).
 	for _, st := range prof.Pager {
-		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), cmdTimeout); err != nil {
+		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), "", cmdTimeout); err != nil {
 			r.emit(emit, dev.Name, PhaseLogin, "pager disable skipped: "+err.Error())
 			break
 		}
@@ -609,15 +612,27 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 }
 
 // sendCommand sends one command line and waits for the prompt to return,
-// advancing through any pager prompts in the output.
-func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Profile, text string, timeout time.Duration) error {
+// advancing through any pager prompts in the output. A non-empty wait (the
+// command's 待つ文字列) replaces the prompt: the wait ends once the line the
+// device is on contains it.
+func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Profile, text, wait string, timeout time.Duration) error {
 	// Clear stale prompts so we wait for the prompt that follows THIS command,
 	// not one left buffered by the previous step.
 	exp.Drain()
 	if err := exp.Send(text); err != nil {
 		return fmt.Errorf("send %q: %w", text, err)
 	}
+	if wait != "" {
+		return r.waitTailAnswering(ctx, exp, prof, waitTail(wait), timeout, prof.Answers)
+	}
 	return r.waitPromptAnswering(ctx, exp, prof, timeout, prof.Answers)
+}
+
+// waitTail is the pattern for a command's 待つ文字列: the text, literally,
+// on the last (still open) line of the output. Requiring it on that line
+// keeps an earlier line that merely mentions it from ending the wait.
+func waitTail(wait string) string {
+	return regexp.QuoteMeta(wait) + `[^\r\n]*\z`
 }
 
 // maxAnswers bounds the questions answered for one command: a device that
@@ -787,18 +802,24 @@ func (r *Runner) waitPrompt(ctx context.Context, exp *expecter, prof profile.Pro
 // waitPromptAnswering is waitPrompt that also replies to the questions in
 // answers (Profile.Answers) when one is the tail of the output.
 func (r *Runner) waitPromptAnswering(ctx context.Context, exp *expecter, prof profile.Profile, timeout time.Duration, answers []profile.Step) error {
-	answered := 0
-	more := prof.MorePrompt
-	if more == "" {
-		more = genericMore
-	}
 	// The prompt counts only as the TAIL of what has arrived. Matched anywhere
 	// in the stream, a prompt character inside a command's own output ends the
 	// wait early: NEC IX's "show processes" prints a "PDEV#" column header, so
 	// the run moved on mid-output and typed the next command into a device that
 	// was still paging — which ate its first character, turning "show logging"
 	// into "how logging".
-	tail := "(?:" + prof.Prompt + `)[ \t]*\z`
+	return r.waitTailAnswering(ctx, exp, prof, "(?:"+prof.Prompt+`)[ \t]*\z`, timeout, answers)
+}
+
+// waitTailAnswering waits until tail (a pattern anchored at the end of the
+// output) matches, paging and answering the way waitPromptAnswering
+// describes.
+func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof profile.Profile, tail string, timeout time.Duration, answers []profile.Step) error {
+	answered := 0
+	more := prof.MorePrompt
+	if more == "" {
+		more = genericMore
+	}
 	deadline := time.Now().Add(timeout)
 	// A device that prints something on its own after the prompt leaves the
 	// tail on that line instead: ALAXALA AX logs "… Local authentication

@@ -1990,7 +1990,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.16"
+const appVersion = "1.5.17"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2012,11 +2012,12 @@ func (a *App) ImportCommandSetFile() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cmds, err := bundle.ParseCommandSet(string(data))
+	set, err := bundle.ParseCommandSet(string(data))
 	if err != nil {
 		return "", err
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	set.Name = name
 
 	a.mu.Lock()
 	if a.inv == nil {
@@ -2026,13 +2027,13 @@ func (a *App) ImportCommandSetFile() (string, error) {
 	found := false
 	for i := range a.inv.CommandSets {
 		if a.inv.CommandSets[i].Name == name {
-			a.inv.CommandSets[i].Commands = cmds
+			a.inv.CommandSets[i].Commands, a.inv.CommandSets[i].PauseOff = set.Commands, set.PauseOff
 			found = true
 			break
 		}
 	}
 	if !found {
-		a.inv.CommandSets = append(a.inv.CommandSets, model.CommandSet{Name: name, Commands: cmds})
+		a.inv.CommandSets = append(a.inv.CommandSets, set)
 	}
 	a.mu.Unlock()
 	return name, a.persist()
@@ -2099,11 +2100,15 @@ func (a *App) ImportOSProfileFile() (string, error) {
 // ---- 一式 (bundle) export / import ----
 
 // bundleDir is where ExportBundle writes: export\bundles\<グループ名>\, or
-// export\bundles\all-devices\ for the whole inventory.
-func bundleDir(group string) string {
+// export\bundles\all-devices\ for the whole inventory. A 共有用 export gets
+// "_share" appended, so it never overwrites the full one.
+func bundleDir(group string, shared bool) string {
 	name := "all-devices"
 	if group != "" {
 		name = bundle.FileNameSafe(group)
+	}
+	if shared {
+		name += "_share"
 	}
 	return filepath.Join(exeDir(), "export", "bundles", name)
 }
@@ -2113,8 +2118,10 @@ func bundleDir(group string) string {
 // to export\bundles\<group>\ and returns that folder. The folder is the
 // hand-over unit: copy it to another PalaTerm and pick its
 // palaterm-bundle.json in 読込. devices.csv inside it is the same CSV as
-// before, so Excel editing still works.
-func (a *App) ExportBundle(group string) (string, error) {
+// before, so Excel editing still works. shared (共有用) leaves every
+// credential out (bundle.Contents.StripCredentials), for handing the
+// devices to a colleague without one's own passwords.
+func (a *App) ExportBundle(group string, shared bool) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -2122,10 +2129,13 @@ func (a *App) ExportBundle(group string) (string, error) {
 	}
 	c := bundle.Select(a.inv, group)
 	a.mu.Unlock()
+	if shared {
+		c.StripCredentials()
+	}
 	if group != "" && len(c.Devices) == 0 {
 		return "", fmt.Errorf("グループ「%s」に機器がありません", group)
 	}
-	dir := bundleDir(group)
+	dir := bundleDir(group, shared)
 	if _, err := bundle.Write(dir, c, "PalaTerm "+appVersion); err != nil {
 		return "", err
 	}
