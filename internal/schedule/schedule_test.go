@@ -174,3 +174,35 @@ func TestIntervalSecondsAndCount(t *testing.T) {
 		t.Errorf("10 s × 5 refused: %v", err)
 	}
 }
+
+// Interval slots ending at a time, and the firings left (shown in the list).
+func TestIntervalUntilAndRemaining(t *testing.T) {
+	s := Slot{Kind: KindInterval, Date: "2026-10-13", Time: "21:00:00", EverySeconds: 600, Until: "2026-10-13 21:25:00"}
+	// Firings: 21:00, 21:10, 21:20 (21:30 is after Until).
+	if got := s.Next(at("2026-10-13 21:15:00")); !got.Equal(at("2026-10-13 21:20:00")) {
+		t.Errorf("next = %v", got)
+	}
+	if got := s.Next(at("2026-10-13 21:20:00")); !got.IsZero() {
+		t.Errorf("after the last firing before Until: %v", got)
+	}
+	if r := s.Remaining(at("2026-10-13 20:00:00")); r != 3 {
+		t.Errorf("remaining before start = %d, want 3", r)
+	}
+	if r := s.Remaining(at("2026-10-13 21:05:00")); r != 2 {
+		t.Errorf("remaining = %d, want 2", r)
+	}
+	// Count and Until together: whichever ends first.
+	s.Count = 2
+	if r := s.Remaining(at("2026-10-13 20:00:00")); r != 2 {
+		t.Errorf("count wins: %d", r)
+	}
+	// Neither: unlimited.
+	if r := (Slot{Kind: KindInterval, Date: "2026-10-13", Time: "21:00:00", EverySeconds: 60}).Remaining(at("2026-10-13 22:00:00")); r != -1 {
+		t.Errorf("unlimited = %d", r)
+	}
+	// Until before the start is refused.
+	bad := Schedule{Name: "x", Group: "g", Slots: []Slot{{Kind: KindInterval, Date: "2026-10-13", Time: "21:00:00", EverySeconds: 60, Until: "2026-10-13 20:00:00"}}}
+	if bad.Validate(at("2026-10-13 19:00:00")) == nil {
+		t.Error("until before start accepted")
+	}
+}

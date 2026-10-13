@@ -139,6 +139,17 @@ tr:hover td { background: var(--bg-2); }
 .modal.mid { width: min(680px, 92vw); }
 /* 予約: one row per 日時 (slot), the date button + month calendar, and the
    時 / 分 / 秒 selects. */
+.sc-devs { padding: 4px 0; max-height: 220px; overflow: auto; }
+.sc-devs .sc-dev { display: grid; grid-template-columns: 22px minmax(120px, 1.2fr) 140px 1fr 1fr; gap: 8px; align-items: center;
+  padding: 4px 10px; font-weight: normal; font-size: 13px; cursor: pointer; }
+.sc-devs .sc-dev:hover { background: var(--bg-2); }
+.sc-devs .sc-dev input { width: auto; }
+.sc-devs .sc-dev span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.sc-st.run { color: var(--run); border-color: var(--run); }
+.sc-st.wait { color: var(--warn); border-color: var(--warn); }
+.sc-st.on { color: var(--ok); border-color: var(--ok); }
+.sc-st.off, .sc-st.done { color: var(--text-dim); }
+tr.sc-dim td { opacity: .65; }
 .sl-row { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
 .dp-wrap { position: relative; display: inline-block; }
 .dp-btn { font-variant-numeric: tabular-nums; }

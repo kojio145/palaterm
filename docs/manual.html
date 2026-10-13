@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.6.3</div>
+    <div class="hero-tag">使い方マニュアル / v1.6.4</div>
   </header>
 
   <nav class="toc">
@@ -558,10 +558,12 @@
     <p class="lead">決まった日時に、自動で一括実行してログを取ります（show 系の取得専用）。定期バックアップ、障害調査中の「今から 10 秒おきに show を 20 回」、夜間作業の前後の取得などに使います。</p>
     <ol class="steps">
       <li>実行タブで<strong>「⏰ 予約…」</strong>を押します（今の選択＝グループ・チェックした機器・コマンド・今回だけ入力したコマンドを引き継ぎます）。左サイドバーの<strong>「予約」</strong>→「＋ 予約を追加」からも作れます。名前は内容から自動で付くので、考える必要はありません。</li>
-      <li><strong>① いつ実行しますか</strong>：<strong>1回だけ</strong>（日付＋時刻）・<strong>毎日</strong>・<strong>毎週</strong>（曜日を複数選択可）・<strong>一定間隔で繰り返す</strong>（開始は「保存したらすぐ」か「日時を指定」。10 秒〜7 日おきに、<strong>回数</strong>を指定。空欄なら止めるまで続けます）。日付はカレンダーから、時刻は時・分・秒のプルダウンで選びます。過去の日時は選べません。「＋ 日時を追加」で、毎日 03:00 と毎週日曜 12:00 のように組み合わせられます。</li>
-      <li><strong>② どの機器で実行しますか</strong>：グループを選び、機器をチェックします（「すべて選択」「すべて解除」あり）。</li>
+      <li><strong>① いつ実行しますか</strong>：<strong>1回だけ</strong>（日付＋時刻）・<strong>毎日</strong>・<strong>毎週</strong>（曜日を複数選択可）・<strong>一定間隔で繰り返す</strong>。日付はカレンダーから、時刻は時・分・秒のプルダウンで選びます。過去の日時は選べません。1 つの予約は 1 つの日時ルールです（別の時刻は別の予約にします）。</li>
+      <li><strong>一定間隔で繰り返す</strong>ときは、開始（「保存したらすぐ」または日時）、間隔（10 秒〜7 日。秒・分・時間）、<strong>終わり</strong>（「◯ 回で終わる」（既定 10 回）・「◯月◯日 ◯時まで」・「止めるまで続ける」）を選びます。</li>
+      <li><strong>② どの機器で実行しますか</strong>：グループを選び、機器をチェックします。台数が多いときは<strong>絞り込み</strong>（機器名・IP・拠点・役割）で探し、「表示中をすべて選択／解除」「選択中だけ表示」、<strong>Shift＋クリックでの範囲選択</strong>が使えます。選んだ台数は「選択中 ◯ / ◯ 台」と出ます。</li>
       <li><strong>③ 何を実行しますか</strong>：<strong>コマンドセットから選ぶ</strong>か、<strong>コマンドを直接入力する</strong>（1 行に 1 コマンド。実行タブの「今回だけ入力」と同じ）。</li>
-      <li>ふだんは<strong>詳細設定</strong>は触りません（作業タイミングは、夜間作業の前と後に 1 回ずつ取って実行履歴タブで比べたいときだけ「作業前」「作業後」を選びます）。<strong>「保存」</strong>で、予約の一覧に「どの機器に・どのコマンドを・いつ」が表示されます。<strong>「今すぐ実行」</strong>で 1 回だけ試せます。</li>
+      <li>ふだんは<strong>詳細設定</strong>は触りません（作業タイミングは、夜間作業の前と後に 1 回ずつ取って実行履歴タブで比べたいときだけ「作業前」「作業後」を選びます）。<strong>「保存」</strong>で一覧に並びます。</li>
+      <li><strong>予約の一覧</strong>には、状態（有効・実行中・順番待ち・停止中・終了）、どの機器に・どのコマンドを・いつ、次の実行と「あと ◯ 回」が出ます。<strong>「⏸ 止める」</strong>で止まり（実行中ならその回も中止）、<strong>「▶ 再開」</strong>でまた動きます。<strong>「今すぐ実行」</strong>で 1 回だけ試せます。もう実行されない予約は「終了」と出るので、<strong>「終了した予約をまとめて削除」</strong>で片付けられます（実行記録とログは残ります）。</li>
     </ol>
     <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンド</strong>（<code>conf t</code>・<code>write</code>・<code>reload</code> など、実行前の警告に出るもの）を含むセットは<strong>予約できません</strong>。無人で動くため取得専用にしています。保存時に加えて実行のたびにも確認し、含まれていれば実行せず「拒否」と記録します。</p></div>
     <h3>いつ動くか</h3>
@@ -751,7 +753,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.6.3 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.6.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

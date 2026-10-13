@@ -45,6 +45,9 @@ type Slot struct {
 	// Count limits an interval slot to that many firings, the first at
 	// Date + Time (0 = no limit).
 	Count int `json:"count,omitempty"`
+	// Until ends an interval slot: no firing after this local date and time
+	// ("YYYY-MM-DD HH:MM:SS"; empty = no end time).
+	Until string `json:"until,omitempty"`
 }
 
 // Schedule is one 予約: a batch run (the run tab's choices) plus when.
@@ -148,7 +151,16 @@ func (s Slot) Validate() error {
 				return fmt.Errorf("間隔は 10 秒〜7 日で指定してください")
 			}
 			if s.Count < 0 || s.Count > MaxCount {
-				return fmt.Errorf("回数は 1〜%d 回（空欄で無制限）で指定してください", MaxCount)
+				return fmt.Errorf("回数は 1〜%d 回で指定してください", MaxCount)
+			}
+			if s.Until != "" {
+				u, err := s.until(time.Local)
+				if err != nil {
+					return err
+				}
+				if start, _ := s.at(time.Local); !u.After(start) {
+					return fmt.Errorf("終わりの日時は開始より後にしてください")
+				}
 			}
 		}
 	case KindDaily, KindWeekly:
@@ -171,6 +183,55 @@ func (s Slot) Validate() error {
 	return nil
 }
 
+// until parses Until.
+func (s Slot) until(loc *time.Location) (time.Time, error) {
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(s.Until), loc)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("終わりの日時の形式が不正です: %q", s.Until)
+	}
+	return t, nil
+}
+
+// intervalIndex is the index (0 = the start) of an interval slot's first
+// firing strictly after after, ignoring Count and Until.
+func (s Slot) intervalIndex(after time.Time) (start time.Time, n int64, ok bool) {
+	start, err := s.at(after.Location())
+	period := s.Period()
+	if err != nil || period <= 0 {
+		return start, 0, false
+	}
+	if !start.After(after) {
+		n = int64(after.Sub(start)/period) + 1
+	}
+	return start, n, true
+}
+
+// Remaining is how many firings an interval slot still has after after:
+// limited by Count and Until, or -1 when neither limits it.
+func (s Slot) Remaining(after time.Time) int {
+	if s.Kind != KindInterval {
+		return -1
+	}
+	start, n, ok := s.intervalIndex(after)
+	if !ok {
+		return 0
+	}
+	left := int64(-1)
+	if s.Count > 0 {
+		left = max(int64(s.Count)-n, 0)
+	}
+	if s.Until != "" {
+		if u, err := s.until(after.Location()); err == nil {
+			last := int64(u.Sub(start) / s.Period()) // index of the last firing at or before Until
+			byUntil := max(last-n+1, 0)
+			if left < 0 || byUntil < left {
+				left = byUntil
+			}
+		}
+	}
+	return int(left)
+}
+
 // Next returns the slot's first firing strictly after after, or the zero
 // time when it never fires again (a once slot in the past, or an invalid
 // slot).
@@ -184,19 +245,11 @@ func (s Slot) Next(after time.Time) time.Time {
 		}
 		return t
 	case KindInterval:
-		start, err := s.at(loc)
-		period := s.Period()
-		if err != nil || period <= 0 {
-			return time.Time{}
+		start, n, ok := s.intervalIndex(after)
+		if !ok || s.Remaining(after) == 0 {
+			return time.Time{} // all Count firings, or Until, are behind
 		}
-		n := time.Duration(0)
-		if !start.After(after) {
-			n = after.Sub(start)/period + 1
-		}
-		if s.Count > 0 && int64(n) >= int64(s.Count) {
-			return time.Time{} // all Count firings are behind
-		}
-		return start.Add(n * period)
+		return start.Add(time.Duration(n) * s.Period())
 	case KindDaily, KindWeekly:
 		h, m, sec, err := parseClock(s.Time)
 		if err != nil {

@@ -523,6 +523,11 @@ func (a *App) emitSched() {
 type ScheduleView struct {
 	schedule.Schedule
 	Next string `json:"next"` // RFC3339, "" = never again
+	// Remaining firings of a repeating (interval) schedule; -1 = until
+	// stopped, or not a repeating schedule.
+	Remaining int  `json:"remaining"`
+	Running   bool `json:"running"` // its batch is running now
+	Queued    bool `json:"queued"`  // waiting for another batch to end
 }
 
 // ScheduleStatus is the scheduler's state for the 予約 tab.
@@ -545,11 +550,21 @@ type ScheduleStatus struct {
 // ListSchedules returns the vault's schedules with their next firing.
 func (a *App) ListSchedules() []ScheduleView {
 	now := time.Now()
+	a.sched.mu.Lock()
+	runID := a.sched.runID
+	queued := map[string]bool{}
+	for _, j := range a.sched.queue {
+		queued[j.sc.ID] = true
+	}
+	a.sched.mu.Unlock()
 	out := []ScheduleView{}
 	for _, sc := range a.schedules() {
-		v := ScheduleView{Schedule: sc}
+		v := ScheduleView{Schedule: sc, Remaining: -1, Running: sc.ID == runID, Queued: queued[sc.ID]}
 		if n := sc.Next(now); !n.IsZero() {
 			v.Next = n.Format(time.RFC3339)
+		}
+		if len(sc.Slots) == 1 && sc.Slots[0].Kind == schedule.KindInterval {
+			v.Remaining = sc.Slots[0].Remaining(now)
 		}
 		out = append(out, v)
 	}
@@ -677,8 +692,58 @@ func (a *App) SetScheduleEnabled(id string, on bool) error {
 		}
 	}
 	a.mu.Unlock()
+	a.stopScheduleRun(id)
 	a.schedKick()
 	return a.persist()
+}
+
+// stopScheduleRun drops a stopped or deleted schedule's waiting firings and
+// stops its batch if it is the one running (止める means now, not after
+// this round).
+func (a *App) stopScheduleRun(id string) {
+	a.sched.mu.Lock()
+	q := a.sched.queue[:0]
+	for _, j := range a.sched.queue {
+		if j.sc.ID != id {
+			q = append(q, j)
+		}
+	}
+	a.sched.queue = q
+	running := a.sched.runID == id
+	a.sched.mu.Unlock()
+	if running {
+		a.CancelScheduledRun()
+	}
+}
+
+// DeleteFinishedSchedules removes the schedules that will not fire again
+// (a 1回だけ that has run, a repeat whose count or end time is behind) and
+// returns how many.
+func (a *App) DeleteFinishedSchedules() (int, error) {
+	now := time.Now()
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return 0, fmt.Errorf("vault is locked")
+	}
+	keep := a.inv.Schedules[:0]
+	n := 0
+	for _, sc := range a.inv.Schedules {
+		on := sc
+		on.Enabled = true // a stopped schedule that could still fire is not finished
+		if on.Next(now).IsZero() {
+			n++
+			continue
+		}
+		keep = append(keep, sc)
+	}
+	a.inv.Schedules = keep
+	a.mu.Unlock()
+	if n == 0 {
+		return 0, nil
+	}
+	a.schedKick()
+	return n, a.persist()
 }
 
 // DeleteSchedule removes a schedule.
@@ -696,6 +761,7 @@ func (a *App) DeleteSchedule(id string) error {
 	}
 	a.inv.Schedules = out
 	a.mu.Unlock()
+	a.stopScheduleRun(id)
 	a.schedKick()
 	return a.persist()
 }
