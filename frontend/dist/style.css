@@ -137,7 +137,9 @@ tr:hover td { background: var(--bg-2); }
   resize: horizontal; overflow: auto; min-width: 520px;
 }
 .modal.mid { width: min(680px, 92vw); }
-/* 予約: the date button + month calendar, and the 時 / 分 / 秒 selects. */
+/* 予約: one row per 日時 (slot), the date button + month calendar, and the
+   時 / 分 / 秒 selects. */
+.sl-row { padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-2); }
 .dp-wrap { position: relative; display: inline-block; }
 .dp-btn { font-variant-numeric: tabular-nums; }
 .dp-pop { position: fixed; z-index: 10001; width: 260px; background: var(--bg-3);

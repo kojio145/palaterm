@@ -379,7 +379,16 @@ var (
 )
 
 func schedRequest(sc schedule.Schedule) RunRequest {
-	return RunRequest{Names: sc.Names, Group: sc.Group, Ungrouped: sc.Ungrouped, Stage: sc.Stage, CommandSet: sc.CommandSet}
+	req := RunRequest{Names: sc.Names, Group: sc.Group, Ungrouped: sc.Ungrouped, Stage: sc.Stage, CommandSet: sc.CommandSet}
+	// Typed commands go like the run tab's 今回だけ入力, without pauses: each
+	// is sent once the prompt is back (the usual case is a short show list
+	// repeated every few seconds).
+	for _, c := range sc.Commands {
+		if c = strings.TrimSpace(c); c != "" {
+			req.AdHoc = append(req.AdHoc, model.Command{Text: c})
+		}
+	}
+	return req
 }
 
 // changeCmdError is changeCommandsErr's error: its own message, and

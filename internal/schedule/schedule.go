@@ -59,7 +59,10 @@ type Schedule struct {
 	Ungrouped  bool     `json:"ungrouped,omitempty"`
 	Names      []string `json:"names,omitempty"`
 	CommandSet string   `json:"commandSet,omitempty"` // "" = each device's own
-	Stage      string   `json:"stage,omitempty"`      // "" / before / during / after
+	// Commands typed for this schedule, one per line (the run tab's 今回だけ
+	// 入力); when set they run instead of any command set.
+	Commands []string `json:"commands,omitempty"`
+	Stage    string   `json:"stage,omitempty"` // "" / before / during / after
 
 	Slots []Slot `json:"slots"`
 }
@@ -232,10 +235,10 @@ func (sc Schedule) Validate(now time.Time) error {
 	}
 	for i, s := range sc.Slots {
 		if err := s.Validate(); err != nil {
-			return fmt.Errorf("枠 %d: %w", i+1, err)
+			return fmt.Errorf("%d つ目の日時: %w", i+1, err)
 		}
 		if s.Kind == KindOnce && s.Next(now).IsZero() {
-			return fmt.Errorf("枠 %d: 過去の日時です（%s %s）", i+1, s.Date, s.Time)
+			return fmt.Errorf("%d つ目の日時が過ぎています（%s %s）。今より後の日時を選んでください", i+1, s.Date, s.Time)
 		}
 	}
 	return nil
