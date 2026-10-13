@@ -34,7 +34,9 @@ import (
 // running) is skipped and recorded. Only one batch runs at a time, by hand
 // or scheduled; the others wait their turn.
 
-const schedTick = 5 * time.Second
+// schedTick is how often the clock is checked: firings are set to the
+// second, and an interval can be as short as schedule.MinInterval.
+const schedTick = time.Second
 
 // schedAwakeBefore is how long before a firing the PC is kept from idle
 // sleep (a woken PC goes back to sleep after about two minutes unattended).
@@ -261,12 +263,31 @@ func (a *App) schedTick(now time.Time) {
 			continue // first look: only firings from now on count
 		}
 		run, miss := sc.Plan(from, now)
-		for _, m := range miss {
-			missed = append(missed, SchedLogEntry{Due: m.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+		// One line for all the firings missed in one gap: a short interval
+		// slept through overnight would otherwise be thousands of lines.
+		switch {
+		case len(miss) == 1:
+			missed = append(missed, SchedLogEntry{Due: miss[0].Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
 				Message: "スリープ中などで実行できなかった回です（さかのぼって実行はしません）"})
+		case len(miss) > 1:
+			missed = append(missed, SchedLogEntry{Due: miss[0].Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+				Message: fmt.Sprintf("スリープ中などで %d 回分（%s〜%s）実行できませんでした（さかのぼって実行はしません）",
+					len(miss), miss[0].Format("01/02 15:04:05"), miss[len(miss)-1].Format("01/02 15:04:05"))})
 		}
 		if !run.IsZero() {
-			s.queue = append(s.queue, schedJob{sc: sc, due: run})
+			// The previous firing of this schedule still waiting or running
+			// (a short interval, a slow device): this one is not stacked
+			// behind it.
+			busySame := s.runID == sc.ID
+			for _, j := range s.queue {
+				busySame = busySame || j.sc.ID == sc.ID
+			}
+			if busySame {
+				missed = append(missed, SchedLogEntry{Due: run.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "skipped",
+					Message: "前の回の実行がまだ終わっていないため、この回は実行しませんでした"})
+			} else {
+				s.queue = append(s.queue, schedJob{sc: sc, due: run})
+			}
 		}
 	}
 	for id := range s.checked {

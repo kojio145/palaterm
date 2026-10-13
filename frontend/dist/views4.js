@@ -9,19 +9,43 @@ let schedRenderTimer = 0;
 
 function fmtSchedTime(iso) { return iso ? fmtRunTime(iso) : ""; }
 
+// An interval slot's period in seconds (everyHours is the v1.6.0–1 form).
+function slotPeriodSec(s) { return s.everySeconds || (s.everyHours || 0) * 3600; }
+function fmtPeriod(sec) {
+  if (sec && sec % 3600 === 0) return t("{n}時間", { n: sec / 3600 });
+  if (sec && sec % 60 === 0) return t("{n}分", { n: sec / 60 });
+  return t("{n}秒", { n: sec });
+}
+
 function slotLabel(s) {
   const tm = s.time || "";
   if (s.kind === "once") return t("1回 {d} {t}", { d: s.date || "", t: tm });
   if (s.kind === "daily") return t("毎日 {t}", { t: tm });
   if (s.kind === "weekly") return t("毎週 {w} {t}", { w: (s.weekdays || []).map(w => t(WEEKDAYS[w])).join("・"), t: tm });
-  if (s.kind === "interval") return t("{n}時間おき（{d} {t} から）", { n: s.everyHours || 0, d: s.date || "", t: tm });
+  if (s.kind === "interval") return t("{p}おき・{c}（{d} {t} から）", {
+    p: fmtPeriod(slotPeriodSec(s)), c: s.count ? t("{n}回", { n: s.count }) : t("回数の制限なし"), d: s.date || "", t: tm });
   return s.kind;
 }
 
-function schedTarget(sc) {
+// The devices a schedule runs on, as names (a schedule from v1.6.0–1 may
+// have no list: then the group's checked devices, as it ran then).
+function schedDeviceList(sc) {
+  if (sc.names) return sc.names;
+  return (INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group) && d.enabled).map(d => d.name);
+}
+function schedDevicesLabel(sc) {
   const g = sc.ungrouped ? t("（グループ未設定）") : sc.group;
-  const devs = sc.names ? t("{n} 台に固定", { n: sc.names.length }) : t("実行時にチェックされている機器");
-  return `${g} ／ ${devs}`;
+  const names = schedDeviceList(sc);
+  const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? t(" ほか {n} 台", { n: names.length - 4 }) : "");
+  return t("{g}：{n} 台（{list}）", { g, n: names.length, list: shown || t("なし") });
+}
+// The commands it sends: the set chosen for it, or each device's own set.
+function schedCommandsLabel(sc) {
+  if (sc.commandSet) return sc.commandSet;
+  const names = new Set(schedDeviceList(sc));
+  const sets = [...new Set((INV.devices || []).filter(d => names.has(d.name) && (sc.ungrouped ? !d.group : d.group === sc.group))
+    .map(d => d.commandSet || t("（未割り当て）")))];
+  return t("機器ごとの設定：{s}", { s: sets.join("、") || t("なし") });
 }
 
 function schedKindLabel(e) {
@@ -38,29 +62,26 @@ async function renderSchedules() {
     return;
   }
   list = list || []; log = log || [];
-  // Can this PC be woken for a 予約? The power plan's "Allow wake timers"
-  // for the current power source, and modern standby (S0 low-power idle).
+  // Will a 予約 run on this PC while it sleeps? Only if Windows lets an app
+  // wake it (wake timers allowed for the current power source) and the PC
+  // is not modern standby (which pauses apps). Otherwise the answer is the
+  // keep-awake check box below — said in plain words, details folded away.
   const pw = st.power || {};
   const timers = pw.onAC === false ? pw.wakeTimersDC : pw.wakeTimersAC;
-  const timersOff = timers === 0;
+  const canWake = st.wake === "ok" && timers !== 0 && !pw.modernStandby;
+  const keep = !!st.keepAwake;
   const wtName = v => v === 0 ? t("無効") : v === 1 ? t("有効") : v === 2 ? t("重要なスリープ解除タイマーのみ") : t("不明");
-  const warns = [];
-  if (timersOff) warns.push(t("この PC は電源オプションの「スリープ解除タイマーの許可」が無効です（電源接続時: {ac}・バッテリー: {dc}）。スリープ中は予約が動きません。予約の時刻には PC を起こしておくか、下の「予約がある間は PC を自動スリープさせない」をオンにしてください",
-    { ac: wtName(pw.wakeTimersAC), dc: wtName(pw.wakeTimersDC) }));
-  if (pw.modernStandby) warns.push(t("この PC はモダンスタンバイ（S0 低電力アイドル）です。スタンバイ中は Windows がアプリを止めるため、スリープ中は予約が動かない可能性があります。確実に動かすには、下の「予約がある間は PC を自動スリープさせない」をオンにしてください"));
-  const wakeMsg = st.wake === "ok" && timersOff ? t("設定済み（ただし PC 側でスリープ解除タイマーが無効のため、スリープからは起こせません）")
-    : st.wake === "ok" ? t("設定済み（{t} に PC をスリープから起こします）", { t: fmtSchedTime(st.wakeAt) })
-    : st.wake === "unsupported" ? t("この PC ではスリープ解除タイマーが使えません（スリープ中は実行されません）")
-    : st.wake === "none" || !st.wake ? t("なし（次の予約がありません）")
-    : t("設定できませんでした: {e}", { e: st.wake });
+  const sleepLine = canWake ? `✅ ${esc(t("PC がスリープ中：予約の少し前に PC を起こして実行します"))}`
+    : keep ? `✅ ${esc(t("放置しても自動でスリープしないので、予約どおり実行します"))} <span class="muted" style="font-size:12px">${esc(t("（自分でスリープした・ノート PC の蓋を閉じたときは実行されません）"))}</span>`
+    : `❌ ${esc(t("PC がスリープ中：実行されません（この PC はスリープから自動では起こせない設定です）"))}`;
   const rows = list.map(sc => `
     <tr>
       <td style="width:44px"><input type="checkbox" data-en="${esc(sc.id)}" ${sc.enabled ? "checked" : ""} title="${esc(t("有効／無効"))}"></td>
-      <td><div class="clip" data-tip="${esc(sc.name)}"><b>${esc(sc.name)}</b></div></td>
-      <td><div style="font-size:13px">${esc(schedTarget(sc))}</div>
-        <div class="muted" style="font-size:12px">${esc(sc.commandSet ? t("コマンド: {s}", { s: sc.commandSet }) : t("コマンド: 機器ごとの設定どおり"))}${sc.stage ? " " + stageBadge(sc.stage) : ""}</div></td>
-      <td><div style="font-size:12px;line-height:1.6">${(sc.slots || []).map(s => esc(slotLabel(s))).join("<br>")}</div></td>
-      <td class="mono" style="width:160px">${sc.enabled ? (sc.next ? esc(fmtSchedTime(sc.next)) : `<span class="muted">${esc(t("（終了）"))}</span>`) : `<span class="muted">${esc(t("（無効）"))}</span>`}</td>
+      <td><div class="clip" data-tip="${esc(sc.name)}"><b>${esc(sc.name)}</b></div>${sc.stage ? stageBadge(sc.stage) : ""}</td>
+      <td><div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("機器"))}</span>　${esc(schedDevicesLabel(sc))}</div>
+        <div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("コマンド"))}</span>　${esc(schedCommandsLabel(sc))}</div></td>
+      <td><div style="font-size:12px;line-height:1.6">${(sc.slots || []).map(s => esc(slotLabel(s))).join("<br>")}</div>
+        <div style="font-size:12px;margin-top:4px"><span class="muted">${esc(t("次の実行"))}</span>　<span class="mono">${sc.enabled ? (sc.next ? esc(fmtSchedTime(sc.next)) : esc(t("（終了）"))) : esc(t("（無効）"))}</span></div></td>
       <td style="text-align:right;white-space:nowrap;width:230px">
         <button class="btn sm" data-now="${esc(sc.id)}">${esc(t("今すぐ実行"))}</button>
         <button class="btn sm" data-edit="${esc(sc.id)}">${esc(t("編集"))}</button>
@@ -85,19 +106,23 @@ async function renderSchedules() {
     <div class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px;line-height:1.9">
       ${st.running ? `<div style="color:var(--run)"><b>${esc(t("▶ 実行中: {n}", { n: st.running }))}</b> ${esc(t("（{d} / {t} 台）", { d: st.done, t: st.total }))} <button class="btn sm" id="sc-cancel">${esc(t("■ 中止"))}</button></div>` : ""}
       ${st.queued ? `<div style="color:var(--warn)">${esc(t("順番待ち: {n} 件（ほかの一括実行が終わりしだい実行。30 分を過ぎたらスキップ）", { n: st.queued }))}</div>` : ""}
-      <div>${esc(t("次の実行"))}: <b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.nextName ? "　" + esc(st.nextName) : ""}</div>
-      <div>${esc(t("スリープ解除タイマー"))}: ${esc(wakeMsg)}</div>
-      ${warns.map(w => `<div style="color:var(--warn);font-size:12px;line-height:1.7;margin-top:4px">⚠ ${esc(w)}</div>`).join("")}
-      <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:6px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${st.keepAwake ? "checked" : ""}> <span>${esc(t("予約がある間は PC を自動スリープさせない"))} <span class="muted" style="font-size:12px">${esc(t("（有効な予約が残っている間ずっと。画面の消灯は止めません。ノート PC の蓋閉じ・手動スリープは止められないので、蓋を閉じて使うときは電源オプションの「カバーを閉じたときの動作」を「何もしない」に）"))}</span></span></label>
-      <details style="margin-top:4px"><summary class="link" style="text-decoration:none">${esc(t("スリープ・蓋閉じ・シャットダウンのときは？"))}</summary>
-        <div class="muted" style="font-size:12px;line-height:1.8;margin-top:6px">${esc(t("・スリープ中: 予約の 90 秒前に PC を起こして実行します。Windows の電源オプション →「スリープ解除タイマーの許可」が「有効」（バッテリー駆動時も）である必要があります。会社の PC では管理者の設定で無効になっていることがあります"))}<br>
-        ${esc(t("・ノート PC の蓋閉じ: 電源設定で「蓋を閉じたときの動作」がスリープなら、上と同じくスリープ解除で動きます。休止状態・シャットダウンでは動きません"))}<br>
-        ${esc(t("・PalaTerm を終了（トレイの「終了」）すると予約は動きません。次に起動して一度ロック解除すると再開します"))}<br>
-        ${esc(t("・スリープ中などで実行できなかった回は「見逃し」として記録し、さかのぼっては実行しません。ほかの一括実行と重なったら順番待ちし、30 分を過ぎたらスキップします"))}<br>
+      <div style="font-weight:600;margin-bottom:2px">${esc(t("この PC での予約の動き"))}</div>
+      <div>✅ ${esc(t("PalaTerm が起動中（画面ロック中、× で閉じてトレイにいる間も）：予約どおり実行します"))}</div>
+      <div>${sleepLine}</div>
+      ${!canWake && !keep ? `<div style="color:var(--warn)">→ ${esc(t("下の「予約がある間は PC を自動スリープさせない」をオンにすれば、このまま使えます（画面ロック・画面の消灯は今までどおり）"))}</div>` : ""}
+      <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:2px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${keep ? "checked" : ""}> ${esc(t("予約がある間は PC を自動スリープさせない"))}<span class="muted" style="font-size:12px">${esc(canWake ? t("（この PC では無くても動きます）") : t("（この PC ではおすすめ）"))}</span></label>
+      <div style="margin-top:6px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.nextName ? "　" + esc(st.nextName) : ""}</div>
+      <details style="margin-top:4px"><summary class="link" style="text-decoration:none">${esc(t("詳しく"))}</summary>
+        <div class="muted" style="font-size:12px;line-height:1.8;margin-top:6px">
+        ${esc(t("・Windows の「スリープ解除タイマーの許可」：電源接続時 {ac}／バッテリー {dc}", { ac: wtName(pw.wakeTimersAC), dc: wtName(pw.wakeTimersDC) }))}<br>
+        ${esc(pw.modernStandby ? t("・この PC はモダンスタンバイ（スリープ中は Windows がアプリを止める方式）です") : t("・この PC は従来型のスリープです"))}<br>
+        ${esc(t("・「予約がある間は PC を自動スリープさせない」は Windows の設定を書き換えません。PalaTerm が動いている間だけ、放置による自動スリープを止めます"))}<br>
+        ${esc(t("・休止状態・シャットダウン・PalaTerm の終了（トレイの「終了」）中は実行されません。次に起動して一度ロック解除すると再開します"))}<br>
+        ${esc(t("・実行できなかった回は「見逃し」として記録し、さかのぼっては実行しません。ほかの一括実行と重なったら順番待ちし、30 分を過ぎたらスキップします"))}<br>
         ${esc(t("・ロック中も実行するため、予約の対象機器の認証情報はロック中もメモリに残します（ファイルには書きません）"))}</div></details>
     </div>
     <div class="panel scrollx" style="margin-bottom:16px">
-      ${list.length ? `<table class="fixed"><thead><tr><th style="width:44px"></th><th style="width:170px">${esc(t("名前"))}</th><th>${esc(t("対象"))}</th><th style="width:230px">${esc(t("日時"))}</th><th style="width:160px">${esc(t("次の実行"))}</th><th style="width:230px"></th></tr></thead><tbody>${rows}</tbody></table>`
+      ${list.length ? `<table class="fixed"><thead><tr><th style="width:44px"></th><th style="width:170px">${esc(t("名前"))}</th><th>${esc(t("実行する機器・コマンド"))}</th><th style="width:290px">${esc(t("日時"))}</th><th style="width:230px"></th></tr></thead><tbody>${rows}</tbody></table>`
         : `<div class="empty">${esc(t("予約はありません。「＋ 予約を追加」または実行タブの「⏰ 予約…」から作れます"))}</div>`}
     </div>
     <div class="page-title" style="font-size:15px;margin:6px 0 8px">${esc(t("予約の実行記録"))}</div>
@@ -108,7 +133,7 @@ async function renderSchedules() {
 
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
   root.querySelector("#sc-keepawake").onchange = async e => {
-    try { await App().SetScheduleKeepAwake(e.target.checked); toast(t("保存しました"), "ok"); }
+    try { await App().SetScheduleKeepAwake(e.target.checked); toast(t("保存しました"), "ok"); renderSchedules(); }
     catch (err) { toast(terr(err), "err"); e.target.checked = !e.target.checked; }
   };
   const cancel = root.querySelector("#sc-cancel");
@@ -162,9 +187,14 @@ function editSchedule(sc, prefill) {
   const ungroupedN = (INV.devices || []).filter(d => !d.group).length;
   const s = sc ? JSON.parse(JSON.stringify(sc)) : {
     id: "", name: "", enabled: true, group: "", ungrouped: false, names: null, commandSet: "", stage: "",
-    slots: [{ kind: "daily", time: "03:00:00", date: todayStr(1), weekdays: [], everyHours: 6 }], ...(prefill || {}),
+    slots: [{ kind: "daily", time: "03:00:00", date: todayStr(1), weekdays: [], everySeconds: 3600 }], ...(prefill || {}),
   };
-  let slots = (s.slots || []).map(x => ({ kind: x.kind, date: x.date || todayStr(1), time: x.time || "03:00:00", weekdays: x.weekdays || [], everyHours: x.everyHours || 6 }));
+  const unitOf = sec => sec && sec % 3600 === 0 ? 3600 : sec && sec % 60 === 0 ? 60 : 1;
+  let slots = (s.slots || []).map(x => {
+    const sec = slotPeriodSec(x) || 3600;
+    return { kind: x.kind, date: x.date || todayStr(1), time: x.time || "03:00:00", weekdays: x.weekdays || [],
+      unit: unitOf(sec), every: sec / unitOf(sec), count: x.count || 0 };
+  });
   const grpVal = s.ungrouped ? RUN_UNGROUPED : (s.group || "");
   const node = h(`<div>
     <h3>${esc(sc ? t("予約を編集") : t("予約を追加"))}</h3>
@@ -183,10 +213,10 @@ function editSchedule(sc, prefill) {
         ${(INV.commandSets || []).map(cs => `<option value="${esc(cs.name)}" ${cs.name === s.commandSet ? "selected" : ""}>${esc(cs.name)}</option>`).join("")}
       </select></div>
     </div>
-    <div class="field"><label>${esc(t("対象機器"))}</label>
-      <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-devmode" value="fixed" style="width:auto" ${s.names ? "checked" : ""}> ${esc(t("下でチェックした機器に固定"))}</label>
-      <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-devmode" value="live" style="width:auto" ${s.names ? "" : "checked"}> ${esc(t("実行時に機器一覧でチェックされている機器（グループの今の選択に従う）"))}</label>
-      <div id="sc-devs" class="panel" style="margin-top:6px;padding:8px 12px;max-height:160px;overflow:auto"></div></div>
+    <div class="field"><label>${esc(t("実行する機器"))} <span class="req">${esc(t("必須"))}</span>
+        <span class="link" id="sc-all" style="font-weight:normal;font-size:12px;margin-left:10px">${esc(t("すべて選択"))}</span>
+        <span class="link" id="sc-none" style="font-weight:normal;font-size:12px;margin-left:8px">${esc(t("すべて解除"))}</span></label>
+      <div id="sc-devs" class="panel" style="padding:8px 12px;max-height:160px;overflow:auto"></div></div>
     <div class="field"><label>${esc(t("作業タイミング"))}</label><select id="sc-stage">
       ${STAGES.map(x => `<option value="${x}" ${x === (s.stage || "") ? "selected" : ""}>${esc(x ? stageLabel(x) : t("指定なし"))}</option>`).join("")}
     </select></div>
@@ -202,19 +232,24 @@ function editSchedule(sc, prefill) {
   openModal(node, "set-edit");
   const grpSel = node.querySelector("#sc-group");
   const devBox = node.querySelector("#sc-devs");
-  let picked = new Set(s.names || []);
+  // The devices this schedule runs: a list checked here. A new one starts
+  // with the group's checked devices (the run tab's choice when it came
+  // from ⏰ 予約…); an old one without a list, with the devices it ran.
+  let picked = new Set(s.names || (s.group || s.ungrouped ? schedDeviceList(s) : []));
   function renderDevs() {
     const g = grpSel.value;
     const devs = !g ? [] : (INV.devices || []).filter(d => g === RUN_UNGROUPED ? !d.group : d.group === g);
-    if (!s.names && !picked.size) devs.filter(d => d.enabled).forEach(d => picked.add(d.name));
-    const fixed = node.querySelector('input[name="sc-devmode"]:checked').value === "fixed";
-    devBox.style.opacity = fixed ? "1" : ".5";
-    devBox.innerHTML = devs.length ? devs.map(d => `<label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;font-size:13px"><input type="checkbox" style="width:auto" data-dev="${esc(d.name)}" ${picked.has(d.name) ? "checked" : ""} ${fixed ? "" : "disabled"}> ${esc(d.name)} <span class="muted mono" style="font-size:12px">${esc(d.host || d.serialPort || "")}</span></label>`).join("")
+    devBox.innerHTML = devs.length ? devs.map(d => `<label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;font-size:13px"><input type="checkbox" style="width:auto" data-dev="${esc(d.name)}" ${picked.has(d.name) ? "checked" : ""}> ${esc(d.name)} <span class="muted mono" style="font-size:12px">${esc(d.host || d.serialPort || "")}</span> <span class="muted" style="font-size:12px">${esc(d.commandSet || "")}</span></label>`).join("")
       : `<span class="muted" style="font-size:12px">${esc(t("グループを選ぶと機器が並びます"))}</span>`;
     devBox.querySelectorAll("[data-dev]").forEach(cb => cb.onchange = () => { cb.checked ? picked.add(cb.dataset.dev) : picked.delete(cb.dataset.dev); });
   }
-  grpSel.onchange = () => { picked = new Set(); s.names = null; renderDevs(); };
-  node.querySelectorAll('input[name="sc-devmode"]').forEach(r => r.onchange = renderDevs);
+  grpSel.onchange = () => {
+    const g = grpSel.value;
+    picked = new Set((INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && d.enabled).map(d => d.name));
+    renderDevs();
+  };
+  node.querySelector("#sc-all").onclick = () => { devBox.querySelectorAll("[data-dev]").forEach(cb => picked.add(cb.dataset.dev)); renderDevs(); };
+  node.querySelector("#sc-none").onclick = () => { picked = new Set(); renderDevs(); };
   renderDevs();
 
   const slotBox = node.querySelector("#sc-slots");
@@ -224,7 +259,11 @@ function editSchedule(sc, prefill) {
       const q = sel => row.querySelector(sel);
       slots[i].kind = q(".sl-kind").value;
       // Date and time are kept in slots[i] by their pickers as they change.
-      if (q(".sl-hours")) slots[i].everyHours = parseInt(q(".sl-hours").value, 10) || 0;
+      if (q(".sl-every")) {
+        slots[i].every = parseInt(q(".sl-every").value, 10) || 0;
+        slots[i].unit = parseInt(q(".sl-unit").value, 10) || 1;
+        slots[i].count = parseInt(q(".sl-count").value, 10) || 0;
+      }
       if (q(".sl-wd")) slots[i].weekdays = [...row.querySelectorAll(".sl-wd:checked")].map(x => +x.value);
     });
   }
@@ -232,12 +271,12 @@ function editSchedule(sc, prefill) {
     slotBox.innerHTML = slots.map((sl, i) => `
       <div data-slot="${i}" class="row-inline" style="gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--border)">
         <select class="sl-kind btn" style="width:auto">
-          ${[["once", "1回"], ["daily", "毎日"], ["weekly", "毎週"], ["interval", "n時間おき"]].map(([k, l]) => `<option value="${k}" ${sl.kind === k ? "selected" : ""}>${esc(t(l))}</option>`).join("")}
+          ${[["once", "1回"], ["daily", "毎日"], ["weekly", "毎週"], ["interval", "一定間隔"]].map(([k, l]) => `<option value="${k}" ${sl.kind === k ? "selected" : ""}>${esc(t(l))}</option>`).join("")}
         </select>
         ${sl.kind === "once" || sl.kind === "interval" ? `<span class="sl-date-host" data-i="${i}"></span>` : ""}
         ${sl.kind === "weekly" ? WEEKDAYS.map((w, wi) => `<label class="row-inline" style="gap:3px;font-weight:normal;cursor:pointer;font-size:13px"><input type="checkbox" class="sl-wd" value="${wi}" style="width:auto" ${sl.weekdays.includes(wi) ? "checked" : ""}>${esc(t(w))}</label>`).join("") : ""}
         <span class="sl-time-host" data-i="${i}"></span>
-        ${sl.kind === "interval" ? `<span class="muted" style="font-size:12px">${esc(t("から"))}</span><input class="sl-hours" type="number" min="1" max="168" value="${sl.everyHours}" style="width:80px"><span class="muted" style="font-size:12px">${esc(t("時間おき"))}</span>` : ""}
+        ${sl.kind === "interval" ? `<span class="muted" style="font-size:12px">${esc(t("から"))}</span><input class="sl-every" type="number" min="1" value="${sl.every}" style="width:70px"><select class="sl-unit btn" style="width:auto">${[[1, "秒"], [60, "分"], [3600, "時間"]].map(([u, l]) => `<option value="${u}" ${sl.unit === u ? "selected" : ""}>${esc(t(l))}</option>`).join("")}</select><span class="muted" style="font-size:12px">${esc(t("おきに"))}</span><input class="sl-count" type="number" min="1" value="${sl.count || ""}" placeholder="${esc(t("無制限"))}" style="width:80px"><span class="muted" style="font-size:12px">${esc(t("回"))}</span>` : ""}
         <button class="btn sm act-del" type="button" data-rm-slot="${i}" style="margin-left:auto">×</button>
       </div>`).join("");
     slotBox.querySelectorAll(".sl-date-host").forEach(host => {
@@ -252,20 +291,20 @@ function editSchedule(sc, prefill) {
     slotBox.querySelectorAll("[data-rm-slot]").forEach(b => b.onclick = () => { collectSlots(); slots.splice(+b.dataset.rmSlot, 1); renderSlots(); });
   }
   renderSlots();
-  node.querySelector("#sc-add-slot").onclick = () => { collectSlots(); slots.push({ kind: "daily", date: todayStr(1), time: "03:00:00", weekdays: [], everyHours: 6 }); renderSlots(); };
+  node.querySelector("#sc-add-slot").onclick = () => { collectSlots(); slots.push({ kind: "daily", date: todayStr(1), time: "03:00:00", weekdays: [], unit: 3600, every: 1, count: 0 }); renderSlots(); };
   guardDiscard(node, "#sc-cancel-edit");
   node.querySelector("#sc-save").onclick = async () => {
     collectSlots();
     const g = grpSel.value;
-    const fixed = node.querySelector('input[name="sc-devmode"]:checked').value === "fixed";
-    const names = fixed ? [...devBox.querySelectorAll("[data-dev]:checked")].map(x => x.dataset.dev) : null;
-    if (fixed && !names.length) { toast(t("対象機器を 1 台以上チェックしてください"), "err"); return; }
+    const names = [...devBox.querySelectorAll("[data-dev]:checked")].map(x => x.dataset.dev);
+    if (g && !names.length) { toast(t("実行する機器を 1 台以上チェックしてください"), "err"); return; }
     const obj = {
       id: s.id || "", name: node.querySelector("#sc-name").value.trim(), enabled: node.querySelector("#sc-enabled").checked,
       group: g === RUN_UNGROUPED ? "" : g, ungrouped: g === RUN_UNGROUPED, names,
       commandSet: node.querySelector("#sc-set").value, stage: node.querySelector("#sc-stage").value,
       slots: slots.map(x => ({ kind: x.kind, time: x.time, date: x.kind === "once" || x.kind === "interval" ? x.date : "",
-        weekdays: x.kind === "weekly" ? x.weekdays : [], everyHours: x.kind === "interval" ? x.everyHours : 0 })),
+        weekdays: x.kind === "weekly" ? x.weekdays : [],
+        everySeconds: x.kind === "interval" ? x.every * x.unit : 0, everyHours: 0, count: x.kind === "interval" ? x.count : 0 })),
     };
     try {
       await App().SaveSchedule(obj);

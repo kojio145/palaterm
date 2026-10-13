@@ -123,3 +123,54 @@ func TestNextOf(t *testing.T) {
 		t.Errorf("got %v", got)
 	}
 }
+
+// Interval slots in seconds, limited to Count firings.
+func TestIntervalSecondsAndCount(t *testing.T) {
+	s := Slot{Kind: KindInterval, Date: "2026-10-13", Time: "21:00:00", EverySeconds: 30, Count: 3}
+	// Firings: 21:00:00, 21:00:30, 21:01:00 — then none.
+	cases := map[string]string{
+		"2026-10-13 20:59:59": "2026-10-13 21:00:00",
+		"2026-10-13 21:00:00": "2026-10-13 21:00:30",
+		"2026-10-13 21:00:45": "2026-10-13 21:01:00",
+		"2026-10-13 21:01:00": "",
+		"2026-10-14 00:00:00": "",
+	}
+	for after, want := range cases {
+		got := s.Next(at(after))
+		if want == "" {
+			if !got.IsZero() {
+				t.Errorf("after %s: got %v, want none (count reached)", after, got)
+			}
+		} else if !got.Equal(at(want)) {
+			t.Errorf("after %s: got %v, want %s", after, got, want)
+		}
+	}
+	sc := Schedule{Enabled: true, Slots: []Slot{s}}
+	if n := len(sc.Due(at("2026-10-13 20:00:00"), at("2026-10-13 23:00:00"))); n != 3 {
+		t.Errorf("due firings = %d, want 3", n)
+	}
+	// No count: unlimited. The older hours field still works.
+	s.Count = 0
+	if s.Next(at("2026-10-14 00:00:00")).IsZero() {
+		t.Error("count 0 should not stop")
+	}
+	if got := (Slot{Kind: KindInterval, Date: "2026-10-13", Time: "00:00:00", EveryHours: 6}).Next(at("2026-10-13 20:00:00")); !got.Equal(at("2026-10-14 00:00:00")) {
+		t.Errorf("hours form: %v", got)
+	}
+	// Limits.
+	now := at("2026-10-13 20:00:00")
+	for _, bad := range []Slot{
+		{Kind: KindInterval, Date: "2026-10-13", Time: "21:00", EverySeconds: 5},
+		{Kind: KindInterval, Date: "2026-10-13", Time: "21:00", EverySeconds: 8 * 24 * 3600},
+		{Kind: KindInterval, Date: "2026-10-13", Time: "21:00", EverySeconds: 60, Count: -1},
+	} {
+		sc := Schedule{Name: "x", Group: "g", Slots: []Slot{bad}}
+		if sc.Validate(now) == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	ok := Schedule{Name: "x", Group: "g", Slots: []Slot{{Kind: KindInterval, Date: "2026-10-13", Time: "21:00", EverySeconds: 10, Count: 5}}}
+	if err := ok.Validate(now); err != nil {
+		t.Errorf("10 s × 5 refused: %v", err)
+	}
+}

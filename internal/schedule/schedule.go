@@ -19,7 +19,7 @@ const (
 	KindOnce     = "once"     // 1 回: Date + Time
 	KindDaily    = "daily"    // 毎日: Time
 	KindWeekly   = "weekly"   // 毎週: Weekdays + Time
-	KindInterval = "interval" // n 時間おき: from Date + Time, every EveryHours
+	KindInterval = "interval" // n 秒・分・時間おき: from Date + Time, every Period, Count times
 )
 
 // MaxLate is how late a firing may still start: one that had to wait longer
@@ -38,8 +38,13 @@ type Slot struct {
 	Time string `json:"time"`
 	// Weekdays of a weekly slot, 0 = Sunday … 6 = Saturday.
 	Weekdays []int `json:"weekdays,omitempty"`
-	// EveryHours is an interval slot's period.
-	EveryHours int `json:"everyHours,omitempty"`
+	// EverySeconds is an interval slot's period. EveryHours is the older
+	// form (v1.6.0–v1.6.1), read when EverySeconds is 0.
+	EverySeconds int `json:"everySeconds,omitempty"`
+	EveryHours   int `json:"everyHours,omitempty"`
+	// Count limits an interval slot to that many firings, the first at
+	// Date + Time (0 = no limit).
+	Count int `json:"count,omitempty"`
 }
 
 // Schedule is one 予約: a batch run (the run tab's choices) plus when.
@@ -112,6 +117,22 @@ func (s Slot) at(loc *time.Location) (time.Time, error) {
 	return time.Date(y, mo, d, h, m, sec, 0, loc), nil
 }
 
+// Interval limits: shorter than MinInterval and the devices would be
+// logged into again before they finished answering.
+const (
+	MinInterval = 10 * time.Second
+	MaxInterval = 7 * 24 * time.Hour
+	MaxCount    = 100000
+)
+
+// Period is an interval slot's period (0 for other kinds or unset).
+func (s Slot) Period() time.Duration {
+	if s.EverySeconds > 0 {
+		return time.Duration(s.EverySeconds) * time.Second
+	}
+	return time.Duration(s.EveryHours) * time.Hour
+}
+
 // Validate checks one slot.
 func (s Slot) Validate() error {
 	switch s.Kind {
@@ -119,8 +140,13 @@ func (s Slot) Validate() error {
 		if _, err := s.at(time.Local); err != nil {
 			return err
 		}
-		if s.Kind == KindInterval && (s.EveryHours < 1 || s.EveryHours > 24*7) {
-			return fmt.Errorf("間隔は 1〜168 時間で指定してください: %d", s.EveryHours)
+		if s.Kind == KindInterval {
+			if p := s.Period(); p < MinInterval || p > MaxInterval {
+				return fmt.Errorf("間隔は 10 秒〜7 日で指定してください")
+			}
+			if s.Count < 0 || s.Count > MaxCount {
+				return fmt.Errorf("回数は 1〜%d 回（空欄で無制限）で指定してください", MaxCount)
+			}
 		}
 	case KindDaily, KindWeekly:
 		if _, _, _, err := parseClock(s.Time); err != nil {
@@ -156,14 +182,17 @@ func (s Slot) Next(after time.Time) time.Time {
 		return t
 	case KindInterval:
 		start, err := s.at(loc)
-		if err != nil || s.EveryHours < 1 {
+		period := s.Period()
+		if err != nil || period <= 0 {
 			return time.Time{}
 		}
-		if start.After(after) {
-			return start
+		n := time.Duration(0)
+		if !start.After(after) {
+			n = after.Sub(start)/period + 1
 		}
-		period := time.Duration(s.EveryHours) * time.Hour
-		n := after.Sub(start)/period + 1
+		if s.Count > 0 && int64(n) >= int64(s.Count) {
+			return time.Time{} // all Count firings are behind
+		}
 		return start.Add(n * period)
 	case KindDaily, KindWeekly:
 		h, m, sec, err := parseClock(s.Time)
