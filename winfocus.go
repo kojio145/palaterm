@@ -88,49 +88,70 @@ func focusOwnWindow() bool {
 	return false
 }
 
+// Windows callbacks are made once: Go never frees one, and a process may
+// make at most about 2000 (syscall.NewCallback). ownTopLevelWindow runs
+// after every scheduled run, so a fresh closure per call ran out after a few
+// hours of a 10-second repeat and the process died. The callbacks take their
+// state from these variables, held by enumMu for the length of one walk.
+var (
+	enumMu      sync.Mutex
+	enumPID     uintptr
+	enumFound   uintptr
+	enumWin1    uintptr
+	enumWin0    uintptr
+	enumTopCB   = syscall.NewCallback(enumTopProc)
+	enumChildCB = syscall.NewCallback(enumChildProc)
+)
+
+func enumTopProc(h uintptr, _ uintptr) uintptr {
+	const gwOwner = 4
+	var wpid uint32
+	pGetWindowThreadProcess.Call(h, uintptr(unsafe.Pointer(&wpid)))
+	if uintptr(wpid) != enumPID {
+		return 1
+	}
+	if v, _, _ := pIsWindowVisible.Call(h); v == 0 {
+		return 1
+	}
+	if owner, _, _ := pGetWindow.Call(h, gwOwner); owner != 0 {
+		return 1 // a tooltip or dialog owned by the frame
+	}
+	enumFound = h
+	return 0
+}
+
+func enumChildProc(h uintptr, _ uintptr) uintptr {
+	buf := make([]uint16, 128)
+	n, _, _ := pGetClassName.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	switch syscall.UTF16ToString(buf[:n]) {
+	case "Chrome_WidgetWin_1":
+		enumWin1 = h
+	case "Chrome_WidgetWin_0":
+		enumWin0 = h
+	}
+	return 1
+}
+
 // ownTopLevelWindow finds the visible, unowned top-level window that belongs
 // to this process (the Wails frame), or 0 while it has not appeared yet.
 func ownTopLevelWindow() uintptr {
-	pid, _, _ := pGetCurrentProcessId.Call()
-	var found uintptr
-	const gwOwner = 4
-	cb := syscall.NewCallback(func(h uintptr, _ uintptr) uintptr {
-		var wpid uint32
-		pGetWindowThreadProcess.Call(h, uintptr(unsafe.Pointer(&wpid)))
-		if uintptr(wpid) != pid {
-			return 1
-		}
-		if v, _, _ := pIsWindowVisible.Call(h); v == 0 {
-			return 1
-		}
-		if owner, _, _ := pGetWindow.Call(h, gwOwner); owner != 0 {
-			return 1 // a tooltip or dialog owned by the frame
-		}
-		found = h
-		return 0
-	})
-	pEnumWindows.Call(cb, 0)
-	return found
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumPID, _, _ = pGetCurrentProcessId.Call()
+	enumFound = 0
+	pEnumWindows.Call(enumTopCB, 0)
+	return enumFound
 }
 
 // webviewInputChild finds the WebView2 child HWND that receives keyboard
 // input, or 0.
 func webviewInputChild(parent uintptr) uintptr {
-	var win1, win0 uintptr
-	cb := syscall.NewCallback(func(h uintptr, _ uintptr) uintptr {
-		buf := make([]uint16, 128)
-		n, _, _ := pGetClassName.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-		switch syscall.UTF16ToString(buf[:n]) {
-		case "Chrome_WidgetWin_1":
-			win1 = h
-		case "Chrome_WidgetWin_0":
-			win0 = h
-		}
-		return 1
-	})
-	pEnumChildWindows.Call(parent, cb, 0)
-	if win1 != 0 {
-		return win1
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumWin1, enumWin0 = 0, 0
+	pEnumChildWindows.Call(parent, enumChildCB, 0)
+	if enumWin1 != 0 {
+		return enumWin1
 	}
-	return win0
+	return enumWin0
 }

@@ -1498,6 +1498,23 @@ func snapshotOf(inv *model.Inventory, req RunRequest) (*model.Inventory, error) 
 			sel[i].CommandSet = override
 		}
 	}
+	// A set saved before control characters were refused (or edited in the
+	// vault by hand) may still hide "show clock\rreload": checked again here,
+	// for every run and every 予約 firing, not only when a set is saved.
+	checked := map[string]bool{}
+	for _, d := range sel {
+		if checked[d.CommandSet] {
+			continue
+		}
+		checked[d.CommandSet] = true
+		for _, cs := range snap.CommandSets {
+			if cs.Name == d.CommandSet {
+				if err := model.CheckCommands(cs.Commands); err != nil {
+					return nil, fmt.Errorf("コマンドセット「%s」: %w", cs.Name, err)
+				}
+			}
+		}
+	}
 	snap.Devices = sel
 	return snap, nil
 }
@@ -2032,6 +2049,9 @@ func (a *App) SetLang(lang string) {
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Lock()
 	quitting, trayQuit := a.quitting, a.trayQuit
+	// The tray's 終了 counts for this close only: cancelled at the
+	// open-terminals question, the next × goes to the tray again.
+	a.trayQuit = false
 	a.mu.Unlock()
 	// × while a 予約 is still to fire: into the tray, not closed (the
 	// schedules run only while this process does).
@@ -2067,7 +2087,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.6.4"
+const appVersion = "1.6.5"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2205,6 +2225,7 @@ func (a *App) ExportBundle(group string, shared bool) (string, error) {
 		return "", fmt.Errorf("vault is locked")
 	}
 	c := bundle.Select(a.inv, group)
+	c.Lang = a.lang
 	a.mu.Unlock()
 	if shared {
 		c.StripCredentials()

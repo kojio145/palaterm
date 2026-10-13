@@ -70,23 +70,42 @@ func TestPlan(t *testing.T) {
 	sc := Schedule{Enabled: true, Slots: []Slot{{Kind: KindInterval, Date: "2026-10-13", Time: "00:00:00", EveryHours: 1}}}
 	// Normal tick: the 21:00 firing, seen 5 seconds late, runs.
 	run, missed := sc.Plan(at("2026-10-13 20:59:58"), at("2026-10-13 21:00:05"))
-	if !run.Equal(at("2026-10-13 21:00:00")) || len(missed) != 0 {
+	if !run.Equal(at("2026-10-13 21:00:00")) || missed.N != 0 {
 		t.Errorf("normal: run=%v missed=%v", run, missed)
 	}
 	// Slept 20:59 → 23:10: 21:00 and 22:00 were missed, 23:00 (10 min late) runs.
 	run, missed = sc.Plan(at("2026-10-13 20:59:00"), at("2026-10-13 23:10:00"))
-	if !run.Equal(at("2026-10-13 23:00:00")) || len(missed) != 2 || !missed[0].Equal(at("2026-10-13 21:00:00")) {
+	if !run.Equal(at("2026-10-13 23:00:00")) || missed.N != 2 || !missed.First.Equal(at("2026-10-13 21:00:00")) || !missed.Last.Equal(at("2026-10-13 22:00:00")) {
 		t.Errorf("after sleep: run=%v missed=%v", run, missed)
 	}
 	// Woke 40 min after the last firing: nothing runs, all recorded as missed.
 	run, missed = sc.Plan(at("2026-10-13 20:59:00"), at("2026-10-13 23:40:00"))
-	if !run.IsZero() || len(missed) != 3 {
+	if !run.IsZero() || missed.N != 3 {
 		t.Errorf("too late: run=%v missed=%v", run, missed)
 	}
 	// Nothing due.
 	run, missed = sc.Plan(at("2026-10-13 21:00:01"), at("2026-10-13 21:00:06"))
-	if !run.IsZero() || missed != nil {
+	if !run.IsZero() || missed.N != 0 {
 		t.Errorf("idle: run=%v missed=%v", run, missed)
+	}
+	// A 10-second repeat slept through for a week: every firing counted (no
+	// cap), the newest runs.
+	ten := Schedule{Enabled: true, Slots: []Slot{{Kind: KindInterval, Date: "2026-10-13", Time: "00:00:00", EverySeconds: 10}}}
+	run, missed = ten.Plan(at("2026-10-13 00:00:00"), at("2026-10-20 00:00:03"))
+	if !run.Equal(at("2026-10-20 00:00:00")) || missed.N != 7*24*360-1 || !missed.Last.Equal(at("2026-10-19 23:59:50")) {
+		t.Errorf("week of 10 s: run=%v missed=%+v", run, missed)
+	}
+	// The same with a count of 5: only those 5 (4 missed, the 5th is old).
+	ten.Slots[0].Count = 5
+	run, missed = ten.Plan(at("2026-10-12 23:59:59"), at("2026-10-13 00:00:45"))
+	if !run.Equal(at("2026-10-13 00:00:40")) || missed.N != 4 {
+		t.Errorf("count 5: run=%v missed=%+v", run, missed)
+	}
+	// Daily over three days: walked.
+	daily := Schedule{Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "03:00:00"}}}
+	run, missed = daily.Plan(at("2026-10-13 04:00:00"), at("2026-10-16 03:00:10"))
+	if !run.Equal(at("2026-10-16 03:00:00")) || missed.N != 2 || !missed.Last.Equal(at("2026-10-15 03:00:00")) {
+		t.Errorf("daily: run=%v missed=%+v", run, missed)
 	}
 }
 
@@ -146,8 +165,8 @@ func TestIntervalSecondsAndCount(t *testing.T) {
 		}
 	}
 	sc := Schedule{Enabled: true, Slots: []Slot{s}}
-	if n := len(sc.Due(at("2026-10-13 20:00:00"), at("2026-10-13 23:00:00"))); n != 3 {
-		t.Errorf("due firings = %d, want 3", n)
+	if sp, _ := sc.due(at("2026-10-13 20:00:00"), at("2026-10-13 23:00:00")); sp.N != 3 {
+		t.Errorf("due firings = %d, want 3", sp.N)
 	}
 	// No count: unlimited. The older hours field still works.
 	s.Count = 0

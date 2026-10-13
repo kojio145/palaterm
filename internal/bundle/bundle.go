@@ -69,6 +69,9 @@ type Manifest struct {
 
 // Contents is what a bundle carries, in memory.
 type Contents struct {
+	// Lang is the language devices.csv is written in ("ja": Japanese
+	// headers and words; anything else: English). Not part of the bundle.
+	Lang        string
 	Manifest    Manifest
 	Devices     []model.Device
 	CommandSets []model.CommandSet
@@ -321,7 +324,7 @@ func Write(dir string, c Contents, app string) (string, error) {
 		Groups:      c.Manifest.Groups,
 		Shared:      c.Manifest.Shared,
 	}
-	text, err := csvio.Export(c.Devices)
+	text, err := csvio.ExportLang(c.Devices, c.Lang)
 	if err != nil {
 		return "", err
 	}

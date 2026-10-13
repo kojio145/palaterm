@@ -151,3 +151,89 @@ func TestScheduleKeepAwakeSetting(t *testing.T) {
 		t.Fatal("setting off: still kept awake")
 	}
 }
+
+// A set saved before control characters were refused still cannot hide a
+// second command behind a carriage return: refused at run time too.
+func TestHiddenCRInSavedSetRefused(t *testing.T) {
+	inv := schedInventory()
+	inv.CommandSets[0].Commands = []model.Command{{Text: "show clock\rreload"}}
+	if _, err := snapshotOf(inv, RunRequest{Group: "A社"}); err == nil || !strings.Contains(err.Error(), "「show」") {
+		t.Fatalf("got %v, want the set refused", err)
+	}
+}
+
+// A firing that waited its turn does not run once its schedule was deleted
+// or stopped.
+func TestGoneScheduleDoesNotRun(t *testing.T) {
+	inv := schedInventory()
+	inv.Schedules = []schedule.Schedule{{ID: "1", Name: "n", Enabled: false, Group: "A社"}}
+	a := NewApp()
+	a.inv = inv
+	if err := a.startScheduled(schedJob{sc: schedule.Schedule{ID: "1", Enabled: true, Group: "A社"}, due: time.Now()}); !errors.Is(err, errSchedGone) {
+		t.Errorf("stopped: got %v", err)
+	}
+	if err := a.startScheduled(schedJob{sc: schedule.Schedule{ID: "deleted", Enabled: true, Group: "A社"}, due: time.Now()}); !errors.Is(err, errSchedGone) {
+		t.Errorf("deleted: got %v", err)
+	}
+	if a.runActive {
+		t.Error("a batch was started")
+	}
+}
+
+// A 10-second repeat whose round outlasts the period: the passed-over
+// firings are counted, not written one line per second, and × keeps the
+// process (it is running).
+func TestSkippedFiringsCollected(t *testing.T) {
+	inv := schedInventory()
+	start := time.Now().Add(-time.Minute).Truncate(time.Second)
+	inv.Schedules = []schedule.Schedule{{ID: "1", Name: "n", Enabled: true, Group: "A社",
+		Slots: []schedule.Slot{{Kind: schedule.KindInterval, Date: start.Format("2006-01-02"), Time: start.Format("15:04:05"), EverySeconds: 10}}}}
+	a := NewApp()
+	a.inv = inv
+	defer armWake(time.Time{})
+	defer func() {
+		if a.sched.release != nil {
+			a.sched.release()
+		}
+	}()
+	a.sched.runID = "1" // its previous round is still running
+	now := time.Now()
+	a.schedTick(now)
+	for i := 1; i <= 35; i++ {
+		a.schedTick(now.Add(time.Duration(i) * time.Second))
+	}
+	if n := a.sched.skips["1"].N; n < 3 || n > 4 {
+		t.Errorf("skipped firings = %d, want 3 or 4 in 35 s", n)
+	}
+	if len(a.sched.queue) != 0 {
+		t.Errorf("stacked behind the running round: %v", a.sched.queue)
+	}
+	if !a.hasPendingSchedules() {
+		t.Error("running: × must not quit")
+	}
+	a.schedFlushSkips("1", "n")
+	if _, ok := a.sched.skips["1"]; ok {
+		t.Error("not cleared after writing")
+	}
+}
+
+// The clock set back does not run the same firings again.
+func TestClockBackDoesNotRepeat(t *testing.T) {
+	inv := schedInventory()
+	inv.Schedules = []schedule.Schedule{{ID: "1", Name: "n", Enabled: true, Group: "A社",
+		Slots: []schedule.Slot{{Kind: schedule.KindDaily, Time: "03:00:00"}}}}
+	a := NewApp()
+	a.inv = inv
+	defer armWake(time.Time{})
+	defer func() {
+		if a.sched.release != nil {
+			a.sched.release()
+		}
+	}()
+	now := time.Now()
+	a.schedTick(now)
+	a.schedTick(now.Add(-time.Hour))
+	if got := a.sched.checked["1"]; !got.Equal(now) {
+		t.Errorf("checked moved back to %v", got)
+	}
+}

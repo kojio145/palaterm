@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kojio145/palaterm/internal/model"
+	"golang.org/x/text/encoding/japanese"
 )
 
 func TestExportImportRoundTrip(t *testing.T) {
@@ -166,20 +167,22 @@ func TestLegacyAndBastionExtrasRoundTrip(t *testing.T) {
 	if b[1].KeyPassphrase != "" || b[1].LegacyAlgos || b[1].JumpCommand != "" {
 		t.Errorf("hop 2 should have no extras: %+v", b[1])
 	}
-	// One column per hop field, for as many hops as the devices use.
+	// One column per hop field, for as many hops as the devices use; no
+	// packed "bastions" column any more.
 	head := strings.SplitN(strings.TrimPrefix(blob, BOM), "\n", 2)[0]
-	for _, c := range []string{"bastion1KeyPassphrase", "bastion1LegacyAlgos", "bastion1JumpCommand", "bastion2JumpCommand"} {
+	for _, c := range []string{"bastion1Host", "bastion1Port", "bastion1Username", "bastion1KeyFile", "bastion1KeyPassphrase", "bastion1LegacyAlgos", "bastion1JumpCommand", "bastion2Host"} {
 		if !strings.Contains(head, c) {
 			t.Errorf("header lacks %s: %s", c, head)
 		}
 	}
-	if strings.Contains(head, "bastion3") || strings.Contains(head, "bastionExtras") {
-		t.Errorf("header has unused hop / old JSON column: %s", head)
+	if strings.Contains(head, "bastion3") || strings.Contains(head, "bastionExtras") || strings.Contains(head, ",bastions,") {
+		t.Errorf("header has unused hop / old packed column: %s", head)
 	}
-	// Without any jump host there are no hop columns at all.
+	// Without any jump host the first hop's columns are still there, empty,
+	// so one can be added in Excel.
 	plain, _ := Export(in[1:])
-	if strings.Contains(plain, "bastion1") {
-		t.Errorf("hop columns written without jump hosts: %s", plain)
+	if !strings.Contains(plain, "bastion1Host") || strings.Contains(plain, "bastion2Host") {
+		t.Errorf("hop 1 columns should be there, empty: %s", plain)
 	}
 	// The JSON column of v1.5.16 and before still imports.
 	oldJSON, err := Import("name,host,bastions,bastionExtras\n" +
@@ -218,5 +221,101 @@ func TestExportStartsWithBOMAndImportStripsIt(t *testing.T) {
 	// A CSV saved by Excel without the BOM still imports.
 	if out, err = Import(strings.TrimPrefix(text, BOM)); err != nil || out[0].Group != "A社" {
 		t.Fatalf("import without BOM: %v %+v", err, out)
+	}
+}
+
+// A Japanese export: Japanese headers, words for the fixed values, one value
+// per cell — and it reads back the same. Filled in by hand in Excel with
+// Japanese words, it imports too.
+func TestJapaneseExportOneValuePerColumn(t *testing.T) {
+	in := []model.Device{{
+		Name: "r1", Group: "A社", Host: "192.0.2.1", Conn: model.ConnSSH, OSType: "cisco-ios", Enabled: true,
+		Username: "u", Password: "p", AuthMethod: model.AuthPassword,
+		Bastions: []model.Bastion{{Host: "192.0.2.9", Method: model.BastionSSH, Port: 2222, Username: "j", AuthMethod: model.AuthPublicKey,
+			KeyFile: `C:\keys\id_dsa`, KeyPassphrase: "kp", LegacyAlgos: true}},
+	}}
+	blob, err := ExportLang(in, "ja")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimPrefix(blob, BOM), "\n")
+	head, row := strings.Split(strings.TrimSpace(lines[0]), ","), strings.Split(strings.TrimSpace(lines[1]), ",")
+	cell := map[string]string{}
+	for i, h := range head {
+		cell[h] = row[i]
+	}
+	want := map[string]string{
+		"機器名": "r1", "IPアドレス": "192.0.2.1", "接続方式": "SSH", "有効": "はい", "認証方式": "パスワード",
+		"踏み台1_ホスト": "192.0.2.9", "踏み台1_ポート": "2222", "踏み台1_ユーザー名": "j", "踏み台1_認証方式": "公開鍵",
+		"踏み台1_鍵ファイル": `C:\keys\id_dsa`, "踏み台1_鍵パスフレーズ": "kp", "踏み台1_旧暗号を許可": "はい",
+	}
+	for k, v := range want {
+		if cell[k] != v {
+			t.Errorf("%s = %q, want %q", k, cell[k], v)
+		}
+	}
+	for _, v := range row {
+		if strings.Contains(v, "ssh:") {
+			t.Errorf("a packed value is left: %q", v)
+		}
+	}
+	back, err := Import(blob)
+	if err != nil || len(back) != 1 {
+		t.Fatal(err)
+	}
+	b := back[0].Bastions
+	if len(b) != 1 || b[0] != in[0].Bastions[0] || back[0].Conn != model.ConnSSH || !back[0].Enabled {
+		t.Errorf("round trip: %+v", back[0])
+	}
+	// Typed by hand: Japanese headers and words, columns in any order.
+	hand, err := Import("機器名,IPアドレス,接続方式,踏み台1_ホスト,踏み台1_認証方式,有効\nsw1,192.0.2.5,Telnet,192.0.2.9,公開鍵,いいえ\n")
+	if err != nil || len(hand) != 1 || hand[0].Conn != model.ConnTelnet || hand[0].Enabled ||
+		len(hand[0].Bastions) != 1 || hand[0].Bastions[0].AuthMethod != model.AuthPublicKey || hand[0].Bastions[0].Method != model.BastionSSH {
+		t.Errorf("hand-made Japanese CSV: %v %+v", err, hand)
+	}
+}
+
+// Review fixes: passwords keep their spaces, Japanese headers ignore case,
+// a Shift_JIS re-save still reads, a later hop is read without bastion1's
+// columns, and the old packed column is used when the new ones are empty.
+func TestImportEdgeCases(t *testing.T) {
+	d := model.Device{Name: "r1", Host: "192.0.2.1", Conn: model.ConnSSH, Password: " pw ", EnablePassword: "\ten",
+		Bastions: []model.Bastion{{Method: model.BastionSSH, Host: "198.51.100.1", Password: "b p "}}}
+	for _, lang := range []string{"en", "ja"} {
+		text, err := ExportLang([]model.Device{d}, lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := Import(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g := back[0]; g.Password != " pw " || g.EnablePassword != "\ten" || g.Bastions[0].Password != "b p " {
+			t.Errorf("%s: secrets changed: %q %q %q", lang, g.Password, g.EnablePassword, g.Bastions[0].Password)
+		}
+	}
+
+	back, err := Import("機器名,ENABLEパスワード\nr1,secret\n")
+	if err != nil || back[0].EnablePassword != "secret" {
+		t.Errorf("case-insensitive Japanese header: %+v %v", back, err)
+	}
+
+	sjis, _ := japanese.ShiftJIS.NewEncoder().String("機器名,IPアドレス,グループ\nr1,192.0.2.1,本社\n")
+	back, err = Import(sjis)
+	if err != nil || back[0].Group != "本社" || back[0].Host != "192.0.2.1" {
+		t.Errorf("Shift_JIS: %+v %v", back, err)
+	}
+	if _, err := Import("name\n\xff\xfe\xfd\n"); err == nil {
+		t.Error("unreadable bytes should be refused")
+	}
+
+	back, err = Import("name,host,bastion2Host,bastion2Username\nr1,192.0.2.1,198.51.100.2,jump\n")
+	if err != nil || len(back[0].Bastions) != 1 || back[0].Bastions[0].Username != "jump" {
+		t.Errorf("bastion2 without bastion1 columns: %+v %v", back, err)
+	}
+
+	back, err = Import("name,host,bastions,bastion1Host\nr1,192.0.2.1,ssh:198.51.100.3:22:u:p,\n")
+	if err != nil || len(back[0].Bastions) != 1 || back[0].Bastions[0].Host != "198.51.100.3" {
+		t.Errorf("old packed column next to empty new ones: %+v %v", back, err)
 	}
 }

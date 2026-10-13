@@ -22,8 +22,12 @@ function slotLabel(s) {
   if (s.kind === "once") return t("1回 {d} {t}", { d: s.date || "", t: tm });
   if (s.kind === "daily") return t("毎日 {t}", { t: tm });
   if (s.kind === "weekly") return t("毎週 {w} {t}", { w: (s.weekdays || []).map(w => t(WEEKDAYS[w])).join("・"), t: tm });
-  if (s.kind === "interval") return t("{p}おき・{c}（{d} {t} から）", {
-    p: fmtPeriod(slotPeriodSec(s)), c: s.count ? t("{n}回", { n: s.count }) : s.until ? t("{u} まで", { u: s.until }) : t("止めるまで"), d: s.date || "", t: tm });
+  if (s.kind === "interval") {
+    const c = s.count ? t("{n}回", { n: s.count }) : s.until ? t("{u} まで", { u: s.until }) : t("止めるまで");
+    // startNow: in the save confirmation, before the start time is taken.
+    if (s.startNow) return t("{p}おき・{c}（保存したらすぐ開始）", { p: fmtPeriod(slotPeriodSec(s)), c });
+    return t("{p}おき・{c}（{d} {t} から）", { p: fmtPeriod(slotPeriodSec(s)), c, d: s.date || "", t: tm });
+  }
   return s.kind;
 }
 
@@ -53,15 +57,20 @@ function schedKindLabel(e) {
   return ({ run: t("実行"), missed: t("見逃し"), skipped: t("スキップ"), refused: t("拒否"), error: t("エラー") })[e.kind] || e.kind;
 }
 
+let schedRenderGen = 0;
 async function renderSchedules() {
   const root = document.getElementById("tab-schedule");
+  // Draws overlap (an event, a button): only the newest one is shown, not
+  // whichever answer came back last.
+  const gen = ++schedRenderGen;
   let list = [], st = {}, log = [];
   try {
     [list, st, log] = await Promise.all([App().ListSchedules(), App().GetScheduleStatus(), App().ScheduleLog(100)]);
   } catch (e) {
-    root.innerHTML = `<div class="empty">${esc(terr(e))}</div>`;
+    if (gen === schedRenderGen) root.innerHTML = `<div class="empty">${esc(terr(e))}</div>`;
     return;
   }
+  if (gen !== schedRenderGen) return;
   list = list || []; log = log || [];
   // Will a 予約 run on this PC while it sleeps? Only if Windows lets an app
   // wake it (wake timers allowed for the current power source) and the PC
@@ -69,12 +78,16 @@ async function renderSchedules() {
   // keep-awake check box below — said in plain words, details folded away.
   const pw = st.power || {};
   const timers = pw.onAC === false ? pw.wakeTimersDC : pw.wakeTimersAC;
-  const canWake = st.wake === "ok" && timers !== 0 && !pw.modernStandby;
+  // The PC's own settings decide it — not whether a wake-up happens to be
+  // armed right now (with nothing scheduled there is none).
+  const canWake = st.wake !== "unsupported" && timers !== 0 && !pw.modernStandby;
   const keep = !!st.keepAwake;
   const wtName = v => v === 0 ? t("無効") : v === 1 ? t("有効") : v === 2 ? t("重要なスリープ解除タイマーのみ") : t("不明");
-  const sleepLine = canWake ? `✅ ${esc(t("PC がスリープ中：予約の少し前に PC を起こして実行します"))}`
-    : keep ? `✅ ${esc(t("放置しても自動でスリープしないので、予約どおり実行します"))} <span class="muted" style="font-size:12px">${esc(t("（自分でスリープした・ノート PC の蓋を閉じたときは実行されません）"))}</span>`
-    : `❌ ${esc(t("PC がスリープ中：実行されません（この PC はスリープから自動では起こせない設定です）"))}`;
+  // One line on what to expect. It describes this PC (it is not a PalaTerm
+  // setting, and nothing the user clicked changed it) — so no red cross.
+  const sleepLine = canWake ? t("✅ PalaTerm を起動していれば、画面ロック中もスリープ中も動きます")
+    : keep ? t("✅ PalaTerm を起動していれば動きます（自分でスリープ・蓋を閉じたときは止まります）")
+    : t("ⓘ この PC は、スリープすると予約が止まります");
   // A schedule's state in words: what it is doing and whether it will run
   // again — a bare check box said none of that.
   const finished = sc => !sc.next && !sc.running && !sc.queued && sc.enabled;
@@ -111,26 +124,22 @@ async function renderSchedules() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("予約"))}</div>
-        <div class="page-sub">${esc(t("決まった日時に一括実行してログを取ります（show 系の取得専用。設定を変更するコマンドを含むセットは予約できません）。PalaTerm が起動している間だけ動きます。× で閉じるとタスクトレイに残って動き続け、ロック中も実行します"))}</div></div>
+        <div class="page-sub">${esc(t("決まった時刻に自動で実行して、ログを取ります"))}</div></div>
       <div class="row-inline"><button class="btn primary" id="sc-add">${esc(t("＋ 予約を追加"))}</button></div>
     </div>
     <div class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px;line-height:1.9">
       ${st.running ? `<div style="color:var(--run)"><b>${esc(t("▶ 実行中: {n}", { n: st.running }))}</b> ${esc(t("（{d} / {t} 台）", { d: st.done, t: st.total }))} <button class="btn sm" id="sc-cancel">${esc(t("■ 中止"))}</button></div>` : ""}
       ${st.queued ? `<div style="color:var(--warn)">${esc(t("順番待ち: {n} 件（ほかの一括実行が終わりしだい実行。30 分を過ぎたらスキップ）", { n: st.queued }))}</div>` : ""}
-      <div style="font-weight:600;margin-bottom:2px">${esc(t("この PC での予約の動き"))}</div>
-      <div>✅ ${esc(t("PalaTerm が起動中（画面ロック中、× で閉じてトレイにいる間も）：予約どおり実行します"))}</div>
-      <div>${sleepLine}</div>
-      ${!canWake && !keep ? `<div style="color:var(--warn)">→ ${esc(t("下の「予約がある間は PC を自動スリープさせない」をオンにすれば、このまま使えます（画面ロック・画面の消灯は今までどおり）"))}</div>` : ""}
-      <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:2px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${keep ? "checked" : ""}> ${esc(t("予約がある間は PC を自動スリープさせない"))}<span class="muted" style="font-size:12px">${esc(canWake ? t("（この PC では無くても動きます）") : t("（この PC ではおすすめ）"))}</span></label>
-      <div style="margin-top:6px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.nextName ? "　" + esc(st.nextName) : ""}</div>
-      <details style="margin-top:4px"><summary class="link" style="text-decoration:none">${esc(t("詳しく"))}</summary>
+      <div>${esc(sleepLine)}</div>
+      ${canWake ? "" : `<label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:2px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${keep ? "checked" : ""}> ${esc(t("放置してもスリープさせない"))}<span class="muted" style="font-size:12px">${esc(t("（画面ロック・画面オフはそのまま）"))}</span></label>`}
+      <div style="margin-top:4px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b></div>
+      <details style="margin-top:2px"><summary class="link" style="text-decoration:none;font-size:12px">${esc(t("詳しく"))}</summary>
         <div class="muted" style="font-size:12px;line-height:1.8;margin-top:6px">
-        ${esc(t("・Windows の「スリープ解除タイマーの許可」：電源接続時 {ac}／バッテリー {dc}", { ac: wtName(pw.wakeTimersAC), dc: wtName(pw.wakeTimersDC) }))}<br>
-        ${esc(pw.modernStandby ? t("・この PC はモダンスタンバイ（スリープ中は Windows がアプリを止める方式）です") : t("・この PC は従来型のスリープです"))}<br>
-        ${esc(t("・「予約がある間は PC を自動スリープさせない」は Windows の設定を書き換えません。PalaTerm が動いている間だけ、放置による自動スリープを止めます"))}<br>
-        ${esc(t("・休止状態・シャットダウン・PalaTerm の終了（トレイの「終了」）中は実行されません。次に起動して一度ロック解除すると再開します"))}<br>
-        ${esc(t("・実行できなかった回は「見逃し」として記録し、さかのぼっては実行しません。ほかの一括実行と重なったら順番待ちし、30 分を過ぎたらスキップします"))}<br>
-        ${esc(t("・ロック中も実行するため、予約の対象機器の認証情報はロック中もメモリに残します（ファイルには書きません）"))}</div></details>
+        ${esc(t("・× で閉じてもトレイで動き続けます。トレイの「終了」で止まります"))}<br>
+        ${esc(t("・設定を変えるコマンド（conf t・write など）は予約できません"))}<br>
+        ${esc(t("・スリープなどで実行できなかった回は「見逃し」と記録します"))}<br>
+        ${esc(t("・「放置してもスリープさせない」は Windows の設定を変えません（PalaTerm 終了で元どおり）"))}<br>
+        ${esc(t("・この PC：スリープ解除タイマー 電源接続時 {ac}／バッテリー {dc}・{m}", { ac: wtName(pw.wakeTimersAC), dc: wtName(pw.wakeTimersDC), m: pw.modernStandby ? t("モダンスタンバイ") : t("従来型スリープ") }))}</div></details>
     </div>
     <div class="panel scrollx" style="margin-bottom:16px">
       ${nFinished ? `<div class="row-inline" style="justify-content:flex-end;padding:8px 12px 0"><span class="link" id="sc-del-finished" style="font-size:12px">${esc(t("終了した予約（{n} 件）をまとめて削除", { n: nFinished }))}</span></div>` : ""}
@@ -144,9 +153,13 @@ async function renderSchedules() {
     </div>`;
 
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
-  root.querySelector("#sc-keepawake").onchange = async e => {
-    try { await App().SetScheduleKeepAwake(e.target.checked); toast(t("保存しました"), "ok"); renderSchedules(); }
-    catch (err) { toast(terr(err), "err"); e.target.checked = !e.target.checked; }
+  const ka = root.querySelector("#sc-keepawake");
+  if (ka) ka.onchange = async e => {
+    try {
+      await App().SetScheduleKeepAwake(e.target.checked);
+      toast(e.target.checked ? t("オンにしました（予約がある間、放置してもスリープしません）") : t("オフにしました（元どおりスリープします）"), "ok");
+      renderSchedules();
+    } catch (err) { toast(terr(err), "err"); e.target.checked = !e.target.checked; }
   };
   const cancel = root.querySelector("#sc-cancel");
   if (cancel) cancel.onclick = async () => {
@@ -195,8 +208,17 @@ function wireScheduleEvents() {
     clearTimeout(schedRenderTimer);
     schedRenderTimer = setTimeout(renderSchedules, 250);
   });
+  // Changes skipped while a dialog was open (a run ending while the editor
+  // was up) show once it closes, however it closed.
+  document.addEventListener("modal-closed", () => {
+    if (!document.querySelector("#tab-schedule.active")) return;
+    clearTimeout(schedRenderTimer);
+    schedRenderTimer = setTimeout(renderSchedules, 50);
+  });
   rt().EventsOn("sched:done", e => {
-    toast(t("予約「{n}」の一括実行が終わりました（成功 {a}・失敗 {b}）", { n: e.schedule, a: e.ok || 0, b: e.failed || 0 }), e.failed ? "err" : "ok");
+    if (e.repeat && !e.last && !e.failed) return;
+    toast(e.repeat && e.last ? t("繰り返しの予約が終わりました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 })
+      : t("予約を実行しました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 }), e.failed ? "err" : "ok");
   });
 }
 
@@ -233,7 +255,9 @@ function editSchedule(sc, prefill) {
     slots: [typed.length ? { kind: "interval", startNow: true, everySeconds: 60, unit: 1, count: 10 } : { kind: "daily", time: "03:00:00" }],
   };
   const unitOf = sec => sec && sec % 3600 === 0 ? 3600 : sec && sec % 60 === 0 ? 60 : 1;
-  const later = new Date(Date.now() + 3600000);
+  // The default end time is a whole hour at least an hour away (an hour from
+  // 10:59:58 rounded down was 11:00:00 — before a start 5 seconds away).
+  const later = new Date(Date.now() + 2 * 3600000);
   let slots = (s.slots || []).map(x => {
     const sec = slotPeriodSec(x) || 60;
     // A new slot says "60 秒" (typing 10 then means 10 seconds); a saved
@@ -245,7 +269,10 @@ function editSchedule(sc, prefill) {
       // How a repeat ends: after N times (the default), at a time, or when
       // stopped from the list.
       end: x.count ? "count" : x.until ? "until" : (sc && x.kind === "interval" ? "never" : "count"),
-      untilDate: ud || ymd(later), untilTime: ut || `${String(later.getHours()).padStart(2, "0")}:00:00` };
+      untilDate: ud || ymd(later), untilTime: ut || `${String(later.getHours()).padStart(2, "0")}:00:00`,
+      // What a saved slot said: a repeat that began yesterday keeps its
+      // start (moving it to today restarted the count and the clock).
+      orig: sc ? { date: x.date || "", time: x.time || "", untilDate: ud || "" } : null };
   });
   const grpVal = s.ungrouped ? RUN_UNGROUPED : (s.group || "");
   const node = h(`<div>
@@ -261,16 +288,16 @@ function editSchedule(sc, prefill) {
           ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === grpVal ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
           ${ungroupedN ? `<option value="${RUN_UNGROUPED}" ${grpVal === RUN_UNGROUPED ? "selected" : ""}>${esc(t("（グループ未設定）"))}</option>` : ""}
         </select>
-        <input id="sc-filter" placeholder="${esc(t("絞り込み（機器名・IP・拠点・役割）"))}" style="flex:1;min-width:200px">
+        <input id="sc-filter" data-guard-skip placeholder="${esc(t("絞り込み（機器名・IP・拠点・役割）"))}" style="flex:1;min-width:200px">
       </div>
       <div class="row-inline" style="gap:12px;flex-wrap:wrap;margin-bottom:4px;font-size:12px">
         <span class="link" id="sc-all">${esc(t("表示中をすべて選択"))}</span>
         <span class="link" id="sc-none">${esc(t("表示中をすべて解除"))}</span>
-        <label class="row-inline" style="gap:4px;font-weight:normal;cursor:pointer"><input type="checkbox" id="sc-onlysel" style="width:auto"> ${esc(t("選択中だけ表示"))}</label>
+        <label class="row-inline" style="gap:4px;font-weight:normal;cursor:pointer"><input type="checkbox" id="sc-onlysel" data-guard-skip style="width:auto"> ${esc(t("選択中だけ表示"))}</label>
         <b id="sc-count" style="margin-left:auto"></b>
       </div>
       <div id="sc-devs" class="panel sc-devs"></div>
-      <div class="muted" style="font-size:11px;margin-top:2px">${esc(t("Shift を押しながらクリックすると、前にクリックした行からまとめて選べます"))}</div></div>
+      <div class="muted" style="font-size:11px;margin-top:2px">${esc(t("Shift＋クリックでまとめて選べます"))}</div></div>
 
     <div class="field"><label>${esc(t("③ 何を実行しますか"))}</label>
       <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-cmdmode" value="set" style="width:auto" ${typed.length ? "" : "checked"}> ${esc(t("コマンドセットから選ぶ"))}</label>
@@ -280,13 +307,13 @@ function editSchedule(sc, prefill) {
       </select>
       <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-cmdmode" value="typed" style="width:auto" ${typed.length ? "checked" : ""}> ${esc(t("コマンドを直接入力する（1 行に 1 コマンド）"))}</label>
       <textarea id="sc-cmds" class="mono" rows="3" style="margin:4px 0 0 26px;width:calc(100% - 26px);font-size:13px" placeholder="show interface status&#10;show logging | include %LINK">${esc(typed.join("\n"))}</textarea>
-      <div class="muted" style="font-size:12px;margin:4px 0 0 26px">${esc(t("設定を変更するコマンド（conf t・write など）は予約できません（無人で動くため。取得用の show 系だけ）"))}</div></div>
+      <div class="muted" style="font-size:12px;margin:4px 0 0 26px">${esc(t("※ conf t・write など、設定を変えるコマンドは使えません"))}</div></div>
 
     <details id="sc-more" style="margin:4px 0 8px" ${s.stage ? "open" : ""}><summary class="link" style="text-decoration:none">${esc(t("詳細設定（ふだんは変更不要）"))}</summary>
       <div class="field" style="margin-top:8px;max-width:420px"><label>${esc(t("作業タイミング"))}</label><select id="sc-stage">
         ${STAGES.map(x => `<option value="${x}" ${x === (s.stage || "") ? "selected" : ""}>${esc(x ? stageLabel(x) : t("指定なし"))}</option>`).join("")}
       </select>
-      <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("ふだんは「指定なし」で OK。夜間作業の前と後に 1 回ずつ取って、実行履歴タブで比べたいときだけ「作業前」「作業後」を選びます"))}</div></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("作業の前後のログを比べたいときだけ選びます"))}</div></div>
     </details>
 
     <div class="modal-actions">
@@ -316,7 +343,7 @@ function editSchedule(sc, prefill) {
     node.querySelector("#sc-count").textContent = grpSel.value ? t("選択中 {a} / {b} 台", { a: all.filter(d => picked.has(d.name)).length, b: all.length }) : "";
     devBox.innerHTML = !grpSel.value ? `<div class="muted" style="font-size:12px;padding:6px">${esc(t("グループを選ぶと機器が並びます"))}</div>`
       : !shown.length ? `<div class="muted" style="font-size:12px;padding:6px">${esc(t("絞り込みに一致する機器がありません"))}</div>`
-      : shown.map((d, i) => `<label class="sc-dev"><input type="checkbox" data-dev="${esc(d.name)}" data-i="${i}" ${picked.has(d.name) ? "checked" : ""}>
+      : shown.map((d, i) => `<label class="sc-dev"><input type="checkbox" data-guard-skip data-dev="${esc(d.name)}" data-i="${i}" ${picked.has(d.name) ? "checked" : ""}>
           <b>${esc(d.name)}</b><span class="mono">${esc(d.host || d.serialPort || "")}</span><span>${esc([d.site, d.role].filter(Boolean).join(" / "))}</span><span class="muted">${esc(d.commandSet || "")}</span></label>`).join("");
     devBox.querySelectorAll("[data-dev]").forEach(cb => cb.addEventListener("click", e => {
       const i = +cb.dataset.i, boxes = [...devBox.querySelectorAll("[data-dev]")];
@@ -361,9 +388,10 @@ function editSchedule(sc, prefill) {
       // Dates and times are kept in slots[i] by their pickers as they change.
       if (q(".sl-start") && kind === "interval") slots[i].startNow = q(".sl-start").value === "now";
       if (q(".sl-every")) {
-        slots[i].every = parseInt(q(".sl-every").value, 10) || 0;
+        // As typed (1.5 時間 is 90 minutes); checked at 保存, not cut down.
+        slots[i].every = Number(q(".sl-every").value) || 0;
         slots[i].unit = parseInt(q(".sl-unit").value, 10) || 1;
-        slots[i].count = parseInt(q(".sl-count").value, 10) || 0;
+        slots[i].count = Number(q(".sl-count").value) || 0;
         const e = row.querySelector(".sl-end:checked");
         if (e) slots[i].end = e.value;
       }
@@ -388,7 +416,7 @@ function editSchedule(sc, prefill) {
         ${sl.kind === "interval" ? `
         <div class="row-inline" style="gap:8px;flex-wrap:wrap;margin-top:8px">
           <span class="muted" style="font-size:12px;min-width:3em">${esc(t("間隔"))}</span>
-          <input class="sl-every" type="number" min="1" value="${sl.every}" style="width:80px"><select class="sl-unit btn" style="width:auto">${[[1, "秒"], [60, "分"], [3600, "時間"]].map(([u, l]) => `<option value="${u}" ${sl.unit === u ? "selected" : ""}>${esc(t(l))}</option>`).join("")}</select><span>${esc(t("おきに"))}</span>
+          <input class="sl-every" type="number" min="0" step="any" value="${sl.every}" style="width:80px"><select class="sl-unit btn" style="width:auto">${[[1, "秒"], [60, "分"], [3600, "時間"]].map(([u, l]) => `<option value="${u}" ${sl.unit === u ? "selected" : ""}>${esc(t(l))}</option>`).join("")}</select><span>${esc(t("おきに"))}</span>
           <span class="muted" style="font-size:12px">${esc(t("（10 秒から）"))}</span></div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <span class="muted" style="font-size:12px;min-width:3em;padding-top:8px">${esc(t("終わり"))}</span>
@@ -398,12 +426,12 @@ function editSchedule(sc, prefill) {
           <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="never" style="width:auto" ${sl.end === "never" ? "checked" : ""}>${esc(t("止めるまで続ける"))}</label>
           </div>
         </div>
-        ${sl.end === "never" ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(t("予約の一覧の「⏸ 止める」を押すまで続けます"))}</div>` : ""}` : ""}
+        ${sl.end === "never" ? `<div style="font-size:12px;margin-top:4px;color:var(--warn)">${esc(t("⚠ 「⏸ 止める」を押すまで、ずっと続きます"))}</div>` : ""}` : ""}
       </div>`;
     }).join("") + (slots.length > 1 ? `<div class="muted" style="font-size:12px">${esc(t("この予約には日時が複数あります（以前の版で作ったもの）。別の時刻にしたいときは、予約を分けて作るのがおすすめです"))}</div>` : "");
     slotBox.querySelectorAll(".sl-date-host").forEach(host => {
       const sl = slots[+host.dataset.i];
-      if (sl.date < todayStr(0)) sl.date = todayStr(0);
+      if (sl.date < todayStr(0) && !(sl.orig && sl.date === sl.orig.date)) sl.date = todayStr(0);
       mountDatePicker(host, sl.date, v => { sl.date = v; }, { noPast: true });
     });
     slotBox.querySelectorAll(".sl-time-host").forEach(host => {
@@ -414,7 +442,7 @@ function editSchedule(sc, prefill) {
     const pickEnd = (host, v) => { const r = host.closest("[data-slot]").querySelector(`.sl-end[value="${v}"]`); if (r) r.checked = true; };
     slotBox.querySelectorAll(".sl-until-date-host").forEach(host => {
       const sl = slots[+host.dataset.i];
-      if (sl.untilDate < todayStr(0)) sl.untilDate = todayStr(0);
+      if (sl.untilDate < todayStr(0) && !(sl.orig && sl.untilDate === sl.orig.untilDate)) sl.untilDate = todayStr(0);
       mountDatePicker(host, sl.untilDate, v => { sl.untilDate = v; pickEnd(host, "until"); }, { noPast: true });
     });
     slotBox.querySelectorAll(".sl-until-time-host").forEach(host => {
@@ -426,9 +454,18 @@ function editSchedule(sc, prefill) {
     slotBox.querySelectorAll("[data-rm-slot]").forEach(b => b.onclick = () => { collectSlots(); slots.splice(+b.dataset.rmSlot, 1); renderSlots(); });
   }
   renderSlots();
-  guardDiscard(node, "#sc-cancel-edit");
+  guardDiscard(node, "#sc-cancel-edit", () => [...picked].sort());
 
-  node.querySelector("#sc-save").onclick = async () => {
+  const saveBtn = node.querySelector("#sc-save");
+  // One save at a time: a second click while the first waits for its
+  // confirmation or for the backend made the same schedule twice.
+  let saving = false;
+  saveBtn.onclick = async () => {
+    if (saving) return;
+    saving = true; saveBtn.disabled = true;
+    try { await saveSchedule(); } finally { saving = false; saveBtn.disabled = false; }
+  };
+  async function saveSchedule() {
     collectSlots();
     const g = grpSel.value;
     if (!g) { toast(t("② のグループを選んでください"), "err"); return; }
@@ -437,36 +474,64 @@ function editSchedule(sc, prefill) {
     const typedMode = node.querySelector('input[name="sc-cmdmode"]:checked').value === "typed";
     const commands = typedMode ? cmdBox.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) : [];
     if (typedMode && !commands.length) { toast(t("③ に実行するコマンドを入力してください"), "err"); return; }
-    for (const x of slots) {
-      if (x.kind === "interval" && x.end === "count" && !(x.count >= 1)) { toast(t("① の回数を 1 以上で入れてください"), "err"); return; }
-    }
-    // 保存したらすぐ: the first firing a few seconds from now.
-    const soon = new Date(Date.now() + 5000);
     const p2 = n => String(n).padStart(2, "0");
-    const outSlots = slots.map(x => {
-      const now = x.kind === "interval" && x.startNow;
-      const iv = x.kind === "interval";
-      return { kind: x.kind,
-        date: x.kind === "once" || iv ? (now ? ymd(soon) : x.date) : "",
-        time: now ? `${p2(soon.getHours())}:${p2(soon.getMinutes())}:${p2(soon.getSeconds())}` : x.time,
-        weekdays: x.kind === "weekly" ? x.weekdays : [],
-        everySeconds: iv ? x.every * x.unit : 0, everyHours: 0,
-        count: iv && x.end === "count" ? x.count : 0,
-        until: iv && x.end === "until" ? `${x.untilDate} ${x.untilTime}` : "" };
-    });
-    const obj = {
+    const stamp = d => `${ymd(d)} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+    for (const x of slots) {
+      if (x.kind !== "interval") continue;
+      const sec = x.every * x.unit;
+      if (!(sec > 0) || Math.abs(sec - Math.round(sec)) > 1e-6) { toast(t("① の間隔は秒単位で割り切れる数で入れてください（例 1.5 時間 = 90 分）"), "err"); return; }
+      if (x.end === "count" && !(Number.isInteger(x.count) && x.count >= 1)) { toast(t("① の回数を 1 以上の整数で入れてください"), "err"); return; }
+      // A start already behind would silently drop the firings before now
+      // (they are never caught up on) — unless it is the saved one, kept.
+      const start = `${x.date} ${x.time}`;
+      const kept = x.orig && x.date === x.orig.date && x.time === x.orig.time;
+      if (!x.startNow && !kept && start < stamp(new Date())) { toast(t("① の開始日時が過ぎています。「保存したらすぐ」を選ぶか、今より後の時刻にしてください"), "err"); return; }
+    }
+    // 保存したらすぐ: the first firing a few seconds after the save itself —
+    // taken again once the confirmation is answered (the backend only runs
+    // firings after the save, so one taken before a long look at the
+    // confirmation was dropped, and the count with it).
+    const build = soon => ({
       id: s.id || "", enabled: sc ? !!s.enabled : true,
       group: g === RUN_UNGROUPED ? "" : g, ungrouped: g === RUN_UNGROUPED, names,
       commandSet: typedMode ? "" : setSel.value, commands,
-      stage: node.querySelector("#sc-stage").value, slots: outSlots,
-    };
+      stage: node.querySelector("#sc-stage").value,
+      slots: slots.map(x => {
+        const now = x.kind === "interval" && x.startNow;
+        const iv = x.kind === "interval";
+        return { kind: x.kind,
+          date: x.kind === "once" || iv ? (now ? ymd(soon) : x.date) : "",
+          time: now ? `${p2(soon.getHours())}:${p2(soon.getMinutes())}:${p2(soon.getSeconds())}` : x.time,
+          weekdays: x.kind === "weekly" ? x.weekdays : [],
+          everySeconds: iv ? Math.round(x.every * x.unit) : 0, everyHours: 0,
+          count: iv && x.end === "count" ? x.count : 0,
+          until: iv && x.end === "until" ? `${x.untilDate} ${x.untilTime}` : "" };
+      }),
+    });
+    let obj = build(new Date(Date.now() + 5000));
+    // What will happen, in one look, before anything starts.
+    const sl0 = obj.slots[0];
+    const startsNow = sl0.kind === "interval" && slots[0].startNow;
+    const shownNames = new Set(shownDevs().map(d => d.name));
+    const hidden = names.filter(n => !shownNames.has(n)).length;
+    const lines = [
+      `<b>${esc(t("いつ"))}</b>　${esc(slotLabel(startsNow ? { ...sl0, startNow: true } : sl0))}`,
+      `<b>${esc(t("機器"))}</b>　${esc(names.length <= 3 ? names.join(", ") : t("{a} ほか {n} 台", { a: names.slice(0, 3).join(", "), n: names.length - 3 }))}`,
+      `<b>${esc(t("コマンド"))}</b>　${esc(commands.length ? commands.join(" ／ ") : obj.commandSet || t("機器ごとのコマンドセット"))}`,
+    ];
+    if (hidden) lines.push(`<span style="color:var(--warn)">${esc(t("絞り込みで表示されていない {n} 台も含みます", { n: hidden }))}</span>`);
+    if (startsNow) lines.push(`<span style="color:var(--warn)">${esc(t("保存するとすぐ始まります"))}</span>`);
+    if (sl0.kind === "interval" && !sl0.count && !sl0.until) lines.push(`<span style="color:var(--warn)">${esc(t("「⏸ 止める」を押すまで続きます"))}</span>`);
+    // Over the editor (not in its place): 戻って直す keeps everything typed.
+    if (!(await subConfirm(`<b>${esc(sc ? t("この内容で保存しますか？") : t("この内容で予約しますか？"))}</b><br>${lines.join("<br>")}`, t("保存"), t("戻って直す"), "primary"))) return;
+    obj = build(new Date(Date.now() + 5000));
     obj.name = schedAutoName(obj);
     try {
       await App().SaveSchedule(obj);
-      closeModal(); toast(t("予約を保存しました"), "ok");
+      closeModal(); toast(t("予約を保存しました（止めるときは一覧の「⏸ 止める」）"), "ok");
       switchTab("schedule");
     } catch (e) { toast(t("保存できません") + ": " + terr(e), "err"); }
-  };
+  }
 }
 
 // The name a schedule is listed by, made from what it does — nobody has to

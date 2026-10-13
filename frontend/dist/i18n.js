@@ -19,7 +19,9 @@ const LANG = (() => {
 // t("日本語", {n: 5}) — translate (when LANG !== "ja") then substitute {n}.
 function t(s, vars) {
   let out = LANG === "ja" ? s : (I18N_EN[s] !== undefined ? I18N_EN[s] : s);
-  if (vars) for (const k of Object.keys(vars)) out = out.split("{" + k + "}").join(String(vars[k]));
+  // One pass: a value that itself contains "{n}" (a group named so) is not
+  // substituted again by a later key.
+  if (vars) out = out.replace(/\{(\w+)\}/g, (m, k) => Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m);
   return out;
 }
 
@@ -55,6 +57,8 @@ const I18N_EN_PATTERNS = [
   [/間隔は 10 秒〜7 日で指定してください/, "the interval must be 10 seconds to 7 days"],
   [/回数は 1〜([0-9]+) 回（空欄で無制限）で指定してください/, "the count must be 1–$1 (empty for no limit)"],
   [/^スリープ中などで ([0-9]+) 回分（(.+?)〜(.+?)）実行できませんでした（さかのぼって実行はしません）$/, "Missed $1 times ($2–$3), asleep for example; not caught up on"],
+  [/^前の回の実行がまだ終わっていないため、([0-9]+) 回分（(.+?)〜(.+?)）は実行しませんでした$/, "Not run $1 times ($2–$3): the previous run of this schedule had not finished"],
+  [/^コマンドセット「(.+?)」: /, 'Command set "$1": '],
   [/毎週の枠は曜日を 1 つ以上選んでください/, "pick at least one weekday"],
   [/過去の日時です（(.*)）/, "that time has passed ($1)"],
   [/（待つ文字列 (".*?") が出ませんでした）/, " (the wait-for text $1 did not appear)"],
@@ -482,6 +486,11 @@ const I18N_EN = {
   "不明": "unknown",
   "{n}時間": "{n} h", "{n}分": "{n} min", "{n}秒": "{n} s", "{n}回": "{n} times",
   "{p}おき・{c}（{d} {t} から）": "Every {p}, {c} (from {d} {t})",
+  "{p}おき・{c}（保存したらすぐ開始）": "Every {p}, {c} (starting as soon as saved)",
+  "絞り込みで表示されていない {n} 台も含みます": "Includes {n} selected device(s) hidden by the filter",
+  "① の間隔は秒単位で割り切れる数で入れてください（例 1.5 時間 = 90 分）": "Enter an interval that is a whole number of seconds in ① (e.g. 1.5 hours = 90 minutes)",
+  "① の回数を 1 以上の整数で入れてください": "Enter a whole number of 1 or more for the count in ①",
+  "① の開始日時が過ぎています。「保存したらすぐ」を選ぶか、今より後の時刻にしてください": "The start in ① has passed. Choose \"As soon as saved\" or a later time",
   "回数の制限なし": "no limit",
   " ほか {n} 台": " and {n} more",
   "{g}：{n} 台（{list}）": "{g}: {n} devices ({list})",
@@ -510,6 +519,32 @@ const I18N_EN = {
   "一定間隔": "Interval",
   "1回だけ": "Once", "一定間隔で繰り返す": "Repeat at an interval",
   "{u} まで": "until {u}", "止めるまで": "until stopped",
+  "✅ PalaTerm を起動していれば、画面ロック中もスリープ中も動きます": "✅ While PalaTerm is running, schedules run — also locked or asleep",
+  "✅ PalaTerm を起動していれば動きます（自分でスリープ・蓋を閉じたときは止まります）": "✅ While PalaTerm is running, schedules run (not if you put the PC to sleep or close the lid)",
+  "ⓘ この PC は、スリープすると予約が止まります": "ⓘ On this PC, schedules stop while it sleeps",
+  "決まった時刻に自動で実行して、ログを取ります": "Runs at set times by itself and keeps the logs",
+  "放置してもスリープさせない": "Don't let it sleep when idle",
+  "（画面ロック・画面オフはそのまま）": " (screen lock and screen off stay as they are)",
+  "・× で閉じてもトレイで動き続けます。トレイの「終了」で止まります": "- × keeps it running in the tray; the tray's Quit stops it",
+  "・設定を変えるコマンド（conf t・write など）は予約できません": "- Configuration-changing commands (conf t, write, …) cannot be scheduled",
+  "・スリープなどで実行できなかった回は「見逃し」と記録します": "- Times missed (asleep, for example) are recorded as missed",
+  "・「放置してもスリープさせない」は Windows の設定を変えません（PalaTerm 終了で元どおり）": "- \"Don't let it sleep\" changes no Windows setting (it ends when PalaTerm quits)",
+  "・この PC：スリープ解除タイマー 電源接続時 {ac}／バッテリー {dc}・{m}": "- This PC: wake timers plugged in {ac} / on battery {dc}, {m}",
+  "モダンスタンバイ": "modern standby", "従来型スリープ": "classic sleep",
+  "オンにしました（予約がある間、放置してもスリープしません）": "On (while schedules are pending, the PC does not sleep when idle)",
+  "オフにしました（元どおりスリープします）": "Off (the PC sleeps as before)",
+  "繰り返しの予約が終わりました（成功 {a}・失敗 {b}）": "A repeating schedule finished ({a} ok, {b} failed)",
+  "予約を実行しました（成功 {a}・失敗 {b}）": "Schedule ran ({a} ok, {b} failed)",
+  "Shift＋クリックでまとめて選べます": "Shift+click selects a range",
+  "※ conf t・write など、設定を変えるコマンドは使えません": "* Configuration-changing commands (conf t, write, …) are not allowed",
+  "作業の前後のログを比べたいときだけ選びます": "Only to compare the logs from before and after work",
+  "⚠ 「⏸ 止める」を押すまで、ずっと続きます": "⚠ Runs until you press \"⏸ Stop\"",
+  "いつ": "When", "{a} ほか {n} 台": "{a} and {n} more", "機器ごとのコマンドセット": "each device's command set",
+  "保存するとすぐ始まります": "Starts as soon as saved",
+  "「⏸ 止める」を押すまで続きます": "Runs until you press \"⏸ Stop\"",
+  "この内容で保存しますか？": "Save these settings?", "この内容で予約しますか？": "Schedule this?",
+  "戻って直す": "Back to edit",
+  "予約を保存しました（止めるときは一覧の「⏸ 止める」）": "Saved (to stop it, \"⏸ Stop\" in the list)",
   "順番待ち": "Waiting", "停止中": "Stopped", "終了": "Finished",
   "—（停止中）": "— (stopped)", "（あと {n} 回）": " ({n} more)", "（止めるまで）": " (until stopped)", "—（終了）": "— (finished)",
   "⏸ 止める": "⏸ Stop", "▶ 再開": "▶ Resume",
@@ -529,7 +564,6 @@ const I18N_EN = {
   "回で終わる": "times", "まで": "", "止めるまで続ける": "When I stop it",
   "予約の一覧の「⏸ 止める」を押すまで続けます": "Runs until you press \"⏸ Stop\" in the schedule list",
   "この予約には日時が複数あります（以前の版で作ったもの）。別の時刻にしたいときは、予約を分けて作るのがおすすめです": "This schedule has several times (made with an earlier version). For another time, a separate schedule is clearer.",
-  "① の回数を 1 以上で入れてください": "Enter a count of 1 or more in ①",
   "直接入力：{s}": "Typed: {s}",
   "① いつ実行しますか": "① When",
   "＋ 日時を追加": "+ Add a time",
@@ -559,8 +593,9 @@ const I18N_EN = {
   "おきに": "apart,", "無制限": "no limit", "回": "times",
   "実行する機器を 1 台以上チェックしてください": "Check at least one device",
   "前の回の実行がまだ終わっていないため、この回は実行しませんでした": "Not run: the previous run of this schedule had not finished",
+  "文字コードを読み取れません。Excel では「CSV UTF-8（コンマ区切り）」で保存してください": "Cannot read the file's character encoding. In Excel, save it as \"CSV UTF-8 (Comma delimited)\"",
   "{y}年{m}月": "{y}-{m}",
-  "今日": "Today", "明日": "Tomorrow", "時": "h", "分": "m", "秒": "s",
+  "今日": "Today", "明日": "Tomorrow", "時": "h", "分": "m", "秒": "s", "時間": "h", "（Enter）": "(Enter)",
   "無効": "off",
   "この PC は電源オプションの「スリープ解除タイマーの許可」が無効です（電源接続時: {ac}・バッテリー: {dc}）。スリープ中は予約が動きません。予約の時刻には PC を起こしておくか、下の「予約がある間は PC を自動スリープさせない」をオンにしてください":
     "\"Allow wake timers\" is off in this PC's power options (plugged in: {ac}, on battery: {dc}). Schedules do not run while it sleeps. Keep the PC awake at the scheduled times, or turn on \"Keep the PC from sleeping while schedules are pending\" below.",

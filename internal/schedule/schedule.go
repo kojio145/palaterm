@@ -312,40 +312,80 @@ func (sc Schedule) Next(after time.Time) time.Time {
 	return best
 }
 
-// maxDue bounds Due's walk (an hourly slot over a month-long gap is 720).
-const maxDue = 2000
+// maxWalk bounds the step-by-step walk over firings (daily and weekly slots,
+// and the older schedules with several slots); a month-long gap of an hourly
+// slot is 720 steps. A single interval slot is counted, not walked, so a
+// 10-second repeat slept through for days is exact.
+const maxWalk = 100000
 
-// Due returns the firings in (from, to], oldest first: what fell due
-// between the scheduler's last look and now. Normally one or none; after a
-// sleep with no wake-up, several.
-func (sc Schedule) Due(from, to time.Time) []time.Time {
-	var out []time.Time
+// Span is a run of firings: how many, the first and the last.
+type Span struct {
+	N           int
+	First, Last time.Time
+}
+
+// due summarises the firings in (from, to]: their span, and the one before
+// the last (zero when there is only one).
+func (sc Schedule) due(from, to time.Time) (sp Span, prev time.Time) {
+	if len(sc.Slots) == 1 && sc.Slots[0].Kind == KindInterval && sc.Enabled {
+		s := sc.Slots[0]
+		first := s.Next(from)
+		if first.IsZero() || first.After(to) {
+			return Span{}, time.Time{}
+		}
+		start, _, _ := s.intervalIndex(from)
+		p := s.Period()
+		kFirst := int64(first.Sub(start) / p)
+		kLast := int64(to.Sub(start) / p)
+		if s.Count > 0 {
+			kLast = min(kLast, int64(s.Count)-1)
+		}
+		if s.Until != "" {
+			if u, err := s.until(from.Location()); err == nil {
+				kLast = min(kLast, int64(u.Sub(start)/p))
+			}
+		}
+		if kLast < kFirst {
+			return Span{}, time.Time{}
+		}
+		last := start.Add(time.Duration(kLast) * p)
+		if kLast > kFirst {
+			prev = last.Add(-p)
+		}
+		return Span{N: int(kLast - kFirst + 1), First: first, Last: last}, prev
+	}
 	t := from
-	for len(out) < maxDue {
+	for i := 0; i < maxWalk; i++ {
 		n := sc.Next(t)
 		if n.IsZero() || n.After(to) {
 			break
 		}
-		out = append(out, n)
+		if sp.N == 0 {
+			sp.First = n
+		}
+		prev = sp.Last
+		sp.N++
+		sp.Last = n
 		t = n
 	}
-	return out
+	return sp, prev
 }
 
 // Plan splits the firings in (from, to] into the one to run now and the ones
 // missed. Only the newest firing may run, and only when it is at most
 // MaxLate old: firings slept through are recorded, never caught up on.
-func (sc Schedule) Plan(from, to time.Time) (run time.Time, missed []time.Time) {
-	due := sc.Due(from, to)
-	if len(due) == 0 {
-		return time.Time{}, nil
+func (sc Schedule) Plan(from, to time.Time) (run time.Time, missed Span) {
+	sp, prev := sc.due(from, to)
+	if sp.N == 0 {
+		return time.Time{}, Span{}
 	}
-	last := due[len(due)-1]
-	missed = due[:len(due)-1]
-	if to.Sub(last) > MaxLate {
-		return time.Time{}, due
+	if to.Sub(sp.Last) > MaxLate {
+		return time.Time{}, sp
 	}
-	return last, missed
+	if sp.N == 1 {
+		return sp.Last, Span{}
+	}
+	return sp.Last, Span{N: sp.N - 1, First: sp.First, Last: prev}
 }
 
 // NextOf is the earliest Next over schedules (zero: nothing scheduled).

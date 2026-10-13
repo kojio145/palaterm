@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.6.4";
+const APP_VERSION = "1.6.5";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -46,7 +46,14 @@ function openModal(node, sizeClass) {
   m.innerHTML = ""; m.appendChild(node);
   $("#modal-overlay").classList.remove("hidden");
 }
-function closeModal() { $("#modal-overlay").classList.add("hidden"); }
+// Closing also drops a calendar left open by a date picker in the dialog
+// (it lives on <body>), and tells the tabs: a list that skipped redrawing
+// while the dialog was open (the 予約 tab) catches up.
+function closeModal() {
+  $("#modal-overlay").classList.add("hidden");
+  document.querySelectorAll(".dp-pop").forEach(p => p.remove());
+  document.dispatchEvent(new Event("modal-closed"));
+}
 
 // Esc closes the open dialog the way its own キャンセル button does (so an
 // editor's "discard changes?" check still runs). Not while a small window
@@ -61,13 +68,13 @@ document.addEventListener("keydown", e => {
 
 // subConfirm asks a yes/no question in a small window over the open dialog
 // (uiConfirm would replace the dialog itself). Resolves true for ok.
-function subConfirm(message, okLabel, cancelLabel) {
+function subConfirm(message, okLabel, cancelLabel, okClass) {
   return new Promise(resolve => {
     const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(440px,90vw)">
       <div style="font-size:14px;line-height:1.7">${message}</div>
       <div class="modal-actions">
         <button class="btn" id="sc-no" type="button">${esc(cancelLabel || t("編集に戻る"))}</button>
-        <button class="btn danger" id="sc-ok" type="button">${esc(okLabel)}</button>
+        <button class="btn ${okClass || "danger"}" id="sc-ok" type="button">${esc(okLabel)}</button>
       </div></div></div>`);
     document.body.appendChild(ov);
     const done = v => { ov.remove(); document.removeEventListener("keydown", onKey, true); resolve(v); };
@@ -81,10 +88,13 @@ function subConfirm(message, okLabel, cancelLabel) {
 
 // guardDiscard makes an editor's cancel button (and so Esc) ask before
 // throwing away edits: the form's values are compared with what they were
-// when the editor finished opening.
-function guardDiscard(node, cancelSel) {
-  const snap = () => JSON.stringify([...node.querySelectorAll("input, select, textarea")]
-    .map(el => el.type === "checkbox" || el.type === "radio" ? el.checked : el.value));
+// when the editor finished opening. The date pickers' buttons count too;
+// fields marked data-guard-skip (a filter, a list redrawn as it is filtered)
+// do not, and extra() adds what the editor keeps outside its fields.
+function guardDiscard(node, cancelSel, extra) {
+  const snap = () => JSON.stringify([[...node.querySelectorAll("input:not([data-guard-skip]), select:not([data-guard-skip]), textarea:not([data-guard-skip])")]
+    .map(el => el.type === "checkbox" || el.type === "radio" ? el.checked : el.value),
+    [...node.querySelectorAll(".dp-val")].map(el => el.textContent), extra ? extra() : null]);
   const start = snap();
   node.querySelector(cancelSel).onclick = async () => {
     if (snap() !== start && !(await subConfirm(esc(t("編集した内容は保存されていません。破棄して閉じますか？")), t("破棄して閉じる")))) return;

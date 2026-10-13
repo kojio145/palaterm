@@ -65,6 +65,10 @@ type SchedLogEntry struct {
 	RunDir  string `json:"runDir,omitempty"`
 	Message string `json:"message,omitempty"`
 	Manual  bool   `json:"manual,omitempty"` // 今すぐ実行
+	// Repeat: a run of a repeating (interval) schedule; Last: its last one.
+	// A repeat only notifies on a failure and at its end, not every round.
+	Repeat bool `json:"repeat,omitempty"`
+	Last   bool `json:"last,omitempty"`
 }
 
 type schedJob struct {
@@ -88,6 +92,10 @@ type schedState struct {
 	logMu          sync.Mutex
 	kick           chan struct{}
 	notified       bool // the tray balloon about hiding was shown
+	// skips: per schedule ID, the firings passed over because its previous
+	// round was still waiting or running — written as one line when that
+	// round ends, not one line a second.
+	skips map[string]schedule.Span
 }
 
 func schedLogPath() string { return filepath.Join(exeDir(), "data", "schedule-log.json") }
@@ -221,9 +229,13 @@ func (a *App) SetScheduleKeepAwake(on bool) error {
 	return a.persist()
 }
 
-// hasPendingSchedules: an enabled schedule will still fire.
+// hasPendingSchedules: an enabled schedule will still fire, or one is
+// running or waiting its turn now (× then must not cut it off).
 func (a *App) hasPendingSchedules() bool {
-	return !schedule.NextOf(a.schedules(), time.Now()).IsZero()
+	a.sched.mu.Lock()
+	busy := a.sched.runID != "" || len(a.sched.queue) > 0
+	a.sched.mu.Unlock()
+	return busy || !schedule.NextOf(a.schedules(), time.Now()).IsZero()
 }
 
 func (a *App) schedKick() {
@@ -258,6 +270,11 @@ func (a *App) schedTick(now time.Time) {
 	for _, sc := range list {
 		seen[sc.ID] = true
 		from, ok := s.checked[sc.ID]
+		if ok && now.Before(from) {
+			// The clock was set back (time sync): the firings up to from
+			// were handled already, and running them again would repeat them.
+			continue
+		}
 		s.checked[sc.ID] = now
 		if !ok || !sc.Enabled {
 			continue // first look: only firings from now on count
@@ -266,13 +283,13 @@ func (a *App) schedTick(now time.Time) {
 		// One line for all the firings missed in one gap: a short interval
 		// slept through overnight would otherwise be thousands of lines.
 		switch {
-		case len(miss) == 1:
-			missed = append(missed, SchedLogEntry{Due: miss[0].Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+		case miss.N == 1:
+			missed = append(missed, SchedLogEntry{Due: miss.First.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
 				Message: "スリープ中などで実行できなかった回です（さかのぼって実行はしません）"})
-		case len(miss) > 1:
-			missed = append(missed, SchedLogEntry{Due: miss[0].Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+		case miss.N > 1:
+			missed = append(missed, SchedLogEntry{Due: miss.First.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
 				Message: fmt.Sprintf("スリープ中などで %d 回分（%s〜%s）実行できませんでした（さかのぼって実行はしません）",
-					len(miss), miss[0].Format("01/02 15:04:05"), miss[len(miss)-1].Format("01/02 15:04:05"))})
+					miss.N, miss.First.Format("01/02 15:04:05"), miss.Last.Format("01/02 15:04:05"))})
 		}
 		if !run.IsZero() {
 			// The previous firing of this schedule still waiting or running
@@ -283,8 +300,16 @@ func (a *App) schedTick(now time.Time) {
 				busySame = busySame || j.sc.ID == sc.ID
 			}
 			if busySame {
-				missed = append(missed, SchedLogEntry{Due: run.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "skipped",
-					Message: "前の回の実行がまだ終わっていないため、この回は実行しませんでした"})
+				if s.skips == nil {
+					s.skips = map[string]schedule.Span{}
+				}
+				sp := s.skips[sc.ID]
+				if sp.N == 0 {
+					sp.First = run
+				}
+				sp.N++
+				sp.Last = run
+				s.skips[sc.ID] = sp
 			} else {
 				s.queue = append(s.queue, schedJob{sc: sc, due: run})
 			}
@@ -341,6 +366,7 @@ func (a *App) schedStartNext(now time.Time) {
 			a.schedPop(job)
 			a.schedLog(SchedLogEntry{Due: job.due.Format(time.RFC3339), ScheduleID: job.sc.ID, Schedule: job.sc.Name, Kind: "skipped",
 				Message: fmt.Sprintf("ほかの一括実行が終わるのを待つうちに %d 分を過ぎたため実行しませんでした", int(schedule.MaxLate.Minutes()))})
+			a.schedFlushSkips(job.sc.ID, job.sc.Name)
 			continue
 		}
 		err := a.startScheduled(job)
@@ -348,7 +374,11 @@ func (a *App) schedStartNext(now time.Time) {
 			return // waits its turn
 		}
 		a.schedPop(job)
+		if errors.Is(err, errSchedGone) {
+			continue // deleted or stopped while it waited: nothing to record
+		}
 		if err != nil {
+			a.schedFlushSkips(job.sc.ID, job.sc.Name)
 			kind := "error"
 			if errors.Is(err, errChangeCommands) {
 				kind = "refused"
@@ -373,9 +403,29 @@ func (a *App) schedPop(job schedJob) {
 	}
 }
 
+// schedFlushSkips writes the firings of id passed over while its previous
+// round ran (see schedState.skips) as one line.
+func (a *App) schedFlushSkips(id, name string) {
+	s := &a.sched
+	s.mu.Lock()
+	sp := s.skips[id]
+	delete(s.skips, id)
+	s.mu.Unlock()
+	switch {
+	case sp.N == 1:
+		a.schedLog(SchedLogEntry{Due: sp.First.Format(time.RFC3339), ScheduleID: id, Schedule: name, Kind: "skipped",
+			Message: "前の回の実行がまだ終わっていないため、この回は実行しませんでした"})
+	case sp.N > 1:
+		a.schedLog(SchedLogEntry{Due: sp.First.Format(time.RFC3339), ScheduleID: id, Schedule: name, Kind: "skipped",
+			Message: fmt.Sprintf("前の回の実行がまだ終わっていないため、%d 回分（%s〜%s）は実行しませんでした",
+				sp.N, sp.First.Format("01/02 15:04:05"), sp.Last.Format("01/02 15:04:05"))})
+	}
+}
+
 var (
 	errBatchBusy      = errors.New("batch busy")
 	errChangeCommands = errors.New("change commands")
+	errSchedGone      = errors.New("schedule deleted or stopped")
 )
 
 func schedRequest(sc schedule.Schedule) RunRequest {
@@ -437,6 +487,19 @@ func (a *App) startScheduled(job schedJob) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault が開かれていないため実行できません")
 	}
+	// The schedule as it is now: deleted or stopped (止める) while this
+	// firing waited, it does not run; edited, it runs as edited.
+	cur := -1
+	for i := range base.Schedules {
+		if base.Schedules[i].ID == job.sc.ID {
+			cur = i
+		}
+	}
+	if cur < 0 || (!job.manual && !base.Schedules[cur].Enabled) {
+		a.mu.Unlock()
+		return errSchedGone
+	}
+	job.sc = base.Schedules[cur]
 	req := schedRequest(job.sc)
 	if !model.Stage(req.Stage).Valid() {
 		a.mu.Unlock()
@@ -455,19 +518,21 @@ func (a *App) startScheduled(job schedJob) error {
 		a.mu.Unlock()
 		return fmt.Errorf("実行する機器がありません（グループ「%s」）", job.sc.Group)
 	}
-	ctx, cancel := a.beginRunLocked(job.sc.Name)
-	a.mu.Unlock()
-
 	total := 0
 	for _, d := range snap.Devices {
 		if d.Enabled {
 			total++
 		}
 	}
+	ctx, cancel := a.beginRunLocked(job.sc.Name)
+	// Marked running under the same lock that claimed the batch: a 止める
+	// or delete (which change the vault under a.mu first) either finds the
+	// schedule gone above or finds it running here, never neither.
 	s := &a.sched
 	s.mu.Lock()
 	s.runID, s.runName, s.runDone, s.runTotal = job.sc.ID, job.sc.Name, 0, total
 	s.mu.Unlock()
+	a.mu.Unlock()
 	a.emitSched()
 
 	go func() {
@@ -495,17 +560,26 @@ func (a *App) startScheduled(job schedJob) error {
 		s.mu.Unlock()
 		e := SchedLogEntry{Due: job.due.Format(time.RFC3339), ScheduleID: job.sc.ID, Schedule: job.sc.Name, Kind: "run",
 			OK: ok, Failed: failed, RunDir: done.RunDir, Manual: job.manual}
+		for _, sl := range job.sc.Slots {
+			e.Repeat = e.Repeat || sl.Kind == schedule.KindInterval
+		}
+		e.Last = job.sc.Next(time.Now()).IsZero()
 		// Not ctx.Err(): execBatch cancels the context on its way out.
 		if canceled {
 			e.Message = "中止しました"
 		}
 		a.schedLog(e)
+		a.schedFlushSkips(job.sc.ID, job.sc.Name)
 		a.emitSched()
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "sched:done", e)
 		}
-		trayBalloon(winWord("予約の一括実行が終わりました", "Scheduled run finished"),
-			fmt.Sprintf(winWord("「%s」 成功 %d・失敗 %d", "\"%s\": %d ok, %d failed"), job.sc.Name, ok, failed))
+		// From the tray, a balloon — but a repeat every 10 seconds must not
+		// pop one up every 10 seconds: only a failure, or its last round.
+		if a.windowHidden() && (!e.Repeat || e.Last || failed > 0) {
+			trayBalloon(winWord("予約の一括実行が終わりました", "Scheduled run finished"),
+				fmt.Sprintf(winWord("「%s」 成功 %d・失敗 %d", "\"%s\": %d ok, %d failed"), job.sc.Name, ok, failed))
+		}
 		a.schedKick()
 	}()
 	return nil
@@ -686,6 +760,10 @@ func (a *App) SetScheduleEnabled(id string, on bool) error {
 		return err
 	}
 	a.mu.Lock()
+	if a.inv == nil { // locked in between
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
 	for i := range a.inv.Schedules {
 		if a.inv.Schedules[i].ID == id {
 			a.inv.Schedules[i].Enabled = false
@@ -712,8 +790,21 @@ func (a *App) stopScheduleRun(id string) {
 	running := a.sched.runID == id
 	a.sched.mu.Unlock()
 	if running {
-		a.CancelScheduledRun()
+		a.CancelScheduledRun() // its end writes the passed-over firings
+	} else {
+		a.schedFlushSkips(id, a.schedNameOf(id))
 	}
+}
+
+// schedNameOf is the name a schedule last had in the 実行記録 (for a line
+// written after it was deleted).
+func (a *App) schedNameOf(id string) string {
+	for _, e := range a.ScheduleLog(0) {
+		if e.ScheduleID == id {
+			return e.Schedule
+		}
+	}
+	return ""
 }
 
 // DeleteFinishedSchedules removes the schedules that will not fire again
@@ -727,21 +818,33 @@ func (a *App) DeleteFinishedSchedules() (int, error) {
 		return 0, fmt.Errorf("vault is locked")
 	}
 	keep := a.inv.Schedules[:0]
-	n := 0
+	var gone []string
 	for _, sc := range a.inv.Schedules {
 		on := sc
 		on.Enabled = true // a stopped schedule that could still fire is not finished
 		if on.Next(now).IsZero() {
-			n++
+			gone = append(gone, sc.ID)
 			continue
 		}
 		keep = append(keep, sc)
 	}
 	a.inv.Schedules = keep
 	a.mu.Unlock()
+	n := len(gone)
 	if n == 0 {
 		return 0, nil
 	}
+	// A 1回だけ still waiting its turn (or a 今すぐ実行) goes with it; one
+	// running now finishes (it is not 止める).
+	a.sched.mu.Lock()
+	q := a.sched.queue[:0]
+	for _, j := range a.sched.queue {
+		if !containsStr(gone, j.sc.ID) {
+			q = append(q, j)
+		}
+	}
+	a.sched.queue = q
+	a.sched.mu.Unlock()
 	a.schedKick()
 	return n, a.persist()
 }
@@ -812,6 +915,10 @@ func (a *App) hideToTray() {
 	}
 	trayShow(a.showFromTray, a.quitFromTray, "PalaTerm", msg)
 }
+
+// windowHidden: the main window is not on screen (in the tray). Asked of
+// Windows, so a window shown by a second start of PalaTerm counts as shown.
+func (a *App) windowHidden() bool { return ownTopLevelWindow() == 0 }
 
 func (a *App) showFromTray() {
 	runtime.WindowShow(a.ctx)

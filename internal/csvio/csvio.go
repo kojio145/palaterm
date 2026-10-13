@@ -1,23 +1,23 @@
 // Package csvio converts the device inventory to and from CSV, so devices can
 // be bulk-edited in Excel/spreadsheets (as the legacy tool allowed).
 //
-// The bastion chain is encoded in a single column as
+// Written for the person filling it in: one value per column, never several
+// packed into one cell. Each jump host is a run of its own columns —
+// bastion1Host, bastion1Port, bastion1Username, … then bastion2… — written
+// for every hop in use and at least the first, so a jump host can be added
+// in Excel. The columns are ordered as one fills them in: the device, how to
+// log in, then the jump hosts. A Japanese export (lang "ja") has Japanese
+// headers (「機器名」「IPアドレス」「踏み台1_ホスト」…) and words for the
+// fixed values (SSH / シリアル, パスワード / 公開鍵, はい / いいえ); import
+// accepts either language for both.
 //
-//	method:host:port:user:pass:auth:keyfile | method:host:...
-//
-// (up to model.MaxBastions hops, "|"-separated, outermost first). Empty trailing fields may be
-// omitted. The field order is fixed with keyfile last so a Windows path's own
-// colons survive the round trip, so new fields cannot simply be appended; the
-// per-hop extras that came later (key passphrase, legacy-cipher flag, jump
-// command) therefore travel in columns of their own per hop —
-// bastion1KeyPassphrase, bastion1LegacyAlgos, bastion1JumpCommand, then
-// bastion2… — written for as many hops as the exported devices use, so each
-// can be edited (or blanked) in Excel. Together with the device-level
-// "legacyAlgos" column this makes the CSV a complete copy of a device. Older
-// CSVs still import: without these columns the extras default to empty, and
-// the JSON "bastionExtras" column of v1.5.16 and before is still read.
-// Passwords are written in clear text — treat exported CSV as sensitive and
-// delete it after re-import.
+// Older CSVs still import: the single "bastions" column of v1.6.4 and before
+// ("method:host:port:user:pass:auth:keyfile | …"), its "bastionExtras" JSON
+// column (v1.5.16 and before) and the per-hop extras columns of v1.5.17–
+// v1.6.4. (v1.6.4 and before read only the packed column: a CSV written
+// here loses its jump hosts there.) A file saved again as Shift_JIS (Excel's
+// plain 「CSV（コンマ区切り）」) is read as such. Passwords are written in
+// clear text — treat exported CSV as sensitive and delete it after re-import.
 package csvio
 
 import (
@@ -27,22 +27,37 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kojio145/palaterm/internal/model"
+	"golang.org/x/text/encoding/japanese"
 )
 
-var header = []string{
-	"name", "group", "site", "host", "conn", "port", "serialPort", "baud",
-	"osType", "commandSet", "authMethod", "keyFile", "keyPassphrase",
-	"username", "password", "enablePassword", "legacyAlgos",
-	"bastions", "enabled", "useGroupCreds", "role",
+// col is one CSV column: its key (the English header) and its Japanese header.
+type col struct{ key, ja string }
+
+// deviceCols are the device's own columns, in the order they are filled in.
+var deviceCols = []col{
+	{"name", "機器名"}, {"group", "グループ"}, {"site", "拠点"}, {"role", "役割"},
+	{"host", "IPアドレス"}, {"conn", "接続方式"}, {"port", "ポート"},
+	{"serialPort", "シリアルポート"}, {"baud", "ボーレート"},
+	{"osType", "OSタイプ"}, {"commandSet", "コマンドセット"}, {"enabled", "有効"},
+	{"useGroupCreds", "グループ既定の認証情報を使う"},
+	{"username", "ユーザー名"}, {"password", "パスワード"}, {"enablePassword", "enableパスワード"},
+	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
+	{"legacyAlgos", "旧暗号を許可"},
 }
 
-// hopCols names hop n's (1-based) extras columns, in header order.
-func hopCols(n int) []string {
-	p := "bastion" + strconv.Itoa(n)
-	return []string{p + "KeyPassphrase", p + "LegacyAlgos", p + "JumpCommand"}
+// hopFields are one jump host's columns (prefixed bastion<n> / 踏み台<n>_).
+var hopFields = []col{
+	{"Method", "接続方式"}, {"Host", "ホスト"}, {"Port", "ポート"},
+	{"Username", "ユーザー名"}, {"Password", "パスワード"},
+	{"AuthMethod", "認証方式"}, {"KeyFile", "鍵ファイル"}, {"KeyPassphrase", "鍵パスフレーズ"},
+	{"LegacyAlgos", "旧暗号を許可"}, {"JumpCommand", "ジャンプコマンド"},
 }
+
+func hopKey(n int, f col) string { return "bastion" + strconv.Itoa(n) + f.key }
+func hopJa(n int, f col) string  { return "踏み台" + strconv.Itoa(n) + "_" + f.ja }
 
 // BOM is the UTF-8 byte order mark every exported CSV starts with: without
 // it Excel on a Japanese Windows opens the file as Shift_JIS and every
@@ -65,20 +80,30 @@ func cellOut(v string) string {
 // cellIn undoes cellOut.
 func cellIn(v string) string { return strings.TrimPrefix(v, "'") }
 
-// Export renders devices as CSV text with a header row.
-func Export(devices []model.Device) (string, error) {
+// Export renders devices as CSV text with English headers and values.
+func Export(devices []model.Device) (string, error) { return ExportLang(devices, "en") }
+
+// ExportLang renders devices as CSV text; lang "ja" writes Japanese headers
+// and words for the fixed values.
+func ExportLang(devices []model.Device, lang string) (string, error) {
+	ja := lang == "ja"
 	var buf bytes.Buffer
 	buf.WriteString(BOM)
 	w := csv.NewWriter(&buf)
-	hops := 0
+	hops := 1 // always room to add a jump host in Excel
 	for i := range devices {
 		d := devices[i]
 		d.NormalizeBastions()
 		hops = max(hops, len(d.Bastions))
 	}
-	head := append([]string(nil), header...)
+	var head []string
+	for _, c := range deviceCols {
+		head = append(head, pick(ja, c.ja, c.key))
+	}
 	for n := 1; n <= hops; n++ {
-		head = append(head, hopCols(n)...)
+		for _, f := range hopFields {
+			head = append(head, pick(ja, hopJa(n, f), hopKey(n, f)))
+		}
 	}
 	if err := w.Write(head); err != nil {
 		return "", err
@@ -87,18 +112,22 @@ func Export(devices []model.Device) (string, error) {
 		d := devices[i]
 		d.NormalizeBastions()
 		rec := []string{
-			d.Name, d.Group, d.Site, d.Host, string(d.Conn), itoa(d.Port), d.SerialPort, itoa(d.Baud),
-			d.OSType, d.CommandSet, string(d.AuthMethod), d.KeyFile, d.KeyPassphrase,
-			d.Username, d.Password, d.EnablePassword, boolStr(d.LegacyAlgos),
-			encodeBastions(d.Bastions), boolStr(d.Enabled),
-			boolStr(d.UseGroupCreds), d.Role,
+			d.Name, d.Group, d.Site, d.Role,
+			d.Host, connOut(string(d.Conn), ja), itoa(d.Port),
+			d.SerialPort, itoa(d.Baud),
+			d.OSType, d.CommandSet, boolOut(d.Enabled, ja),
+			boolOut(d.UseGroupCreds, ja),
+			d.Username, d.Password, d.EnablePassword,
+			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
+			boolOut(d.LegacyAlgos, ja),
 		}
 		for n := 0; n < hops; n++ {
 			if n < len(d.Bastions) {
 				b := d.Bastions[n]
-				rec = append(rec, b.KeyPassphrase, boolStr(b.LegacyAlgos), b.JumpCommand)
+				rec = append(rec, connOut(string(b.Method), ja), b.Host, itoa(b.Port), b.Username, b.Password,
+					authOut(string(b.AuthMethod), ja), b.KeyFile, b.KeyPassphrase, boolOut(b.LegacyAlgos, ja), b.JumpCommand)
 			} else {
-				rec = append(rec, "", "", "")
+				rec = append(rec, make([]string, len(hopFields))...)
 			}
 		}
 		for i := range rec {
@@ -112,9 +141,26 @@ func Export(devices []model.Device) (string, error) {
 	return buf.String(), w.Error()
 }
 
+func pick(ja bool, a, b string) string {
+	if ja {
+		return a
+	}
+	return b
+}
+
 // Import parses CSV text (with header) into devices. Column order follows the
-// header names, so users may reorder or omit optional columns.
+// header names (English or Japanese), so users may reorder or omit optional
+// columns.
 func Import(text string) ([]model.Device, error) {
+	if !utf8.ValidString(text) {
+		// Saved again by Excel as 「CSV（コンマ区切り）」: Shift_JIS, and
+		// every Japanese header and value would otherwise be unreadable.
+		dec, err := japanese.ShiftJIS.NewDecoder().String(text)
+		if err != nil || strings.ContainsRune(dec, utf8.RuneError) {
+			return nil, fmt.Errorf("文字コードを読み取れません。Excel では「CSV UTF-8（コンマ区切り）」で保存してください")
+		}
+		text = dec
+	}
 	text = strings.TrimPrefix(text, BOM)
 	r := csv.NewReader(strings.NewReader(text))
 	r.FieldsPerRecord = -1 // tolerate ragged rows
@@ -125,19 +171,49 @@ func Import(text string) ([]model.Device, error) {
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("empty CSV")
 	}
+	// Header → column index, keyed by the lower-case English key: a Japanese
+	// header is mapped to its key first.
+	// Matched ignoring case in both languages (「ENABLEパスワード」).
+	alias := map[string]string{}
+	for _, c := range deviceCols {
+		alias[strings.ToLower(c.ja)] = strings.ToLower(c.key)
+	}
+	for n := 1; n <= model.MaxBastions; n++ {
+		for _, f := range hopFields {
+			alias[strings.ToLower(hopJa(n, f))] = strings.ToLower(hopKey(n, f))
+		}
+	}
 	idx := map[string]int{}
 	for i, name := range rows[0] {
-		idx[strings.TrimSpace(strings.ToLower(name))] = i
+		h := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(name, BOM)))
+		if k, ok := alias[h]; ok {
+			h = k
+		}
+		idx[h] = i
 	}
 	if _, ok := idx["name"]; !ok {
-		return nil, fmt.Errorf("CSV must have a 'name' column in the header row")
+		return nil, fmt.Errorf("1 行目（見出し）に「機器名」（name）の列がありません")
 	}
-
+	has := func(key string) bool { _, ok := idx[strings.ToLower(key)]; return ok }
 	get := func(row []string, key string) string {
-		if i, ok := idx[key]; ok && i < len(row) {
+		if i, ok := idx[strings.ToLower(key)]; ok && i < len(row) {
 			return strings.TrimSpace(cellIn(row[i]))
 		}
 		return ""
+	}
+	// secret is get without trimming: a password may begin or end with a
+	// space, and must read back as it was written.
+	secret := func(row []string, key string) string {
+		if i, ok := idx[strings.ToLower(key)]; ok && i < len(row) {
+			return cellIn(row[i])
+		}
+		return ""
+	}
+	// The one-column-per-field jump hosts are there when any hop's host
+	// column is (bastion1Host deleted in Excel leaves bastion2Host read).
+	perHop := false
+	for n := 1; n <= model.MaxBastions; n++ {
+		perHop = perHop || has(hopKey(n, hopFields[1]))
 	}
 
 	var out []model.Device
@@ -152,38 +228,61 @@ func Import(text string) ([]model.Device, error) {
 			Site:           get(row, "site"),
 			Role:           get(row, "role"),
 			Host:           get(row, "host"),
-			Conn:           model.ConnMethod(orDefault(get(row, "conn"), "ssh")),
+			Conn:           model.ConnMethod(orDefault(connIn(get(row, "conn")), "ssh")),
 			Port:           atoi(get(row, "port")),
-			SerialPort:     get(row, "serialport"),
+			SerialPort:     get(row, "serialPort"),
 			Baud:           atoi(get(row, "baud")),
-			OSType:         orDefault(get(row, "ostype"), "generic"),
-			CommandSet:     get(row, "commandset"),
-			AuthMethod:     model.AuthMethod(orDefault(get(row, "authmethod"), "password")),
-			KeyFile:        get(row, "keyfile"),
-			KeyPassphrase:  get(row, "keypassphrase"),
+			OSType:         orDefault(get(row, "osType"), "generic"),
+			CommandSet:     get(row, "commandSet"),
+			AuthMethod:     model.AuthMethod(orDefault(authIn(get(row, "authMethod")), "password")),
+			KeyFile:        get(row, "keyFile"),
+			KeyPassphrase:  secret(row, "keyPassphrase"),
 			Username:       get(row, "username"),
-			Password:       get(row, "password"),
-			EnablePassword: get(row, "enablepassword"),
-			LegacyAlgos:    parseBool(get(row, "legacyalgos"), false),
-			Bastions:       decodeBastions(get(row, "bastions")),
+			Password:       secret(row, "password"),
+			EnablePassword: secret(row, "enablePassword"),
+			LegacyAlgos:    parseBool(get(row, "legacyAlgos"), false),
 			Enabled:        parseBool(get(row, "enabled"), true),
-			UseGroupCreds:  parseBool(get(row, "usegroupcreds"), false),
+			UseGroupCreds:  parseBool(get(row, "useGroupCreds"), false),
 		}
-		applyBastionExtras(d.Bastions, get(row, "bastionextras"))
-		// Per-hop columns win over the old JSON column: a column that is
-		// there is the file's word for that field, empty included.
-		for n := range d.Bastions {
-			c := hopCols(n + 1)
-			has := func(k string) bool { _, ok := idx[strings.ToLower(k)]; return ok }
-			b := &d.Bastions[n]
-			if has(c[0]) {
-				b.KeyPassphrase = get(row, strings.ToLower(c[0]))
+		if perHop {
+			// One column per jump-host field. A hop is there when its host is.
+			for n := 1; n <= model.MaxBastions; n++ {
+				hv := func(f int) string { return get(row, hopKey(n, hopFields[f])) }
+				hs := func(f int) string { return secret(row, hopKey(n, hopFields[f])) }
+				if hv(1) == "" {
+					continue
+				}
+				d.Bastions = append(d.Bastions, model.Bastion{
+					Method:        model.BastionMethod(orDefault(connIn(hv(0)), "ssh")),
+					Host:          hv(1),
+					Port:          atoi(hv(2)),
+					Username:      hv(3),
+					Password:      hs(4),
+					AuthMethod:    model.AuthMethod(orDefault(authIn(hv(5)), "password")),
+					KeyFile:       hv(6),
+					KeyPassphrase: hs(7),
+					LegacyAlgos:   parseBool(hv(8), false),
+					JumpCommand:   hv(9),
+				})
 			}
-			if has(c[1]) {
-				b.LegacyAlgos = parseBool(get(row, strings.ToLower(c[1])), false)
-			}
-			if has(c[2]) {
-				b.JumpCommand = get(row, strings.ToLower(c[2]))
+		}
+		if len(d.Bastions) == 0 && get(row, "bastions") != "" {
+			// v1.6.4 and before: the packed "bastions" column, its extras in
+			// the JSON column (≤ v1.5.16) or per-hop extras columns.
+			d.Bastions = decodeBastions(get(row, "bastions"))
+			applyBastionExtras(d.Bastions, get(row, "bastionExtras"))
+			for n := range d.Bastions {
+				p := "bastion" + strconv.Itoa(n+1)
+				b := &d.Bastions[n]
+				if has(p + "KeyPassphrase") {
+					b.KeyPassphrase = get(row, p+"KeyPassphrase")
+				}
+				if has(p + "LegacyAlgos") {
+					b.LegacyAlgos = parseBool(get(row, p+"LegacyAlgos"), false)
+				}
+				if has(p + "JumpCommand") {
+					b.JumpCommand = get(row, p+"JumpCommand")
+				}
 			}
 		}
 		out = append(out, d)
@@ -191,17 +290,71 @@ func Import(text string) ([]model.Device, error) {
 	return out, nil
 }
 
-func encodeBastions(bs []model.Bastion) string {
-	if len(bs) == 0 {
-		return ""
+// ---- the fixed values, in the words of the export's language ----
+
+func connOut(v string, ja bool) string {
+	if !ja {
+		return v
 	}
-	parts := make([]string, 0, len(bs))
-	for _, b := range bs {
-		f := []string{string(b.Method), b.Host, itoa(b.Port), b.Username, b.Password, string(b.AuthMethod), b.KeyFile}
-		parts = append(parts, strings.Join(f, ":"))
+	switch v {
+	case "ssh":
+		return "SSH"
+	case "telnet":
+		return "Telnet"
+	case "serial":
+		return "シリアル"
 	}
-	return strings.Join(parts, "|")
+	return v
 }
+
+func connIn(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "ssh":
+		return "ssh"
+	case "telnet":
+		return "telnet"
+	case "serial", "シリアル":
+		return "serial"
+	}
+	return strings.TrimSpace(v)
+}
+
+func authOut(v string, ja bool) string {
+	if !ja {
+		return v
+	}
+	switch v {
+	case "password", "":
+		return "パスワード"
+	case "publickey":
+		return "公開鍵"
+	}
+	return v
+}
+
+func authIn(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "password", "パスワード":
+		return "password"
+	case "publickey", "公開鍵", "鍵":
+		return "publickey"
+	}
+	return strings.TrimSpace(v)
+}
+
+func boolOut(b, ja bool) string {
+	switch {
+	case ja && b:
+		return "はい"
+	case ja:
+		return "いいえ"
+	case b:
+		return "true"
+	}
+	return "false"
+}
+
+// ---- the packed "bastions" column of v1.6.4 and before (import only) ----
 
 func decodeBastions(s string) []model.Bastion {
 	s = strings.TrimSpace(s)
@@ -238,17 +391,16 @@ func decodeBastions(s string) []model.Bastion {
 	return out
 }
 
-// bastionExtra is the per-hop part of a bastion that the positional
-// "bastions" column cannot carry. Field names match model.Bastion's JSON so
-// the column reads like the vault.
+// bastionExtra is the per-hop part the packed column could not carry, as
+// the JSON "bastionExtras" column of v1.5.16 and before wrote it.
 type bastionExtra struct {
 	KeyPassphrase string `json:"keyPassphrase,omitempty"`
 	LegacyAlgos   bool   `json:"legacyAlgos,omitempty"`
 	JumpCommand   string `json:"jumpCommand,omitempty"`
 }
 
-// applyBastionExtras merges the old JSON "bastionExtras" column into the decoded hops by
-// position. A malformed or absent column leaves the hops as decoded.
+// applyBastionExtras merges the old JSON "bastionExtras" column into the
+// decoded hops by position. A malformed or absent column leaves them as is.
 func applyBastionExtras(bs []model.Bastion, s string) {
 	s = strings.TrimSpace(s)
 	if s == "" || len(bs) == 0 {
@@ -274,18 +426,12 @@ func itoa(i int) string {
 	}
 	return strconv.Itoa(i)
 }
-func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
-func boolStr(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}
+func atoi(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
 func parseBool(s string, def bool) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "1", "yes", "y", "on":
+	case "true", "1", "yes", "y", "on", "はい", "○", "◯", "有効":
 		return true
-	case "false", "0", "no", "n", "off":
+	case "false", "0", "no", "n", "off", "いいえ", "×", "無効":
 		return false
 	}
 	return def

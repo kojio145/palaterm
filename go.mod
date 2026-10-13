@@ -1,12 +1,15 @@
 module github.com/kojio145/palaterm
 
-go 1.25.0
+go 1.26.0
+
+toolchain go1.26.9
 
 require (
 	github.com/wailsapp/wails/v2 v2.9.2
 	go.bug.st/serial v1.6.2
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.56.0
 	golang.org/x/sys v0.47.0
+	golang.org/x/text v0.41.0
 )
 
 require (
@@ -35,5 +38,4 @@ require (
 	github.com/wailsapp/mimetype v1.4.1 // indirect
 	golang.org/x/exp v0.0.0-20230522175609-2e198f4a06a1 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
 )
