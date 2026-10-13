@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.15";
+const APP_VERSION = "1.5.16";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -61,12 +61,12 @@ document.addEventListener("keydown", e => {
 
 // subConfirm asks a yes/no question in a small window over the open dialog
 // (uiConfirm would replace the dialog itself). Resolves true for ok.
-function subConfirm(message, okLabel) {
+function subConfirm(message, okLabel, cancelLabel) {
   return new Promise(resolve => {
     const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(440px,90vw)">
       <div style="font-size:14px;line-height:1.7">${message}</div>
       <div class="modal-actions">
-        <button class="btn" id="sc-no" type="button">${esc(t("編集に戻る"))}</button>
+        <button class="btn" id="sc-no" type="button">${esc(cancelLabel || t("編集に戻る"))}</button>
         <button class="btn danger" id="sc-ok" type="button">${esc(okLabel)}</button>
       </div></div></div>`);
     document.body.appendChild(ov);
@@ -569,6 +569,18 @@ async function boot() {
     return;
   }
   App().SetLang(LANG).catch(() => {});
+  // × with terminal windows open: the backend holds the close and asks here
+  // (Windows' own Yes/No box looked out of place). キャンセル has the focus.
+  let quitAsking = false;
+  rt().EventsOn("app:quit-request", async n => {
+    if (quitAsking) return;
+    quitAsking = true;
+    const ok = await subConfirm(`<b>${esc(t("PalaTerm を終了"))}</b><br>` +
+      esc(t("対話接続のウィンドウが {n} 個開いています。PalaTerm を終了すると、これらも切断して閉じます（ログは保存されます）。終了しますか？", { n })),
+      t("終了する"), t("キャンセル"));
+    quitAsking = false;
+    if (ok) App().ConfirmQuit().catch(() => {});
+  });
   restoredTab = restoreUIState();
   const exists = await App().VaultExists();
   renderLock(exists);

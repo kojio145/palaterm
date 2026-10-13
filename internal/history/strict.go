@@ -174,21 +174,65 @@ func normCmd(s string) string {
 	return strings.ToLower(strings.TrimSpace(ws.ReplaceAllString(s, " ")))
 }
 
+// refusedMark matches what devices print right after a command they did
+// not take: "% Invalid input detected at '^' marker.", "% Incomplete
+// command.", "% Ambiguous command", NEC IX "% x -- Invalid command.",
+// "Unrecognized command", "syntax error", bash "command not found", and the
+// caret line that points at the error.
+var refusedMark = regexp.MustCompile(`(?i)(^\s*\^\s*$|%\s*(invalid|incomplete|ambiguous|unknown|unrecognized)|invalid (input|command)|unrecognized command|unknown command|syntax error|command not found|command fail|error: )`)
+
+// refusedWithin is how many output lines after a command are looked at for
+// a refusal (the device answers at once; later lines are output).
+const refusedWithin = 3
+
 // ExtractConfigCommands returns the setting lines typed in a work transcript,
 // in order, deduplicated, and the number of command lines of any kind.
+//
+// A prompt line is not always a command that ran. Two kinds are left out,
+// because counting them made a mistyped "show" or a half-typed word look
+// like a setting the device had not taken (user report 2026-10-13):
+//
+//   - refused: the device answered with an error ("% Invalid input …",
+//     the "^" marker, "command not found") — a typo, or "de" + Enter;
+//   - redrawn: "?" help or an ambiguous Tab listed candidates and the device
+//     printed the prompt again with what was typed so far ("…#de" → list →
+//     "…#description x"). The earlier line is the same prompt, the later
+//     one continues it, and output came in between. (Two real commands in a
+//     row show no output between them, so a setting that extends the one
+//     before it is still counted.)
 func ExtractConfigCommands(workLog string) ([]string, int) {
+	type entry struct {
+		prompt, cmd string
+		after       []string // output lines up to the next prompt line
+	}
+	var entries []entry
+	for _, raw := range splitLines(workLog) {
+		line := strings.TrimRight(raw, " \t")
+		if m := promptLine.FindStringSubmatch(line); m != nil {
+			entries = append(entries, entry{prompt: m[1], cmd: strings.TrimSpace(m[2])})
+			continue
+		}
+		if n := len(entries); n > 0 && strings.TrimSpace(line) != "" {
+			entries[n-1].after = append(entries[n-1].after, line)
+		}
+	}
 	var out []string
 	seen := map[string]bool{}
 	typed := 0
-	for _, raw := range splitLines(workLog) {
-		m := promptLine.FindStringSubmatch(strings.TrimRight(raw, " \t"))
-		if m == nil {
+	for i, e := range entries {
+		typed++
+		cmd := e.cmd
+		if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") {
 			continue
 		}
-		cmd := strings.TrimSpace(m[2])
-		typed++
-		if cmd == "" || notSetting.MatchString(cmd) {
+		if refused(e.after) {
 			continue
+		}
+		if i+1 < len(entries) && len(e.after) > 0 {
+			next := entries[i+1]
+			if next.prompt == e.prompt && len(next.cmd) > len(cmd) && strings.HasPrefix(strings.ToLower(next.cmd), strings.ToLower(cmd)) {
+				continue // redrawn after help / completion candidates
+			}
 		}
 		k := normCmd(cmd)
 		if seen[k] {
@@ -198,6 +242,19 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 		out = append(out, cmd)
 	}
 	return out, typed
+}
+
+// refused reports a device error among the first lines after a command.
+func refused(after []string) bool {
+	for i, l := range after {
+		if i >= refusedWithin {
+			break
+		}
+		if refusedMark.MatchString(l) {
+			return true
+		}
+	}
+	return false
 }
 
 // lineCounts indexes a log by normalised line.

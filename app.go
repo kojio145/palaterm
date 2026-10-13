@@ -60,6 +60,7 @@ type App struct {
 	pendingPins map[string]string
 
 	lastDone *RunDone // the last batch's results (GetRunStatus)
+	quitting bool     // ConfirmQuit: close without asking again
 }
 
 // NewApp constructs the backend with the vault stored next to the executable
@@ -1954,21 +1955,30 @@ func (a *App) SetLang(lang string) {
 	a.mu.Unlock()
 }
 
-// beforeClose asks before closing the main window while terminal windows are
-// open: they close with it (see winjob.go).
+// beforeClose holds the main window's close while terminal windows are open
+// (they close with it, see winjob.go) and asks in the page, styled like the
+// rest of the app: ConfirmQuit finishes the close.
 func (a *App) beforeClose(ctx context.Context) bool {
+	a.mu.Lock()
+	quitting := a.quitting
+	a.mu.Unlock()
 	n := a.openTerminals()
-	if n == 0 {
+	if quitting || n == 0 {
 		return false
 	}
+	runtime.EventsEmit(ctx, "app:quit-request", n)
+	return true
+}
+
+// ConfirmQuit is the answer "quit" to app:quit-request.
+func (a *App) ConfirmQuit() {
 	a.mu.Lock()
-	en := a.lang == "en"
+	a.quitting = true
+	ctx := a.ctx
 	a.mu.Unlock()
-	title, msg := "PalaTerm を終了", fmt.Sprintf("対話接続のウィンドウが %d 個開いています。PalaTerm を終了すると、これらも切断して閉じます。終了しますか？", n)
-	if en {
-		title, msg = "Quit PalaTerm", fmt.Sprintf("%d terminal window(s) are open. Quitting PalaTerm disconnects and closes them too. Quit?", n)
+	if ctx != nil {
+		runtime.Quit(ctx)
 	}
-	return !confirmDialog(ctx, title, msg)
 }
 
 // termEventClearHostKey is the stdout line a terminal window prints when the
@@ -1980,7 +1990,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.15"
+const appVersion = "1.5.16"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

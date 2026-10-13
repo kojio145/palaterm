@@ -153,6 +153,16 @@ async function bootTerminalWindow() {
         </div>
       </div>
     </div>
+    <div id="tw-close" class="hidden" style="position:absolute;inset:0;z-index:35;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7)">
+      <div style="width:min(460px,92vw);background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:20px 22px;font-family:'Segoe UI',sans-serif">
+        <div style="color:#e6ecf3;font-size:15px;font-weight:600;margin-bottom:8px">${esc(t("接続中です"))}</div>
+        <div style="color:#c7d0dc;font-size:13px;line-height:1.8;margin-bottom:16px">${esc(t("この機器との接続を切断して、ウィンドウを閉じますか？ ログはここまでの内容で保存されます。"))}</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn" id="tw-close-cancel">${esc(t("キャンセル"))}</button>
+          <button class="btn danger" id="tw-close-ok">${esc(t("切断して閉じる"))}</button>
+        </div>
+      </div>
+    </div>
     <div id="tw-lock" class="hidden" style="position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:#0b0e13">
       <div style="width:360px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px;font-family:'Segoe UI',sans-serif">
         <div style="color:#e6ecf3;font-size:15px;font-weight:600;margin-bottom:6px">🔒 ${esc(t("ロック中"))}</div>
@@ -606,6 +616,39 @@ async function bootTerminalWindow() {
   document.getElementById("tw-lock-ok").onclick = tryUnlock;
   lockIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); tryUnlock(); } });
   rt().EventsOn("term:lock", showLock);
+  // × while connected: the backend holds the close and asks here, in the
+  // window's own style. キャンセル (also Esc) is where the focus starts, so a
+  // stray Enter keeps the session.
+  const closeDlg = document.getElementById("tw-close");
+  // While the question shows, everything behind it is inert: the window
+  // coming to the front on × gave the terminal the focus back, and keys
+  // typed then went to the device instead of the dialog.
+  let inertBefore = null;
+  const hideCloseDlg = () => {
+    closeDlg.classList.add("hidden");
+    closeDlg.style.zIndex = "35";
+    if (inertBefore) { [...wrap.children].forEach((el, i) => { el.inert = inertBefore[i]; }); inertBefore = null; }
+    // Locked meanwhile (or before): the lock decides what stays inert.
+    if (locked) { setInert(true); lockIn.focus(); } else term.focus();
+  };
+  rt().EventsOn("term:close-request", () => {
+    // Closing sends nothing to the device, so a locked window may be closed
+    // too: the question then shows above the lock screen.
+    if (locked) closeDlg.style.zIndex = "45";
+    if (!inertBefore) {
+      inertBefore = [...wrap.children].map(el => el.inert);
+      [...wrap.children].forEach(el => { el.inert = el !== closeDlg; });
+    }
+    closeDlg.inert = false;
+    closeDlg.classList.remove("hidden");
+    setTimeout(() => document.getElementById("tw-close-cancel").focus(), 30);
+  });
+  document.getElementById("tw-close-cancel").onclick = hideCloseDlg;
+  document.getElementById("tw-close-ok").onclick = () => {
+    document.getElementById("tw-close-ok").disabled = true;
+    Term().ConfirmClose().catch(() => {});
+  };
+  closeDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); hideCloseDlg(); } });
   Term().IsLocked().then(v => { if (v) showLock(); }).catch(() => {});
   let lastInput = Date.now();
   ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) lastInput = Date.now(); }, { passive: true }));

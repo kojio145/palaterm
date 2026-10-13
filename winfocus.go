@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
 	"runtime"
 	"sync"
 	"syscall"
 	"time"
 	"unsafe"
-
-	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var (
@@ -136,20 +133,4 @@ func webviewInputChild(parent uintptr) uintptr {
 		return win1
 	}
 	return win0
-}
-
-// confirmDialog shows a native Yes/No question and reports whether Yes was
-// chosen (any failure to show it counts as No). On Windows Wails shows the
-// standard はい／いいえ buttons whatever labels are passed, and makes いいえ the
-// default only for DefaultButton "No" — so Enter never confirms a quit or a
-// disconnect by accident.
-func confirmDialog(ctx context.Context, title, msg string) bool {
-	res, err := wruntime.MessageDialog(ctx, wruntime.MessageDialogOptions{
-		Type: wruntime.QuestionDialog, Title: title, Message: msg,
-		Buttons: []string{"Yes", "No"}, DefaultButton: "No", CancelButton: "No",
-	})
-	if err != nil {
-		return false
-	}
-	return res == "Yes"
 }

@@ -783,16 +783,31 @@ func (t *Term) SetLang(lang string) {
 // of a configuration change.
 func (t *Term) beforeClose(ctx context.Context) bool {
 	t.mu.Lock()
-	live, en := t.send != nil && !t.quitting, t.lang == "en"
+	live := t.send != nil && !t.quitting
 	t.mu.Unlock()
 	if !live {
 		return false
 	}
-	title, msg := "接続中", "この機器に接続中です。切断してウィンドウを閉じますか？"
-	if en {
-		title, msg = "Connected", "This window is connected to the device. Disconnect and close it?"
+	// The question is asked in the window itself, styled like the rest of it
+	// (Windows' own Yes/No box looked out of place): the close is held here,
+	// and ConfirmClose finishes it if the user says so.
+	runtime.EventsEmit(ctx, "term:close-request")
+	return true
+}
+
+// ConfirmClose is the answer "disconnect and close" to term:close-request:
+// the session ends the normal way (log closed, summary written), then the
+// window closes without asking again.
+func (t *Term) ConfirmClose() {
+	t.mu.Lock()
+	t.quitting = true
+	ctx := t.ctx
+	t.mu.Unlock()
+	t.Close()
+	time.Sleep(300 * time.Millisecond) // let onClose write the summary
+	if ctx != nil {
+		runtime.Quit(ctx)
 	}
-	return !confirmDialog(ctx, title, msg)
 }
 
 // quitForParent ends the session the normal way — so the log is closed and
