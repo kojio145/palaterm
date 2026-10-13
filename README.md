@@ -31,6 +31,8 @@ Windows exe — no installation required.
 - 📁 **Automatic log saving** — `{host}_{site}_{role}_{stage}_{date}_{time}.txt` style, customizable with placeholders
 - 🕘 **Run history & before/after diff** — tag a run as before / during / after the work, then compare
   the before and after logs per device (clock and counter noise ignored)
+- ⏰ **Schedules** — run a batch at set times (once / daily / weekly / every n hours) for collecting show output;
+  keeps running from the tray and while locked, wakes the PC from sleep where Windows allows it
 - ⚠️ **Change guard** — a command set that contains `conf t` / `write` / `reload` … is called out
   before the batch starts; a connect-only dry run checks credentials without sending a command
 - 🏢 **Group default credentials** — one shared account per group, with per-device overrides

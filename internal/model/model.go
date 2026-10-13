@@ -13,6 +13,7 @@ import (
 
 	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/profile"
+	"github.com/kojio145/palaterm/internal/schedule"
 )
 
 // ConnMethod is how PalaTerm reaches a device.
@@ -414,6 +415,10 @@ type Inventory struct {
 	// (trust-on-first-use); a later mismatch aborts the connection. Stored
 	// inside the encrypted vault like everything else.
 	KnownHostKeys map[string]string `json:"knownHostKeys,omitempty"`
+
+	// Schedules are the 予約 (scheduled batch runs), run by the main window
+	// while it is open, locked or in the tray (see sched_app.go).
+	Schedules []schedule.Schedule `json:"schedules,omitempty"`
 }
 
 // Settings holds run-wide options.
@@ -458,6 +463,11 @@ type Settings struct {
 	// (the default) pastes at once. Off wins over Confirm, as in Tera Term.
 	RightClickPasteOff     bool `json:"rightClickPasteOff,omitempty"`
 	RightClickPasteConfirm bool `json:"rightClickPasteConfirm,omitempty"`
+
+	// ScheduleKeepAwake keeps the PC from idle sleep for as long as an
+	// enabled 予約 is still to fire (set in the 予約 tab): for PCs that
+	// cannot be woken for one (wake timers off, modern standby).
+	ScheduleKeepAwake bool `json:"scheduleKeepAwake,omitempty"`
 }
 
 // RightClickPaste returns what a right-click does in the interactive

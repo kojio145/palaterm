@@ -1,0 +1,125 @@
+package schedule
+
+import (
+	"testing"
+	"time"
+)
+
+var jst = time.FixedZone("JST", 9*3600)
+
+func at(s string) time.Time {
+	t, err := time.ParseInLocation("2006-01-02 15:04:05", s, jst)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func TestSlotNext(t *testing.T) {
+	cases := []struct {
+		name  string
+		slot  Slot
+		after string
+		want  string // "" = never
+	}{
+		{"once ahead", Slot{Kind: KindOnce, Date: "2026-10-14", Time: "03:00:00"}, "2026-10-13 20:00:00", "2026-10-14 03:00:00"},
+		{"once exactly now is past", Slot{Kind: KindOnce, Date: "2026-10-14", Time: "03:00:00"}, "2026-10-14 03:00:00", ""},
+		{"once past", Slot{Kind: KindOnce, Date: "2026-10-12", Time: "03:00"}, "2026-10-13 20:00:00", ""},
+		{"daily later today", Slot{Kind: KindDaily, Time: "21:30:15"}, "2026-10-13 20:00:00", "2026-10-13 21:30:15"},
+		{"daily tomorrow", Slot{Kind: KindDaily, Time: "03:00"}, "2026-10-13 20:00:00", "2026-10-14 03:00:00"},
+		{"daily same second is next day", Slot{Kind: KindDaily, Time: "20:00:00"}, "2026-10-13 20:00:00", "2026-10-14 20:00:00"},
+		// 2026-10-13 is a Tuesday.
+		{"weekly sun/wed", Slot{Kind: KindWeekly, Time: "12:00:00", Weekdays: []int{0, 3}}, "2026-10-13 20:00:00", "2026-10-14 12:00:00"},
+		{"weekly only tue, later today", Slot{Kind: KindWeekly, Time: "23:00:00", Weekdays: []int{2}}, "2026-10-13 20:00:00", "2026-10-13 23:00:00"},
+		{"weekly only tue, passed today", Slot{Kind: KindWeekly, Time: "08:00:00", Weekdays: []int{2}}, "2026-10-13 20:00:00", "2026-10-20 08:00:00"},
+		{"weekly no days", Slot{Kind: KindWeekly, Time: "08:00:00"}, "2026-10-13 20:00:00", ""},
+		{"interval before start", Slot{Kind: KindInterval, Date: "2026-10-14", Time: "00:00:00", EveryHours: 6}, "2026-10-13 20:00:00", "2026-10-14 00:00:00"},
+		{"interval running", Slot{Kind: KindInterval, Date: "2026-10-13", Time: "01:00:00", EveryHours: 6}, "2026-10-13 20:00:00", "2026-10-14 01:00:00"},
+		{"interval on boundary", Slot{Kind: KindInterval, Date: "2026-10-13", Time: "02:00:00", EveryHours: 6}, "2026-10-13 20:00:00", "2026-10-14 02:00:00"},
+		{"bad time", Slot{Kind: KindDaily, Time: "25:00"}, "2026-10-13 20:00:00", ""},
+	}
+	for _, c := range cases {
+		got := c.slot.Next(at(c.after))
+		if c.want == "" {
+			if !got.IsZero() {
+				t.Errorf("%s: got %v, want never", c.name, got)
+			}
+			continue
+		}
+		if !got.Equal(at(c.want)) {
+			t.Errorf("%s: got %v, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestScheduleNextPicksEarliestSlot(t *testing.T) {
+	sc := Schedule{Enabled: true, Slots: []Slot{
+		{Kind: KindDaily, Time: "03:00:00"},
+		{Kind: KindOnce, Date: "2026-10-13", Time: "22:00:00"},
+	}}
+	if got := sc.Next(at("2026-10-13 20:00:00")); !got.Equal(at("2026-10-13 22:00:00")) {
+		t.Errorf("got %v", got)
+	}
+	sc.Enabled = false
+	if !sc.Next(at("2026-10-13 20:00:00")).IsZero() {
+		t.Error("a disabled schedule must not fire")
+	}
+}
+
+func TestPlan(t *testing.T) {
+	sc := Schedule{Enabled: true, Slots: []Slot{{Kind: KindInterval, Date: "2026-10-13", Time: "00:00:00", EveryHours: 1}}}
+	// Normal tick: the 21:00 firing, seen 5 seconds late, runs.
+	run, missed := sc.Plan(at("2026-10-13 20:59:58"), at("2026-10-13 21:00:05"))
+	if !run.Equal(at("2026-10-13 21:00:00")) || len(missed) != 0 {
+		t.Errorf("normal: run=%v missed=%v", run, missed)
+	}
+	// Slept 20:59 → 23:10: 21:00 and 22:00 were missed, 23:00 (10 min late) runs.
+	run, missed = sc.Plan(at("2026-10-13 20:59:00"), at("2026-10-13 23:10:00"))
+	if !run.Equal(at("2026-10-13 23:00:00")) || len(missed) != 2 || !missed[0].Equal(at("2026-10-13 21:00:00")) {
+		t.Errorf("after sleep: run=%v missed=%v", run, missed)
+	}
+	// Woke 40 min after the last firing: nothing runs, all recorded as missed.
+	run, missed = sc.Plan(at("2026-10-13 20:59:00"), at("2026-10-13 23:40:00"))
+	if !run.IsZero() || len(missed) != 3 {
+		t.Errorf("too late: run=%v missed=%v", run, missed)
+	}
+	// Nothing due.
+	run, missed = sc.Plan(at("2026-10-13 21:00:01"), at("2026-10-13 21:00:06"))
+	if !run.IsZero() || missed != nil {
+		t.Errorf("idle: run=%v missed=%v", run, missed)
+	}
+}
+
+func TestValidate(t *testing.T) {
+	now := at("2026-10-13 20:00:00")
+	ok := Schedule{Name: "夜間", Group: "A社", Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "03:00"}}}
+	if err := ok.Validate(now); err != nil {
+		t.Fatalf("valid schedule refused: %v", err)
+	}
+	bad := []Schedule{
+		{Group: "A社", Slots: ok.Slots},
+		{Name: "x", Slots: ok.Slots},
+		{Name: "x", Group: "A社"},
+		{Name: "x", Group: "A社", Slots: []Slot{{Kind: KindOnce, Date: "2026-10-12", Time: "03:00"}}},
+		{Name: "x", Group: "A社", Slots: []Slot{{Kind: KindInterval, Date: "2026-10-12", Time: "03:00", EveryHours: 0}}},
+		{Name: "x", Group: "A社", Slots: []Slot{{Kind: KindWeekly, Time: "03:00"}}},
+		{Name: "x", Group: "A社", Slots: []Slot{{Kind: "monthly", Time: "03:00"}}},
+		{Name: "x", Group: "A社", Slots: []Slot{{Kind: KindDaily, Time: "3時"}}},
+	}
+	for i, sc := range bad {
+		if err := sc.Validate(now); err == nil {
+			t.Errorf("case %d accepted: %+v", i, sc)
+		}
+	}
+}
+
+func TestNextOf(t *testing.T) {
+	list := []Schedule{
+		{Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "03:00"}}},
+		{Enabled: false, Slots: []Slot{{Kind: KindDaily, Time: "21:00"}}},
+		{Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "22:00"}}},
+	}
+	if got := NextOf(list, at("2026-10-13 20:00:00")); !got.Equal(at("2026-10-13 22:00:00")) {
+		t.Errorf("got %v", got)
+	}
+}

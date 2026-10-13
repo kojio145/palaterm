@@ -104,7 +104,7 @@ function renderHistoryView() {
     return `<tr>
       <td style="width:36px"><span class="link" data-toggle="${esc(r.dir)}" style="text-decoration:none">${open ? "▾" : "▸"}</span></td>
       <td style="width:170px" class="mono">${esc(fmtRunTime(r.startedAt))}</td>
-      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("単独接続"))}</span>` : ""}</td>
+      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("単独接続"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
       <td><div class="clip" data-tip="${esc(r.group || "")}">${esc(r.group || "")}</div></td>
       <td style="width:130px">${counts}</td>
       <td style="width:120px" class="muted" style="font-size:12px">${r.hasSummary ? "" : esc(t("旧形式"))}</td>

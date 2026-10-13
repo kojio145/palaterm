@@ -440,6 +440,7 @@ function renderRun() {
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
       </select>
       <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
+      <button class="btn" id="btn-sched" ${running ? "disabled" : ""} data-tip="${esc(t("今の選択（グループ・チェックした機器・コマンド・作業タイミング）で、決まった日時に一括実行する予約を作ります"))}">${esc(t("⏰ 予約…"))}</button>
       <div class="run-stat">
         <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
         <div>${esc(t("失敗"))} <b id="rc-err" style="color:var(--err)">0</b></div>
@@ -536,6 +537,7 @@ function renderRun() {
   const btnClear = document.getElementById("btn-clear");
   if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
+  document.getElementById("btn-sched").onclick = () => scheduleFromRun();
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
     // Results (and the 失敗のみ再実行 button) belong to the previous group's

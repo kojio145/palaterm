@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.5.17</div>
+    <div class="hero-tag">使い方マニュアル / v1.6.0</div>
   </header>
 
   <nav class="toc">
@@ -207,6 +207,7 @@
       <li><a href="#run">一括実行する</a></li>
       <li><a href="#interactive">対話接続（手動ログイン）</a></li>
       <li><a href="#history">実行履歴と作業前後の比較</a></li>
+      <li><a href="#schedule">予約（決まった日時に一括実行）</a></li>
       <li><a href="#log">ログを確認する</a></li>
       <li><a href="#settings">設定</a></li>
       <li><a href="#ostype">OSタイプ設定</a></li>
@@ -469,6 +470,7 @@
     右上には<strong>成功 / 失敗 / 実行中</strong>の件数に加えて<strong>予想残り時間</strong>が表示されます
     （完了済みコマンド数と経過時間からの概算で、実行が進むほど精度が上がります）。
     途中で止めたいときは<strong>「■ 中止」</strong>を押します（確認のうえ、接続待ちの最中でも即座に止まります）。</p>
+    <div class="callout tip"><span class="ic">i</span><p><strong>一括実行中は Windows の自動スリープを止めます。</strong> しばらく操作がないときのスリープは、実行が終わる（完了・中止・エラー）まで起きません（画面の消灯は止めません）。ただし、ノート PC の蓋を閉じる・手動でスリープにする操作は止められないので、長い実行中は蓋を閉じないでください（電源設定で「蓋を閉じたときの動作」を「何もしない」にする方法もあります）。</p></div>
 
     <figure class="shot" data-shot="11b_run_danger"><img src="img/manual/11b_run_danger.png" alt="設定を変更するコマンドが含まれるときの事前警告。同意するまで実行できない" loading="lazy"><figcaption>設定を変更するコマンドが含まれるときの事前警告。同意するまで実行できない</figcaption></figure>
     <figure class="shot" data-shot="14b_cancel_confirm"><img src="img/manual/14b_cancel_confirm.png" alt="■ 中止 を押したときの確認（実行中・未実行の台数）" loading="lazy"><figcaption>■ 中止 を押したときの確認（実行中・未実行の台数）</figcaption></figure>
@@ -549,6 +551,28 @@
       <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または単独接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗（＝は作業前からあった行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。</li>
     </ol>
     <div class="callout tip"><span class="ic">i</span><p>作業前に「作業タイミング: 作業前」で取得 → 作業 → 「作業後」で取得、という流れにしておくと、A / B を選ぶ手間なく比較できます。「指定なし」で取ったログ同士も比較できます（<code>palaterm-run.json</code> が無い古いフォルダはファイル名から機器名を推定します）。</p></div>
+  </section>
+
+  <section id="schedule">
+    <h2 class="step"><span class="num">★</span>予約（決まった日時に一括実行）</h2>
+    <p class="lead">夜間の設定バックアップのような定期取得を、決まった日時に自動で一括実行します（show 系の取得専用）。</p>
+    <ol class="steps">
+      <li>実行タブでグループ・機器のチェック・コマンド・作業タイミングを選び、<strong>「⏰ 予約…」</strong>を押します（左サイドバーの<strong>「予約」</strong>→「＋ 予約を追加」からも作れます）。</li>
+      <li><strong>予約名</strong>を付け、<strong>対象機器</strong>を「下でチェックした機器に固定」か「実行時に機器一覧でチェックされている機器」から選びます。</li>
+      <li><strong>日時（枠）</strong>を追加します。<strong>1回</strong>（日付＋時刻）・<strong>毎日</strong>・<strong>毎週</strong>（曜日を複数選択可）・<strong>n時間おき</strong>（開始日時から 1〜168 時間ごと）。時刻は秒まで指定でき、1 つの予約に枠を複数組み合わせられます（例: 毎日 03:00 ＋ 毎週日曜 12:00）。予約自体もいくつでも作れます。</li>
+      <li><strong>「保存」</strong>。予約タブに次の実行日時が出ます。<strong>「今すぐ実行」</strong>で 1 回だけ試せます。</li>
+    </ol>
+    <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンド</strong>（<code>conf t</code>・<code>write</code>・<code>reload</code> など、実行前の警告に出るもの）を含むセットは<strong>予約できません</strong>。無人で動くため取得専用にしています。保存時に加えて実行のたびにも確認し、含まれていれば実行せず「拒否」と記録します。</p></div>
+    <h3>いつ動くか</h3>
+    <ul>
+      <li>予約は <strong>PalaTerm が起動している間</strong>だけ動きます。予約があるときに <strong>× で閉じるとタスクトレイに残って</strong>動き続けます（トレイのアイコンをダブルクリックで再表示、右クリック →「終了」で本当に終了。Windows 11 ではアイコンが通知領域の「^」の中に入ります。常に表示するには、タスクバーの設定 →「その他のシステム トレイ アイコン」で PalaTerm をオン）。予約がなければ × は今までどおり終了です。</li>
+      <li><strong>ロック中も実行します</strong>。そのため、予約の対象機器の認証情報はロック中もメモリに残します（ファイルには書きません。対象外の機器やグループ既定の認証情報は残しません）。</li>
+      <li><strong>スリープ中</strong>は、予約の 90 秒前に PC をスリープから起こして実行します（スリープ解除タイマー）。Windows の電源オプション →「スリープ解除タイマーの許可」が<strong>有効</strong>である必要があります（バッテリー駆動時も。会社の PC では管理者の設定で無効のことがあります）。ノート PC の蓋閉じがスリープになる設定なら同じく動きます。<strong>休止状態・シャットダウン・PalaTerm の終了中は動きません</strong>。PalaTerm を起動して一度ロック解除すると再開します。</li>
+      <li><strong>スリープ解除タイマーが無効の PC・モダンスタンバイの PC</strong>（予約タブに ⚠ が出ます）では、スリープ中は予約が動きません（動かない可能性があります）。予約タブの<strong>「予約がある間は PC を自動スリープさせない」</strong>をオンにすると、有効な予約が残っている間は自動スリープを止めます（画面の消灯は止めません）。<strong>Windows の電源設定は書き換えません</strong>。PalaTerm が動いている間だけ Windows に「スリープしないで」と頼む仕組みなので、オフにする・予約がなくなる・PalaTerm を終了すると元どおりです。蓋閉じ・手動スリープは止められないので、蓋を閉じて使うときは電源オプションの「カバーを閉じたときの動作」を「何もしない」にしてください。</li>
+      <li>スリープ中などで実行できなかった回は<strong>「見逃し」</strong>として記録し、<strong>さかのぼっては実行しません</strong>。ほかの一括実行と重なったときは順番待ちし、<strong>30 分を過ぎたらスキップ</strong>して記録します。</li>
+      <li>PalaTerm は 1 つのフォルダにつき 1 つだけ起動します。トレイにいる間にもう一度 PalaTerm.exe を開くと、トレイの窓が表示されます。</li>
+    </ul>
+    <p>予約による実行のログは通常の一括実行と同じフォルダに保存され、<a href="#history">実行履歴</a>に「予約」の印付きで並びます。予約タブの<strong>「予約の実行記録」</strong>には、実行・見逃し・スキップ・拒否・エラーが予定日時ごとに残ります。</p>
   </section>
 
   <section id="log">
@@ -726,7 +750,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.5.17 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.6.0 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

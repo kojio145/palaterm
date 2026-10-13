@@ -40,7 +40,8 @@ type App struct {
 	inv      *model.Inventory // nil until unlocked
 
 	runCancel context.CancelFunc
-	runActive bool // a batch is in progress (blocks a second concurrent batch)
+	runActive bool   // a batch is in progress (blocks a second concurrent batch)
+	runSched  string // the 予約 running it ("" = started by hand)
 
 	// Host keys pinned during a batch are saved shortly after, together
 	// (persistSoon), not one vault write per device inside the handshake.
@@ -61,6 +62,13 @@ type App struct {
 
 	lastDone *RunDone // the last batch's results (GetRunStatus)
 	quitting bool     // ConfirmQuit: close without asking again
+
+	// 予約: the scheduler's state, the copy of what the enabled schedules
+	// need kept while the vault is locked (schedCopy), and the tray menu's
+	// 終了 (close for real instead of hiding into the tray).
+	sched    schedState
+	schedInv *model.Inventory
+	trayQuit bool
 }
 
 // NewApp constructs the backend with the vault stored next to the executable
@@ -73,6 +81,7 @@ func NewApp() *App {
 		runner:    runpkg.New(reg),
 		vaultPath: defaultVaultPath(),
 	}
+	a.sched.kick = make(chan struct{}, 1)
 	a.runner.HostKeys = a // TOFU host key pinning backed by the vault
 	return a
 }
@@ -99,6 +108,7 @@ func (a *App) startup(ctx context.Context) {
 		}
 		_, _ = bundle.WriteProfileJSON(profDir, p)
 	}
+	go a.schedLoop()
 }
 
 // ---- SSH host key pinning (session.HostKeyStore) ----
@@ -174,6 +184,8 @@ func (a *App) flushPersist() { a.writePending() }
 // shutdown runs when the main window closes.
 func (a *App) shutdown(ctx context.Context) {
 	a.flushPersist()
+	trayHide()
+	armWake(time.Time{})
 	// Ask the terminal windows to close their sessions first, so each writes
 	// its log summary (killed outright, they left an empty or unsummarised
 	// run in 実行履歴); then end whatever is left.
@@ -320,6 +332,7 @@ func (a *App) CreateVault(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	a.schedInv = nil    // the vault itself again
 	a.pendingPins = nil // a new vault starts with no pins from an old one
 	a.mu.Unlock()
 	return nil
@@ -516,6 +529,7 @@ func (a *App) Unlock(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	a.schedInv = nil // the vault itself again
 	// Keys a batch pinned while the vault was locked (see runHostKeys).
 	pins := a.pendingPins
 	a.pendingPins = nil
@@ -555,10 +569,14 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 	return len(sets) > 0
 }
 
-// Lock forgets the password and inventory from memory.
+// Lock forgets the password and inventory from memory — all but what the
+// enabled 予約 need to run while locked (schedCopy).
 func (a *App) Lock() {
 	a.flushPersist()
 	a.mu.Lock()
+	if a.inv != nil {
+		a.schedInv = schedCopy(a.inv)
+	}
 	a.password, a.inv = "", nil
 	a.mu.Unlock()
 }
@@ -607,6 +625,7 @@ func (a *App) ResetVault(current string) error {
 		return fmt.Errorf("現在のマスターパスワードが違います")
 	}
 	a.password, a.inv = "", nil
+	a.schedInv = nil
 	a.pendingPins = nil // nothing of the old vault goes into the next one
 	a.mu.Unlock()
 	if err := os.Remove(a.vaultPath); err != nil && !os.IsNotExist(err) {
@@ -830,6 +849,9 @@ func (a *App) SaveDevice(d model.Device) error {
 		}
 	}
 	if idx >= 0 {
+		if old := a.inv.Devices[idx]; old.Group == d.Group && old.Name != d.Name {
+			renameSchedDevice(a.inv, d.Group, old.Name, d.Name)
+		}
 		a.inv.Devices[idx] = d
 	} else {
 		if d.ID == "" {
@@ -1057,6 +1079,7 @@ func (a *App) RenameDevice(id, newName string) error {
 		a.mu.Unlock()
 		return errDeviceNameTaken(d.Group, newName)
 	}
+	renameSchedDevice(a.inv, d.Group, d.Name, newName)
 	d.Name = newName
 	a.mu.Unlock()
 	return a.persist()
@@ -1209,6 +1232,7 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 			a.inv.Devices[i].Group = newName
 		}
 	}
+	renameSchedGroup(a.inv, oldName, newName)
 	a.mu.Unlock()
 	return a.persist()
 }
@@ -1274,6 +1298,7 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 		return fmt.Errorf("command set %q not found", oldName)
 	}
 	a.inv.CommandSets[idx].Name = newName
+	renameSchedSet(a.inv, oldName, newName)
 	for i := range a.inv.Devices {
 		if a.inv.Devices[i].CommandSet == oldName {
 			a.inv.Devices[i].CommandSet = newName
@@ -1341,8 +1366,10 @@ func (a *App) SaveSettings(s model.Settings) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	// The form never shows LastKeyFile; keep it instead of blanking it.
+	// The form never shows LastKeyFile or the 予約 tab's keep-awake; keep
+	// them instead of blanking them.
 	s.LastKeyFile = a.inv.Settings.LastKeyFile
+	s.ScheduleKeepAwake = a.inv.Settings.ScheduleKeepAwake
 	// Stage words: trimmed, defaults stored as empty, and checked before
 	// they can produce a bad file name or a mislabelled history row.
 	s.StageTokenBefore, s.StageTokenWork, s.StageTokenAfter = strings.TrimSpace(s.StageTokenBefore), strings.TrimSpace(s.StageTokenWork), strings.TrimSpace(s.StageTokenAfter)
@@ -1408,10 +1435,16 @@ func (a *App) RunWith(req RunRequest) error {
 // the slot a queued device pointed at. It holds only the request's devices,
 // with group credentials filled in and any per-run command set applied.
 func (a *App) runSnapshot(req RunRequest) (*model.Inventory, error) {
+	return snapshotOf(a.inv, req)
+}
+
+// snapshotOf is runSnapshot over any inventory: the vault, or — for a 予約
+// firing while the vault is locked — the copy kept for the schedules.
+func snapshotOf(inv *model.Inventory, req RunRequest) (*model.Inventory, error) {
 	if req.Group == "" && !req.Ungrouped {
 		return nil, fmt.Errorf("実行するグループを選んでください")
 	}
-	snap := a.inv.Clone()
+	snap := inv.Clone()
 	var want map[string]bool
 	if req.Names != nil {
 		want = make(map[string]bool, len(req.Names))
@@ -1485,45 +1518,74 @@ func (a *App) run(req RunRequest) error {
 		return err
 	}
 	if a.runActive {
+		err := a.busyErrLocked()
 		a.mu.Unlock()
-		return fmt.Errorf("一括実行中です。完了または中止を待ってください")
+		return err
 	}
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.runCancel = cancel
-	a.runActive = true
+	ctx, cancel := a.beginRunLocked("")
 	a.mu.Unlock()
 
 	go func() {
-		defer cancel()
 		emit := func(ev runpkg.Event) {
 			runtime.EventsEmit(a.ctx, "run:event", ev)
 		}
-		started := time.Now()
-		// The batch checks host keys against a copy taken now, not the vault:
-		// the vault can be locked mid-run (ロック), and a locked vault knows no
-		// keys — every device would have looked new, a replaced one included.
-		a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
-		results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: stage, DryRun: req.DryRun, Group: req.Group}, emit)
-		// Back to the vault before the next batch may start (runActive below):
-		// restored later, it could undo the next batch's own copy.
-		a.runner.HostKeys = a
-		if runDir != "" {
-			writeRunSummary(runDir, snap, req, started, results)
-		}
-		done := RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
-		a.mu.Lock()
-		a.runActive = false
-		a.lastDone = &done
-		a.mu.Unlock()
+		done := a.execBatch(ctx, cancel, snap, req, "", emit)
 		runtime.EventsEmit(a.ctx, "run:done", done)
 	}()
 	return nil
 }
 
+// busyErrLocked (caller holds a.mu) says why a second batch cannot start.
+func (a *App) busyErrLocked() error {
+	if a.runSched != "" {
+		return fmt.Errorf("予約「%s」の一括実行中です。終わるまでお待ちください（予約タブで中止できます）", a.runSched)
+	}
+	return fmt.Errorf("一括実行中です。完了または中止を待ってください")
+}
+
+// beginRunLocked (caller holds a.mu and has checked !runActive) claims the
+// one batch slot. sched names the 予約 running it ("" = started by hand).
+func (a *App) beginRunLocked(sched string) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.runCancel = cancel
+	a.runActive = true
+	a.runSched = sched
+	return ctx, cancel
+}
+
+// execBatch runs a claimed batch to the end and frees the slot: the part a
+// run started by hand and one started by a 予約 share.
+func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched string, emit runpkg.EmitFunc) RunDone {
+	defer cancel()
+	// No idle sleep until the batch ends (done, 中止 or error).
+	defer keepSystemAwake()()
+	started := time.Now()
+	// The batch checks host keys against a copy taken now, not the vault:
+	// the vault can be locked mid-run (ロック), and a locked vault knows no
+	// keys — every device would have looked new, a replaced one included.
+	a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
+	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group}, emit)
+	// Back to the vault before the next batch may start (runActive below):
+	// restored later, it could undo the next batch's own copy.
+	a.runner.HostKeys = a
+	if runDir != "" {
+		writeRunSummary(runDir, snap, req, sched, started, results)
+	}
+	done := RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
+	a.mu.Lock()
+	a.runActive = false
+	a.runSched = ""
+	if sched == "" {
+		a.lastDone = &done
+	}
+	a.mu.Unlock()
+	return done
+}
+
 // writeRunSummary records the batch in its log folder for the 実行履歴 tab.
 // Best effort: a summary that cannot be written costs the history row, not
 // the logs.
-func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, started time.Time, results []runpkg.DeviceResult) {
+func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched string, started time.Time, results []runpkg.DeviceResult) {
 	byName := map[string]model.Device{}
 	for _, d := range inv.Devices {
 		byName[d.Name] = d
@@ -1535,6 +1597,7 @@ func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, starte
 		Group:      req.Group,
 		Stage:      req.Stage,
 		DryRun:     req.DryRun,
+		Schedule:   sched,
 		Devices:    []history.DeviceSummary{},
 	}
 	for _, r := range results {
@@ -1576,6 +1639,13 @@ func (a *App) CheckDangerousCommands(req RunRequest) []DangerWarning {
 	if err != nil {
 		return out
 	}
+	return dangerOf(snap)
+}
+
+// dangerOf lists, per device of a run snapshot, the commands of its set
+// that change the device.
+func dangerOf(snap *model.Inventory) []DangerWarning {
+	out := []DangerWarning{}
 	sets := map[string]*model.CommandSet{}
 	for i := range snap.CommandSets {
 		sets[snap.CommandSets[i].Name] = &snap.CommandSets[i]
@@ -1695,7 +1765,8 @@ type RunStatus struct {
 func (a *App) GetRunStatus() RunStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return RunStatus{Active: a.runActive, Last: a.lastDone}
+	// Active is about a batch started by hand: a 予約 runs apart from the run tab.
+	return RunStatus{Active: a.runActive && a.runSched == "", Last: a.lastDone}
 }
 
 func (a *App) CancelRun() {
@@ -1960,8 +2031,14 @@ func (a *App) SetLang(lang string) {
 // rest of the app: ConfirmQuit finishes the close.
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Lock()
-	quitting := a.quitting
+	quitting, trayQuit := a.quitting, a.trayQuit
 	a.mu.Unlock()
+	// × while a 予約 is still to fire: into the tray, not closed (the
+	// schedules run only while this process does).
+	if !quitting && !trayQuit && a.hasPendingSchedules() {
+		a.hideToTray()
+		return true
+	}
 	n := a.openTerminals()
 	if quitting || n == 0 {
 		return false
@@ -1990,7 +2067,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.5.17"
+const appVersion = "1.6.0"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

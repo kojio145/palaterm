@@ -156,6 +156,11 @@ func runPasteWindow(device string) {
 }
 
 func runMainApp() {
+	// One main window per folder: a second start shows the first (it may be
+	// in the tray running 予約) and ends.
+	if !claimSingleInstance() {
+		return
+	}
 	app := NewApp()
 	err := wails.Run(&options.App{
 		Title:     "PalaTerm",

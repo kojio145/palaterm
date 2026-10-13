@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.5.17";
+const APP_VERSION = "1.6.0";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -827,6 +827,7 @@ function renderTab(name) {
   else if (name === "commands") renderCommands();
   else if (name === "run") renderRun();
   else if (name === "history") renderHistory();
+  else if (name === "schedule") renderSchedules();
   else if (name === "settings") renderSettings();
   else if (name === "ostypes") renderOSTypes();
 }

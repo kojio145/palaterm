@@ -50,8 +50,10 @@ type Summary struct {
 	DryRun     bool   `json:"dryRun,omitempty"`
 	// Interactive marks a 対話接続 session (one device, operated by hand),
 	// recorded in its own run folder like a batch so it shows in the history.
-	Interactive bool            `json:"interactive,omitempty"`
-	Devices     []DeviceSummary `json:"devices"`
+	Interactive bool `json:"interactive,omitempty"`
+	// Schedule names the 予約 that started the batch ("" = started by hand).
+	Schedule string          `json:"schedule,omitempty"`
+	Devices  []DeviceSummary `json:"devices"`
 }
 
 // Run is one row of the 実行履歴 list: a run folder plus its summary (or, for
@@ -65,6 +67,7 @@ type Run struct {
 	Stage       string   `json:"stage,omitempty"`
 	DryRun      bool     `json:"dryRun,omitempty"`
 	Interactive bool     `json:"interactive,omitempty"`
+	Schedule    string   `json:"schedule,omitempty"`
 	HasSummary  bool     `json:"hasSummary"`
 	OK          int      `json:"ok"`
 	Failed      int      `json:"failed"`
@@ -157,7 +160,7 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 				r.StartedAt = s.StartedAt
 			}
 			r.FinishedAt = s.FinishedAt
-			r.Group, r.Stage, r.DryRun, r.Interactive = s.Group, s.Stage, s.DryRun, s.Interactive
+			r.Group, r.Stage, r.DryRun, r.Interactive, r.Schedule = s.Group, s.Stage, s.DryRun, s.Interactive, s.Schedule
 			for _, d := range s.Devices {
 				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error, Warnings: d.Warnings}
 				switch {
