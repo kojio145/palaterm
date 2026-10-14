@@ -302,26 +302,51 @@ func ResolveRoot(root string) string {
 // folder, and a template without {time} names the same file each round, so
 // the later one gets "_2", "_3", … before the extension.
 func Write(dir, tmpl string, f Fields, transcript string, now time.Time) (string, error) {
+	path, fh, err := create(dir, tmpl, f, now)
+	if err != nil {
+		return "", err
+	}
+	_, err = fh.WriteString(transcript)
+	if cerr := fh.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// Claim creates the empty file Write would have written and returns its
+// path: a batch device's log is named when its connection starts and then
+// filled as the output arrives (see Stream), so the name — "_2" and all —
+// has to be taken before the first byte. The caller removes the file if
+// nothing ever goes into it.
+func Claim(dir, tmpl string, f Fields, now time.Time) (string, error) {
+	path, fh, err := create(dir, tmpl, f, now)
+	if err != nil {
+		return "", err
+	}
+	if err := fh.Close(); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// create makes a new file under the template's name, never an existing one.
+func create(dir, tmpl string, f Fields, now time.Time) (string, *os.File, error) {
 	path := Path(dir, tmpl, f, now)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	ext := filepath.Ext(path)
 	base := strings.TrimSuffix(path, ext)
 	for i := 2; ; i++ {
 		fh, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if err == nil {
-			_, err = fh.WriteString(transcript)
-			if cerr := fh.Close(); err == nil {
-				err = cerr
-			}
-			if err != nil {
-				return "", err
-			}
-			return path, nil
+			return path, fh, nil
 		}
 		if !os.IsExist(err) || i > 9999 {
-			return "", err
+			return "", nil, err
 		}
 		path = fmt.Sprintf("%s_%d%s", base, i, ext)
 	}

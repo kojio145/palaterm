@@ -1,4 +1,4 @@
-package main
+package logstore
 
 import (
 	"bytes"
@@ -18,7 +18,7 @@ func TestStreamLogMasksAcrossChunkBoundaries(t *testing.T) {
 	want := strings.ReplaceAll(transcript, secret, "****")
 	for size := 1; size <= len(transcript); size++ {
 		path := filepath.Join(t.TempDir(), "x.txt")
-		l := newStreamLog(path, []string{secret, "", "ab"})
+		l := NewStream(path, []string{secret, "", "ab"})
 		for i := 0; i < len(transcript); i += size {
 			end := i + size
 			if end > len(transcript) {
@@ -43,7 +43,7 @@ func TestStreamLogMasksAcrossChunkBoundaries(t *testing.T) {
 
 func TestStreamLogWritesPromptlyAndIdleFlushesTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.txt")
-	l := newStreamLog(path, []string{"longpassword"})
+	l := NewStream(path, []string{"longpassword"})
 	l.Write([]byte("R1#show version\r\nIOS 15.2\r\nR1#"))
 	got, _ := os.ReadFile(path)
 	// Written immediately, except the held tail (len("longpassword")-1 = 11 bytes).
@@ -67,7 +67,7 @@ func TestStreamLogWritesPromptlyAndIdleFlushesTail(t *testing.T) {
 
 func TestStreamLogNoFileWithoutData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.txt")
-	l := newStreamLog(path, nil)
+	l := NewStream(path, nil)
 	if p, _ := l.Flush(); p != "" {
 		t.Fatalf("flush with no data returned %q", p)
 	}
@@ -83,7 +83,7 @@ func TestStreamLogNoFileWithoutData(t *testing.T) {
 // open (a user tailing the log in an editor).
 func TestStreamLogReadableWhileOpen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.txt")
-	l := newStreamLog(path, nil)
+	l := NewStream(path, nil)
 	l.Write([]byte("hello\r\n"))
 	if _, err := os.ReadFile(path); err != nil {
 		t.Fatalf("read while open: %v", err)
@@ -98,7 +98,7 @@ func TestStreamLogReadableWhileOpen(t *testing.T) {
 
 func TestStreamLogPauseResume(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.txt")
-	l := newStreamLog(path, []string{"secretpw"})
+	l := NewStream(path, []string{"secretpw"})
 	l.Write([]byte("before\r\n"))
 	if p, err := l.SetPaused(true); err != nil || p != path {
 		t.Fatalf("pause: %q %v", p, err)
@@ -117,7 +117,7 @@ func TestStreamLogPauseResume(t *testing.T) {
 	}
 	// Pausing before anything was written leaves no file and no marker.
 	path2 := filepath.Join(t.TempDir(), "y.txt")
-	l2 := newStreamLog(path2, nil)
+	l2 := NewStream(path2, nil)
 	if p, _ := l2.SetPaused(true); p != "" {
 		t.Fatalf("pause on empty log returned %q", p)
 	}
@@ -133,7 +133,7 @@ func TestStreamLogPauseResume(t *testing.T) {
 // written byte for byte.
 func TestStreamLogNoSecrets(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "raw.txt")
-	l := newStreamLog(p, nil)
+	l := NewStream(p, nil)
 	l.Write([]byte("login: admin\r\nusername admin password secret1\r\n"))
 	l.Close()
 	b, _ := os.ReadFile(p)

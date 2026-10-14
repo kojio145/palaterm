@@ -109,3 +109,94 @@ async function bootViewerWindow() {
   });
   ta.focus();
 }
+
+// Screen window (child process: PalaTerm.exe --watch <file>). A batch
+// device's log replayed into a read-only terminal as it grows — what a Tera
+// Term macro's window shows — so a device that has gone wrong is seen while
+// the batch is still running. The file is polled from where the last read
+// ended; the status says how long the device has been quiet. Only runs when
+// Watcher is bound.
+async function bootWatchWindow() {
+  document.getElementById("lock").classList.add("hidden");
+  document.getElementById("app").classList.add("hidden");
+  document.body.style.background = "#000";
+  const W = () => window.go.main.Watcher;
+  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#000;font-family:'Segoe UI',sans-serif">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442">
+      <div id="wv-name" style="color:#e6ecf3;font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+      <span id="wv-state" class="pill" style="font-size:11px"></span>
+      <button class="btn sm" id="wv-font-dec" title="Ctrl+-">A−</button>
+      <button class="btn sm" id="wv-font-inc" title="Ctrl++">A＋</button>
+      <button class="btn sm" id="wv-log" data-tip="${esc(t("同じログを文字で開きます（検索・全文コピー）"))}">${esc(t("ログ表示"))}</button>
+    </div>
+    <div style="padding:2px 12px;background:#11151c;color:#8b97a8;font-size:11px;border-bottom:1px solid #2a3442">${esc(t("表示のみ（キー入力は機器に送りません）。操作するときは本体の「接続」から別に接続してください"))}</div>
+    <div id="wv-host" style="flex:1;min-height:0;padding:4px 0 0 6px"></div>
+  </div>`);
+  document.body.appendChild(wrap);
+
+  const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
+  let fontSize = FONT_DEF;
+  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
+  const term = new Terminal({
+    convertEol: false, cursorBlink: false, disableStdin: true, scrollback: 10000,
+    fontFamily: '"Consolas", monospace', fontSize,
+    theme: { background: "#000000", foreground: "#d6dee8", cursor: "#5b9bff" },
+  });
+  const fit = new (window.FitAddon.FitAddon)();
+  term.loadAddon(fit);
+  term.open(document.getElementById("wv-host"));
+  const refit = () => { try { fit.fit(); } catch (e) {} };
+  refit();
+  window.addEventListener("resize", refit);
+  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); term.options.fontSize = fontSize; refit(); }
+  document.getElementById("wv-font-inc").onclick = () => setFont(fontSize + 1);
+  document.getElementById("wv-font-dec").onclick = () => setFont(fontSize - 1);
+  document.getElementById("wv-log").onclick = () => W().OpenLog().catch(e => toast(terr(e), "err"));
+
+  // Selection → Ctrl+C / right-click copies it (the terminal sends nothing).
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type === "keydown" && e.ctrlKey && (e.code === "KeyC" || e.key === "c") && term.hasSelection()) { copyText(term.getSelection(), t("コピーしました")); return false; }
+    return true;
+  });
+  ctxExtraItems = () => term.hasSelection() ? [[t("選択した文字をコピー"), () => copyText(term.getSelection(), t("コピーしました"))]] : [];
+  document.addEventListener("keydown", e => {
+    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
+    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
+    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (e.key === "Escape") W().Close();
+  }, true); // capture: the terminal's own textarea would swallow the keys
+
+  // Poll the file from where the last read ended; a full chunk means more
+  // is waiting (a long log opened late), so read again at once.
+  const state = document.getElementById("wv-state");
+  let off = 0, lastMod = 0, named = false;
+  function showState() {
+    if (!lastMod) { state.textContent = ""; return; }
+    const quiet = Math.max(0, Math.round((Date.now() - lastMod) / 1000));
+    state.className = "pill " + (quiet < 10 ? "ok" : "");
+    state.textContent = quiet < 3 ? t("出力中") : t("最後の出力から {n} 秒", { n: quiet });
+  }
+  async function poll() {
+    let more = false;
+    try {
+      const c = await W().Read(off);
+      if (!named) { document.getElementById("wv-name").textContent = t("画面") + ": " + c.name; document.getElementById("wv-name").title = c.path; named = true; }
+      if (c.err) { state.className = "pill"; state.textContent = terr(c.err); }
+      else {
+        if (c.off < off) term.reset();
+        if (c.data) {
+          const bin = atob(c.data), bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          term.write(bytes);
+          more = bytes.length >= 512 * 1024;
+        }
+        off = c.off;
+        lastMod = c.modUnixMs || lastMod;
+        showState();
+      }
+    } catch (e) { }
+    setTimeout(poll, more ? 0 : 300);
+  }
+  setInterval(showState, 1000);
+  poll();
+}

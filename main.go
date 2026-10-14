@@ -47,6 +47,12 @@ func main() {
 		runViewerWindow(os.Args[2])
 		return
 	}
+	// Screen window: "--watch <file>" (a batch device's log replayed into a
+	// read-only terminal as it grows; the run table's 画面).
+	if len(os.Args) >= 3 && os.Args[1] == "--watch" {
+		runWatchWindow(os.Args[2])
+		return
+	}
 	// Diff window: "--diff <A> <B> [label]".
 	if len(os.Args) >= 4 && os.Args[1] == "--diff" {
 		label := ""
@@ -84,6 +90,32 @@ func runViewerWindow(path string) {
 		OnStartup:        v.startup,
 		OnDomReady:       v.domReady,
 		Bind:             []interface{}{v},
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+		},
+	})
+	if err != nil {
+		println("error:", err.Error())
+	}
+}
+
+func runWatchWindow(path string) {
+	title := "PalaTerm - " + winWord("画面", "Screen") + " - " + filepath.Base(path)
+	w := NewWatcher(path, title)
+	err := wails.Run(&options.App{
+		Title:     title,
+		Width:     termWin.W,
+		Height:    termWin.H,
+		MinWidth:  termWin.MinW,
+		MinHeight: termWin.MinH,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 1},
+		OnStartup:        w.startup,
+		OnDomReady:       w.domReady,
+		Bind:             []interface{}{w},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,

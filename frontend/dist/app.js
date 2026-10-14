@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.6.6";
+const APP_VERSION = "1.6.7";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -568,6 +568,11 @@ async function boot() {
     bootDiffWindow();
     return;
   }
+  // Screen window (binds Watcher).
+  if (window.go && window.go.main && window.go.main.Watcher) {
+    bootWatchWindow();
+    return;
+  }
   // Log-viewer window (binds Viewer).
   if (window.go && window.go.main && window.go.main.Viewer) {
     bootViewerWindow();
@@ -579,14 +584,19 @@ async function boot() {
     return;
   }
   App().SetLang(LANG).catch(() => {});
-  // × with terminal windows open: the backend holds the close and asks here
-  // (Windows' own Yes/No box looked out of place). キャンセル has the focus.
+  // × with terminal windows open or a batch running: the backend holds the
+  // close and asks here (Windows' own Yes/No box looked out of place).
+  // キャンセル has the focus.
   let quitAsking = false;
-  rt().EventsOn("app:quit-request", async n => {
+  rt().EventsOn("app:quit-request", async q => {
     if (quitAsking) return;
     quitAsking = true;
+    const n = (q && q.terminals) || 0;
+    const lines = [];
+    if (q && q.running) lines.push(esc(t("一括実行中です。PalaTerm を終了すると実行が止まります（実行中の機器のログは途中まで残ります）。")));
+    if (n > 0) lines.push(esc(t("対話接続のウィンドウが {n} 個開いています。PalaTerm を終了すると、これらも切断して閉じます（ログは保存されます）。", { n })));
     const ok = await subConfirm(`<b>${esc(t("PalaTerm を終了"))}</b><br>` +
-      esc(t("対話接続のウィンドウが {n} 個開いています。PalaTerm を終了すると、これらも切断して閉じます（ログは保存されます）。終了しますか？", { n })),
+      lines.join("<br>") + "<br>" + esc(t("終了しますか？")),
       t("終了する"), t("キャンセル"));
     quitAsking = false;
     if (ok) App().ConfirmQuit().catch(() => {});

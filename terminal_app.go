@@ -48,7 +48,7 @@ type Term struct {
 	resizeFn  func(cols, rows int) error
 	closeFn   func() error
 	logDir    string // Settings.LogDir once the vault is open ("" => logs/)
-	slog      *streamLog
+	slog      *logstore.Stream
 	pasteOpen bool          // a paste-confirmation window is showing
 	pw        string        // master password, kept for a reconnect
 	dev       *model.Device // the device once the vault is open
@@ -414,7 +414,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	// template as a batch log with the stage "work", in its own run folder
 	// (log_<time>_work) so the session shows in 実行履歴 like a batch. It is
 	// written as it arrives (Tera Term style) with the passwords masked —
-	// see streamLog.
+	// see logstore.Stream.
 	started := time.Now()
 	runDir := logstore.ClaimRunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
 	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
@@ -423,7 +423,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	if settings.MaskLogSecrets {
 		secrets = runpkg.SecretsOf(&d)
 	}
-	slog := newStreamLog(logPath, secrets)
+	slog := logstore.NewStream(logPath, secrets)
 	if shown {
 		if tr := exp.TakeTranscript(); tr != "" {
 			slog.Write([]byte(tr))

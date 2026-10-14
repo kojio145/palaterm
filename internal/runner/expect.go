@@ -32,6 +32,7 @@ type expecter struct {
 	readErr    error
 
 	rawSink func([]byte) // when set, incoming bytes are forwarded here (interactive mode)
+	tee     func([]byte) // when set, also gets every byte the transcript gets (a batch device's live log)
 	onClose func()       // called once when the read loop ends (session closed)
 
 	lastData time.Time // when the last byte arrived (creation time until then)
@@ -44,7 +45,13 @@ type expecter struct {
 }
 
 func newExpecter(sess session.Session) *expecter {
-	e := &expecter{sess: sess, newData: make(chan struct{}, 1), eol: "\r\n", lastData: time.Now()}
+	return newExpecterTee(sess, nil)
+}
+
+// newExpecterTee is newExpecter with tee set before the first read, so the
+// copy misses nothing. tee is called from the read loop, in order.
+func newExpecterTee(sess session.Session, tee func([]byte)) *expecter {
+	e := &expecter{sess: sess, newData: make(chan struct{}, 1), eol: "\r\n", lastData: time.Now(), tee: tee}
 	if le, ok := sess.(session.LineEnder); ok {
 		e.eol = le.LineEnding()
 	}
@@ -65,6 +72,9 @@ func (e *expecter) readLoop() {
 				e.transcript.Write(tmp[:n])
 			}
 			e.mu.Unlock()
+			if sink == nil && e.tee != nil {
+				e.tee(tmp[:n])
+			}
 			if sink != nil {
 				// Interactive mode: forward bytes straight to the UI terminal.
 				chunk := make([]byte, n)

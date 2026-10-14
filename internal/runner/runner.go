@@ -49,6 +49,11 @@ type Event struct {
 	// WaitSec counts down the configured pause after a command, so a run that
 	// looks frozen on a 10-second 待機 says how much of it is left.
 	WaitSec int `json:"waitSec,omitempty"`
+	// LogPath is the device's log file, written as the output arrives: on
+	// every event from the start of the connection (ログ表示 works while the
+	// device runs), and on the last one the file kept ("" = none: nothing
+	// was read).
+	LogPath string `json:"logPath,omitempty"`
 }
 
 // DeviceResult is the outcome of one device run.
@@ -73,6 +78,9 @@ type DeviceResult struct {
 const (
 	CanceledMsg       = "中止しました"
 	CanceledNotRunMsg = "中止しました（未実行）"
+	// CanceledDeviceMsg: this device alone was stopped (CancelDevice), the
+	// rest of the batch went on.
+	CanceledDeviceMsg = "この機器だけ中止しました"
 )
 
 // finishPhase picks the terminal phase for a failed device: canceled when the
@@ -95,6 +103,66 @@ type Runner struct {
 
 	// HostKeys pins SSH host keys (TOFU). nil accepts any key (tests only).
 	HostKeys session.HostKeyStore
+
+	// live: the logs of the devices running now, by path (see FlushLive).
+	live sync.Map
+
+	// Stopping one device of a batch (CancelDevice): the running ones by
+	// name, and the ones asked to stop before their turn came. devStop is
+	// nil outside a batch.
+	devMu     sync.Mutex
+	devCancel map[string]context.CancelFunc
+	devStop   map[string]bool
+}
+
+// CancelDevice stops one device of the running batch and lets the others go
+// on: a device in progress is cut off like 中止 cuts off the whole batch, a
+// device still waiting for its turn is not started. False when no batch is
+// running.
+func (r *Runner) CancelDevice(name string) bool {
+	r.devMu.Lock()
+	defer r.devMu.Unlock()
+	if c, ok := r.devCancel[name]; ok {
+		c()
+		return true
+	}
+	if r.devStop == nil {
+		return false
+	}
+	r.devStop[name] = true
+	return true
+}
+
+// claimDevice gives a batch device its own context (CancelDevice cancels
+// it), unless it was already asked to stop. release ends the claim.
+func (r *Runner) claimDevice(ctx context.Context, name string) (dctx context.Context, release func(), stopped bool) {
+	r.devMu.Lock()
+	defer r.devMu.Unlock()
+	if r.devStop[name] {
+		return ctx, func() {}, true
+	}
+	dctx, cancel := context.WithCancel(ctx)
+	if r.devCancel == nil {
+		r.devCancel = map[string]context.CancelFunc{}
+	}
+	r.devCancel[name] = cancel
+	return dctx, func() {
+		r.devMu.Lock()
+		delete(r.devCancel, name)
+		r.devMu.Unlock()
+		cancel()
+	}, false
+}
+
+// FlushLive writes out what a running device's log still holds back and
+// reports whether path is such a log (it is still growing: a viewer opened
+// on it should follow it).
+func (r *Runner) FlushLive(path string) bool {
+	v, ok := r.live.Load(path)
+	if ok {
+		v.(*logstore.Stream).Flush()
+	}
+	return ok
 }
 
 // New returns a Runner using the given profile registry.
@@ -161,7 +229,22 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		cmdTimeout = 30 * time.Second
 	}
 
-	exp, prof, err := r.Connect(ctx, dev, s, emit)
+	// The log is written as the output arrives, so ログ表示 shows a device
+	// still running and a batch cut short (quit, power cut, sleep) leaves
+	// what it had read. A file that cannot be claimed falls back to writing
+	// the transcript at the end (where the error is reported).
+	final := emit
+	var live *liveLog
+	if !opts.DryRun {
+		live = r.startLog(dev, s, runDir, now, opts.logStage())
+	}
+	var tee func([]byte)
+	if live != nil {
+		tee = live.stream.Write
+		emit = live.tag(emit)
+	}
+
+	exp, prof, err := r.connect(ctx, dev, s, emit, tee)
 	if exp != nil {
 		defer exp.Close()
 	}
@@ -172,10 +255,12 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 			res.Transcript = exp.Transcript()
 		}
 		if !opts.DryRun {
-			r.saveLog(&res, dev, s, runDir, now, opts.logStage())
+			r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
 		}
 		res.Elapsed = time.Since(start)
-		r.emit(emit, dev.Name, ph, res.Error)
+		if final != nil {
+			final(Event{Device: dev.Name, Phase: ph, Message: res.Error, LogPath: res.LogPath})
+		}
 		return res
 	}
 
@@ -248,19 +333,21 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	res.Transcript = exp.Transcript()
 	res.Success = res.Error == ""
 	if !opts.DryRun {
-		r.saveLog(&res, dev, s, runDir, now, opts.logStage())
+		r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
 		res.Success = res.Error == ""
 	}
 	res.Elapsed = time.Since(start)
 
-	if res.Success {
-		msg := res.LogPath
-		if opts.DryRun {
-			msg = DryRunOKMsg
+	if final != nil {
+		if res.Success {
+			msg := res.LogPath
+			if opts.DryRun {
+				msg = DryRunOKMsg
+			}
+			final(Event{Device: dev.Name, Phase: PhaseDone, Message: msg, LogPath: res.LogPath})
+		} else {
+			final(Event{Device: dev.Name, Phase: finishPhase(ctx, &res), Message: res.Error, LogPath: res.LogPath})
 		}
-		r.emit(emit, dev.Name, PhaseDone, msg)
-	} else {
-		r.emit(emit, dev.Name, finishPhase(ctx, &res), res.Error)
 	}
 	return res
 }
@@ -430,6 +517,12 @@ func (r *Runner) disconnect(ctx context.Context, exp *expecter, prof profile.Pro
 // RunDevice uses this before executing a command set; the interactive terminal
 // uses it and then hands the session to raw pass-through.
 func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc) (*expecter, profile.Profile, error) {
+	return r.connect(ctx, dev, s, emit, nil)
+}
+
+// connect is Connect with tee getting a copy of every byte read (see
+// newExpecterTee): a batch device's live log.
+func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc, tee func([]byte)) (*expecter, profile.Profile, error) {
 	prof := r.profiles.Get(dev.OSType)
 	connTimeout := time.Duration(s.ConnectTimeout) * time.Second
 	if connTimeout <= 0 {
@@ -445,7 +538,7 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	if err != nil {
 		return nil, prof, err
 	}
-	exp := newExpecter(sess)
+	exp := newExpecterTee(sess, tee)
 
 	if dev.Conn == model.ConnSerial {
 		wakeSerial(ctx, exp, prof)
@@ -1109,6 +1202,72 @@ func RedactSecrets(text string, dev *model.Device) string {
 	return text
 }
 
+// liveLog is a running device's log: the file claimed for it and the
+// stream filling it.
+type liveLog struct {
+	path   string
+	stream *logstore.Stream
+}
+
+// tag adds the log's path to the device's progress events.
+func (l *liveLog) tag(emit EmitFunc) EmitFunc {
+	if emit == nil {
+		return nil
+	}
+	return func(ev Event) {
+		ev.LogPath = l.path
+		emit(ev)
+	}
+}
+
+// startLog claims the device's log file and starts its stream (nil when the
+// file cannot be created: saveLog then tries again at the end and reports).
+// Masking follows the setting, as saveLog's RedactSecrets does.
+func (r *Runner) startLog(dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) *liveLog {
+	path, err := logstore.Claim(runDir, s.LogNameTemplate, logFields(dev, s, stage), now)
+	if err != nil {
+		return nil
+	}
+	var secrets []string
+	if s.MaskLogSecrets {
+		secrets = SecretsOf(dev)
+	}
+	l := &liveLog{path: path, stream: logstore.NewStream(path, secrets)}
+	r.live.Store(path, l.stream)
+	return l
+}
+
+// finishLog closes the device's live log (or, without one, writes the
+// transcript the old way). A file nothing was written to is removed: a
+// device that never answered leaves no empty log, as before.
+func (r *Runner) finishLog(res *DeviceResult, l *liveLog, dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) {
+	if l == nil {
+		r.saveLog(res, dev, s, runDir, now, stage)
+		return
+	}
+	r.live.Delete(l.path)
+	p, err := l.stream.Close()
+	if err != nil {
+		msg := "ログを保存できませんでした: " + err.Error()
+		if res.Error == "" {
+			res.Error = msg
+		} else {
+			res.Error += "／" + msg
+		}
+	}
+	if p == "" {
+		_ = os.Remove(l.path)
+		return
+	}
+	res.LogPath = p
+}
+
+func logFields(dev *model.Device, s model.Settings, stage model.Stage) logstore.Fields {
+	return logstore.Fields{
+		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Role: dev.Role, Stage: string(stage), Tokens: s.StageTokens(),
+	}
+}
+
 func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) {
 	if res.Transcript == "" {
 		return
@@ -1117,9 +1276,7 @@ func (r *Runner) saveLog(res *DeviceResult, dev *model.Device, s model.Settings,
 	if s.MaskLogSecrets {
 		text = RedactSecrets(text, dev)
 	}
-	path, err := logstore.Write(runDir, s.LogNameTemplate, logstore.Fields{
-		Host: dev.Name, IP: dev.Host, OS: dev.OSType, Group: dev.Group, Site: dev.Site, Role: dev.Role, Stage: string(stage), Tokens: s.StageTokens(),
-	}, text, now)
+	path, err := logstore.Write(runDir, s.LogNameTemplate, logFields(dev, s, stage), text, now)
 	if err != nil {
 		// A run whose log could not be written (disk full, a file locked by
 		// another program, a template producing a bad name) did not do its
@@ -1180,6 +1337,14 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 	sem := make(chan struct{}, limit)
 	results := make([]DeviceResult, len(targets))
 	var wg sync.WaitGroup
+	r.devMu.Lock()
+	r.devStop = map[string]bool{}
+	r.devMu.Unlock()
+	defer func() {
+		r.devMu.Lock()
+		r.devStop = nil
+		r.devMu.Unlock()
+	}()
 
 	for i, dev := range targets {
 		wg.Add(1)
@@ -1194,11 +1359,26 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 				r.emit(emit, d.Name, PhaseCanceled, CanceledNotRunMsg)
 				return
 			}
+			dctx, release, stopped := r.claimDevice(ctx, d.Name)
+			defer release()
+			if stopped {
+				results[idx] = DeviceResult{Device: d.Name, Canceled: true, Error: CanceledNotRunMsg}
+				r.emit(emit, d.Name, PhaseCanceled, CanceledNotRunMsg)
+				return
+			}
 			var set *model.CommandSet
 			if cs, ok := sets[d.CommandSet]; ok {
 				set = cs
 			}
-			results[idx] = r.runDevice(ctx, d, set, inv.Settings, runDir, now, emit, opts)
+			res := r.runDevice(dctx, d, set, inv.Settings, runDir, now, emit, opts)
+			if res.Canceled && ctx.Err() == nil {
+				// Stopped alone: say so, the batch's 中止 was not pressed.
+				res.Error = CanceledDeviceMsg
+				if emit != nil {
+					emit(Event{Device: d.Name, Phase: PhaseCanceled, Message: res.Error, LogPath: res.LogPath})
+				}
+			}
+			results[idx] = res
 		}(i, dev)
 	}
 	wg.Wait()

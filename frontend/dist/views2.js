@@ -407,8 +407,10 @@ function renderRun() {
       <td class="muted"><div class="clip" data-tip="${esc(runSetName(d) || t("コマンドセット未割り当て: ログインのみで終わります"))}" ${runSetSel ? 'style="color:var(--accent)"' : (runSetName(d) ? "" : 'style="color:var(--warn)"')}>${esc(runSetName(d) || t("（なし）"))}</div></td>
       <td class="muted mono"><div class="clip" data-tip="${esc(runMsg(st))}">${esc(runMsg(st))}</div></td>
       <td style="text-align:right;white-space:nowrap">
-        ${st.logPath ? `<span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
+        ${st.logPath ? `<span class="link" data-watch="${esc(st.logPath)}" data-tip="${esc(t("機器の画面を表示のみで開きます（実行中は出力をそのまま追います）"))}">${esc(t("画面"))}</span> <span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
         ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.id)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
+        ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
+          ? `<button class="btn sm" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} style="color:var(--err);border-color:var(--err)" data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
@@ -585,6 +587,8 @@ function renderRun() {
   if (runChkAll) runChkAll.onclick = () => applyEnable(visible.map(d => d.id), runChkAll.checked);
   wireShiftRange("run:" + runGroupSel, [...root.querySelectorAll("[data-enable]")], applyEnable);
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
+  root.querySelectorAll("[data-stop]").forEach(el => el.onclick = () => stopDevice(el.dataset.stop));
+  root.querySelectorAll("[data-watch]").forEach(el => el.onclick = () => App().OpenWatchWindow(el.dataset.watch).catch(e => toast(t("画面を開けません") + ": " + terr(e), "err")));
   wireConnectButtons(root);
   updateCounts();
 }
@@ -930,6 +934,27 @@ function updateCounts() {
   updateEta();
 }
 
+// 中止 on a row: this device only, the rest of the batch goes on. A device
+// in the middle of a command is cut off (its log so far is kept); one still
+// waiting is not started. Either can be re-run with 失敗・中断のみ再実行.
+async function stopDevice(name) {
+  const st = runState[name] || {};
+  const ok = await uiConfirm({
+    title: t("この機器だけ中止"),
+    message: st.phase === "queued"
+      ? t("<b>{n}</b> は開始しません。ほかの機器はそのまま続けます。中止しますか？", { n: esc(name) })
+      : t("<b>{n}</b> の実行を打ち切ります（送信中のコマンドは途中で切れます。ここまでのログは残ります）。ほかの機器はそのまま続けます。中止しますか？", { n: esc(name) }),
+    okLabel: t("中止する"),
+    danger: true,
+  });
+  if (!ok || !running) return;
+  const cur = runState[name];
+  if (!cur || ["done", "error", "canceled"].includes(cur.phase)) return;
+  cur.stopping = true;
+  renderRun();
+  if (!(await App().CancelDevice(name).catch(() => false))) { cur.stopping = false; renderRun(); }
+}
+
 // ログ表示 opens the file in its own window (PalaTerm.exe --view), so it can
 // sit beside the run table or another log instead of covering the app.
 async function showLog(path) {
@@ -952,7 +977,12 @@ function wireEvents() {
       // Seconds left of the command's configured 待機. Absent on every other
       // event, which is what clears the countdown once the pause is over.
       waitSec: ev.waitSec || 0,
-      logPath: ev.phase === "done" ? ev.message : prev.logPath };
+      // The log is written while the device runs, so ログ表示 is there from
+      // the connection on; the last event says which file was kept (none
+      // when nothing was read).
+      logPath: ["done", "error", "canceled"].includes(ev.phase) ? (ev.logPath || "") : (ev.logPath || prev.logPath),
+      // 中止 pressed on this row, until the device's last event.
+      stopping: !["done", "error", "canceled"].includes(ev.phase) && !!prev.stopping };
     const active = document.querySelector(".tab.active");
     if (active && active.id === "tab-run") renderRun();
   });

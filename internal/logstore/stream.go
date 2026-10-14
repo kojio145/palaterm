@@ -1,4 +1,4 @@
-package main
+package logstore
 
 import (
 	"bytes"
@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// streamLog writes an interactive session's transcript to its log file as the
-// bytes arrive, the way Tera Term does, while still masking the device's
-// passwords the way the batch logs do.
+// Stream writes a session's transcript to its log file as the bytes arrive,
+// the way Tera Term does, while still masking the device's passwords: the
+// interactive window's log, and each device's log in a batch (so a batch cut
+// short by quitting, a power cut or a sleep still leaves what it had read).
 //
 // Masking is the one thing that keeps this from being a plain append: a
 // secret (a password echoed back, or sitting in a "show running-config") can
@@ -23,7 +24,7 @@ import (
 // crosses it. The held tail is written once the device has been quiet for
 // idleFlush (nothing is half-way through arriving by then), on an explicit
 // Flush, and on Close — so the file is never more than a second behind.
-type streamLog struct {
+type Stream struct {
 	mu      sync.Mutex
 	path    string
 	secrets [][]byte
@@ -34,17 +35,18 @@ type streamLog struct {
 	written int
 	err     error
 	paused  bool
+	closed  bool
 }
 
 // idleFlush is how long the device must be quiet before the held tail is
 // written out too.
 const idleFlush = time.Second
 
-// newStreamLog prepares a log at path (the file is created on the first
+// NewStream prepares a log at path (the file is created on the first
 // byte, so a session that produced nothing leaves no empty file). Secrets
 // shorter than 4 bytes are not masked, as in RedactSecrets.
-func newStreamLog(path string, secrets []string) *streamLog {
-	l := &streamLog{path: path}
+func NewStream(path string, secrets []string) *Stream {
+	l := &Stream{path: path}
 	for _, s := range secrets {
 		if len(s) >= 4 {
 			l.secrets = append(l.secrets, []byte(s))
@@ -61,7 +63,7 @@ func newStreamLog(path string, secrets []string) *streamLog {
 // of the click; output that arrives while paused is not recorded. A marker
 // line notes each stop and start so a gap in the file is not mistaken for
 // the device having said nothing.
-func (l *streamLog) SetPaused(paused bool) (string, error) {
+func (l *Stream) SetPaused(paused bool) (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if paused == l.paused {
@@ -81,17 +83,19 @@ func (l *streamLog) SetPaused(paused bool) (string, error) {
 }
 
 // Paused reports whether recording is stopped.
-func (l *streamLog) Paused() bool {
+func (l *Stream) Paused() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.paused
 }
 
 // Write takes the next chunk of transcript.
-func (l *streamLog) Write(b []byte) {
+func (l *Stream) Write(b []byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.paused {
+	// Bytes the session's reader delivers after Close (the last of the
+	// logout) must not reopen the file.
+	if l.paused || l.closed {
 		return
 	}
 	l.buf = append(l.buf, b...)
@@ -105,7 +109,7 @@ func (l *streamLog) Write(b []byte) {
 
 // Flush writes everything received so far, held tail included, and returns
 // the file path ("" while nothing has been written).
-func (l *streamLog) Flush() (string, error) {
+func (l *Stream) Flush() (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.flushLocked(true)
@@ -113,13 +117,14 @@ func (l *streamLog) Flush() (string, error) {
 }
 
 // Close flushes and closes the file.
-func (l *streamLog) Close() (string, error) {
+func (l *Stream) Close() (string, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.timer != nil {
 		l.timer.Stop()
 	}
 	l.flushLocked(true)
+	l.closed = true
 	if l.f != nil {
 		_ = l.f.Close()
 		l.f = nil
@@ -127,7 +132,7 @@ func (l *streamLog) Close() (string, error) {
 	return l.pathLocked(), l.err
 }
 
-func (l *streamLog) pathLocked() string {
+func (l *Stream) pathLocked() string {
 	if l.written == 0 {
 		return ""
 	}
@@ -137,7 +142,7 @@ func (l *streamLog) pathLocked() string {
 // cut returns how many bytes of buf can be written now: all of them when all
 // is set, otherwise everything but the held tail, pulled back to the start of
 // any secret occurrence that would otherwise be split by the boundary.
-func (l *streamLog) cut(all bool) int {
+func (l *Stream) cut(all bool) int {
 	cut := len(l.buf)
 	if !all {
 		cut -= l.hold
@@ -165,7 +170,7 @@ func (l *streamLog) cut(all bool) int {
 	return cut
 }
 
-func (l *streamLog) flushLocked(all bool) {
+func (l *Stream) flushLocked(all bool) {
 	n := l.cut(all)
 	if n <= 0 || l.err != nil {
 		return

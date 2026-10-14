@@ -1816,6 +1816,15 @@ func (a *App) CancelRun() {
 	}
 }
 
+// CancelDevice stops one device of the running batch (the run table's 中止
+// on its row); the other devices go on. False when nothing is running.
+func (a *App) CancelDevice(name string) bool {
+	a.mu.Lock()
+	active := a.runActive
+	a.mu.Unlock()
+	return active && a.runner.CancelDevice(name)
+}
+
 // ---- Convenience ----
 
 // PickKeyFile opens a file dialog for choosing an SSH private key. The chosen
@@ -1920,15 +1929,36 @@ func (a *App) OpenDiffWindow(pathA, pathB, label string) error {
 }
 
 // OpenLogWindow shows a saved log in its own window (PalaTerm.exe --view).
-// Only files under the log folder are opened.
+// Only files under the log folder are opened. The log of a device still
+// running is written out first and opens following its growth, the way an
+// interactive window's log does.
 func (a *App) OpenLogWindow(path string) error {
 	if err := a.underLogRoot(path); err != nil {
 		return err
 	}
+	var env []string
+	if a.runner.FlushLive(path) {
+		env = []string{"PALATERM_VIEW_LIVE=1"}
+	}
 	if _, err := os.Stat(path); err != nil {
 		return err
 	}
-	return spawnWindow(nil, "--view", path)
+	return spawnWindow(env, "--view", path)
+}
+
+// OpenWatchWindow shows a batch device's log replayed into a read-only
+// terminal (PalaTerm.exe --watch) that follows it as it grows: the device's
+// screen, as a Tera Term macro window shows it. Same rule as OpenLogWindow:
+// only files under the log folder.
+func (a *App) OpenWatchWindow(path string) error {
+	if err := a.underLogRoot(path); err != nil {
+		return err
+	}
+	a.runner.FlushLive(path)
+	if _, err := os.Stat(path); err != nil {
+		return err
+	}
+	return spawnWindow(nil, "--watch", path)
 }
 
 // ---- Interactive terminal (single-device manual operation) ----
@@ -2064,12 +2094,20 @@ func (a *App) SetLang(lang string) {
 	a.mu.Unlock()
 }
 
+// QuitRequest is what app:quit-request asks about: the terminal windows that
+// close with the main window and whether a batch would be cut short.
+type QuitRequest struct {
+	Terminals int  `json:"terminals"`
+	Running   bool `json:"running"`
+}
+
 // beforeClose holds the main window's close while terminal windows are open
-// (they close with it, see winjob.go) and asks in the page, styled like the
-// rest of the app: ConfirmQuit finishes the close.
+// (they close with it, see winjob.go) or a batch runs (it stops with the
+// process: × used to end a batch by hand without a word) and asks in the
+// page, styled like the rest of the app: ConfirmQuit finishes the close.
 func (a *App) beforeClose(ctx context.Context) bool {
 	a.mu.Lock()
-	quitting, trayQuit := a.quitting, a.trayQuit
+	quitting, trayQuit, running := a.quitting, a.trayQuit, a.runActive
 	// The tray's 終了 counts for this close only: cancelled at the
 	// open-terminals question, the next × goes to the tray again.
 	a.trayQuit = false
@@ -2081,10 +2119,10 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return true
 	}
 	n := a.openTerminals()
-	if quitting || n == 0 {
+	if quitting || (n == 0 && !running) {
 		return false
 	}
-	runtime.EventsEmit(ctx, "app:quit-request", n)
+	runtime.EventsEmit(ctx, "app:quit-request", QuitRequest{Terminals: n, Running: running})
 	return true
 }
 
@@ -2108,7 +2146,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.6.6"
+const appVersion = "1.6.7"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
