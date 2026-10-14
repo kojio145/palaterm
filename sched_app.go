@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
 	runpkg "github.com/kojio145/palaterm/internal/runner"
 	"github.com/kojio145/palaterm/internal/schedule"
@@ -69,6 +70,15 @@ type SchedLogEntry struct {
 	// A repeat only notifies on a failure and at its end, not every round.
 	Repeat bool `json:"repeat,omitempty"`
 	Last   bool `json:"last,omitempty"`
+	// Logs are this round's log files, one per device (the 実行記録 opens
+	// each with ログ表示; the folder holds every round's).
+	Logs []SchedLogFile `json:"logs,omitempty"`
+}
+
+// SchedLogFile is one device's log of a 予約 round.
+type SchedLogFile struct {
+	Device string `json:"device"`
+	Path   string `json:"path"`
 }
 
 type schedJob struct {
@@ -524,6 +534,11 @@ func (a *App) startScheduled(job schedJob) error {
 			total++
 		}
 	}
+	settings := base.Settings
+	var ids []string
+	for _, sc := range base.Schedules {
+		ids = append(ids, sc.ID)
+	}
 	ctx, cancel := a.beginRunLocked(job.sc.Name)
 	// Marked running under the same lock that claimed the batch: a 止める
 	// or delete (which change the vault under a.mu first) either finds the
@@ -534,6 +549,7 @@ func (a *App) startScheduled(job schedJob) error {
 	s.mu.Unlock()
 	a.mu.Unlock()
 	a.emitSched()
+	dir := a.schedRunDir(job.sc, settings, ids)
 
 	go func() {
 		emit := func(ev runpkg.Event) {
@@ -545,9 +561,13 @@ func (a *App) startScheduled(job schedJob) error {
 				a.emitSched()
 			}
 		}
-		done := a.execBatch(ctx, cancel, snap, req, job.sc.Name, emit)
+		done := a.execBatch(ctx, cancel, snap, req, job.sc.Name, dir, emit)
 		ok, failed, canceled := 0, 0, false
+		var logs []SchedLogFile
 		for _, r := range done.Results {
+			if r.LogPath != "" {
+				logs = append(logs, SchedLogFile{Device: r.Device, Path: r.LogPath})
+			}
 			if r.Success {
 				ok++
 			} else {
@@ -559,7 +579,7 @@ func (a *App) startScheduled(job schedJob) error {
 		s.runID, s.runName = "", ""
 		s.mu.Unlock()
 		e := SchedLogEntry{Due: job.due.Format(time.RFC3339), ScheduleID: job.sc.ID, Schedule: job.sc.Name, Kind: "run",
-			OK: ok, Failed: failed, RunDir: done.RunDir, Manual: job.manual}
+			OK: ok, Failed: failed, RunDir: done.RunDir, Manual: job.manual, Logs: logs}
 		for _, sl := range job.sc.Slots {
 			e.Repeat = e.Repeat || sl.Kind == schedule.KindInterval
 		}
@@ -583,6 +603,65 @@ func (a *App) startScheduled(job schedJob) error {
 		a.schedKick()
 	}()
 	return nil
+}
+
+// schedDirsPath records, per schedule ID, the folder its rounds' logs go
+// to (data/schedule-dirs.json; paths only, nothing secret).
+func schedDirsPath() string { return filepath.Join(exeDir(), "data", "schedule-dirs.json") }
+
+type schedDirRec struct {
+	Dir   string `json:"dir"`
+	Group string `json:"group"`
+}
+
+// schedLogStage is the stage a run's log file names are made with: for a
+// 予約 (it has its own folder, dir) without a stage, the 予約 word set in
+// 設定 (default "reserve") — the plain capture's "Config" read as
+// "Config_Config" under a template that already says Config. Otherwise ""
+// (the stage's own word).
+func schedLogStage(dir, stage string) string {
+	if dir != "" && stage == "" {
+		return logstore.StageSchedule
+	}
+	return ""
+}
+
+// schedRunDir is the one folder a 予約 keeps its logs in, every round and
+// 今すぐ実行 alike: the one it already has, or a new one named like a run
+// folder with the 予約 word (設定; default "reserve") where the stage word
+// goes (not the schedule's name:
+// the made-up names are long, and the history row names the schedule). A new folder is made
+// when the old one is gone (deleted by hand), sits outside the log folder
+// now set, or was made for another group. ids are the schedules that exist:
+// the records of deleted ones are dropped.
+func (a *App) schedRunDir(sc schedule.Schedule, s model.Settings, ids []string) string {
+	a.sched.logMu.Lock()
+	defer a.sched.logMu.Unlock()
+	recs := map[string]schedDirRec{}
+	if b, err := os.ReadFile(schedDirsPath()); err == nil {
+		_ = json.Unmarshal(b, &recs)
+	}
+	root := logstore.ResolveRoot(s.LogDir)
+	if r, ok := recs[sc.ID]; ok && r.Group == sc.Group && strings.EqualFold(filepath.Dir(r.Dir), filepath.Clean(root)) {
+		if fi, err := os.Stat(r.Dir); err == nil && fi.IsDir() {
+			return r.Dir
+		}
+	}
+	dir := logstore.ClaimRunDir(s.LogDir, s.LogDirTemplate, sc.Group, logstore.StageSchedule, s.StageTokens(), time.Now())
+	for id := range recs {
+		if !containsStr(ids, id) {
+			delete(recs, id)
+		}
+	}
+	recs[sc.ID] = schedDirRec{Dir: dir, Group: sc.Group}
+	if b, err := json.MarshalIndent(recs, "", "  "); err == nil {
+		_ = os.MkdirAll(filepath.Dir(schedDirsPath()), 0o755)
+		tmp := schedDirsPath() + ".tmp"
+		if os.WriteFile(tmp, b, 0o600) == nil {
+			_ = os.Rename(tmp, schedDirsPath())
+		}
+	}
+	return dir
 }
 
 func (a *App) emitSched() {
@@ -644,6 +723,11 @@ func (a *App) ListSchedules() []ScheduleView {
 	}
 	return out
 }
+
+// GetPowerInfo reads this PC's sleep and lid settings (read only: nothing
+// is changed). The run tab uses it to say whether closing the lid will stop
+// the batch that is running.
+func (a *App) GetPowerInfo() PowerInfo { return readPowerInfo() }
 
 // GetScheduleStatus reports what the scheduler is doing.
 func (a *App) GetScheduleStatus() ScheduleStatus {

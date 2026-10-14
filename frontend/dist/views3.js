@@ -3,9 +3,13 @@
 // before/after comparison of two runs' logs.
 // User-visible strings are Japanese source text wrapped in t() (see i18n.js).
 
+// Rows drawn at first (and added per さらに表示): a log folder of
+// thousands of runs drew thousands of rows every time the tab opened.
+const HIST_PAGE = 200;
+
 // Which run rows are expanded, and the two runs picked for comparison. Kept
 // across re-renders of the tab.
-const histState = { open: {}, a: "", b: "", c: "", runs: [] };
+const histState = { open: {}, a: "", b: "", c: "", runs: [], limit: HIST_PAGE };
 // Runs that represent the work itself: a batch tagged 作業中, or an
 // interactive session (stage "work").
 function isWorkRun(r) { return r.stage === "during" || r.stage === "work"; }
@@ -37,12 +41,18 @@ function histMsg(d) {
   return fmtRunMsg(d.error || "");
 }
 
+// The tab opens at once on the runs read last time (if any) and redraws
+// when the fresh list arrives.
+let histLoading = 0;
 async function renderHistory() {
   const root = document.getElementById("tab-history");
-  root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
+  const seq = ++histLoading;
+  if (histState.runs.length) renderHistoryView();
+  else root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
   let runs = [];
   try { runs = await App().ListRunHistory() || []; }
-  catch (e) { root.innerHTML = `<div class="empty">${esc(t("履歴を読めません")) + ": " + esc(terr(e))}</div>`; return; }
+  catch (e) { if (seq === histLoading) root.innerHTML = `<div class="empty">${esc(t("履歴を読めません")) + ": " + esc(terr(e))}</div>`; return; }
+  if (seq !== histLoading) return; // a newer read is on its way
   histState.runs = runs;
   renderHistoryView();
 }
@@ -87,12 +97,14 @@ function renderHistoryView() {
     r => [fmtRunTime(r.startedAt), r.group, stageName(r), ...r.devices.map(d => d.name)],
     (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? r.failed * 100000 + r.ok : -1) : (r.group || ""),
     { group: r => r.group || "", stage: r => stageLabel(r.stage || "") });
-  const rows = visible.map(r => {
+  const shown = visible.slice(0, histState.limit);
+  const rows = shown.map(r => {
     const open = !!histState.open[r.dir];
     const counts = r.hasSummary
       ? `<span style="color:var(--ok)">${r.ok}</span> / <span style="color:var(--err)">${r.failed}</span>${r.canceled ? ` / <span style="color:var(--warn)">${r.canceled}</span>` : ""}`
       : `<span class="muted">${esc(t("{n} ファイル", { n: r.devices.length }))}</span>`;
     const devRows = open ? `<tr class="hist-devs"><td colspan="7" style="padding:0">
+      ${r.rounds > 1 ? `<div class="muted" style="font-size:12px;padding:6px 48px">${esc(t("各機器の最新の回の結果です。ほかの回のログは「フォルダ」で開けます"))}</div>` : ""}
       <table><tbody>${r.devices.map(d => `<tr>
         <td style="width:36px"></td>
         <td style="width:140px"><span class="dot st-${d.status === "ok" ? "done" : d.status === "unknown" ? "queued" : d.status}"></span>${esc(({ ok: t("完了"), error: t("エラー"), canceled: t("中止"), unknown: t("—") })[d.status] || d.status)}</td>
@@ -107,7 +119,7 @@ function renderHistoryView() {
       <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("単独接続"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
       <td><div class="clip" data-tip="${esc(r.group || "")}">${esc(r.group || "")}</div></td>
       <td style="width:130px">${counts}</td>
-      <td style="width:120px" class="muted" style="font-size:12px">${r.hasSummary ? "" : esc(t("旧形式"))}</td>
+      <td style="width:120px;font-size:12px" class="muted">${r.rounds > 1 ? `<span data-tip="${esc(t("この予約で実行した回数（各機器の結果は最新の回）。失敗のあった回: {f}", { f: r.failedRounds || 0 }))}">${esc(t("{n} 回分", { n: r.rounds }))}${r.failedRounds ? ` <span style="color:var(--err)">${esc(t("(失敗 {f})", { f: r.failedRounds }))}</span>` : ""}</span>` : r.hasSummary ? "" : esc(t("旧形式"))}</td>
       <td style="text-align:right;white-space:nowrap;width:260px">
         <button class="btn sm" data-cmp-a="${esc(r.dir)}" ${histState.a === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較元(A)"))}</button>
         <button class="btn sm" data-cmp-b="${esc(r.dir)}" ${histState.b === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較先(B)"))}</button>
@@ -147,6 +159,7 @@ function renderHistoryView() {
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する実行がありません"))}</div>`
         : `<table class="fixed" data-colw="history"><thead><tr><th style="width:36px"></th>${listViewTh(LV, "time", t("開始日時"), "width:170px")}${listViewTh(LV, "stage", t("作業"), "width:110px")}${listViewTh(LV, "group", t("グループ"))}${listViewTh(LV, "result", t("成功 / 失敗"), "width:130px")}<th style="width:120px"></th><th style="width:260px"></th></tr></thead>
           <tbody>${rows}</tbody></table>`}
+      ${visible.length > shown.length ? `<div style="padding:10px 14px;text-align:center"><button class="btn" id="hist-more">${esc(t("さらに表示（残り {n} 件）", { n: visible.length - shown.length }))}</button></div>` : ""}
     </div>`;
 
   // Re-rendering for a sort / filter change must not re-read the log root:
@@ -154,15 +167,18 @@ function renderHistoryView() {
   listViewWire(LV, root, renderHistoryView, focus);
   wireColResize(root);
   document.getElementById("hist-refresh").onclick = renderHistory;
+  const more = document.getElementById("hist-more");
+  if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
   root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistoryView(); });
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   root.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => App().OpenRunFolder(b.dataset.folder).catch(e => toast(terr(e), "err")));
-  root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { histState.a = b.dataset.cmpA; renderHistory(); });
-  root.querySelectorAll("[data-cmp-b]").forEach(b => b.onclick = () => { histState.b = b.dataset.cmpB; renderHistory(); });
-  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value; renderHistory(); };
-  document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value; histState.c = ""; renderHistory(); };
-  document.getElementById("cmp-c").onchange = e => { histState.c = e.target.value || "-"; renderHistory(); };
+  // Picking A / B / 作業中 only redraws: the runs are already in hand.
+  root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { histState.a = b.dataset.cmpA; renderHistoryView(); });
+  root.querySelectorAll("[data-cmp-b]").forEach(b => b.onclick = () => { histState.b = b.dataset.cmpB; renderHistoryView(); });
+  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value; renderHistoryView(); };
+  document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value; histState.c = ""; renderHistoryView(); };
+  document.getElementById("cmp-c").onchange = e => { histState.c = e.target.value || "-"; renderHistoryView(); };
   document.getElementById("cmp-go").onclick = compareRuns;
 }
 

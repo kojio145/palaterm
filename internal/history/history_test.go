@@ -200,3 +200,53 @@ func TestListCustomStageWords(t *testing.T) {
 		}
 	}
 }
+
+// A 予約's rounds fold into one summary: first start kept, latest result
+// per device, rounds and failed rounds counted.
+func TestAddRound(t *testing.T) {
+	r1 := Summary{StartedAt: "2026-10-14T10:00:00+09:00", Devices: []DeviceSummary{{Name: "a", Success: true}, {Name: "b", Success: false}}}
+	r2 := Summary{StartedAt: "2026-10-14T10:00:10+09:00", Devices: []DeviceSummary{{Name: "b", Success: true}, {Name: "c", Success: true}}}
+	s := AddRound(r1, r2)
+	if s.StartedAt != r1.StartedAt || s.Rounds != 2 || s.FailedRounds != 1 {
+		t.Fatalf("got start %s rounds %d failed %d", s.StartedAt, s.Rounds, s.FailedRounds)
+	}
+	if len(s.Devices) != 3 || !s.Devices[1].Success || s.Devices[2].Name != "c" {
+		t.Fatalf("devices %+v", s.Devices)
+	}
+	s = AddRound(s, r1)
+	if s.Rounds != 3 || s.FailedRounds != 2 {
+		t.Fatalf("third round: rounds %d failed %d", s.Rounds, s.FailedRounds)
+	}
+}
+
+// The cached row of a folder follows a summary rewritten in place and a
+// folder that disappears.
+func TestListCacheFollowsChanges(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "20261014_100000_G")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(dir, Summary{StartedAt: "2026-10-14T10:00:00+09:00", Devices: []DeviceSummary{{Name: "a", Success: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if runs, _ := List(root, logstore.StageTokens{}); len(runs) != 1 || runs[0].OK != 1 {
+		t.Fatalf("first read %+v", runs)
+	}
+	prev, _ := Read(dir)
+	if err := Write(dir, AddRound(prev, Summary{Devices: []DeviceSummary{{Name: "a", Success: false}}})); err != nil {
+		t.Fatal(err)
+	}
+	runs, _ := List(root, logstore.StageTokens{})
+	if len(runs) != 1 || runs[0].Failed != 1 || runs[0].Rounds != 2 {
+		t.Fatalf("after a new round %+v", runs)
+	}
+	runs[0].Devices[0].Name = "changed by the caller"
+	if again, _ := List(root, logstore.StageTokens{}); again[0].Devices[0].Name != "a" {
+		t.Fatal("a caller's change reached the cache")
+	}
+	os.RemoveAll(dir)
+	if runs, _ := List(root, logstore.StageTokens{}); len(runs) != 0 {
+		t.Fatalf("deleted folder still listed: %+v", runs)
+	}
+}

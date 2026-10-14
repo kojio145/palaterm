@@ -36,10 +36,17 @@ type StageTokens struct {
 	Before string `json:"before"`
 	Work   string `json:"work"` // a batch marked 作業中, or an interactive session
 	After  string `json:"after"`
+	// Schedule is a 予約's word: its folder carries it where the stage goes,
+	// and so do its log files when it has no stage of its own.
+	Schedule string `json:"schedule"`
 }
 
 // DefaultStageTokens is the naming a new vault starts with.
-var DefaultStageTokens = StageTokens{Before: "before", Work: StageWork, After: "after"}
+var DefaultStageTokens = StageTokens{Before: "before", Work: StageWork, After: "after", Schedule: "reserve"}
+
+// StageSchedule is the stage a 予約's folder (and its stage-less log files)
+// is named for; it expands to StageTokens.Schedule.
+const StageSchedule = "schedule"
 
 // Filled returns t with every empty field replaced by its default.
 func (t StageTokens) Filled() StageTokens {
@@ -52,7 +59,10 @@ func (t StageTokens) Filled() StageTokens {
 	if strings.TrimSpace(t.After) == "" {
 		t.After = DefaultStageTokens.After
 	}
-	return StageTokens{Before: strings.TrimSpace(t.Before), Work: strings.TrimSpace(t.Work), After: strings.TrimSpace(t.After)}
+	if strings.TrimSpace(t.Schedule) == "" {
+		t.Schedule = DefaultStageTokens.Schedule
+	}
+	return StageTokens{Before: strings.TrimSpace(t.Before), Work: strings.TrimSpace(t.Work), After: strings.TrimSpace(t.After), Schedule: strings.TrimSpace(t.Schedule)}
 }
 
 // Token is what {stage} expands to: a plain capture with no stage is a
@@ -69,6 +79,8 @@ func (t StageTokens) Token(stage string) string {
 		return t.Work
 	case "after":
 		return t.After
+	case StageSchedule:
+		return t.Schedule
 	}
 	return stage
 }
@@ -87,6 +99,8 @@ func (t StageTokens) Canonical(tok string) string {
 		return StageWork
 	case strings.ToLower(t.After), "after":
 		return "after"
+	case strings.ToLower(t.Schedule), "reserve", "予約":
+		return StageSchedule
 	}
 	return tok
 }
@@ -95,7 +109,7 @@ func (t StageTokens) Canonical(tok string) string {
 // same for two stages, or that would be read as a different stage.
 func (t StageTokens) Validate() error {
 	t = t.Filled()
-	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}}
+	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}, {"予約", t.Schedule}}
 	seen := map[string]string{}
 	for _, x := range words {
 		if len([]rune(x.w)) > 32 {
@@ -121,7 +135,7 @@ func (t StageTokens) Validate() error {
 	}
 	// A word that is another stage's default would be read back as that
 	// stage ("after" for 作業前 would list the run as 作業後).
-	defaults := map[string]string{"before": "作業前", "work": "作業中", "during": "作業中", "after": "作業後", "config": "指定なし"}
+	defaults := map[string]string{"before": "作業前", "work": "作業中", "during": "作業中", "after": "作業後", "reserve": "予約", "schedule": "予約", "config": "指定なし"}
 	for _, x := range words {
 		if lbl, ok := defaults[strings.ToLower(x.w)]; ok && lbl != x.label {
 			return fmt.Errorf("%sの付与文字列 %q は「%s」の既定語なので使えません", x.label, x.w, lbl)
@@ -284,15 +298,33 @@ func ResolveRoot(root string) string {
 
 // Write saves transcript under dir using the template, returning the full path.
 // The run's timestamp is passed in so all logs in one batch share a folder time.
+// An existing file is never overwritten: a 予約 puts every round into one
+// folder, and a template without {time} names the same file each round, so
+// the later one gets "_2", "_3", … before the extension.
 func Write(dir, tmpl string, f Fields, transcript string, now time.Time) (string, error) {
 	path := Path(dir, tmpl, f, now)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(path, []byte(transcript), 0o644); err != nil {
-		return "", err
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for i := 2; ; i++ {
+		fh, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err == nil {
+			_, err = fh.WriteString(transcript)
+			if cerr := fh.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				return "", err
+			}
+			return path, nil
+		}
+		if !os.IsExist(err) || i > 9999 {
+			return "", err
+		}
+		path = fmt.Sprintf("%s_%d%s", base, i, ext)
 	}
-	return path, nil
 }
 
 // Path returns the file Write would create, without writing it — for a

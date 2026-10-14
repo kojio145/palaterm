@@ -75,14 +75,18 @@ func armWake(at time.Time) string {
 }
 
 var (
-	powrprof                   = syscall.NewLazyDLL("powrprof.dll")
-	pCallNtPowerInformation    = powrprof.NewProc("CallNtPowerInformation")
-	pPowerGetActiveScheme      = powrprof.NewProc("PowerGetActiveScheme")
-	pPowerReadACValueIndex     = powrprof.NewProc("PowerReadACValueIndex")
-	pPowerReadDCValueIndex     = powrprof.NewProc("PowerReadDCValueIndex")
-	pLocalFree                 = kernel32.NewProc("LocalFree")
-	pGetSystemPowerStatus      = kernel32.NewProc("GetSystemPowerStatus")
-	guidSleepSubgroup          = syscall.GUID{Data1: 0x238c9fa8, Data2: 0x0aad, Data3: 0x41ed, Data4: [8]byte{0x83, 0xf4, 0x97, 0xbe, 0x24, 0x2c, 0x8f, 0x20}}
+	powrprof                = syscall.NewLazyDLL("powrprof.dll")
+	pCallNtPowerInformation = powrprof.NewProc("CallNtPowerInformation")
+	pPowerGetActiveScheme   = powrprof.NewProc("PowerGetActiveScheme")
+	pPowerReadACValueIndex  = powrprof.NewProc("PowerReadACValueIndex")
+	pPowerReadDCValueIndex  = powrprof.NewProc("PowerReadDCValueIndex")
+	pLocalFree              = kernel32.NewProc("LocalFree")
+	pGetSystemPowerStatus   = kernel32.NewProc("GetSystemPowerStatus")
+	guidSleepSubgroup       = syscall.GUID{Data1: 0x238c9fa8, Data2: 0x0aad, Data3: 0x41ed, Data4: [8]byte{0x83, 0xf4, 0x97, 0xbe, 0x24, 0x2c, 0x8f, 0x20}}
+	// Power buttons and lid: what closing the lid does (0 nothing, 1 sleep,
+	// 2 hibernate, 3 shut down).
+	guidButtonSubgroup         = syscall.GUID{Data1: 0x4f971e89, Data2: 0xeebd, Data3: 0x4455, Data4: [8]byte{0xa8, 0xde, 0x9e, 0x59, 0x04, 0x0e, 0x73, 0x47}}
+	guidLidAction              = syscall.GUID{Data1: 0x5ca83367, Data2: 0x6e45, Data3: 0x459f, Data4: [8]byte{0xa2, 0x7b, 0x47, 0x6b, 0x1d, 0x01, 0xc9, 0x36}}
 	guidAllowWakeTimers        = syscall.GUID{Data1: 0xbd3b718a, Data2: 0x0680, Data3: 0x4d9d, Data4: [8]byte{0x8a, 0xb2, 0xe1, 0xd2, 0xb4, 0xac, 0x80, 0x6d}}
 	systemPowerCapabilitiesLvl = uintptr(4) // SystemPowerCapabilities
 )
@@ -99,17 +103,24 @@ type PowerInfo struct {
 	WakeTimersAC int  `json:"wakeTimersAC"`
 	WakeTimersDC int  `json:"wakeTimersDC"`
 	OnAC         bool `json:"onAC"`
+	// LidPresent: the PC has a lid (a laptop). LidActionAC / DC: what
+	// closing it does on mains / battery (0 nothing, 1 sleep, 2 hibernate,
+	// 3 shut down, -1 unknown) — anything but 0 stops a running batch.
+	LidPresent  bool `json:"lidPresent"`
+	LidActionAC int  `json:"lidActionAC"`
+	LidActionDC int  `json:"lidActionDC"`
 }
 
 // readPowerInfo asks Windows about sleep states and the wake-timer setting
 // (no administrator rights needed).
 func readPowerInfo() PowerInfo {
-	pi := PowerInfo{WakeTimersAC: -1, WakeTimersDC: -1, OnAC: true}
+	pi := PowerInfo{WakeTimersAC: -1, WakeTimersDC: -1, OnAC: true, LidActionAC: -1, LidActionDC: -1}
 	// SYSTEM_POWER_CAPABILITIES: 15 BOOLEANs from PowerButtonPresent to
 	// ProcessorThrottle (SystemS3 is the 6th), then two BYTEs and
 	// FastSystemS4, Hiberboot, WakeAlarmPresent, AoAc (offset 20).
 	var caps [128]byte
 	if r, _, _ := pCallNtPowerInformation.Call(systemPowerCapabilitiesLvl, 0, 0, uintptr(unsafe.Pointer(&caps[0])), uintptr(len(caps))); r == 0 {
+		pi.LidPresent = caps[2] != 0
 		pi.S3 = caps[5] != 0
 		pi.ModernStandby = caps[20] != 0
 	}
@@ -121,6 +132,12 @@ func readPowerInfo() PowerInfo {
 		}
 		if r, _, _ := pPowerReadDCValueIndex.Call(0, uintptr(unsafe.Pointer(scheme)), uintptr(unsafe.Pointer(&guidSleepSubgroup)), uintptr(unsafe.Pointer(&guidAllowWakeTimers)), uintptr(unsafe.Pointer(&v))); r == 0 {
 			pi.WakeTimersDC = int(v)
+		}
+		if r, _, _ := pPowerReadACValueIndex.Call(0, uintptr(unsafe.Pointer(scheme)), uintptr(unsafe.Pointer(&guidButtonSubgroup)), uintptr(unsafe.Pointer(&guidLidAction)), uintptr(unsafe.Pointer(&v))); r == 0 {
+			pi.LidActionAC = int(v)
+		}
+		if r, _, _ := pPowerReadDCValueIndex.Call(0, uintptr(unsafe.Pointer(scheme)), uintptr(unsafe.Pointer(&guidButtonSubgroup)), uintptr(unsafe.Pointer(&guidLidAction)), uintptr(unsafe.Pointer(&v))); r == 0 {
+			pi.LidActionDC = int(v)
 		}
 		pLocalFree.Call(uintptr(unsafe.Pointer(scheme)))
 	}

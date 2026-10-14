@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kojio145/palaterm/internal/logstore"
@@ -52,27 +53,93 @@ type Summary struct {
 	// recorded in its own run folder like a batch so it shows in the history.
 	Interactive bool `json:"interactive,omitempty"`
 	// Schedule names the 予約 that started the batch ("" = started by hand).
-	Schedule string          `json:"schedule,omitempty"`
-	Devices  []DeviceSummary `json:"devices"`
+	Schedule string `json:"schedule,omitempty"`
+	// Rounds is how many runs of a 予約 the folder holds (each round adds
+	// its logs to the same folder); 0 = a single run. Devices is then each
+	// device's latest round, and FailedRounds counts the rounds in which a
+	// device failed.
+	Rounds       int             `json:"rounds,omitempty"`
+	FailedRounds int             `json:"failedRounds,omitempty"`
+	Devices      []DeviceSummary `json:"devices"`
+}
+
+// Read returns dir's summary (false when it has none, or an unreadable one).
+func Read(dir string) (Summary, bool) {
+	var s Summary
+	data, err := os.ReadFile(filepath.Join(dir, SummaryName))
+	if err != nil || json.Unmarshal(data, &s) != nil {
+		return Summary{}, false
+	}
+	return s, true
+}
+
+// AddRound folds the round cur into prev, the summary already in a 予約's
+// folder: the first start stays, the count goes up, and each device's row
+// becomes its latest one (a device not in this round keeps its last).
+func AddRound(prev, cur Summary) Summary {
+	out := cur
+	out.StartedAt = prev.StartedAt
+	if out.StartedAt == "" {
+		out.StartedAt = cur.StartedAt
+	}
+	n := prev.Rounds
+	if n == 0 {
+		n = 1
+	}
+	out.Rounds = n + 1
+	out.FailedRounds = prev.FailedRounds
+	if prev.Rounds == 0 && hasFailure(prev.Devices) {
+		out.FailedRounds = 1
+	}
+	if hasFailure(cur.Devices) {
+		out.FailedRounds++
+	}
+	idx := map[string]int{}
+	devs := append([]DeviceSummary{}, prev.Devices...)
+	for i, d := range devs {
+		idx[d.Name] = i
+	}
+	for _, d := range cur.Devices {
+		if i, ok := idx[d.Name]; ok {
+			devs[i] = d
+		} else {
+			idx[d.Name] = len(devs)
+			devs = append(devs, d)
+		}
+	}
+	out.Devices = devs
+	return out
+}
+
+func hasFailure(devs []DeviceSummary) bool {
+	for _, d := range devs {
+		if !d.Success {
+			return true
+		}
+	}
+	return false
 }
 
 // Run is one row of the 実行履歴 list: a run folder plus its summary (or, for
 // a folder from before summaries existed, what can be told from its files).
 type Run struct {
-	Dir         string   `json:"dir"`  // absolute folder path
-	Name        string   `json:"name"` // folder name (log_…)
-	StartedAt   string   `json:"startedAt"`
-	FinishedAt  string   `json:"finishedAt,omitempty"`
-	Group       string   `json:"group,omitempty"`
-	Stage       string   `json:"stage,omitempty"`
-	DryRun      bool     `json:"dryRun,omitempty"`
-	Interactive bool     `json:"interactive,omitempty"`
-	Schedule    string   `json:"schedule,omitempty"`
-	HasSummary  bool     `json:"hasSummary"`
-	OK          int      `json:"ok"`
-	Failed      int      `json:"failed"`
-	Canceled    int      `json:"canceled"`
-	Devices     []Device `json:"devices"`
+	Dir         string `json:"dir"`  // absolute folder path
+	Name        string `json:"name"` // folder name (log_…)
+	StartedAt   string `json:"startedAt"`
+	FinishedAt  string `json:"finishedAt,omitempty"`
+	Group       string `json:"group,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+	DryRun      bool   `json:"dryRun,omitempty"`
+	Interactive bool   `json:"interactive,omitempty"`
+	Schedule    string `json:"schedule,omitempty"`
+	// Rounds / FailedRounds: see Summary (a 予約's folder).
+	Rounds       int      `json:"rounds,omitempty"`
+	FailedRounds int      `json:"failedRounds,omitempty"`
+	HasSummary   bool     `json:"hasSummary"`
+	OK           int      `json:"ok"`
+	Failed       int      `json:"failed"`
+	Canceled     int      `json:"canceled"`
+	Devices      []Device `json:"devices"`
 }
 
 // Device is one device row inside a Run.
@@ -121,19 +188,32 @@ func List(root string, tok logstore.StageTokens) ([]Run, error) {
 		// run from before summaries, an interactive window that crashed),
 		// one whose name starts the way the app's templates do: the old
 		// "log_" prefix, or the date and time the current default opens with.
-		if _, err := os.Stat(filepath.Join(dir, SummaryName)); err != nil {
+		sum, serr := os.Stat(filepath.Join(dir, SummaryName))
+		if serr != nil {
 			if _, _, ok := parseDirName(e.Name()); !ok {
 				continue
 			}
 		}
-		r := readRun(dir, tok)
-		if r.StartedAt == "" {
-			if info, err := e.Info(); err == nil {
-				r.StartedAt = info.ModTime().Format(time.RFC3339)
-			}
+		var dirMod time.Time
+		if info, err := e.Info(); err == nil {
+			dirMod = info.ModTime()
 		}
+		key := cacheKey{dirMod: dirMod, tok: tok}
+		if serr == nil {
+			key.sumMod, key.sumSize = sum.ModTime(), sum.Size()
+		}
+		if r, ok := cached(dir, key); ok {
+			runs = append(runs, r)
+			continue
+		}
+		r := readRun(dir, tok)
+		if r.StartedAt == "" && !dirMod.IsZero() {
+			r.StartedAt = dirMod.Format(time.RFC3339)
+		}
+		store(dir, key, r)
 		runs = append(runs, r)
 	}
+	forget(root, entries)
 	sort.Slice(runs, func(i, j int) bool {
 		if runs[i].StartedAt != runs[j].StartedAt {
 			return runs[i].StartedAt > runs[j].StartedAt
@@ -141,6 +221,64 @@ func List(root string, tok logstore.StageTokens) ([]Run, error) {
 		return runs[i].Name > runs[j].Name
 	})
 	return runs, nil
+}
+
+// The 実行履歴 tab re-reads the log folder every time it opens, and a log
+// folder of thousands of runs (a 予約 every few seconds, before v1.6.6 one
+// folder per round) took a second or more. A folder's row is kept while
+// the folder and its summary are unchanged: a file added to or removed from
+// it changes the folder's time, a rewritten summary its own time or size.
+type cacheKey struct {
+	dirMod, sumMod time.Time
+	sumSize        int64
+	tok            logstore.StageTokens
+}
+
+type cacheEnt struct {
+	key cacheKey
+	run Run
+}
+
+var (
+	cacheMu  sync.Mutex
+	runCache = map[string]cacheEnt{}
+)
+
+func cached(dir string, k cacheKey) (Run, bool) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	e, ok := runCache[dir]
+	if !ok || e.key != k {
+		return Run{}, false
+	}
+	return copyRun(e.run), true
+}
+
+func store(dir string, k cacheKey, r Run) {
+	cacheMu.Lock()
+	runCache[dir] = cacheEnt{key: k, run: copyRun(r)}
+	cacheMu.Unlock()
+}
+
+// copyRun copies the slices a caller could change.
+func copyRun(r Run) Run {
+	r.Devices = append([]Device{}, r.Devices...)
+	return r
+}
+
+// forget drops the cached rows of root's folders that are gone.
+func forget(root string, entries []os.DirEntry) {
+	have := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		have[filepath.Join(root, e.Name())] = true
+	}
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	for dir := range runCache {
+		if filepath.Dir(dir) == filepath.Clean(root) && !have[dir] {
+			delete(runCache, dir)
+		}
+	}
 }
 
 // readRun builds a Run from one folder: the summary when present, otherwise
@@ -161,6 +299,7 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 			}
 			r.FinishedAt = s.FinishedAt
 			r.Group, r.Stage, r.DryRun, r.Interactive, r.Schedule = s.Group, s.Stage, s.DryRun, s.Interactive, s.Schedule
+			r.Rounds, r.FailedRounds = s.Rounds, s.FailedRounds
 			for _, d := range s.Devices {
 				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error, Warnings: d.Warnings}
 				switch {

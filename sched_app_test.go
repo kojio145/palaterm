@@ -2,10 +2,13 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/schedule"
 )
@@ -235,5 +238,53 @@ func TestClockBackDoesNotRepeat(t *testing.T) {
 	a.schedTick(now.Add(-time.Hour))
 	if got := a.sched.checked["1"]; !got.Equal(now) {
 		t.Errorf("checked moved back to %v", got)
+	}
+}
+
+// Every round of a 予約 goes into one folder named for it; a new folder
+// only when that one is gone or the group changed.
+func TestScheduleKeepsOneFolder(t *testing.T) {
+	root := t.TempDir()
+	a := &App{}
+	s := model.Settings{LogDir: root}
+	sc := schedule.Schedule{ID: "testkeep" + schedule.NewID(), Name: "10秒おき show", Group: "A社"}
+	ids := []string{sc.ID}
+	d1 := a.schedRunDir(sc, s, ids)
+	if !strings.Contains(filepath.Base(d1), "_A社_reserve") {
+		t.Fatalf("folder name %q does not say 予約", filepath.Base(d1))
+	}
+	if d2 := a.schedRunDir(sc, s, ids); d2 != d1 {
+		t.Fatalf("second round got %q, want %q", d2, d1)
+	}
+	if err := os.RemoveAll(d1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // a new folder is named for a new second
+	d3 := a.schedRunDir(sc, s, ids)
+	if d3 == d1 {
+		t.Fatal("a deleted folder was handed out again without being re-made")
+	}
+	if _, err := os.Stat(d3); err != nil {
+		t.Fatal(err)
+	}
+	sc.Group = "B社"
+	if d4 := a.schedRunDir(sc, s, ids); d4 == d3 {
+		t.Fatal("another group kept the old group's folder")
+	}
+	a.schedRunDir(schedule.Schedule{ID: "other"}, s, []string{"other"}) // drops the test's record
+}
+
+// A 予約 without a stage names its log files with the 予約 word
+// (not "Config", which doubled up under a template that already says
+// Config); with a stage, or outside a 予約, the stage's own word stays.
+func TestSchedLogStage(t *testing.T) {
+	if got := schedLogStage(`C:\logs\x_予約`, ""); got != logstore.StageSchedule {
+		t.Errorf("schedule without stage: %q", got)
+	}
+	if got := schedLogStage(`C:\logs\x_予約`, "after"); got != "" {
+		t.Errorf("schedule with a stage: %q", got)
+	}
+	if got := schedLogStage("", ""); got != "" {
+		t.Errorf("hand run: %q", got)
 	}
 }

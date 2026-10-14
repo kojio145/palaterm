@@ -435,8 +435,10 @@ type Settings struct {
 	StageTokenBefore string `json:"stageTokenBefore,omitempty"`
 	StageTokenWork   string `json:"stageTokenWork,omitempty"`
 	StageTokenAfter  string `json:"stageTokenAfter,omitempty"`
-	ConnectTimeout   int    `json:"connectTimeout"` // seconds
-	CommandTimeout   int    `json:"commandTimeout"` // seconds per expect
+	// StageTokenSchedule is the word for a 予約 (empty = "reserve").
+	StageTokenSchedule string `json:"stageTokenSchedule,omitempty"`
+	ConnectTimeout     int    `json:"connectTimeout"` // seconds
+	CommandTimeout     int    `json:"commandTimeout"` // seconds per expect
 
 	// LastKeyFile is the most recently chosen SSH private-key path; the device
 	// editor pre-fills it when public-key auth is selected.
@@ -484,7 +486,7 @@ func (s Settings) RightClickPaste() string {
 
 // StageTokens returns the stage words for log names, defaults filled in.
 func (s Settings) StageTokens() logstore.StageTokens {
-	return logstore.StageTokens{Before: s.StageTokenBefore, Work: s.StageTokenWork, After: s.StageTokenAfter}.Filled()
+	return logstore.StageTokens{Before: s.StageTokenBefore, Work: s.StageTokenWork, After: s.StageTokenAfter, Schedule: s.StageTokenSchedule}.Filled()
 }
 
 // DefaultAutoLockMin is the idle time before the vault locks itself when the
@@ -659,9 +661,14 @@ func DefaultSettings() Settings {
 // vault. They mirror the show-command patterns of the legacy Tera Term tool
 // (Show_Command_Pattern_1..7.list); pause values keep the original
 // remote/console split (PauseSec = SSH/Telnet, SerialSec = console).
+//
+// Every command waits for "#" (待つ文字列), written out so the user sees
+// what the run waits for: it is the prompt of the OS profiles these sets
+// are made for (Cisco IOS, FortiGate, NEC IX, ALAXALA AX), and a wait text
+// matches only at the end of the line, as the profile's prompt does.
 func DefaultCommandSets() []CommandSet {
 	c := func(text string, pause, serial int) Command {
-		return Command{Text: text, PauseSec: pause, SerialSec: serial}
+		return Command{Text: text, PauseSec: pause, SerialSec: serial, Wait: SampleWait}
 	}
 	return []CommandSet{
 		{Name: "【サンプル】Cisco_ルータ", Commands: []Command{
@@ -849,7 +856,43 @@ func DefaultCommandSets() []CommandSet {
 // (Inventory.CommandSetSeedGen); a sample set introduced in a later generation
 // is added to such a vault once. Bump this and add the set's name to
 // commandSetIntroducedIn whenever a sample set joins DefaultCommandSets.
-const CommandSetSeedGen = 1
+const CommandSetSeedGen = 2
+
+// SampleWait is the 待つ文字列 of every command in the sample sets.
+const SampleWait = "#"
+
+// SampleWaitsAddedIn is the generation that wrote SampleWait into the
+// sample sets; FillSampleWaits brings an older vault's samples up to it.
+const SampleWaitsAddedIn = 2
+
+// FillSampleWaits gives the commands of the sample sets (by name) that
+// still have no 待つ文字列 the sample's one, for a vault seeded before
+// SampleWaitsAddedIn. A command the user added or retyped (its text not in
+// the sample) and a wait the user set are left alone. Reports a change.
+func FillSampleWaits(sets []CommandSet) bool {
+	want := map[string]map[string]string{}
+	for _, cs := range DefaultCommandSets() {
+		m := map[string]string{}
+		for _, c := range cs.Commands {
+			m[c.Text] = c.Wait
+		}
+		want[cs.Name] = m
+	}
+	changed := false
+	for i := range sets {
+		m := want[sets[i].Name]
+		if m == nil {
+			continue
+		}
+		for j := range sets[i].Commands {
+			c := &sets[i].Commands[j]
+			if w, ok := m[c.Text]; ok && c.Wait == "" && w != "" {
+				c.Wait, changed = w, true
+			}
+		}
+	}
+	return changed
+}
 
 // commandSetIntroducedIn maps the sample sets that joined after the original
 // five to the generation that brought them. Original sets are absent (0).

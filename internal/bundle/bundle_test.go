@@ -360,49 +360,35 @@ func TestParseCommandSetRefusesHiddenCR(t *testing.T) {
 	}
 }
 
-// A 共有用 export carries no credentials at all, and reading it back over
-// the same devices keeps the credentials this PalaTerm already has.
-func TestSharedExportKeepsExistingCredentials(t *testing.T) {
+// Credentials left empty in what is read in (cells blanked by hand, or a
+// 共有用 export from v1.6.5 and earlier) keep the ones this PalaTerm
+// already has, while the other fields update.
+func TestBlankCredentialsKeepExisting(t *testing.T) {
 	inv := sampleInventory()
 	inv.Devices[0].EnablePassword, inv.Devices[0].KeyFile, inv.Devices[0].KeyPassphrase = "en", `C:\k\id`, "kp"
 	inv.Devices[1].Bastions[0].Password, inv.Devices[1].Bastions[0].KeyPassphrase = "jp", "jkp"
 	inv.DeviceGroups[0].Username, inv.DeviceGroups[0].Password = "gu", "gp"
 	src := Select(inv, "A社")
-	src.StripCredentials()
-
-	dir := filepath.Join(t.TempDir(), "A社_share")
-	mp, err := Write(dir, src, "PalaTerm test")
+	for i := range src.Devices {
+		d := &src.Devices[i]
+		d.Username, d.Password, d.EnablePassword, d.KeyFile, d.KeyPassphrase = "", "", "", "", ""
+		d.Bastions = append([]model.Bastion(nil), d.Bastions...)
+		for j := range d.Bastions {
+			d.Bastions[j].Username, d.Bastions[j].Password, d.Bastions[j].KeyFile, d.Bastions[j].KeyPassphrase = "", "", "", ""
+		}
+	}
+	for i := range src.Manifest.Groups {
+		g := &src.Manifest.Groups[i]
+		g.Username, g.Password, g.EnablePassword = "", "", ""
+	}
+	mp, err := Write(filepath.Join(t.TempDir(), "A社"), src, "PalaTerm test")
 	if err != nil {
 		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(filepath.Join(dir, "devices.csv"))
-	for _, secret := range []string{"en", "kp", "jp", "jkp", `C:\k\id`} {
-		if strings.Contains(string(raw), ","+secret+",") || strings.Contains(string(raw), ":"+secret) {
-			t.Errorf("shared CSV still carries %q:\n%s", secret, raw)
-		}
 	}
 	got, err := Read(mp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Manifest.Shared || got.Manifest.Groups[0].HasCreds() {
-		t.Errorf("manifest not marked shared or group creds left: %+v", got.Manifest)
-	}
-	d0, b0 := got.Devices[0], got.Devices[1].Bastions[0]
-	if d0.Username != "" || d0.Password != "" || d0.EnablePassword != "" || d0.KeyFile != "" || d0.KeyPassphrase != "" ||
-		b0.Username != "" || b0.Password != "" || b0.KeyPassphrase != "" {
-		t.Errorf("credentials left in shared export: %+v / %+v", d0, b0)
-	}
-	// Everything else survives (jump command, legacy flag, set, host).
-	if b0.JumpCommand != "ssh -l {user} {host}" || !b0.LegacyAlgos || d0.CommandSet != "backup" || d0.Host != "192.0.2.1" {
-		t.Errorf("non-credential fields lost: %+v / %+v", d0, b0)
-	}
-	// Select must not have blanked the inventory itself.
-	if inv.Devices[0].Password != "p" || inv.Devices[1].Bastions[0].Password != "jp" {
-		t.Fatalf("StripCredentials touched the inventory")
-	}
-
-	// Read back over the same inventory: credentials stay, other fields update.
 	got.Devices[0].Host = "192.0.2.11"
 	s, _ := Apply(inv, got, Options{})
 	d, j := inv.Devices[0], inv.Devices[1].Bastions[0]
@@ -412,14 +398,14 @@ func TestSharedExportKeepsExistingCredentials(t *testing.T) {
 	if d.Username != "u" || d.Password != "p" || d.EnablePassword != "en" || d.KeyFile != `C:\k\id` || d.KeyPassphrase != "kp" {
 		t.Errorf("device credentials lost: %+v", d)
 	}
-	if j.Username != "j" || j.Password != "jp" || j.KeyPassphrase != "jkp" {
+	if j.Username != "j" || j.Password != "jp" || j.KeyPassphrase != "jkp" || j.JumpCommand != "ssh -l {user} {host}" {
 		t.Errorf("bastion credentials lost: %+v", j)
 	}
 	if inv.DeviceGroups[0].Username != "gu" || inv.DeviceGroups[0].Password != "gp" {
 		t.Errorf("group credentials lost: %+v", inv.DeviceGroups[0])
 	}
-	if !s.Shared || strings.Join(s.CredsKept, ",") != "A社 / a-rt1,A社 / a-fw1" {
-		t.Errorf("summary: shared=%v kept=%v", s.Shared, s.CredsKept)
+	if strings.Join(s.CredsKept, ",") != "A社 / a-rt1,A社 / a-fw1" {
+		t.Errorf("summary: kept=%v", s.CredsKept)
 	}
 }
 

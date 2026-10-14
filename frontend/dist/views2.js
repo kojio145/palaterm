@@ -128,7 +128,7 @@ function editCommandSet(set) {
     <div class="scroll"><table style="margin-top:6px">
       <thead><tr>
         <th style="width:26px"></th><th style="width:36px">#</th><th>${esc(t("コマンド"))}</th>
-        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行にこの文字列が出たら次のコマンドを送ります（例: (config)#）。文字そのまま・部分一致。空欄なら OS タイプのプロンプト（showコマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
+        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行がこの文字列で終わったら次のコマンドを送ります（例: (config)#）。文字そのまま・行末で一致（行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプト（showコマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
         <th style="width:110px">${esc(t("待機(リモート)"))}</th><th style="width:110px">${esc(t("待機(シリアル)"))}</th><th style="width:76px"></th>
       </tr></thead>
       <tbody id="cmd-rows"></tbody>
@@ -241,6 +241,20 @@ function editCommandSet(set) {
 
 // ---- Run tab ----
 let running = false;
+// This PC's lid setting, read from Windows (never changed) when a run
+// starts: a laptop whose lid sleeps it stops the run when closed, which the
+// run tab says while the run goes. Screen lock does not stop it.
+let runPower = null;
+function runLidNote() {
+  if (running && runPower === null) {
+    runPower = {}; // asked once per run
+    App().GetPowerInfo().then(p => { runPower = p || {}; if (running && document.querySelector("#tab-run.active")) renderRun(); }).catch(() => { });
+  }
+  if (!running || !runPower || !runPower.lidPresent) return "";
+  const act = runPower.onAC === false ? runPower.lidActionDC : runPower.lidActionAC;
+  if (act === 0) return "";
+  return `<div style="font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 14px;margin:-6px 0 14px">${esc(t("ⓘ この PC は、ふたを閉じるとスリープして実行が止まります。ふたは開けたままにしてください（画面ロックは大丈夫です）"))}</div>`;
+}
 // True between pressing ■ 中止 and the backend's run:done, so the button can
 // say 中止中… and the completion toast can say what was stopped.
 let cancelling = false;
@@ -327,7 +341,7 @@ function runTargetDevices() {
   return (runFilterActive() ? runVisible(devs) : devs).filter(d => d.enabled);
 }
 function stageLabel(st) {
-  return ({ "": t("指定なし"), before: t("作業前"), during: t("作業中"), after: t("作業後"), work: t("作業中") })[st] || st;
+  return ({ "": t("指定なし"), before: t("作業前"), during: t("作業中"), after: t("作業後"), work: t("作業中"), schedule: t("予約") })[st] || st;
 }
 
 // Fraction of a device's whole run that is behind it, as a percentage.
@@ -430,17 +444,16 @@ function renderRun() {
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
         ${ungroupedCount ? `<option value="${RUN_UNGROUPED}" ${runGroupSel === RUN_UNGROUPED ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: t("（グループ未設定）"), n: ungroupedCount }))}</option>` : ""}
       </select>` : ""}
+      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます"))}">
+        ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
+      </select>
       <select id="run-set" class="btn" style="padding-right:8px;max-width:260px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行だけ、全機器で使うコマンドセットを差し替えます（機器の割り当ては変わりません）。「今回だけ入力…」で、その場で打ったコマンドを流せます"))}">
         <option value="" ${!runSetSel ? "selected" : ""}>${esc(t("コマンド: 機器ごとの設定どおり"))}</option>
         ${(INV.commandSets || []).map(cs => `<option value="${esc(cs.name)}" ${cs.name === runSetSel ? "selected" : ""}>${esc(t("コマンド: {s}（今回のみ）", { s: cs.name }))}</option>`).join("")}
         <option value="${RUN_ADHOC}" ${runSetSel === RUN_ADHOC ? "selected" : ""}>${esc(runSetSel === RUN_ADHOC ? t("コマンド: 今回だけ入力（{n} 行）", { n: runAdHocCommands().length }) : t("コマンド: 今回だけ入力…"))}</option>
       </select>
       ${runSetSel === RUN_ADHOC && !running ? `<button class="btn sm" id="run-adhoc-edit">${esc(t("入力を編集…"))}</button>` : ""}
-      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます"))}">
-        ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
-      </select>
       <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
-      <button class="btn" id="btn-sched" ${running ? "disabled" : ""} data-tip="${esc(t("今の選択（グループ・チェックした機器・コマンド・作業タイミング）で、決まった日時に一括実行する予約を作ります"))}">${esc(t("⏰ 予約…"))}</button>
       <div class="run-stat">
         <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
         <div>${esc(t("失敗"))} <b id="rc-err" style="color:var(--err)">0</b></div>
@@ -448,6 +461,7 @@ function renderRun() {
         <div><span data-tip="${esc(t("完了済みコマンド数と経過時間から算出した全体の予想残り時間。実行が進むほど精度が上がります"))}">${esc(t("予想残り"))}</span> <b id="rc-eta">${running ? computeEta() : "—"}</b></div>
       </div>
     </div>
+    ${runLidNote()}
     ${runGroupSel && devs.length ? `<div class="run-toolbar" style="margin-top:-8px;gap:8px">
       <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（ホスト名・IP・拠点・役割・コマンドセット）"))}" value="${esc(runFilter.text)}">
       <select id="run-filter-site" class="btn" style="padding-right:8px"><option value="">${esc(t("拠点: すべて"))}</option>${sites.map(s => `<option value="${esc(s)}" ${s === runFilter.site ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
@@ -537,7 +551,6 @@ function renderRun() {
   const btnClear = document.getElementById("btn-clear");
   if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
-  document.getElementById("btn-sched").onclick = () => scheduleFromRun();
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
     // Results (and the 失敗のみ再実行 button) belong to the previous group's
@@ -759,6 +772,7 @@ async function doRun(names, dryRun, partial) {
   clearInterval(etaTimer);
   etaTimer = setInterval(updateEta, 1000);
   running = true;
+  runPower = null;
   renderRun();
   try { await App().RunWith(req); }
   catch (e) { toast(t("実行開始に失敗") + ": " + terr(e), "err"); running = false; renderRun(); }
@@ -1036,11 +1050,12 @@ function renderSettings() {
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
-      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前（before）"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中（work）"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業後（after）"))}</span><input id="set-st-after" style="flex:1" placeholder="after" value="${esc(s.stageTokenAfter || "after")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("予約のログフォルダ名と、作業タイミングを指定していない予約のログファイル名に付きます"))}">${esc(t("予約（reserve）"))}</span><input id="set-st-sched" style="flex:1" placeholder="reserve" value="${esc(s.stageTokenSchedule || "reserve")}"></div>
         </div></div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中はロックしません）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
@@ -1058,7 +1073,7 @@ function renderSettings() {
         <tr><td class="mono">{os}</td><td>${esc(t("OS種別"))}</td><td class="mono">{hhmm}</td><td>${esc(t("時刻（hhmm）"))}</td></tr>
         <tr><td class="mono">{group}</td><td>${esc(t("グループ名"))}</td><td class="mono">{site}</td><td>${esc(t("拠点名"))}</td></tr>
         <tr><td class="mono">{role}</td><td colspan="3">${esc(t("役割（機器編集の「役割（任意）」。空なら詰められます）"))}</td></tr>
-        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after。上の欄で変更可）。指定なしは Config。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
+        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve。上の欄で変更可）。指定なしは Config（予約では reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
@@ -1090,6 +1105,7 @@ function renderSettings() {
       stageTokenBefore: document.getElementById("set-st-before").value.trim(),
       stageTokenWork: document.getElementById("set-st-work").value.trim(),
       stageTokenAfter: document.getElementById("set-st-after").value.trim(),
+      stageTokenSchedule: document.getElementById("set-st-sched").value.trim(),
     };
     const lockMin = parseInt(document.getElementById("set-lock").value, 10);
     out.autoLockOff = !(lockMin > 0);

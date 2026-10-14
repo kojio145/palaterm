@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -126,6 +127,21 @@ type Options struct {
 	// written to disk. The result says whether each device is reachable with
 	// its credentials — a rehearsal for the real batch.
 	DryRun bool
+	// Dir, when set, is the folder the logs go to instead of a new run
+	// folder: a 予約 keeps every round in one folder of its own.
+	Dir string
+	// LogStage, when set, is the word {stage} becomes in the log file names
+	// instead of Stage's: a 予約 run with no stage is named "予約" rather
+	// than the plain-capture "Config".
+	LogStage string
+}
+
+// logStage is what the log file names call the run's stage.
+func (o Options) logStage() model.Stage {
+	if o.LogStage != "" {
+		return model.Stage(o.LogStage)
+	}
+	return o.Stage
 }
 
 // RunDevice connects to one device, drives login + commands, and writes a log.
@@ -156,7 +172,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 			res.Transcript = exp.Transcript()
 		}
 		if !opts.DryRun {
-			r.saveLog(&res, dev, s, runDir, now, opts.Stage)
+			r.saveLog(&res, dev, s, runDir, now, opts.logStage())
 		}
 		res.Elapsed = time.Since(start)
 		r.emit(emit, dev.Name, ph, res.Error)
@@ -232,7 +248,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	res.Transcript = exp.Transcript()
 	res.Success = res.Error == ""
 	if !opts.DryRun {
-		r.saveLog(&res, dev, s, runDir, now, opts.Stage)
+		r.saveLog(&res, dev, s, runDir, now, opts.logStage())
 		res.Success = res.Error == ""
 	}
 	res.Elapsed = time.Since(start)
@@ -629,10 +645,12 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 }
 
 // waitTail is the pattern for a command's 待つ文字列: the text, literally,
-// on the last (still open) line of the output. Requiring it on that line
-// keeps an earlier line that merely mentions it from ending the wait.
+// at the end of the last (still open) line of the output — the same rule as
+// the OS profile's prompt (see waitPromptAnswering). Anywhere on that line
+// was too loose: "#" matched NEC IX's "PDEV#" column header while
+// "show processes" was still printing, and the next command went too soon.
 func waitTail(wait string) string {
-	return regexp.QuoteMeta(wait) + `[^\r\n]*\z`
+	return regexp.QuoteMeta(wait) + `[ \t]*\z`
 }
 
 // maxAnswers bounds the questions answered for one command: a device that
@@ -1071,9 +1089,9 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 // SecretsOf lists the passwords a transcript of dev must never show: its own,
 // its enable password, and its bastions'.
 func SecretsOf(dev *model.Device) []string {
-	secrets := []string{dev.Password, dev.EnablePassword}
+	secrets := []string{dev.Password, dev.EnablePassword, dev.KeyPassphrase}
 	for _, b := range dev.ActiveBastions() {
-		secrets = append(secrets, b.Password)
+		secrets = append(secrets, b.Password, b.KeyPassphrase)
 	}
 	return secrets
 }
@@ -1134,7 +1152,11 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 	// A real run claims its folder now (created, so a concurrent run or
 	// terminal cannot take the same name); a dry run writes nothing.
 	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
-	if !opts.DryRun {
+	switch {
+	case opts.Dir != "" && !opts.DryRun:
+		runDir = opts.Dir
+		_ = os.MkdirAll(runDir, 0o755) // a failure shows as each device's log error
+	case !opts.DryRun:
 		runDir = logstore.ClaimRunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
 	}
 	sets := indexSets(inv.CommandSets)

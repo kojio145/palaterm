@@ -368,6 +368,11 @@ func (a *App) Unlock(password string) error {
 	// under that name is left alone, and one deleted afterwards stays deleted
 	// because the vault remembers the generation.
 	if inv.CommandSetSeedGen < model.CommandSetSeedGen {
+		// The sample sets' 待つ文字列 (generation 2) go onto the samples a
+		// vault already has, where the user left the field empty.
+		if inv.CommandSetSeedGen < model.SampleWaitsAddedIn {
+			model.FillSampleWaits(inv.CommandSets)
+		}
 		have := map[string]bool{}
 		for _, cs := range inv.CommandSets {
 			have[cs.Name] = true
@@ -545,6 +550,9 @@ func (a *App) Unlock(password string) error {
 	if len(pins) > 0 {
 		a.persistSoon()
 	}
+	// Read the log folder once in the background, so the 実行履歴 tab opens
+	// from the cache (see history.List) instead of reading every run folder.
+	go func() { _, _ = a.ListRunHistory() }()
 	return nil
 }
 
@@ -1373,6 +1381,7 @@ func (a *App) SaveSettings(s model.Settings) error {
 	// Stage words: trimmed, defaults stored as empty, and checked before
 	// they can produce a bad file name or a mislabelled history row.
 	s.StageTokenBefore, s.StageTokenWork, s.StageTokenAfter = strings.TrimSpace(s.StageTokenBefore), strings.TrimSpace(s.StageTokenWork), strings.TrimSpace(s.StageTokenAfter)
+	s.StageTokenSchedule = strings.TrimSpace(s.StageTokenSchedule)
 	if err := s.StageTokens().Validate(); err != nil {
 		a.mu.Unlock()
 		return err
@@ -1385,6 +1394,9 @@ func (a *App) SaveSettings(s model.Settings) error {
 	}
 	if s.StageTokenAfter == logstore.DefaultStageTokens.After {
 		s.StageTokenAfter = ""
+	}
+	if s.StageTokenSchedule == logstore.DefaultStageTokens.Schedule {
+		s.StageTokenSchedule = ""
 	}
 	a.inv.Settings = s
 	a.mu.Unlock()
@@ -1546,7 +1558,7 @@ func (a *App) run(req RunRequest) error {
 		emit := func(ev runpkg.Event) {
 			runtime.EventsEmit(a.ctx, "run:event", ev)
 		}
-		done := a.execBatch(ctx, cancel, snap, req, "", emit)
+		done := a.execBatch(ctx, cancel, snap, req, "", "", emit)
 		runtime.EventsEmit(a.ctx, "run:done", done)
 	}()
 	return nil
@@ -1572,7 +1584,10 @@ func (a *App) beginRunLocked(sched string) (context.Context, context.CancelFunc)
 
 // execBatch runs a claimed batch to the end and frees the slot: the part a
 // run started by hand and one started by a 予約 share.
-func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched string, emit runpkg.EmitFunc) RunDone {
+//
+// dir is a 予約's own folder ("" = a new run folder): its rounds all go
+// there, and the folder's summary counts them (history.AddRound).
+func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched, dir string, emit runpkg.EmitFunc) RunDone {
 	defer cancel()
 	// No idle sleep until the batch ends (done, 中止 or error).
 	defer keepSystemAwake()()
@@ -1581,12 +1596,12 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	// the vault can be locked mid-run (ロック), and a locked vault knows no
 	// keys — every device would have looked new, a replaced one included.
 	a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
-	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group}, emit)
+	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: schedLogStage(dir, req.Stage)}, emit)
 	// Back to the vault before the next batch may start (runActive below):
 	// restored later, it could undo the next batch's own copy.
 	a.runner.HostKeys = a
 	if runDir != "" {
-		writeRunSummary(runDir, snap, req, sched, started, results)
+		writeRunSummary(runDir, snap, req, sched, dir != "", started, results)
 	}
 	done := RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
 	a.mu.Lock()
@@ -1601,8 +1616,9 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 
 // writeRunSummary records the batch in its log folder for the 実行履歴 tab.
 // Best effort: a summary that cannot be written costs the history row, not
-// the logs.
-func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched string, started time.Time, results []runpkg.DeviceResult) {
+// the logs. With addRound (a 予約's folder) the round is added to the
+// summary already there instead of replacing it.
+func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched string, addRound bool, started time.Time, results []runpkg.DeviceResult) {
 	byName := map[string]model.Device{}
 	for _, d := range inv.Devices {
 		byName[d.Name] = d
@@ -1628,6 +1644,11 @@ func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched 
 			ds.LogFile = filepath.Base(r.LogPath)
 		}
 		s.Devices = append(s.Devices, ds)
+	}
+	if addRound {
+		if prev, ok := history.Read(runDir); ok {
+			s = history.AddRound(prev, s)
+		}
 	}
 	_ = history.Write(runDir, s)
 }
@@ -2087,7 +2108,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.6.5"
+const appVersion = "1.6.6"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2197,15 +2218,11 @@ func (a *App) ImportOSProfileFile() (string, error) {
 // ---- 一式 (bundle) export / import ----
 
 // bundleDir is where ExportBundle writes: export\bundles\<グループ名>\, or
-// export\bundles\all-devices\ for the whole inventory. A 共有用 export gets
-// "_share" appended, so it never overwrites the full one.
-func bundleDir(group string, shared bool) string {
+// export\bundles\all-devices\ for the whole inventory.
+func bundleDir(group string) string {
 	name := "all-devices"
 	if group != "" {
 		name = bundle.FileNameSafe(group)
-	}
-	if shared {
-		name += "_share"
 	}
 	return filepath.Join(exeDir(), "export", "bundles", name)
 }
@@ -2215,10 +2232,8 @@ func bundleDir(group string, shared bool) string {
 // to export\bundles\<group>\ and returns that folder. The folder is the
 // hand-over unit: copy it to another PalaTerm and pick its
 // palaterm-bundle.json in 読込. devices.csv inside it is the same CSV as
-// before, so Excel editing still works. shared (共有用) leaves every
-// credential out (bundle.Contents.StripCredentials), for handing the
-// devices to a colleague without one's own passwords.
-func (a *App) ExportBundle(group string, shared bool) (string, error) {
+// before, so Excel editing still works.
+func (a *App) ExportBundle(group string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -2227,13 +2242,10 @@ func (a *App) ExportBundle(group string, shared bool) (string, error) {
 	c := bundle.Select(a.inv, group)
 	c.Lang = a.lang
 	a.mu.Unlock()
-	if shared {
-		c.StripCredentials()
-	}
 	if group != "" && len(c.Devices) == 0 {
 		return "", fmt.Errorf("グループ「%s」に機器がありません", group)
 	}
-	dir := bundleDir(group, shared)
+	dir := bundleDir(group)
 	if _, err := bundle.Write(dir, c, "PalaTerm "+appVersion); err != nil {
 		return "", err
 	}

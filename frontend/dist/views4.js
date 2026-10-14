@@ -58,6 +58,10 @@ function schedKindLabel(e) {
 }
 
 let schedRenderGen = 0;
+// The tab shows one list at a time — the schedules or their 実行記録 — in
+// a panel that fills the window like every other tab's list (its own
+// scroll, header row fixed, columns resizable, sort and filter).
+const schedTab = { view: "list", data: null };
 async function renderSchedules() {
   const root = document.getElementById("tab-schedule");
   // Draws overlap (an event, a button): only the newest one is shown, not
@@ -71,7 +75,21 @@ async function renderSchedules() {
     return;
   }
   if (gen !== schedRenderGen) return;
-  list = list || []; log = log || [];
+  schedTab.data = { list: list || [], st: st || {}, log: log || [] };
+  renderSchedulesView();
+}
+
+// Draws the tab from the data already read: a sort, filter or switch of
+// list redraws without asking the backend again.
+function renderSchedulesView() {
+  const root = document.getElementById("tab-schedule");
+  if (!schedTab.data) return;
+  const { list, st, log } = schedTab.data;
+  // A redraw (a repeat every 10 seconds sends one each round) keeps the
+  // list where the user scrolled it.
+  const oldPanel = root.querySelector(".panel.scrollx");
+  const keepScroll = oldPanel && oldPanel.dataset.view === schedTab.view ? oldPanel.scrollTop : 0;
+  const focus = listViewFocus();
   // Will a 予約 run on this PC while it sleeps? Only if Windows lets an app
   // wake it (wake timers allowed for the current power source) and the PC
   // is not modern standby (which pauses apps). Otherwise the answer is the
@@ -97,7 +115,17 @@ async function renderSchedules() {
     : finished(sc) ? `<span class="badge sc-st done">${esc(t("終了"))}</span>`
     : `<span class="badge sc-st on">${esc(t("有効"))}</span>`;
   const nextText = sc => !sc.enabled ? t("—（停止中）") : sc.next ? fmtSchedTime(sc.next) + (sc.remaining > 0 ? t("（あと {n} 回）", { n: sc.remaining }) : sc.remaining === -1 && (sc.slots || [])[0] && sc.slots[0].kind === "interval" ? t("（止めるまで）") : "") : t("—（終了）");
-  const rows = list.map(sc => `
+  const stateWord = sc => sc.running ? t("実行中") : sc.queued ? t("順番待ち") : !sc.enabled ? t("停止中") : finished(sc) ? t("終了") : t("有効");
+  const LV = "schedules", LG = "schedlog";
+  const shownList = listViewApply(LV, list,
+    sc => [stateWord(sc), schedDevicesLabel(sc), schedCommandsLabel(sc), ...(sc.slots || []).map(slotLabel), nextText(sc)],
+    (sc, k) => k === "state" ? stateWord(sc) : k === "when" ? (sc.next || "~") : schedDevicesLabel(sc),
+    { state: stateWord });
+  const shownLog = listViewApply(LG, log,
+    e => [fmtSchedTime(e.due), e.schedule, schedKindLabel(e), terr(e.message || "")],
+    (e, k) => k === "due" ? (e.due || "") : k === "kind" ? schedKindLabel(e) : k === "result" ? (e.kind === "run" ? (e.failed || 0) * 100000 + (e.ok || 0) : -1) : (e.schedule || ""),
+    { kind: schedKindLabel });
+  const rows = shownList.map(sc => `
     <tr class="${!sc.enabled || finished(sc) ? "sc-dim" : ""}">
       <td style="width:90px">${stateBadge(sc)}</td>
       <td><div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("機器"))}</span>　${esc(schedDevicesLabel(sc))}${sc.stage ? " " + stageBadge(sc.stage) : ""}</div>
@@ -112,14 +140,14 @@ async function renderSchedules() {
       </td>
     </tr>`).join("");
   const nFinished = list.filter(finished).length;
-  const logRows = log.map(e => `
+  const logRows = shownLog.map(e => `
     <tr>
       <td class="mono" style="width:170px">${esc(fmtSchedTime(e.due))}</td>
       <td><div class="clip" data-tip="${esc(e.schedule)}">${esc(e.schedule)}${e.manual ? ` <span class="badge">${esc(t("今すぐ"))}</span>` : ""}</div></td>
       <td style="width:90px"><span class="dot st-${e.kind === "run" ? (e.failed ? "error" : "done") : e.kind === "missed" || e.kind === "skipped" ? "canceled" : "error"}"></span>${esc(schedKindLabel(e))}</td>
       <td style="width:120px">${e.kind === "run" ? `<span style="color:var(--ok)">${e.ok || 0}</span> / <span style="color:var(--err)">${e.failed || 0}</span>` : ""}</td>
       <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
-      <td style="text-align:right;width:100px">${e.runDir ? `<span class="link" data-folder="${esc(e.runDir)}">${esc(t("フォルダ"))}</span>` : ""}</td>
+      <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join("　")}</div></td>
     </tr>`).join("");
   root.innerHTML = `
     <div class="page-head">
@@ -141,18 +169,35 @@ async function renderSchedules() {
         ${esc(t("・「放置してもスリープさせない」は Windows の設定を変えません（PalaTerm 終了で元どおり）"))}<br>
         ${esc(t("・この PC：スリープ解除タイマー 電源接続時 {ac}／バッテリー {dc}・{m}", { ac: wtName(pw.wakeTimersAC), dc: wtName(pw.wakeTimersDC), m: pw.modernStandby ? t("モダンスタンバイ") : t("従来型スリープ") }))}</div></details>
     </div>
-    <div class="panel scrollx" style="margin-bottom:16px">
-      ${nFinished ? `<div class="row-inline" style="justify-content:flex-end;padding:8px 12px 0"><span class="link" id="sc-del-finished" style="font-size:12px">${esc(t("終了した予約（{n} 件）をまとめて削除", { n: nFinished }))}</span></div>` : ""}
-      ${list.length ? `<table class="fixed"><thead><tr><th style="width:90px">${esc(t("状態"))}</th><th>${esc(t("実行する機器・コマンド"))}</th><th style="width:320px">${esc(t("日時"))}</th><th style="width:300px"></th></tr></thead><tbody>${rows}</tbody></table>`
-        : `<div class="empty">${esc(t("予約はありません。「＋ 予約を追加」または実行タブの「⏰ 予約…」から作れます"))}</div>`}
+    <div class="row-inline" style="gap:6px;margin-bottom:12px">
+      <button class="btn" data-scview="list" style="${schedTab.view === "list" ? "border-color:var(--accent);font-weight:600" : ""}">${esc(t("予約一覧（{n}）", { n: list.length }))}</button>
+      <button class="btn" data-scview="log" style="${schedTab.view === "log" ? "border-color:var(--accent);font-weight:600" : ""}">${esc(t("予約の実行記録（{n}）", { n: log.length }))}</button>
+      <span style="margin-left:auto"></span>
+      ${schedTab.view === "list" && nFinished ? `<span class="link" id="sc-del-finished" style="font-size:12px;margin-right:8px">${esc(t("終了した予約（{n} 件）をまとめて削除", { n: nFinished }))}</span>` : ""}
+      <button class="btn" id="sc-logdir" data-tip="${esc(t("ログの保存先フォルダを開きます（予約のログは、予約ごとのフォルダに入ります）"))}">${esc(t("ログフォルダを開く"))}</button>
     </div>
-    <div class="page-title" style="font-size:15px;margin:6px 0 8px">${esc(t("予約の実行記録"))}</div>
-    <div class="panel scrollx">
-      ${log.length ? `<table class="fixed"><thead><tr><th style="width:170px">${esc(t("予定日時"))}</th><th style="width:200px">${esc(t("予約"))}</th><th style="width:90px">${esc(t("結果"))}</th><th style="width:120px">${esc(t("成功 / 失敗"))}</th><th>${esc(t("メッセージ"))}</th><th style="width:100px"></th></tr></thead><tbody>${logRows}</tbody></table>`
-        : `<div class="empty">${esc(t("まだ記録はありません"))}</div>`}
-    </div>`;
+    ${schedTab.view === "list" ? `
+    ${list.length ? listViewBar(LV, t("絞り込み（機器・コマンド・日時）"), [{ id: "state", label: t("状態: すべて"), values: [...new Set(list.map(stateWord))] }]) : ""}
+    <div class="panel scrollx" data-view="list">
+      ${!list.length ? `<div class="empty">${esc(t("予約はありません。「＋ 予約を追加」から作れます"))}</div>`
+        : !shownList.length ? `<div class="empty">${esc(t("絞り込みに一致する予約がありません"))}</div>`
+        : `<table class="fixed" data-colw="schedules"><thead><tr>${listViewTh(LV, "state", t("状態"), "width:90px")}${listViewTh(LV, "target", t("実行する機器・コマンド"))}${listViewTh(LV, "when", t("日時"), "width:320px")}<th style="width:300px"></th></tr></thead><tbody>${rows}</tbody></table>`}
+    </div>` : `
+    ${log.length ? listViewBar(LG, t("絞り込み（予約・メッセージ）"), [{ id: "kind", label: t("結果: すべて"), values: [...new Set(log.map(schedKindLabel))] }]) : ""}
+    <div class="panel scrollx" data-view="log">
+      ${!log.length ? `<div class="empty">${esc(t("まだ記録はありません"))}</div>`
+        : !shownLog.length ? `<div class="empty">${esc(t("絞り込みに一致する記録がありません"))}</div>`
+        : `<table class="fixed" data-colw="schedlog"><thead><tr>${listViewTh(LG, "due", t("予定日時"), "width:170px")}${listViewTh(LG, "schedule", t("予約"), "width:200px")}${listViewTh(LG, "kind", t("結果"), "width:90px")}${listViewTh(LG, "result", t("成功 / 失敗"), "width:120px")}<th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody>${logRows}</tbody></table>`}
+    </div>`}`;
 
+  listViewWire(LV, root, renderSchedulesView, focus);
+  listViewWire(LG, root, renderSchedulesView, focus);
+  wireColResize(root);
+  const panel = root.querySelector(".panel.scrollx");
+  if (panel && keepScroll) panel.scrollTop = keepScroll;
+  root.querySelectorAll("[data-scview]").forEach(b => b.onclick = () => { schedTab.view = b.dataset.scview; renderSchedulesView(); });
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
+  root.querySelector("#sc-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const ka = root.querySelector("#sc-keepawake");
   if (ka) ka.onchange = async e => {
     try {
@@ -197,7 +242,7 @@ async function renderSchedules() {
     try { await App().DeleteSchedule(b.dataset.del); renderSchedules(); }
     catch (e) { toast(terr(e), "err"); }
   });
-  root.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => App().OpenRunFolder(b.dataset.folder).catch(e => toast(terr(e), "err")));
+  root.querySelectorAll("[data-log]").forEach(b => b.onclick = () => showLog(b.dataset.log));
 }
 
 // Re-draw the tab when the scheduler reports a change (a run starting or
@@ -232,7 +277,7 @@ function todayStr(addDays) {
 // devices, what. No name to invent: one is made from those three. One
 // schedule is one rule of time (another time is another schedule — a
 // second rule inside one schedule read as "a second schedule" and confused).
-// prefill (from the run tab's ⏰ 予約…) carries the run choices: group,
+// prefill (a copy of an existing schedule, say) fills the choices: group,
 // devices, command set or typed commands, stage.
 //
 // What people schedule, and what the defaults are for:
@@ -641,18 +686,6 @@ function mountTimePicker(host, value, onChange) {
     onChange(`${p(".tp-h")}:${p(".tp-m")}:${p(".tp-s")}`);
   };
   host.querySelectorAll("select").forEach(x => x.onchange = emit);
-}
-
-// The run tab's ⏰ 予約…: a new schedule with the run tab's current choices.
-function scheduleFromRun() {
-  if (!runGroupSel) { toast(t("先にグループを選んでください"), "err"); return; }
-  const names = runTargetDevices().map(d => d.name);
-  editSchedule(null, {
-    group: runGroupSel === RUN_UNGROUPED ? "" : runGroupSel, ungrouped: runGroupSel === RUN_UNGROUPED,
-    names: names.length ? names : null,
-    commandSet: runSetSel && runSetSel !== RUN_ADHOC ? runSetSel : "", stage: runStage,
-    commands: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text) : [],
-  });
 }
 
 wireScheduleEvents();

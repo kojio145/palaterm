@@ -235,3 +235,46 @@ func TestClaimRunDirIsExclusive(t *testing.T) {
 		}
 	}
 }
+
+// Write never replaces a log already there (a 予約's rounds share a folder).
+func TestWriteKeepsExistingLog(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 14, 10, 0, 0, 0, time.Local)
+	p1, err := Write(dir, "{host}.txt", Fields{Host: "r1"}, "one", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := Write(dir, "{host}.txt", Fields{Host: "r1"}, "two", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p1 == p2 || filepath.Base(p2) != "r1_2.txt" {
+		t.Fatalf("second write went to %s", p2)
+	}
+	if b, _ := os.ReadFile(p1); string(b) != "one" {
+		t.Fatalf("first log overwritten: %q", b)
+	}
+}
+
+// The 予約 word: "reserve" by default, renamable like the stage words, and
+// refused as another stage's word.
+func TestScheduleToken(t *testing.T) {
+	if got := (StageTokens{}).Token(StageSchedule); got != "reserve" {
+		t.Errorf("default: %q", got)
+	}
+	if got := (StageTokens{Schedule: "yoyaku"}).Token(StageSchedule); got != "yoyaku" {
+		t.Errorf("renamed: %q", got)
+	}
+	if got := (StageTokens{Schedule: "yoyaku"}).Canonical("yoyaku"); got != StageSchedule {
+		t.Errorf("canonical: %q", got)
+	}
+	if err := (StageTokens{Before: "reserve"}).Validate(); err == nil {
+		t.Error("before = reserve accepted")
+	}
+	if err := (StageTokens{Schedule: "after"}).Validate(); err == nil {
+		t.Error("schedule = after accepted")
+	}
+	if err := (StageTokens{Schedule: "a/b"}).Validate(); err == nil {
+		t.Error("bad file name accepted")
+	}
+}

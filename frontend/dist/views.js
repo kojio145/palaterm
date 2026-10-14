@@ -576,21 +576,17 @@ function exportBundleDialog(defaultGroup) {
     <h3>${esc(t("一式書き出し"))}</h3>
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
     <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
-    <div class="field" style="margin-top:10px"><label style="font-weight:normal;display:flex;gap:8px;align-items:flex-start;cursor:pointer"><input type="checkbox" id="cx-share" style="width:auto;margin-top:3px"> <span>${esc(t("共有用（認証情報を空にする）"))}<br><span class="muted" style="font-size:12px">${esc(t("機器・踏み台・グループのユーザー名・パスワード・enable パスワード・鍵ファイル・パスフレーズを空にして、フォルダ名に _share を付けて書き出します。ほかの人に機器一覧を渡すときに。受け取った側で読み込むと、既にある機器の認証情報はそのまま残ります。"))}</span></span></label></div>
-    <div class="muted" style="font-size:12px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
+    <div class="muted" style="font-size:12px;margin-top:8px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
   openModal(node, "mid");
-  const share = node.querySelector("#cx-share");
-  share.onchange = () => { node.querySelector("#cx-plain-note").style.display = share.checked ? "none" : ""; };
   node.querySelector("#cx-cancel").onclick = closeModal;
   node.querySelector("#cx-ok").onclick = async () => {
     const v = node.querySelector("#cx-grp").value;
-    const shared = share.checked;
     closeModal();
     try {
-      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v, shared);
+      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v);
       if (!dir) return;
       if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く") })) {
         try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
@@ -642,7 +638,6 @@ function importDialog(defaultGroup) {
       lines.push(t("コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.sets, a: s.setsNew, b: s.setsUpdated, c: s.setsSkipped }));
       lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
     }
-    if (s.shared) lines.push(t("共有用の一式です（認証情報は含まれていません）"));
     if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
     if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
     if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
@@ -728,7 +723,7 @@ function editDevice(dev, preGroup) {
         <input id="f-key" style="flex:1" value="${esc(d.keyFile || "")}" placeholder="C:\\Users\\...\\id_ed25519">
         <button class="btn sm" id="f-key-pick" type="button">${esc(t("参照…"))}</button>
       </div></div>
-    <div class="field" id="fw-keypass"><label>${esc(t("秘密鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存）"))}</label>
+    <div class="field" id="fw-keypass"><label><span data-tip="${esc(t("踏み台経由で、踏み台の上の鍵のパスフレーズを聞かれる場合（Enter passphrase for key …）は、そのパスフレーズをここに入れてください。聞かれたときに自動で送ります（踏み台経由では秘密鍵ファイル欄は使いません）"))}">${esc(t("秘密鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存） ⓘ"))}</span></label>
       <input id="f-keypass" type="password" value="${esc(d.keyPassphrase || "")}"></div>
     <div class="field" id="fw-legacy">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer">

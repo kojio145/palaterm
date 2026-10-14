@@ -63,12 +63,22 @@ func TestWaitTail(t *testing.T) {
 		{"\r\nEnter configuration commands\r\nR1(config-if)#", false},
 		{"\r\nR1(config)#\r\nbuilding", false},
 		{"\r\nR1(configX#", false},
+		{"\r\nR1(config)# show run", false}, // not at the end of the line
 	}
 	for _, c := range cases {
 		e := &expecter{}
 		e.buf.WriteString(c.out)
 		if got := e.Seen(waitTail("(config)#")); got != c.want {
 			t.Errorf("%q: got %v, want %v", c.out, got, c.want)
+		}
+	}
+	// "#" as the wait text: a column header still being printed is not the
+	// prompt (NEC IX "show processes").
+	for out, want := range map[string]bool{"\r\nPDEV#  Name": false, "\r\nIX-A(config)#": true, "\r\nIX-A(config)# ": true} {
+		e := &expecter{}
+		e.buf.WriteString(out)
+		if got := e.Seen(waitTail("#")); got != want {
+			t.Errorf("# on %q: got %v, want %v", out, got, want)
 		}
 	}
 }

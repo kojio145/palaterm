@@ -62,9 +62,6 @@ type Manifest struct {
 	// in after the bundle is read elsewhere. Absent in bundles from before
 	// group credentials existed.
 	Groups []model.DeviceGroup `json:"groups,omitempty"`
-	// Shared marks a 共有用 export: every credential was left out on
-	// purpose (see Contents.StripCredentials).
-	Shared bool `json:"shared,omitempty"`
 }
 
 // Contents is what a bundle carries, in memory.
@@ -118,32 +115,10 @@ func Select(inv *model.Inventory, group string) Contents {
 	return c
 }
 
-// StripCredentials blanks every credential c carries — each device's and
-// jump host's username, password, enable password, key file and key
-// passphrase, and the groups' default credentials — so the bundle can be
-// handed to a colleague (共有用). Reading it back over existing devices keeps
-// their own credentials (see Apply). Marks the manifest Shared.
-func (c *Contents) StripCredentials() {
-	for i := range c.Devices {
-		d := &c.Devices[i]
-		d.Username, d.Password, d.EnablePassword, d.KeyFile, d.KeyPassphrase = "", "", "", "", ""
-		d.Bastions = append([]model.Bastion(nil), d.Bastions...)
-		for j := range d.Bastions {
-			b := &d.Bastions[j]
-			b.Username, b.Password, b.KeyFile, b.KeyPassphrase = "", "", "", ""
-		}
-	}
-	for i := range c.Manifest.Groups {
-		g := &c.Manifest.Groups[i]
-		g.Username, g.Password, g.EnablePassword = "", "", ""
-	}
-	c.Manifest.Shared = true
-}
-
 // keepCredentials fills the credentials d leaves empty from cur, the
-// device it replaces: a row written without them (a 共有用 export, or
-// cells blanked by hand) must not wipe what this PalaTerm already has. A
-// jump hop takes over only from the hop at the same position with the same
+// device it replaces: a row written without them (cells blanked by hand,
+// or a 共有用 export from v1.6.5 and earlier) must not wipe what this
+// PalaTerm already has. A jump hop takes over only from the hop at the same position with the same
 // host. Reports whether anything was taken over.
 func keepCredentials(d *model.Device, cur model.Device) bool {
 	kept := false
@@ -322,7 +297,6 @@ func Write(dir string, c Contents, app string) (string, error) {
 		CommandSets: []FileRef{},
 		OSProfiles:  []FileRef{},
 		Groups:      c.Manifest.Groups,
-		Shared:      c.Manifest.Shared,
 	}
 	text, err := csvio.ExportLang(c.Devices, c.Lang)
 	if err != nil {
@@ -494,8 +468,6 @@ type Summary struct {
 	// CredsKept lists existing devices whose row left some credentials
 	// empty and that therefore kept their own (see keepCredentials).
 	CredsKept []string `json:"credsKept"`
-	// Shared: the file is a 共有用 export (credentials left out).
-	Shared bool `json:"shared"`
 }
 
 // Preview reports what Apply would do without changing inv.
@@ -528,7 +500,6 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.Duplicate = []string{}
 	s.JumpCommands = []string{}
 	s.CredsKept = []string{}
-	s.Shared = c.Manifest.Shared
 
 	// Profiles first: they may rename keys the devices use.
 	keyMap := map[string]string{}

@@ -12,10 +12,14 @@ import (
 
 // Prompts commonly seen while logging into / hopping through jump hosts.
 const (
-	reLogin     = `(?i)login:|username:`
-	rePassword  = `(?i)password:`
-	reYesNo     = `(?i)\(yes/no`
-	reShellDone = `[>#$%\]]\s*$` // a generic shell prompt after landing on a hop
+	reLogin    = `(?i)login:|username:`
+	rePassword = `(?i)password:`
+	reYesNo    = `(?i)\(yes/no`
+	// OpenSSH on a hop asking for the passphrase of a key kept on that hop
+	// ("Enter passphrase for key '/home/u/.ssh/id_rsa':"): the next hop or
+	// the device takes the key that lives on the jump host, not one on this PC.
+	rePassphrase = `(?i)passphrase for key`
+	reShellDone  = `[>#$%\]]\s*$` // a generic shell prompt after landing on a hop
 )
 
 // traverseBastions walks the jump-host chain and then jumps to the device,
@@ -40,8 +44,16 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	// PREVIOUS hop's shell, so that hop's JumpCommand template applies.
 	for i := 1; i < len(bastions); i++ {
 		next := bastions[i]
-		if err := jumpTo(ctx, exp, bastions[i-1].JumpCommand, next.Method, next.Host, next.Username, next.Port, timeout); err != nil {
+		keyed, err := jumpToKey(ctx, exp, bastions[i-1].JumpCommand, next.Method, next.Host, next.Username, next.Port, next.KeyPassphrase, timeout)
+		if err != nil {
 			return fmt.Errorf("踏み台%d段目へのジャンプに失敗: %w", i+1, err)
+		}
+		if keyed {
+			// In with the hop's key: no login or password prompt is coming.
+			if err := exp.Expect(ctx, reShellDone, timeout); err != nil {
+				return fmt.Errorf("踏み台%d段目（%s）のログイン後にプロンプトが出ませんでした: %w", i+1, next.Host, err)
+			}
+			continue
 		}
 		if err := loginHop(ctx, exp, next, timeout); err != nil {
 			return fmt.Errorf("踏み台%d段目のログインに失敗: %w", i+1, err)
@@ -56,7 +68,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 		method = model.BastionSSH
 	}
 	last := bastions[len(bastions)-1]
-	if err := jumpTo(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, timeout); err != nil {
+	if _, err := jumpToKey(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, dev.KeyPassphrase, timeout); err != nil {
 		return fmt.Errorf("機器へのジャンプに失敗: %w", err)
 	}
 	return nil
@@ -95,49 +107,52 @@ const maxNegotiateRetries = 4
 // An OpenSSH "Unable to negotiate" refusal is answered by retrying with the
 // device's offered algorithms allowed (see reNegotiate).
 func jumpTo(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, timeout time.Duration) error {
+	_, err := jumpToKey(ctx, exp, template, method, host, user, port, "", timeout)
+	return err
+}
+
+// jumpToKey is jumpTo that also answers the hop's ssh asking for the
+// passphrase of a key kept on the hop (see rePassphrase) with passphrase —
+// the 秘密鍵のパスフレーズ of the device or bastion being reached. keyed
+// reports that it did: the far end then logs in with the key, and no login
+// or password prompt follows.
+func jumpToKey(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, passphrase string, timeout time.Duration) (keyed bool, err error) {
 	// The user name is typed into the hop's shell. Checked here, on the value
 	// actually used — a device on its group's default credentials sends the
 	// group's name, which the device's own checks never see.
 	if !model.ShellSafeWord(user) {
-		return fmt.Errorf("踏み台で使うユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", user)
+		return false, fmt.Errorf("踏み台で使うユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", user)
 	}
 	cmd := buildJumpCommand(template, method, host, user, port)
 	var extra []string
 	for attempt := 0; ; attempt++ {
 		exp.Drain()
 		if err := exp.Send(withSSHOptions(cmd, extra)); err != nil {
-			return err
+			return false, err
 		}
 		// A first-connection host-key prompt, or OpenSSH refusing the far
 		// end's algorithms, both show up within moments of the command. The
 		// far end's own login prompt showing up instead means the jump is
 		// through: return at once and leave that prompt unconsumed for the
 		// OS profile (or loginHop) to answer.
-		seen := ""
-		deadline := time.Now().Add(3 * time.Second)
-		for seen == "" && time.Now().Before(deadline) {
-			switch {
-			case exp.Seen(reNegotiate):
-				seen = "negotiate"
-			case exp.Seen(reYesNo):
-				seen = "yesno"
-			case exp.Seen(reLogin) || exp.Seen(rePassword):
-				seen = "login"
-			default:
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(50 * time.Millisecond):
-				}
-			}
-		}
-		if seen == "" || seen == "login" {
-			return nil
+		seen, err := jumpSeen(ctx, exp)
+		if err != nil {
+			return false, err
 		}
 		if seen == "yesno" {
 			_ = exp.Expect(ctx, reYesNo, time.Second)
+			exp.Drain()
 			_ = exp.Send("yes")
-			return nil
+			// The key's passphrase is asked after the host key is accepted.
+			if seen, err = jumpSeen(ctx, exp); err != nil {
+				return false, err
+			}
+		}
+		if seen == "passphrase" {
+			return true, answerPassphrase(ctx, exp, host, passphrase)
+		}
+		if seen != "negotiate" {
+			return false, nil
 		}
 		// Let the line finish so the offer is readable, then land back on the
 		// hop's shell before typing again.
@@ -145,10 +160,66 @@ func jumpTo(ctx context.Context, exp *expecter, template string, method model.Ba
 		opt := negotiateFix(exp.Transcript())
 		_ = exp.Expect(ctx, reShellDone, 3*time.Second)
 		if opt == "" || attempt >= maxNegotiateRetries || containsStr(extra, opt) {
-			return fmt.Errorf("%s の ssh が %s と暗号方式を合意できません（%s）。機器が古い方式しか持たない場合は踏み台のジャンプコマンド欄で -o オプションを指定してください", shellName(exp), host, lastNegotiateLine(exp.Transcript()))
+			return false, fmt.Errorf("%s の ssh が %s と暗号方式を合意できません（%s）。機器が古い方式しか持たない場合は踏み台のジャンプコマンド欄で -o オプションを指定してください", shellName(exp), host, lastNegotiateLine(exp.Transcript()))
 		}
 		extra = append(extra, opt)
 	}
+}
+
+// jumpSeen watches the moments after a jump command (or the "yes" to a host
+// key) for what the hop's ssh says: "negotiate", "yesno", "passphrase",
+// "login" (the far end's own login or password prompt), or "" (nothing yet:
+// the far end is on its way). A prompt is left unconsumed for whoever
+// answers it.
+func jumpSeen(ctx context.Context, exp *expecter) (string, error) {
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		switch {
+		case exp.Seen(reNegotiate):
+			return "negotiate", nil
+		case exp.Seen(reYesNo):
+			return "yesno", nil
+		case exp.Seen(rePassphrase):
+			return "passphrase", nil
+		case exp.Seen(reLogin) || exp.Seen(rePassword):
+			return "login", nil
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return "", nil
+}
+
+// answerPassphrase sends the key passphrase the hop's ssh asked for. Asked
+// again, the passphrase was wrong: said so, instead of waiting out a login
+// that will not come (OpenSSH asks three times, then falls back or gives up).
+func answerPassphrase(ctx context.Context, exp *expecter, host, passphrase string) error {
+	if passphrase == "" {
+		return fmt.Errorf("%s で %s へ入る鍵のパスフレーズを聞かれましたが、「秘密鍵のパスフレーズ」が空です。その機器（踏み台なら踏み台）の SSH 認証方式を「公開鍵」にし、踏み台の上にある鍵のパスフレーズを「秘密鍵のパスフレーズ」欄に入れてください（踏み台経由では秘密鍵ファイル欄は使いません）", shellName(exp), host)
+	}
+	_ = exp.Expect(ctx, rePassphrase+`[^\r\n]*:`, time.Second)
+	exp.Drain()
+	if err := exp.Send(passphrase); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if exp.Seen(rePassphrase) {
+			return fmt.Errorf("%s で %s へ入る鍵のパスフレーズが違うため、入れませんでした（「秘密鍵のパスフレーズ」欄を確認してください）", shellName(exp), host)
+		}
+		if exp.Seen(reShellDone) || exp.Seen(reLogin) || exp.Seen(rePassword) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return nil
 }
 
 // negotiateFix turns the newest "Unable to negotiate" line of a transcript
