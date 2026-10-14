@@ -20,6 +20,7 @@ let deviceView = { mode: "select", group: null };
 
 function renderDevices() {
   if (deviceView.mode === "select") return renderGroupChooser();
+  if (deviceView.mode === "grid") return renderGrid();
   return renderDeviceList();
 }
 
@@ -77,11 +78,11 @@ function renderGroupChooser() {
           <div class="choice-t clip" data-tip="${esc(g.name)}">${esc(g.name)}</div>
           <button class="btn sm act-copy" type="button" data-dup="${esc(g.name)}" title="${esc(t("グループを複製"))}">${esc(t("複製"))}</button>
         </div>
-        <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(active ? t("（並び替え・絞り込み中はドラッグ不可）") : t("⠿ ドラッグで並替"))}</span></div>
+        <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(active ? t("（並び替え・絞り込み中はドラッグ不可）") : t("⠿ ドラッグで並替"))}</span> ${gridDraftBadge(g.name, true)}</div>
       </div>`).join("")}
       ${ungroupedN ? `<div class="choice" role="button" tabindex="0" data-open="${DEV_UNGROUPED}" style="border-style:dashed" data-tip="${esc(t("グループを削除したり、グループ欄を空にした機器です。開いて編集・グループへの移動（一括変更）ができます"))}">
         <div class="choice-t">${esc(t("（グループ未設定）"))}</div>
-        <div class="choice-n">${esc(t("{n} 台", { n: ungroupedN }))}</div>
+        <div class="choice-n">${esc(t("{n} 台", { n: ungroupedN }))} ${gridDraftBadge(GRID_UNGROUPED, true)}</div>
       </div>` : ""}
       ${groups.length && !visible.length ? `<div class="empty" style="grid-column:1/-1">${esc(t("絞り込みに一致するグループがありません"))}</div>` : ""}
     </div>`;
@@ -96,6 +97,7 @@ function renderGroupChooser() {
   document.getElementById("exp-csv").onclick = () => exportBundleDialog("");
   document.getElementById("imp-csv").onclick = () => importDialog("");
   document.getElementById("choice-new").onclick = newGroupPrompt;
+  wireGridBadges(root);
   root.querySelectorAll("[data-open]").forEach(b => {
     b.onclick = e => {
       if (e.target.closest("[data-dup]")) return;
@@ -279,7 +281,7 @@ function renderDeviceList() {
       <td><input class="cell inl-site" data-id="${esc(d.id)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
       <td><input class="cell inl-role" data-id="${esc(d.id)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
       <td>
-        <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) : ""))}">${connOptions(d.conn)}</select>
+        <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) + (d.bastionMode === "tunnel" ? " " + t("（SSH トンネル）") : "") : ""))}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
@@ -311,6 +313,8 @@ function renderDeviceList() {
         ${scopeGroup ? `<button class="btn" id="grp-creds" data-tip="${esc(t("このグループの機器が共通で使うユーザー名・パスワード。機器ごとに「グループ既定を使う／個別に設定」を選べます"))}">${esc(t("グループ既定の認証情報…"))}</button>
         <button class="btn" id="grp-rename">${esc(t("グループ名変更"))}</button>
         <button class="btn danger" id="grp-delete">${esc(t("グループ削除"))}</button>` : ""}
+        ${gridDraftBadge(gridScopeOf(deviceView.group))}
+        <button class="btn" id="grid-open" data-tip="${esc(t("Excel のように表の上で複数の機器をまとめて編集します（コピー・貼り付け・Ctrl+D・連番など）。保存するまでは下書きです"))}">${esc(t("表で編集"))}</button>
         <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
         <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
         <button class="btn primary" id="add-dev">${esc(t("＋ 機器を追加"))}</button>
@@ -375,6 +379,8 @@ function renderDeviceList() {
   }
   document.getElementById("exp-csv").onclick = () => exportBundleDialog(scopeGroup ? scopeGroup.name : "");
   document.getElementById("imp-csv").onclick = () => importDialog(scopeGroup ? scopeGroup.name : "");
+  document.getElementById("grid-open").onclick = () => openGrid(gridScopeOf(deviceView.group)).catch(e => toast(terr(e), "err"));
+  wireGridBadges(root);
 
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editDevice(devById(b.dataset.edit)));
@@ -723,7 +729,7 @@ function editDevice(dev, preGroup) {
         <input id="f-key" style="flex:1" value="${esc(d.keyFile || "")}" placeholder="C:\\Users\\...\\id_ed25519">
         <button class="btn sm" id="f-key-pick" type="button">${esc(t("参照…"))}</button>
       </div></div>
-    <div class="field" id="fw-keypass"><label><span data-tip="${esc(t("踏み台経由で、踏み台の上の鍵のパスフレーズを聞かれる場合（Enter passphrase for key …）は、そのパスフレーズをここに入れてください。聞かれたときに自動で送ります（踏み台経由では秘密鍵ファイル欄は使いません）"))}">${esc(t("秘密鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存） ⓘ"))}</span></label>
+    <div class="field" id="fw-keypass"><label><span data-tip="${esc(t("踏み台上でコマンドを打つ方式で、踏み台の上の鍵のパスフレーズを聞かれる場合（Enter passphrase for key …）は、そのパスフレーズをここに入れてください。聞かれたときに自動で送ります（この方式では秘密鍵ファイル欄は使いません。SSH トンネル方式ではこの PC の秘密鍵ファイルを使います）"))}">${esc(t("秘密鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存） ⓘ"))}</span></label>
       <input id="f-keypass" type="password" value="${esc(d.keyPassphrase || "")}"></div>
     <div class="field" id="fw-legacy">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
@@ -732,6 +738,11 @@ function editDevice(dev, preGroup) {
       </label></div>
 
     <div class="section-label">${esc(t("踏み台サーバ（任意・最大5段。外側＝手前から順に）"))}</div>
+    <div class="field" id="fw-bmode" style="margin-bottom:4px"><label><span data-tip="${esc(t("踏み台上でコマンドを打つ: 手前の踏み台の画面で ssh / telnet を打って次へ進みます。ルーターなどシェルのある踏み台ならどれでも使えますが、2段目以降と機器へのログインは踏み台側の ssh が行います。SSH トンネル: 踏み台の SSH の中を通して、この PC から各段と機器へ直接 SSH ログインします（OpenSSH の ProxyJump と同じ）。全段で秘密鍵・レガシー暗号・ホストキー確認が効きます。踏み台はすべて SSH で、TCP 転送を許可している必要があります（Linux の OpenSSH は標準で許可）"))}">${esc(t("踏み台の通り方 ⓘ"))}</span></label>
+      <select id="f-bmode">
+        <option value="" ${d.bastionMode === "tunnel" ? "" : "selected"}>${esc(t("踏み台上でコマンドを打つ（標準・ルーターの踏み台も可）"))}</option>
+        <option value="tunnel" ${d.bastionMode === "tunnel" ? "selected" : ""}>${esc(t("SSH トンネル（この PC から全段にログイン・鍵が使える）"))}</option>
+      </select></div>
     <div id="bastions-host"></div>
     <button class="btn sm" id="add-bastion" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
 
@@ -839,8 +850,15 @@ function editDevice(dev, preGroup) {
   // and legacy-cipher switch only ever apply to hop 1. The fields stay in the
   // DOM (collectBastions reads them) but are hidden with a note for hop 2+.
   const NOTE_HOP = "2段目以降の認証は手前の踏み台の ssh / telnet コマンドが行うため、ここで使われるのはユーザー名とパスワードだけです。鍵認証やレガシー暗号は、手前の踏み台側の ssh 設定（~/.ssh の鍵など）で用意してください。";
+  // Through an SSH tunnel every hop is a login made from this PC, so every
+  // hop's key and legacy fields apply and no jump command is typed.
+  const bmode = node.querySelector("#f-bmode");
+  bmode.onchange = () => { bastions = collectBastions(); renderBastions(); };
   function renderBastions() {
-    bhost.innerHTML = bastions.map((b, i) => `
+    const tun = bmode.value === "tunnel";
+    node.querySelector("#fw-bmode").style.display = bastions.length ? "" : "none";
+    const hide = i => i > 0 && !tun;
+    bhost.innerHTML = (tun && bastions.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${esc(t("SSH トンネルでは踏み台はすべて SSH にしてください。踏み台の sshd が TCP 転送を許可していないと接続できません"))}</div>` : "") + bastions.map((b, i) => `
       <div class="card" data-bastion-row style="padding:14px 16px;margin:10px 0">
         <div class="row-inline" style="justify-content:space-between;margin-bottom:8px">
           <b>${esc(t("{n}段目の踏み台", { n: i + 1 }))}</b>
@@ -854,18 +872,18 @@ function editDevice(dev, preGroup) {
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label>
             <input class="b-port" type="number" value="${esc(String(b.port || (b.method === "telnet" ? 23 : 22)))}"></div>
         </div>
-        <div class="field" style="margin-bottom:8px${b.method === "telnet" || i > 0 ? ";display:none" : ""}" data-b-legacy>
+        <div class="field" style="margin-bottom:8px${b.method === "telnet" || hide(i) ? ";display:none" : ""}" data-b-legacy>
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
-          <div class="field" style="margin-bottom:8px${i > 0 ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
+          <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
             <option value="publickey" ${b.authMethod === "publickey" ? "selected" : ""}>${esc(t("公開鍵"))}</option></select></div>
         </div>
-        ${i > 0 ? `<div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t(NOTE_HOP))}</div>` : ""}
-        <div class="grid-2" ${i > 0 ? 'style="display:none"' : ""}>
+        ${hide(i) ? `<div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t(NOTE_HOP))}</div>` : ""}
+        <div class="grid-2" ${hide(i) ? 'style="display:none"' : ""}>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
             <div class="row-inline" style="gap:6px">
               <input class="b-key" style="flex:1" value="${esc(b.keyFile || "")}">
@@ -874,7 +892,7 @@ function editDevice(dev, preGroup) {
           <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label>
             <input class="b-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
         </div>
-        <div class="field" style="margin-bottom:0"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>
+        <div class="field" style="margin-bottom:0${tun ? ";display:none" : ""}"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>
           <input class="b-jump mono" value="${esc(b.jumpCommand || "")}" placeholder="ssh -l {user} {host}">
           <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("例と使える変数（クリックでコピー）:"))}</div>
           <table class="ph-table"><tbody>
@@ -904,7 +922,7 @@ function editDevice(dev, preGroup) {
       const p = parseInt(portInp.value, 10) || 0;
       if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
       const first = row === bhost.querySelector("[data-bastion-row]");
-      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || !first ? "none" : "";
+      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || (!first && bmode.value !== "tunnel") ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
     bhost.querySelectorAll(".b-auth").forEach(sel => sel.onchange = () => {
@@ -955,7 +973,10 @@ function editDevice(dev, preGroup) {
       out.port = parseInt(node.querySelector("#f-port").value, 10) || 0;
     }
     const chain = collectBastions().filter(b => b.host && b.method);
-    if (chain.length) out.bastions = chain.slice(0, 5);
+    if (chain.length) {
+      out.bastions = chain.slice(0, 5);
+      out.bastionMode = bmode.value;
+    }
     if (!out.name) { toast(t("ホスト名は必須です"), "err"); return; }
     if (conn !== "serial" && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
     // A name only has to be unique within its group (it names the log

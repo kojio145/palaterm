@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.6.7</div>
+    <div class="hero-tag">使い方マニュアル / v1.7.0</div>
   </header>
 
   <nav class="toc">
@@ -355,8 +355,8 @@
       <li><strong>「保存」</strong>を押すと一覧に追加されます。</li>
     </ol>
     <figure class="shot" data-shot="01_groups"><img src="img/manual/01_groups.png" alt="機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ" loading="lazy"><figcaption>機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ</figcaption></figure>
-    <figure class="shot" data-shot="01b_group_dup"><img src="img/manual/01b_group_dup.png" alt="グループの複製。既定の認証情報と機器をまとめてコピー（機器名はそのまま。接尾辞は任意）" loading="lazy"><figcaption>グループの複製。既定の認証情報と機器をまとめてコピー（機器名はそのまま。接尾辞は任意）</figcaption></figure>
-    <figure class="shot" data-shot="02_devices"><img src="img/manual/02_devices.png" alt="グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除" loading="lazy"><figcaption>グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除</figcaption></figure>
+    <figure class="shot" data-shot="01b_group_dup"><img src="img/manual/01b_group_dup.png" alt="グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）" loading="lazy"><figcaption>グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）</figcaption></figure>
+    <figure class="shot" data-shot="02_devices"><img src="img/manual/02_devices.png" alt="グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除・「表で編集」" loading="lazy"><figcaption>グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除・「表で編集」</figcaption></figure>
     <figure class="shot" data-shot="03_device_edit"><img src="img/manual/03_device_edit.png" alt="機器の編集画面（上部: 基本項目と認証情報。赤い「必須」以外は任意）" loading="lazy"><figcaption>機器の編集画面（上部: 基本項目と認証情報。赤い「必須」以外は任意）</figcaption></figure>
     <p>グループ一覧の画面では、各グループの機器台数が表示され、<strong>カードをドラッグして並び順を変更</strong>できます。
     グループ内の一覧では、上部の<strong>「グループ名変更」「グループ削除」</strong>が使えます（削除しても機器自体は残り、グループ未設定になります）。
@@ -397,9 +397,12 @@
     <h3>踏み台サーバ（任意・最大5段）</h3>
     <p><strong>「＋ 踏み台を追加」</strong>で、踏み台（ジャンプサーバ）を<strong>最大5段まで</strong>登録できます。
     外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
-    ホスト・ユーザー・パスワードを設定します（<strong>1段目</strong>のSSHは公開鍵認証・レガシー暗号の許可も可）。
-    <strong>2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進む</strong>ため、その認証は手前の踏み台側の ssh クライアントが行います。PalaTerm に登録した鍵ファイルが使われるのは1段目だけで、2段目以降を鍵認証にしたい場合は手前の踏み台に鍵を置いてください（編集画面でも2段目以降は鍵の欄が出ません）。
-    次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。踏み台を1つも追加しなければ直接接続です。</p>
+    ホスト・ユーザー・パスワードを設定します。<strong>「踏み台の通り方」</strong>は次の 2 つから選びます。</p>
+    <ul>
+      <li><strong>踏み台上でコマンドを打つ（標準）</strong> — 2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進みます。ルーターなどシェルのある踏み台ならどれでも使えます。その認証は手前の踏み台側の ssh クライアントが行うため、PalaTerm に登録した鍵ファイル・レガシー暗号の設定が使われるのは1段目だけです（編集画面でも2段目以降は鍵の欄が出ません）。</li>
+      <li><strong>SSH トンネル</strong> — 踏み台の SSH の中を通して、この PC から各段と対象機器へ直接 SSH ログインします（OpenSSH の <code>ProxyJump</code> と同じ）。<strong>全段で</strong>この PC の秘密鍵・パスフレーズ・レガシー暗号の設定・ホストキー確認が効き、踏み台では何も打ちません。踏み台はすべて SSH で、TCP 転送（<code>AllowTcpForwarding</code>。Linux の OpenSSH は標準で許可）を許可している必要があります。対象機器は SSH / Telnet。転送を許可していない踏み台（ルーターなど）では「転送を許可していません」と表示されるので、「踏み台上でコマンドを打つ」を選んでください。</li>
+    </ul>
+    <p>「踏み台上でコマンドを打つ」で次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。踏み台を1つも追加しなければ直接接続です。</p>
 
     <h3>グループ未設定の機器</h3>
     <p>グループを削除したり、グループ欄を空にした機器は「グループ未設定」になり、グループ選択画面に<strong>「（グループ未設定）n 台」</strong>のカードが出ます。そこから編集・削除・一括変更でのグループ移動ができます。</p>
@@ -412,6 +415,26 @@
     認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>で機器をコピー、<strong>「削除」</strong>で削除します。
     行の順序は左端の <strong>⠿ ドラッグ</strong>で入れ替えられます（複数選択も可・<a href="#flow">共通操作参照</a>。グループ内の並びだけが変わり、他グループの機器は動きません）。</p>
     <p><strong>並び替え・絞り込み・列幅</strong>（機器一覧・グループ一覧・コマンドセット・OSタイプ設定・実行履歴で共通。実行タブと同じ操作）: <strong>見出しをクリック</strong>すると、その列で並び替え（再クリックで逆順、「並び順を戻す」で登録順に戻る）。表の上の<strong>絞り込み欄</strong>に文字を入れると一致する行だけが残り（コマンドセットはコマンド本文も対象）、拠点やグループのセレクトでも絞れます。どちらも表示だけの操作で保存順は変わりませんが、並び替え・絞り込み中は ⠿ のドラッグができません。<strong>見出しの境目をドラッグすると列幅</strong>を変えられ（ダブルクリックで既定幅・この PC に記憶されます）、切れている文字は<strong>セルにカーソルを合わせる</strong>と全文がチップで出ます。表の行を<strong>右クリック</strong>すると「選択した文字／このセル／この行／表示中の表をすべて」をコピーできます（行・表はタブ区切りで Excel にそのまま貼れます。実行タブ・実行履歴でも同じです）。</p>
+
+    <h3>表で編集（Excel のようにまとめて編集）</h3>
+    <figure class="shot" data-shot="02c_grid"><img src="img/manual/02c_grid.png" alt="表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）" loading="lazy"><figcaption>表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）</figcaption></figure>
+    <p>機器一覧の<strong>「表で編集」</strong>で、そのグループの機器を<strong>CSV と同じ列の表</strong>として、Excel と同じ操作でまとめて編集できます。CSV を書き出して Excel で直して読み込む手間がいりません（認証情報・踏み台 1〜5 段・踏み台の通り方の列もあり、<strong>「列の表示…」</strong>で出す列を選べます）。</p>
+    <ul>
+      <li><strong>選択・入力</strong>: クリック／<kbd>Shift</kbd>+クリック／ドラッグで範囲、行番号・見出しで行・列全体、<kbd>Ctrl</kbd>+<kbd>A</kbd> で全体。文字を打つか <kbd>F2</kbd>・ダブルクリックで編集、<kbd>Enter</kbd>／<kbd>Tab</kbd> で確定して移動、<kbd>Esc</kbd> で取消、<kbd>Delete</kbd> で空に、<kbd>Ctrl</kbd>+<kbd>Enter</kbd> で選んだセルすべてに同じ値。</li>
+      <li><strong>コピー・貼り付け</strong>: <kbd>Ctrl</kbd>+<kbd>C</kbd>／<kbd>X</kbd>／<kbd>V</kbd> は <strong>Excel と相互</strong>に使えます。最終行を越えて貼った分は新しい行になり、1 つの値を範囲に貼ると全部に入ります。「はい／いいえ」「SSH／Telnet／シリアル」などは日本語・英語どちらの表記でも読みます。</li>
+      <li><strong>埋める</strong>: <kbd>Ctrl</kbd>+<kbd>D</kbd> で上の値を下へ、<kbd>Ctrl</kbd>+<kbd>R</kbd> で左の値を右へ。選択の右下の <strong>■ をドラッグ</strong>すると、末尾が数字の値は連番（<code>core-sw1</code>→<code>core-sw2</code>、<code>192.0.2.10</code>→<code>192.0.2.11</code>）、それ以外はコピーになります（<kbd>Ctrl</kbd> を押しながらで入れ替え。最終行より下へ伸ばすと行が増えます）。</li>
+      <li><strong>空行</strong>: 表の下にはいつも空行が 20 行あり、そのまま打ち込んだり貼り付けたりできます（打ち込むとグループ・SSH などの既定値が入ります。何も入れていない空行は保存されません）。</li>
+      <li><strong>行の操作</strong>: 表の上のボタン（上に行を挿入／下に行を挿入／行をコピー／コピーした行を挿入／行を複製／↑ 上へ移動／↓ 下へ移動／行を削除）、右クリック、キー（<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>＋</kbd> 挿入・<kbd>Ctrl</kbd>+<kbd>－</kbd> 削除・<kbd>Alt</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 移動）。行番号にマウスを乗せると出る <strong>＋</strong> でその下に 1 行挿入します。「行をコピー」した行は隠している列も含めて「コピーした行を挿入」で挿入でき、Excel からコピーした行も挿入できます。</li>
+      <li><strong>切り取りで移動</strong>: <kbd>Ctrl</kbd>+<kbd>X</kbd> で切り取って貼り付けると、Excel と同じく貼り付けた時点で元のセルが空になります（範囲は点線で囲まれ、<kbd>Esc</kbd> で取り消し）。</li>
+      <li><strong>取り消し・検索</strong>: <kbd>Ctrl</kbd>+<kbd>Z</kbd>／<kbd>Ctrl</kbd>+<kbd>Y</kbd> で元に戻す・やり直し。<kbd>Ctrl</kbd>+<kbd>F</kbd>／<kbd>Ctrl</kbd>+<kbd>H</kbd> で検索・置換（選択範囲だけ・大文字と小文字を区別・セル全体が一致）。</li>
+      <li><strong>並べ替え・フィルター・列幅</strong>: 見出しの <strong>▾</strong> で昇順・降順、値の一覧から選ぶ絞り込み、列を隠す。「この並び順で確定」でその順番を表の順番にできます。見出しの境目のドラッグで列幅（ダブルクリックで内容に合わせる）。<kbd>Shift</kbd>+<kbd>Space</kbd> で行、<kbd>Ctrl</kbd>+<kbd>Space</kbd> で列を選択。■ のダブルクリックで最後の機器の行まで埋めます。入力中はその列にある値が候補に出ます。</li>
+      <li><strong>編集の動き</strong>も Excel と同じです: 文字を打ち始めたセルは矢印キーで確定して隣へ、<kbd>F2</kbd>・ダブルクリックで入ったときは矢印キーで文字の中を動きます。日本語入力の変換中の <kbd>Enter</kbd>・矢印は変換に使われます。<kbd>Ctrl</kbd>+矢印は値の続く端で止まり、<kbd>Ctrl</kbd>+<kbd>End</kbd> は最後の機器の行へ。右クリックの「貼り付け」も <kbd>Ctrl</kbd>+<kbd>V</kbd> と同じです。</li>
+      <li><strong>Excel との違い（意図的）</strong>: 隠した列には貼り付けません。絞り込み中の貼り付けは表示している行にだけ入ります。数式・書式・<kbd>Ctrl</kbd>+クリックの飛び飛び選択・選択枠のドラッグ移動はありません。</li>
+      <li>「表の編集を終える」は左上と右上にあります。</li>
+      <li><strong>パスワード</strong>は ●●●● で表示し、<strong>「パスワードを表示」</strong>を押している間だけ平文で表示・コピーします（ロックで伏せ字に戻ります）。</li>
+      <li>変更したセルは黄色、新しい行は緑、<strong>エラーのセルは赤枠</strong>（マウスを当てると理由）で、入力するたびに確認されます。</li>
+    </ul>
+    <p><strong>保存するまでは下書き</strong>です。下書きは vault に暗号化して自動保存されるので、タブの切り替え・ロック・終了でも消えません。下書きがある間は機器一覧・グループ一覧・実行タブに<strong>「下書き n 行（未反映）」</strong>と表示されます（一括実行や接続は保存済みの内容で行います）。<strong>「保存」</strong>（<kbd>Ctrl</kbd>+<kbd>S</kbd>）で件数を確認して保存し、エラーがあるときは<strong>「エラーのない行だけ保存（エラー行は下書きとして保存）」「すべて保存しない（編集に戻る）」「キャンセル」</strong>から選べます。表を開いてから機器の編集画面などで同じ機器が変更・削除されていた場合は、どちらを残すか選べます。表の行の順番が機器の並び順として保存されます。</p>
 
     <figure class="shot" data-shot="02b_group_creds"><img src="img/manual/02b_group_creds.png" alt="グループ既定の認証情報。グループで共通のユーザー名・パスワードを一度だけ登録" loading="lazy"><figcaption>グループ既定の認証情報。グループで共通のユーザー名・パスワードを一度だけ登録</figcaption></figure>
     <figure class="shot" data-shot="03c_device_edit_groupcreds"><img src="img/manual/03c_device_edit_groupcreds.png" alt="「グループ既定を使う」にした機器の編集画面。ユーザー名・パスワード欄は出ない" loading="lazy"><figcaption>「グループ既定を使う」にした機器の編集画面。ユーザー名・パスワード欄は出ない</figcaption></figure>
@@ -431,7 +454,7 @@
     <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読込」で CSV 単体を選べば機器だけを読み込めます（「グループ名＋機器名」で照合し、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
     読み込む前に<strong>確認画面</strong>で新規・上書き・既存のまま残す件数が表示されます。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。</p>
     <p><strong>読み込み時の認証情報</strong>: 既存の機器（グループ名＋機器名が一致）の行で認証情報の欄が<strong>空なら、その機器の今の認証情報を残します</strong>。認証情報の欄を空にした CSV を読み込んでも自分のパスワードは消えません（踏み台は同じ段・同じホストのときだけ引き継ぎます）。欄に値があればその値で上書きします。確認画面に、引き継ぐ機器の台数が表示されます。</p>
-    <p>CSV は<strong>1 つの列に 1 つの値</strong>です。画面が日本語なら見出しも日本語（「機器名」「IPアドレス」「ユーザー名」…）で、接続方式は SSH / Telnet / シリアル、認証方式は パスワード / 公開鍵、はい / いいえ のように書かれます（英語の見出し・値でも読めます）。踏み台は段ごとに「踏み台1_ホスト」「踏み台1_ポート」「踏み台1_ユーザー名」「踏み台1_パスワード」「踏み台1_認証方式」「踏み台1_鍵ファイル」「踏み台1_鍵パスフレーズ」「踏み台1_旧暗号を許可」「踏み台1_ジャンプコマンド」（2 段目は「踏み台2_…」）の列です。踏み台を使っていなくても「踏み台1_…」の列は出るので、Excel で書き足せます。v1.6.4 以前の CSV（<code>bastions</code> 列に <code>ssh:…</code> を詰めた形式）もそのまま読めます。<strong>逆に、この形式の CSV・一式は v1.6.4 以前の PalaTerm では踏み台が読み込まれません</strong>（踏み台なしの機器として入ります）。受け取る側も v1.6.5 以降にしてください。Excel で「CSV（コンマ区切り）」（Shift_JIS）として保存し直したファイルも読めますが、「CSV UTF-8（コンマ区切り）」での保存がおすすめです。</p>
+    <p>CSV は<strong>1 つの列に 1 つの値</strong>です。画面が日本語なら見出しも日本語（「機器名」「IPアドレス」「ユーザー名」…）で、接続方式は SSH / Telnet / シリアル、認証方式は パスワード / 公開鍵、はい / いいえ のように書かれます（英語の見出し・値でも読めます）。踏み台は段ごとに「踏み台1_ホスト」「踏み台1_ポート」「踏み台1_ユーザー名」「踏み台1_パスワード」「踏み台1_認証方式」「踏み台1_鍵ファイル」「踏み台1_鍵パスフレーズ」「踏み台1_旧暗号を許可」「踏み台1_ジャンプコマンド」（2 段目は「踏み台2_…」）の列で、通り方は「踏み台の通り方」列（コマンド入力 / SSHトンネル）です。踏み台を使っていなくても「踏み台1_…」の列は出るので、Excel で書き足せます。v1.6.4 以前の CSV（<code>bastions</code> 列に <code>ssh:…</code> を詰めた形式）もそのまま読めます。<strong>逆に、この形式の CSV・一式は v1.6.4 以前の PalaTerm では踏み台が読み込まれません</strong>（踏み台なしの機器として入ります）。受け取る側も v1.6.5 以降にしてください。Excel で「CSV（コンマ区切り）」（Shift_JIS）として保存し直したファイルも読めますが、「CSV UTF-8（コンマ区切り）」での保存がおすすめです。</p>
     <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
   </section>
 
@@ -447,14 +470,14 @@
       <li><strong>「▶ 一括実行」</strong>を押します。確認画面には選んだ作業タイミングが大きく色分けで出ます（作業前=青・作業中=橙・作業後=緑、ボタンは「▶ 作業前として実行」など）。「指定なし」のときは、作業前後の比較で自動では選ばれない旨が警告色で出るので、取り違えに気づけます。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません）。</li>
       <li>各機器の状態がリアルタイムで更新されます。</li>
     </ol>
-    <div class="callout tip"><span class="ic">i</span><p><strong>機器に拒否されたコマンド</strong>（<code>% Invalid input</code>、<code>Invalid command</code>、<code>command not found</code> など）があると、その機器は「完了」のまま状態列に<strong>「警告 n」</strong>が付き、メッセージ列に「コマンド → 機器の応答」が出ます（実行履歴にも残ります）。<br>
-    <strong>確認を求めるコマンド</strong>（<code>copy run start</code> の <code>Destination filename [startup-config]?</code>、<code>clear counters</code> の <code>[confirm]</code> など）は、OS タイプの<strong>「確認への自動応答」</strong>で答えます（Cisco IOS / ASA は既定で Enter）。グループを削除して<strong>グループ未設定</strong>になった機器は、グループ選択の「（グループ未設定）」で実行できます。</p></div>
     <figure class="shot" data-shot="10_run_ready"><img src="img/manual/10_run_ready.png" alt="実行タブ。グループを選ぶと対象機器が並ぶ。作業タイミング・絞り込み・並び替え" loading="lazy"><figcaption>実行タブ。グループを選ぶと対象機器が並ぶ。作業タイミング・絞り込み・並び替え</figcaption></figure>
     <figure class="shot" data-shot="10b_run_filter"><img src="img/manual/10b_run_filter.png" alt="絞り込み中。表示されている機器だけが実行対象になり、非表示でチェック済みの台数を警告" loading="lazy"><figcaption>絞り込み中。表示されている機器だけが実行対象になり、非表示でチェック済みの台数を警告</figcaption></figure>
     <figure class="shot" data-shot="11c_run_dry_confirm"><img src="img/manual/11c_run_dry_confirm.png" alt="「⚡ 接続確認のみ」の確認。コマンドは送らずログも残さない" loading="lazy"><figcaption>「⚡ 接続確認のみ」の確認。コマンドは送らずログも残さない</figcaption></figure>
     <figure class="shot" data-shot="11_run_confirm"><img src="img/manual/11_run_confirm.png" alt="一括実行の確認（作業タイミング付き）" loading="lazy"><figcaption>一括実行の確認（作業タイミング付き）</figcaption></figure>
     <figure class="shot" data-shot="12_run_progress_2"><img src="img/manual/12_run_progress_2.png" alt="実行中。機器ごとの進捗バーと全体の予想残り時間" loading="lazy"><figcaption>実行中。機器ごとの進捗バーと全体の予想残り時間</figcaption></figure>
     <figure class="shot" data-shot="13_run_done"><img src="img/manual/13_run_done.png" alt="完了。各行に「ログ表示」が出る（別ウィンドウで開く）" loading="lazy"><figcaption>完了。各行に「ログ表示」が出る（別ウィンドウで開く）</figcaption></figure>
+    <div class="callout tip"><span class="ic">i</span><p><strong>機器に拒否されたコマンド</strong>（<code>% Invalid input</code>、<code>Invalid command</code>、<code>command not found</code> など）があると、その機器は「完了」のまま状態列に<strong>「警告 n」</strong>が付き、メッセージ列に「コマンド → 機器の応答」が出ます（実行履歴にも残ります）。<br>
+    <strong>確認を求めるコマンド</strong>（<code>copy run start</code> の <code>Destination filename [startup-config]?</code>、<code>clear counters</code> の <code>[confirm]</code> など）は、OS タイプの<strong>「確認への自動応答」</strong>で答えます（Cisco IOS / ASA は既定で Enter）。グループを削除して<strong>グループ未設定</strong>になった機器は、グループ選択の「（グループ未設定）」で実行できます。</p></div>
     <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンドの事前警告:</strong> コマンドセットに <code>conf t</code> / <code>write</code> / <code>reload</code> / <code>no …</code> / <code>erase</code> など機器の設定や状態を変えるコマンドが含まれていると、実行前にそのコマンドを列挙した警告が出ます。「変更を伴うことを理解したうえで実行します」にチェックしないと実行ボタンは押せません。show 系だけのセットでは出ません。</p></div>
 
     <p>状態は次のように表示されます。</p>
@@ -532,7 +555,7 @@
     </ul>
     <p>そのための入口が 3 つあります。いずれもログは通常の対話接続と同じく保存されます。</p>
     <ol class="steps">
-      <li><strong>「接続」を <kbd>Shift</kbd>+クリック（または右クリック）</strong> — 回線（シリアルポート / SSH / Telnet）を開くだけで<strong>何も自動では打たない</strong>端末が開きます。Tera Term で普通に接続したときと同じ状態です（踏み台がある機器では 1 段目だけ接続し、その先は手で進めます）。</li>
+      <li><strong>「接続」を <kbd>Shift</kbd>+クリック（または右クリック）</strong> — 回線（シリアルポート / SSH / Telnet）を開くだけで<strong>何も自動では打たない</strong>端末が開きます。Tera Term で普通に接続したときと同じ状態です（踏み台がある機器では 1 段目だけ接続し、その先は手で進めます。踏み台の通り方が SSH トンネルなら対象機器の画面が開きます）。</li>
       <li>対話窓の接続中に出る<strong>「手動に切り替え」</strong>ボタン — 自動ログインをその場で打ち切り、機器が出している画面のまま手で操作に入ります。機器が想定外の画面で止まっているのが見えたら、タイムアウトを待たずに押せます。</li>
       <li>自動ログインに<strong>失敗しても回線は切りません</strong>。画面に機器の応答とエラーを表示したうえで、上部に<strong>「手動で続ける」／「切断する」</strong>のバーが出ます。「手動で続ける」で、その画面にそのまま手で答えられます。</li>
     </ol>
@@ -633,7 +656,7 @@
         <tr><td>対話窓の右クリック</td><td>Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目です。<strong>マウス右ボタンでの貼り付けを無効にする</strong>: 右クリックしても何もしません。<strong>マウス右ボタンでの貼り付けを確認する</strong>: 右クリックで小さなメニューが出て、「貼り付け」を選んだときだけ貼り付けます（<kbd>Esc</kbd> で取消）。どちらもオフ（既定）なら右クリックですぐ貼り付け、「無効にする」がオンならもう一方は無視されます。変更は、このあと開く対話窓から反映されます。</td></tr>
       </tbody>
     </table></div>
-    <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
+    <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
     <div class="callout tip"><span class="ic">i</span><p>変更したら<strong>「保存」</strong>を忘れずに。未保存のまま他のタブへ移ろうとすると確認が出ます。</p></div>
 
     <h3>初期化（全データ削除）</h3>
@@ -675,7 +698,7 @@
     文字の一部が画面に現れた時点で一致します（部分一致・大文字小文字は区別）。
     たとえば <code>assword:</code> と書けば <code>Password:</code> にも <code>password:</code> にも一致します。</p>
 
-    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準プロファイル＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準プロファイル＋自作）</figcaption></figure>
+    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準15種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準15種＋自作）</figcaption></figure>
     <figure class="shot" data-shot="07_profile_edit"><img src="img/manual/07_profile_edit.png" alt="OSタイププロファイルの編集（expect / send の手順）" loading="lazy"><figcaption>OSタイププロファイルの編集（expect / send の手順）</figcaption></figure>
     <h3>プロファイルの項目</h3>
     <div class="scroll"><table>
@@ -717,7 +740,7 @@
       <li><strong>Telnet・シリアルは平文通信</strong>です（プロトコルの仕様）。信頼できる経路でのみ使い、可能ならSSHを選んでください。</li>
       <li><strong>CSV書き出しファイルはパスワードが平文</strong>です。編集が済んだら速やかに削除してください。</li>
       <li><strong>マスターパスワードは長く推測されにくいもの</strong>に。暗号化の実効強度はマスターパスワードの強度で決まります。</li>
-      <li>踏み台の2段目以降の接続は踏み台上のsshコマンドが行うため、そのホストキー検証は<strong>踏み台側の設定に依存</strong>します。</li>
+      <li>「踏み台上でコマンドを打つ」では、踏み台の2段目以降の接続は踏み台上のsshコマンドが行うため、そのホストキー検証は<strong>踏み台側の設定に依存</strong>します。全段を PalaTerm で検証したい場合は「SSH トンネル」を選んでください。</li>
     </ul>
   </section>
 
@@ -753,7 +776,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.6.7 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.7.0 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

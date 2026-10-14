@@ -319,3 +319,36 @@ func TestImportEdgeCases(t *testing.T) {
 		t.Errorf("old packed column next to empty new ones: %+v %v", back, err)
 	}
 }
+
+// How the jump hosts are passed through survives CSV in both languages, and
+// an older CSV without the column reads as typed jumps.
+func TestBastionModeRoundTrip(t *testing.T) {
+	devs := []model.Device{
+		{Name: "a", Host: "10.0.0.1", Conn: model.ConnSSH, Enabled: true, BastionMode: model.BastionViaTunnel,
+			Bastions: []model.Bastion{{Host: "192.0.2.1", Method: model.BastionSSH, Username: "ops"}}},
+		{Name: "b", Host: "10.0.0.2", Conn: model.ConnSSH, Enabled: true,
+			Bastions: []model.Bastion{{Host: "192.0.2.1", Method: model.BastionSSH, Username: "ops"}}},
+		{Name: "c", Host: "10.0.0.3", Conn: model.ConnSSH, Enabled: true},
+	}
+	for _, lang := range []string{"en", "ja"} {
+		text, err := ExportLang(devs, lang)
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, err := Import(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if back[0].BastionMode != model.BastionViaTunnel || back[1].BastionMode != model.BastionViaShell || back[2].BastionMode != "" {
+			t.Errorf("%s: modes %q %q %q", lang, back[0].BastionMode, back[1].BastionMode, back[2].BastionMode)
+		}
+	}
+	back, err := Import("name,host,bastion1Host,bastion1Username\na,10.0.0.1,192.0.2.1,ops\n")
+	if err != nil || back[0].BastionMode != model.BastionViaShell {
+		t.Fatalf("old CSV: %v %q", err, back[0].BastionMode)
+	}
+	back, _ = Import("機器名,IPアドレス,踏み台の通り方\na,10.0.0.1,SSH トンネル\n")
+	if back[0].BastionMode != model.BastionViaTunnel {
+		t.Errorf("「SSH トンネル」 read as %q", back[0].BastionMode)
+	}
+}

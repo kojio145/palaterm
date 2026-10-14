@@ -23,7 +23,10 @@ Windows exe — no installation required.
 - 🖥 **Parallel login** — connect to every device in your list at once (concurrency is adjustable)
 - 📡 **Three transports** — SSH / Telnet / serial console (COM ports auto-discovered)
 - 🏢 **Jump host support** — multi-hop connections through bastion servers
-  (SSH public-key auth: Ed25519/RSA/ECDSA plus legacy PEM DSA for old jump servers, passphrase-protected keys supported)
+  (SSH public-key auth: Ed25519/RSA/ECDSA plus legacy PEM DSA for old jump servers, passphrase-protected keys supported;
+  an SSH tunnel mode, like OpenSSH's ProxyJump, logs into every hop from your PC with its own key)
+- 📊 **Edit as a table** — edit many devices at once like a spreadsheet: copy and paste with Excel, Ctrl+D, fill series, undo, find and replace;
+  changes stay an encrypted draft until saved, and rows with errors can be kept back while the rest are saved
 - 🤖 **Login automation** — 17 built-in OS profiles (Cisco IOS/ASA, JUNOS, FortiGate,
   HPE, NEC IX, ALAXALA AX, Yamaha RTX, Linux servers, …) handling enable escalation and pager disabling; all
   profiles are editable and you can add your own

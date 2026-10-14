@@ -34,6 +34,23 @@ const (
 	BastionTelnet BastionMethod = "telnet"
 )
 
+// BastionMode is how a jump-host chain is passed through.
+type BastionMode string
+
+const (
+	// BastionViaShell types "ssh user@host" / "telnet host" on each hop's
+	// shell: works through any hop with a shell (routers included), but the
+	// hops after the first and the device are logged into by the hop's own
+	// client, so this PC's keys, algorithm settings and host-key pins do not
+	// reach them.
+	BastionViaShell BastionMode = ""
+	// BastionViaTunnel opens each next hop, and the device, as a TCP channel
+	// through the previous SSH hop (OpenSSH's ProxyJump): every hop is an SSH
+	// login made from this PC, with its key, its algorithms and its host-key
+	// check. Needs SSH hops that allow TCP forwarding.
+	BastionViaTunnel BastionMode = "tunnel"
+)
+
 // AuthMethod selects password vs. public-key authentication (SSH only).
 type AuthMethod string
 
@@ -125,6 +142,10 @@ type Device struct {
 	// Optional jump-host chain (up to MaxBastions hops, outermost first).
 	Bastions []Bastion `json:"bastions,omitempty"`
 
+	// BastionMode is how Bastions is passed through (empty: typed on each
+	// hop's shell).
+	BastionMode BastionMode `json:"bastionMode,omitempty"`
+
 	// Bastion is the legacy single jump-host field, kept only so older vaults
 	// load; NormalizeBastions folds it into Bastions.
 	Bastion *Bastion `json:"bastion,omitempty"`
@@ -155,6 +176,51 @@ func (d *Device) ActiveBastions() []Bastion {
 		}
 	}
 	return out
+}
+
+// Tunneled reports that the device is reached through its jump hosts by SSH
+// tunnel (BastionViaTunnel) rather than by commands typed on them.
+func (d *Device) Tunneled() bool {
+	return d.BastionMode == BastionViaTunnel && len(d.ActiveBastions()) > 0
+}
+
+// HopAddr is the "host:port" an SSH endpoint is dialed and pinned under.
+func HopAddr(host string, port int) string {
+	return net.JoinHostPort(host, fmt.Sprintf("%d", port))
+}
+
+// TunnelName is the name the host key of an endpoint reached through a
+// tunnel is pinned under: the chain of addresses that leads to it ("jump:22>
+// 10.0.0.5:22"). Behind a jump host the address alone is someone's private
+// network — two customers' 10.0.0.1 are different machines with different
+// keys, and pinning both under "10.0.0.1:22" would call one of them an attack.
+func TunnelName(via, addr string) string {
+	if via == "" {
+		return addr
+	}
+	return via + ">" + addr
+}
+
+// HostKeyNames lists every name the device's SSH host keys (its own and its
+// jump hosts') are pinned under, so they can be dropped together when a
+// device is legitimately replaced.
+func (d *Device) HostKeyNames() []string {
+	bastions := d.ActiveBastions()
+	var names []string
+	via := ""
+	for _, b := range bastions {
+		p := b.Port
+		if p == 0 {
+			p = 22
+		}
+		if d.Tunneled() {
+			via = TunnelName(via, HopAddr(b.Host, p))
+			names = append(names, via)
+		} else {
+			names = append(names, HopAddr(b.Host, p))
+		}
+	}
+	return append(names, TunnelName(via, HopAddr(d.Host, d.EffectivePort())))
 }
 
 // NormalizeBastions migrates the deprecated single Bastion field into the
@@ -419,6 +485,64 @@ type Inventory struct {
 	// Schedules are the 予約 (scheduled batch runs), run by the main window
 	// while it is open, locked or in the tray (see sched_app.go).
 	Schedules []schedule.Schedule `json:"schedules,omitempty"`
+
+	// GridDrafts is the device table editor's unsaved work, per scope (a
+	// group name, GridUngrouped, or "" for every device). It holds
+	// passwords like the devices do, so it lives here in the vault and
+	// survives a lock or a restart until saved or thrown away.
+	GridDrafts map[string]GridDraft `json:"gridDrafts,omitempty"`
+}
+
+// GridUngrouped is the table editor's scope for the devices in no group.
+const GridUngrouped = "__ungrouped__"
+
+// GridDraft is one scope's table: its rows in order, and the devices the
+// table deleted.
+type GridDraft struct {
+	Rows    []GridRow `json:"rows"`
+	Deleted []GridRow `json:"deleted,omitempty"`
+	// Saved is when the draft was last written (RFC 3339).
+	Saved string `json:"saved,omitempty"`
+}
+
+// GridRow is a row of the table editor: the device it edits (ID, empty for
+// a new row), the cells as they were when the table read the device (Base,
+// to tell changed cells and edits made elsewhere meanwhile) and as they are
+// now (Cells). UID names the row in the table, new rows included.
+type GridRow struct {
+	UID   string            `json:"uid"`
+	ID    string            `json:"id,omitempty"`
+	Base  map[string]string `json:"base,omitempty"`
+	Cells map[string]string `json:"cells"`
+	// Init marks a new row that already got the table's defaults (so a
+	// default cleared on purpose is not put back after a reload).
+	Init bool `json:"init,omitempty"`
+	// After is, for a deleted row, the row it was under (to go back there if
+	// the deletion is called off); "" for the top.
+	After string `json:"after,omitempty"`
+}
+
+// Dirty reports that the row is new or differs from what it was read as.
+func (r GridRow) Dirty() bool {
+	if r.ID == "" {
+		return true
+	}
+	return !SameCells(r.Base, r.Cells)
+}
+
+// SameCells compares two rows' cells, a missing cell counting as empty.
+func SameCells(a, b map[string]string) bool {
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	for k, v := range b {
+		if a[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // Settings holds run-wide options.
@@ -534,16 +658,24 @@ func (d *Device) Validate() error {
 		return fmt.Errorf("秘密鍵にネットワーク上のパス（\\\\サーバー\\…）は指定できません: %q", d.KeyFile)
 	}
 	bastions := d.ActiveBastions()
+	if d.BastionMode != BastionViaShell && d.BastionMode != BastionViaTunnel {
+		return fmt.Errorf("踏み台の通り方が不正です: %q", d.BastionMode)
+	}
+	tunnel := d.Tunneled()
+	if tunnel && d.Conn == ConnSerial {
+		return errors.New("シリアル接続の機器は踏み台を経由できません")
+	}
 	// Behind a jump host the device's username is typed into the hop's shell
-	// ("ssh user@host"), so shell syntax in it would run there.
-	if len(bastions) > 0 && !ShellSafeWord(d.Username) {
+	// ("ssh user@host"), so shell syntax in it would run there. A tunnel
+	// types nothing on the hops.
+	if len(bastions) > 0 && !tunnel && !ShellSafeWord(d.Username) {
 		return fmt.Errorf("ユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", d.Username)
 	}
 	for i, b := range bastions {
 		if !validHostOrIP(b.Host) {
 			return fmt.Errorf("踏み台%d段目のホスト形式が不正です: %q", i+1, b.Host)
 		}
-		if i > 0 && !ShellSafeWord(b.Username) {
+		if i > 0 && !tunnel && !ShellSafeWord(b.Username) {
 			return fmt.Errorf("踏み台%d段目のユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", i+1, b.Username)
 		}
 		if isUNCPath(b.KeyFile) {
@@ -551,6 +683,9 @@ func (d *Device) Validate() error {
 		}
 		if b.Method != BastionSSH && b.Method != BastionTelnet {
 			return fmt.Errorf("踏み台%d段目の接続方式が不正です", i+1)
+		}
+		if tunnel && b.Method != BastionSSH {
+			return fmt.Errorf("SSH トンネルで通る踏み台はすべて SSH にしてください（%d段目が %s）", i+1, b.Method)
 		}
 		if b.Port < 0 || b.Port > 65535 {
 			return fmt.Errorf("踏み台%d段目のポート番号が範囲外です: %d（0〜65535）", i+1, b.Port)

@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.6.7";
+const APP_VERSION = "1.7.0";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -599,6 +599,7 @@ async function boot() {
       lines.join("<br>") + "<br>" + esc(t("終了しますか？")),
       t("終了する"), t("キャンセル"));
     quitAsking = false;
+    if (ok && typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
     if (ok) App().ConfirmQuit().catch(() => {});
   });
   restoredTab = restoreUIState();
@@ -709,6 +710,7 @@ let restoredTab = null;
 
 async function refreshInventory() {
   INV = await App().GetInventory();
+  if (typeof loadGridCounts === "function") await loadGridCounts();
   if (!INV.devices) INV.devices = [];
   if (!INV.commandSets) INV.commandSets = [];
   const active = document.querySelector(".tab.active");
@@ -726,6 +728,7 @@ $("#btn-lock").onclick = async () => {
   // behind their own lock screen); the idle auto-lock below does not, since
   // a terminal can be in use while this window sits idle.
   await App().LockTerminals().catch(() => {});
+  if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
   saveUIState();
   await App().Lock(); location.reload();
 };
@@ -867,6 +870,7 @@ setInterval(async () => {
   const min = s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30);
   if (!min || (typeof running !== "undefined" && running)) return;
   if (Date.now() - lastActivityMs < min * 60000) return;
+  if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
   saveUIState();
   try { await App().Lock(); } catch (e) { }
   location.reload();

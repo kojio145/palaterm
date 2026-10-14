@@ -213,15 +213,7 @@ func (a *App) ClearHostKeys(id string) error {
 		return fmt.Errorf("機器が見つかりません")
 	}
 	dev := &a.inv.Devices[idx]
-	addrs := []string{fmt.Sprintf("%s:%d", dev.Host, dev.EffectivePort())}
-	for _, b := range dev.ActiveBastions() {
-		p := b.Port
-		if p == 0 {
-			p = 22
-		}
-		addrs = append(addrs, fmt.Sprintf("%s:%d", b.Host, p))
-	}
-	for _, addr := range addrs {
+	for _, addr := range dev.HostKeyNames() {
 		delete(a.inv.KnownHostKeys, addr)
 	}
 	a.mu.Unlock()
@@ -1209,6 +1201,9 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 			d.Name = nn
 		}
 	}
+	// The group's table draft was read against devices that are now
+	// ungrouped (and maybe renamed): it would only come back as conflicts.
+	delete(a.inv.GridDrafts, name)
 	a.mu.Unlock()
 	return renamed, a.persist()
 }
@@ -1241,6 +1236,7 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 		}
 	}
 	renameSchedGroup(a.inv, oldName, newName)
+	renameGridDrafts(a.inv, oldName, newName)
 	a.mu.Unlock()
 	return a.persist()
 }
@@ -2146,7 +2142,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.6.7"
+const appVersion = "1.7.0"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

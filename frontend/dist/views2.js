@@ -433,7 +433,7 @@ function renderRun() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
-        <div class="page-sub">${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}</div></div>
+        <div class="page-sub">${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
     </div>
     <div class="run-toolbar">
       <button class="btn run" id="btn-run" ${running || enabledCount === 0 ? "disabled" : ""}>${esc(filtered ? t("▶ 表示中の {n} 台を実行", { n: enabledCount }) : t("▶ 一括実行"))}</button>
@@ -553,6 +553,7 @@ function renderRun() {
   const btnClear = document.getElementById("btn-clear");
   if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
+  wireGridBadges(root);
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
     // Results (and the 失敗のみ再実行 button) belong to the previous group's

@@ -22,6 +22,9 @@ type sshSession struct {
 	sess   *ssh.Session
 	stdin  io.WriteCloser
 	stdout io.Reader
+	// hops are the jump hosts a tunneled session runs through (outermost
+	// first), closed after the device's own connection.
+	hops []*ssh.Client
 }
 
 func (s *sshSession) Read(p []byte) (int, error)  { return s.stdout.Read(p) }
@@ -49,8 +52,13 @@ func (s *sshSession) Close() error {
 	if s.sess != nil {
 		_ = s.sess.Close()
 	}
+	var err error
 	if s.client != nil {
-		return s.client.Close()
+		err = s.client.Close()
+	}
+	closeHops(s.hops)
+	if err != nil {
+		return err
 	}
 	return nil
 }
@@ -168,6 +176,31 @@ func startKeepalive(c *ssh.Client) {
 }
 
 func dialSSH(host string, port int, user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (Session, error) {
+	cfg, err := sshConfig(user, password, auth, keyFile, keyPassphrase, timeout, opts)
+	if err != nil {
+		return nil, err
+	}
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	client, conn, err := dialSSHClient(addr, cfg, timeout)
+	if err != nil {
+		return nil, sshDialError(addr, err, user, auth, opts)
+	}
+	s, err := startShell(client)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		s.Close()
+		return nil, err
+	}
+	startKeepalive(client)
+	return s, nil
+}
+
+// sshConfig builds the client config for one SSH endpoint: its credentials,
+// the algorithms it is offered and the host-key check.
+func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
 
 	if auth == model.AuthPublicKey {
@@ -208,7 +241,7 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	if hostKey == nil {
 		hostKey = ssh.InsecureIgnoreHostKey() // tests / fakes only
 	}
-	cfg := &ssh.ClientConfig{
+	return &ssh.ClientConfig{
 		User:            user,
 		Auth:            authMethods,
 		HostKeyCallback: hostKey,
@@ -217,22 +250,26 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 			KeyExchanges: kex,
 			Ciphers:      ciphers,
 		},
-	}
+	}, nil
+}
 
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	client, conn, err := dialSSHClient(addr, cfg, timeout)
-	if err != nil {
-		if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
-			return nil, fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
-		}
-		if hint := authFailureHint(err, user, auth); hint != "" {
-			return nil, fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
-		}
-		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+// sshDialError adds what the user can do about a failed handshake: allow
+// the old algorithms, or fix the credentials.
+func sshDialError(addr string, err error, user string, auth model.AuthMethod, opts DialOpts) error {
+	if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
+		return fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
 	}
+	if hint := authFailureHint(err, user, auth); hint != "" {
+		return fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
+	}
+	return fmt.Errorf("ssh dial %s: %w", addr, err)
+}
+
+// startShell opens the interactive shell on an authenticated client. The
+// caller still owns client when it fails.
+func startShell(client *ssh.Client) (*sshSession, error) {
 	sess, err := client.NewSession()
 	if err != nil {
-		client.Close()
 		return nil, err
 	}
 
@@ -244,34 +281,23 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
 	if err := sess.RequestPty("xterm", 40, 120, modes); err != nil {
 		sess.Close()
-		client.Close()
 		return nil, err
 	}
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		sess.Close()
-		client.Close()
 		return nil, err
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
 		sess.Close()
-		client.Close()
 		return nil, err
 	}
 	sess.Stderr = io.Discard
 	if err := sess.Shell(); err != nil {
 		sess.Close()
-		client.Close()
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Time{}); err != nil {
-		sess.Close()
-		client.Close()
-		return nil, err
-	}
-	startKeepalive(client)
-
 	return &sshSession{client: client, sess: sess, stdin: stdin, stdout: stdout}, nil
 }
 

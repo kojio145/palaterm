@@ -406,3 +406,51 @@ th.sortable:hover { color: var(--text); }
 .sub-modal { width: min(560px, 90vw); background: var(--panel); border: 1px solid var(--accent);
   border-radius: 12px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
 .sub-modal h3 { margin: 0 0 14px; font-size: 16px; }
+
+/* ---- device table editor (表で編集) ---- */
+.grid-wrap { position: relative; overflow: auto; max-height: calc(100vh - 230px); border: 1px solid var(--border); border-radius: 10px; background: var(--panel); outline: none; }
+.grid-wrap:focus { border-color: var(--accent); }
+table.grid { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: max-content; font-size: 13px; user-select: none; }
+table.grid th, table.grid td { border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 0 6px; height: 28px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+table.grid thead th { position: sticky; top: 0; background: var(--bg-3); z-index: 3; font-weight: 600; font-size: 12px; cursor: pointer; }
+table.grid th.g-rh { position: sticky; left: 0; background: var(--bg-2); z-index: 2; text-align: right; color: var(--text-dim); font-weight: 400; font-size: 12px; cursor: pointer; }
+table.grid thead th.g-corner { z-index: 5; }
+table.grid .g-stick { position: sticky; left: 46px; z-index: 1; background: var(--panel); }
+table.grid thead th.g-stick { z-index: 4; background: var(--bg-3); }
+table.grid tr.g-new td { background: #14261d; }
+table.grid td.chg { color: #fcd34d; }
+table.grid tr.g-conf th.g-rh { color: var(--warn); font-weight: 700; }
+table.grid .g-mark { float: left; color: #fcd34d; }
+table.grid tr td.in, table.grid tr td.g-stick.in { background: #1d3557; }
+table.grid tr td.fillp { background: #22304a; }
+table.grid td.cur { box-shadow: inset 0 0 0 2px var(--accent); }
+table.grid td.err { box-shadow: inset 0 0 0 2px var(--err); }
+table.grid td.err.cur { box-shadow: inset 0 0 0 2px var(--err), inset 0 0 0 4px var(--accent); }
+table.grid th.hl { background: #233a5c; color: var(--text); }
+table.grid .g-sort { float: right; background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 0 0 0 4px; font-size: 11px; }
+.g-fill { position: absolute; width: 9px; height: 9px; background: var(--accent); border: 1px solid #fff; cursor: crosshair; z-index: 6; }
+.g-editor { position: absolute; z-index: 7; background: var(--bg); color: var(--text); border: 2px solid var(--accent); padding: 0 6px; font: inherit; font-size: 13px; outline: none; box-sizing: border-box; }
+.g-findbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.badge.grid-draft { background: #3a2a0c; color: var(--warn); cursor: pointer; }
+.btn.g-close { border-color: var(--accent); color: var(--text); font-weight: 600; }
+.btn.g-close:hover { background: #1d3557; }
+.g-tools .g-sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+table.grid th.g-rh .g-ins { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); display: none; width: 18px; height: 18px; padding: 0; line-height: 16px; border-radius: 4px; border: 1px solid var(--accent); background: var(--bg); color: var(--accent); font-size: 12px; cursor: pointer; }
+table.grid tr:hover th.g-rh .g-ins { display: block; }
+table.grid th.g-rh .g-ins:hover { background: var(--accent); color: #fff; }
+table.grid .g-mark.new { color: var(--ok); font-size: 10px; font-weight: 700; }
+table.grid tr.g-blank th.g-rh { color: #4b5563; }
+.g-clip { position: absolute; z-index: 5; pointer-events: none; border: 2px dashed var(--accent); }
+.g-clip.cut { border-color: var(--warn); }
+table.grid .g-hmenu { float: right; background: none; border: none; color: var(--text-dim); cursor: pointer; padding: 0 2px 0 4px; font-size: 11px; }
+table.grid .g-hmenu.on { color: var(--accent); }
+table.grid .g-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
+.g-hpop { position: fixed; z-index: 60; width: 240px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.4); font-size: 13px; }
+.g-hpop .g-hi { display: block; width: 100%; text-align: left; background: none; border: none; color: var(--text); padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.g-hpop .g-hi:hover { background: var(--bg-3); }
+.g-hpop .g-hsep { height: 1px; background: var(--border); margin: 6px 0; }
+.g-hpop .g-hlabel { color: var(--text-dim); font-size: 12px; margin: 2px 4px 4px; }
+.g-hpop .g-hq { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+.g-hpop .g-hlist { max-height: 200px; overflow: auto; }
+.g-hpop .g-hv { display: flex; gap: 6px; align-items: center; padding: 2px 4px; cursor: pointer; }
+.g-hpop .g-hv .muted { margin-left: auto; font-size: 11px; }

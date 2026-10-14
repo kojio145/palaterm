@@ -489,13 +489,8 @@ func (t *Term) AllowHostKeyChange() error {
 	if dev == nil || hk == nil {
 		return fmt.Errorf("機器が見つかりません")
 	}
-	hk.Delete(fmt.Sprintf("%s:%d", dev.Host, dev.EffectivePort()))
-	for _, b := range dev.ActiveBastions() {
-		p := b.Port
-		if p == 0 {
-			p = 22
-		}
-		hk.Delete(fmt.Sprintf("%s:%d", b.Host, p))
+	for _, addr := range dev.HostKeyNames() {
+		hk.Delete(addr)
 	}
 	fmt.Fprintln(os.Stdout, termEventClearHostKey+" "+dev.ID)
 	go t.connect(pw)

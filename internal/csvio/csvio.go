@@ -45,7 +45,7 @@ var deviceCols = []col{
 	{"useGroupCreds", "グループ既定の認証情報を使う"},
 	{"username", "ユーザー名"}, {"password", "パスワード"}, {"enablePassword", "enableパスワード"},
 	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
-	{"legacyAlgos", "旧暗号を許可"},
+	{"legacyAlgos", "旧暗号を許可"}, {"bastionMode", "踏み台の通り方"},
 }
 
 // hopFields are one jump host's columns (prefixed bastion<n> / 踏み台<n>_).
@@ -119,7 +119,7 @@ func ExportLang(devices []model.Device, lang string) (string, error) {
 			boolOut(d.UseGroupCreds, ja),
 			d.Username, d.Password, d.EnablePassword,
 			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
-			boolOut(d.LegacyAlgos, ja),
+			boolOut(d.LegacyAlgos, ja), modeOut(d.BastionMode, len(d.Bastions) > 0, ja),
 		}
 		for n := 0; n < hops; n++ {
 			if n < len(d.Bastions) {
@@ -243,6 +243,7 @@ func Import(text string) ([]model.Device, error) {
 			LegacyAlgos:    parseBool(get(row, "legacyAlgos"), false),
 			Enabled:        parseBool(get(row, "enabled"), true),
 			UseGroupCreds:  parseBool(get(row, "useGroupCreds"), false),
+			BastionMode:    modeIn(get(row, "bastionMode")),
 		}
 		if perHop {
 			// One column per jump-host field. A hop is there when its host is.
@@ -317,6 +318,28 @@ func connIn(v string) string {
 		return "serial"
 	}
 	return strings.TrimSpace(v)
+}
+
+// modeOut writes how the jump hosts are passed through, for a device that
+// has any ("shell" / "tunnel"; コマンド入力 / SSHトンネル).
+func modeOut(v model.BastionMode, hops, ja bool) string {
+	if !hops {
+		return ""
+	}
+	if v == model.BastionViaTunnel {
+		return pick(ja, "SSHトンネル", "tunnel")
+	}
+	return pick(ja, "コマンド入力", "shell")
+}
+
+func modeIn(v string) model.BastionMode {
+	switch strings.ToLower(strings.ReplaceAll(strings.TrimSpace(v), " ", "")) {
+	case "", "shell", "コマンド入力":
+		return model.BastionViaShell
+	case "tunnel", "sshtunnel", "sshトンネル", "トンネル":
+		return model.BastionViaTunnel
+	}
+	return model.BastionMode(strings.TrimSpace(v)) // Validate names it
 }
 
 func authOut(v string, ja bool) string {

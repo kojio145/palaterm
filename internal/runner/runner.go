@@ -328,7 +328,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	}
 
 	// Clean logout (best effort), then unwind each bastion layer.
-	r.disconnect(ctx, exp, prof, vars, len(dev.ActiveBastions()))
+	r.disconnect(ctx, exp, prof, vars, typedHops(dev))
 
 	res.Transcript = exp.Transcript()
 	res.Success = res.Error == ""
@@ -482,6 +482,15 @@ const disconnectSettle = 2 * time.Second
 //
 // The settle happens BEFORE each send rather than after, so the final logout —
 // which is answered by a closed connection, never a prompt — costs nothing.
+// typedHops is how many jump hosts the session sits inside as shells, each
+// left with an "exit": none through a tunnel, where nothing was typed on them.
+func typedHops(dev *model.Device) int {
+	if dev.Tunneled() {
+		return 0
+	}
+	return len(dev.ActiveBastions())
+}
+
 func (r *Runner) disconnect(ctx context.Context, exp *expecter, prof profile.Profile, vars profile.Vars, hops int) {
 	sends := make([]string, 0, len(prof.Disconnect)+hops)
 	for _, st := range prof.Disconnect {
@@ -544,7 +553,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 		wakeSerial(ctx, exp, prof)
 	}
 
-	if len(bastions) > 0 {
+	if len(bastions) > 0 && !dev.Tunneled() {
 		if err := r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
 			return exp, prof, err
 		}
@@ -556,7 +565,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// Over direct SSH the transport already authenticated, so the profile's
 	// {user}/{password} steps are skipped outright; through a bastion (or on
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
-	skipCreds := len(bastions) == 0 && dev.Conn == model.ConnSSH
+	skipCreds := (len(bastions) == 0 || dev.Tunneled()) && dev.Conn == model.ConnSSH
 	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
 		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
 			return exp, prof, errors.New(hint)
@@ -611,7 +620,12 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions []model.Bastion, connTimeout time.Duration, emit EmitFunc) (session.Session, error) {
 	var sess session.Session
 	var err error
-	if len(bastions) > 0 {
+	if len(bastions) > 0 && dev.Tunneled() {
+		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("踏み台%d段経由（SSH トンネル） %s", len(bastions), dev.Host))
+		sess, err = dialCtx(ctx, func() (session.Session, error) {
+			return session.DialTunnel(bastions, dev, connTimeout, r.dialOpts(dev))
+		})
+	} else if len(bastions) > 0 {
 		r.emit(emit, dev.Name, PhaseConnecting, fmt.Sprintf("踏み台%d段経由 %s", len(bastions), dev.Host))
 		sess, err = dialCtx(ctx, func() (session.Session, error) {
 			return session.DialBastionHead(&bastions[0], connTimeout, r.dialOpts(dev))
@@ -642,7 +656,8 @@ func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions 
 // Close it.
 //
 // Behind a jump-host chain only the first hop is connected; the user types
-// the rest of the way, which is the point of the mode.
+// the rest of the way, which is the point of the mode. Through an SSH tunnel
+// there is nothing to type on the hops: the console opens on the device.
 func (r *Runner) Open(ctx context.Context, dev *model.Device, s model.Settings) (*expecter, error) {
 	connTimeout := time.Duration(s.ConnectTimeout) * time.Second
 	if connTimeout <= 0 {

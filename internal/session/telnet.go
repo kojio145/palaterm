@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // Telnet command bytes (RFC 854 / 855).
@@ -29,6 +31,9 @@ const (
 type telnetSession struct {
 	conn net.Conn
 	buf  []byte // leftover decoded bytes
+	// hops are the jump hosts a tunneled session runs through (DialTunnel),
+	// closed after the connection itself.
+	hops []*ssh.Client
 }
 
 func dialTelnet(host string, port int, timeout time.Duration) (Session, error) {
@@ -45,7 +50,9 @@ func (t *telnetSession) Write(p []byte) (int, error) {
 }
 
 func (t *telnetSession) Close() error {
-	return t.conn.Close()
+	err := t.conn.Close()
+	closeHops(t.hops)
+	return err
 }
 
 // Read strips IAC negotiation sequences and replies to option requests,

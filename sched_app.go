@@ -1029,11 +1029,13 @@ func renameSchedDevice(inv *model.Inventory, group, oldName, newName string) {
 		if sc.Group != group || sc.Names == nil {
 			continue
 		}
-		for j, n := range sc.Names {
+		names := append([]string(nil), sc.Names...) // copies handed out share the old slice
+		for j, n := range names {
 			if n == oldName {
-				sc.Names[j] = newName
+				names[j] = newName
 			}
 		}
+		sc.Names = names
 	}
 }
 
