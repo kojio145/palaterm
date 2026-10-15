@@ -46,7 +46,7 @@ func names(c Contents) (devs, sets, profs []string) {
 }
 
 func TestSelectScopesToGroupAndReferences(t *testing.T) {
-	c := Select(sampleInventory(), "A社")
+	c := Select(sampleInventory(), "A社", false)
 	devs, sets, profs := names(c)
 	if strings.Join(devs, ",") != "a-rt1,a-fw1" {
 		t.Errorf("devices = %v", devs)
@@ -58,7 +58,7 @@ func TestSelectScopesToGroupAndReferences(t *testing.T) {
 		t.Errorf("profiles = %v", profs)
 	}
 	// Whole inventory: everything, including the unused set.
-	all := Select(sampleInventory(), "")
+	all := Select(sampleInventory(), "", false)
 	_, sets, profs = names(all)
 	if len(all.Devices) != 3 || len(sets) != 3 || len(profs) != 3 {
 		t.Errorf("all-devices bundle should be complete: %d devices %v %v", len(all.Devices), sets, profs)
@@ -67,7 +67,7 @@ func TestSelectScopesToGroupAndReferences(t *testing.T) {
 
 func TestWriteReadRoundTrip(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "A社")
-	src := Select(sampleInventory(), "A社")
+	src := Select(sampleInventory(), "A社", false)
 	mp, err := Write(dir, src, "PalaTerm test")
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestApplySkipsSharedByDefaultAndRemapsProfileKeys(t *testing.T) {
 		CommandSets:    []model.CommandSet{{Name: "backup", Commands: []model.Command{{Text: "old"}}}},
 		CustomProfiles: []profile.Profile{{Key: "custom:MyOS-2", Name: "myos", Prompt: "%"}},
 	}
-	c := Select(sampleInventory(), "A社")
+	c := Select(sampleInventory(), "A社", false)
 	pre := Preview(inv, c, Options{})
 	if pre.DevicesNew != 2 || pre.SetsNew != 1 || pre.SetsSkipped != 1 || pre.ProfilesNew != 1 || pre.ProfilesSkip != 1 {
 		t.Errorf("preview = %+v", pre)
@@ -182,7 +182,7 @@ func TestApplySkipsSharedByDefaultAndRemapsProfileKeys(t *testing.T) {
 
 func TestApplyOverwriteSharedAndTargetGroup(t *testing.T) {
 	inv := sampleInventory()
-	c := Select(sampleInventory(), "A社")
+	c := Select(sampleInventory(), "A社", false)
 	c.CommandSets[0].Commands = []model.Command{{Text: "show run brief"}}
 	c.Profiles[0].Prompt = "#>"
 	c.Devices[0].Host = "192.0.2.100"
@@ -255,7 +255,7 @@ func TestGroupCredentialsTravelInBundle(t *testing.T) {
 	inv.DeviceGroups[0] = model.DeviceGroup{Name: "A社", Username: "gu", Password: "gp", EnablePassword: "ge"}
 	inv.Devices[0].UseGroupCreds = true
 	dir := t.TempDir()
-	if _, err := Write(dir, Select(inv, "A社"), "test"); err != nil {
+	if _, err := Write(dir, Select(inv, "A社", false), "test"); err != nil {
 		t.Fatal(err)
 	}
 	c, err := Read(filepath.Join(dir, ManifestName))
@@ -368,7 +368,7 @@ func TestBlankCredentialsKeepExisting(t *testing.T) {
 	inv.Devices[0].EnablePassword, inv.Devices[0].KeyFile, inv.Devices[0].KeyPassphrase = "en", `C:\k\id`, "kp"
 	inv.Devices[1].Bastions[0].Password, inv.Devices[1].Bastions[0].KeyPassphrase = "jp", "jkp"
 	inv.DeviceGroups[0].Username, inv.DeviceGroups[0].Password = "gu", "gp"
-	src := Select(inv, "A社")
+	src := Select(inv, "A社", false)
 	for i := range src.Devices {
 		d := &src.Devices[i]
 		d.Username, d.Password, d.EnablePassword, d.KeyFile, d.KeyPassphrase = "", "", "", "", ""
@@ -467,5 +467,59 @@ func TestCommandSetPauseOffAndWaitRoundTrip(t *testing.T) {
 	// A set with pauses on and no waits writes no directive at all.
 	if s := FormatCommandSet(model.CommandSet{Commands: []model.Command{{Text: "show clock", PauseSec: 1, SerialSec: 1}}}); strings.Contains(s, "palaterm") {
 		t.Errorf("unexpected directive: %q", s)
+	}
+}
+
+// 踏み台の認証情報を含めない: the hops' logins stay out of the files, the
+// rest (device logins, hop hosts) travel, and on the receiving side the
+// user's own jump-host login fills the hop in.
+func TestSelectWithoutBastionCredsRoundTrip(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[1].Bastions[0].Password = "jp"
+	inv.Devices[1].Bastions[0].AuthMethod = model.AuthPublicKey
+	inv.Devices[1].Bastions[0].KeyFile = `C:\Users\me\.ssh\id_ed25519`
+	inv.Devices[1].Bastions[0].KeyPassphrase = "secret-pass"
+	dir := t.TempDir()
+	mp, err := Write(dir, Select(inv, "A社", true), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Devices[1].Bastions[0].Username != "j" {
+		t.Fatal("exporting changed the vault's device")
+	}
+	for _, f := range []string{"devices.csv", ManifestName} {
+		data, _ := os.ReadFile(filepath.Join(dir, f))
+		for _, secret := range []string{"secret-pass", `id_ed25519`, "jp"} {
+			if strings.Contains(string(data), secret) {
+				t.Errorf("%s contains %q", f, secret)
+			}
+		}
+	}
+	c, err := Read(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fw model.Device
+	for _, d := range c.Devices {
+		if d.Name == "a-fw1" {
+			fw = d
+		}
+	}
+	if len(fw.Bastions) != 1 || fw.Bastions[0].Host != "192.0.2.9" || fw.Bastions[0].Username != "" || fw.Bastions[0].JumpCommand == "" {
+		t.Fatalf("hop after round trip = %+v", fw.Bastions)
+	}
+	if c.Devices[0].Username != "u" || c.Devices[0].Password != "p" {
+		t.Errorf("device login must still travel: %+v", c.Devices[0])
+	}
+	recv := &model.Inventory{MyBastionLogins: []model.BastionLogin{{Host: "192.0.2.9", Username: "theirs", AuthMethod: model.AuthPublicKey, KeyFile: `C:\k`}}}
+	Apply(recv, c, Options{})
+	for _, d := range recv.Devices {
+		if d.Name != "a-fw1" {
+			continue
+		}
+		r := recv.ResolveCredentials(d)
+		if r.Bastions[0].Username != "theirs" || r.Bastions[0].KeyFile != `C:\k` {
+			t.Errorf("receiver's own login not used: %+v", r.Bastions[0])
+		}
 	}
 }

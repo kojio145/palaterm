@@ -24,7 +24,7 @@ func TestGridRowCarriesEveryDeviceField(t *testing.T) {
 		Group: "lab", Site: "本社", Role: "コア", OSType: "cisco-ios", CommandSet: "bk",
 		AuthMethod: model.AuthPublicKey, KeyFile: `C:\k\id`, KeyPassphrase: "pp", Username: "ops", Password: "pw", EnablePassword: "en",
 		LegacyAlgos: true, Bastions: []model.Bastion{hop}, BastionMode: model.BastionViaTunnel,
-		Bastion: &model.Bastion{Host: "192.0.2.99"}, UseGroupCreds: true, Enabled: true,
+		Bastion: &model.Bastion{Host: "192.0.2.99"}, UseGroupCreds: true, Enabled: true, GUIPort: 10443,
 	}
 	requireAllSet := func(v reflect.Value, what string) {
 		for i := 0; i < v.NumField(); i++ {

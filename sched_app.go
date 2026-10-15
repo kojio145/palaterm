@@ -152,8 +152,8 @@ func (a *App) ScheduleLog(limit int) []SchedLogEntry {
 
 // schedCopy is what a locked vault leaves the scheduler: the inventory with
 // only the devices an enabled schedule targets (credentials filled in from
-// their group), the command sets, settings and host keys — no other device,
-// no group credentials. nil when nothing is scheduled.
+// their group, jump hosts from 自分の踏み台認証), the command sets, settings
+// and host keys — no other device, no group credentials. nil when nothing is scheduled.
 func schedCopy(inv *model.Inventory) *model.Inventory {
 	if inv == nil {
 		return nil
@@ -184,6 +184,8 @@ func schedCopy(inv *model.Inventory) *model.Inventory {
 		}
 	}
 	c.Devices = keep
+	// Already filled into the kept devices' hops above.
+	c.MyBastionLogins = nil
 	for i := range c.DeviceGroups {
 		g := &c.DeviceGroups[i]
 		g.Username, g.Password, g.EnablePassword = "", "", ""

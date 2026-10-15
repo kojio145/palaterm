@@ -295,7 +295,9 @@ func containsStr(list []string, s string) bool {
 
 // buildJumpCommand renders the command typed on a hop's shell to reach the
 // next hop. A non-empty template wins, with {user} {host} {port} substituted
-// (port 0 => ""); otherwise the standard ssh/telnet form for method is used.
+// (port 0 => ""); otherwise the standard ssh/telnet form for method is used,
+// with the port when it is not the method's own (a device may well run its
+// SSH on 2222: typed without it, the hop reached port 22 instead).
 func buildJumpCommand(template string, method model.BastionMethod, host, user string, port int) string {
 	if template != "" {
 		p := ""
@@ -305,10 +307,17 @@ func buildJumpCommand(template string, method model.BastionMethod, host, user st
 		return strings.NewReplacer("{user}", user, "{host}", host, "{port}", p).Replace(template)
 	}
 	if method == model.BastionSSH {
-		if user != "" {
-			return fmt.Sprintf("ssh %s@%s", user, host)
+		opt := ""
+		if port > 0 && port != 22 {
+			opt = fmt.Sprintf("-p %d ", port)
 		}
-		return fmt.Sprintf("ssh %s", host)
+		if user != "" {
+			return fmt.Sprintf("ssh %s%s@%s", opt, user, host)
+		}
+		return fmt.Sprintf("ssh %s%s", opt, host)
+	}
+	if port > 0 && port != 23 {
+		return fmt.Sprintf("telnet %s %d", host, port)
 	}
 	return fmt.Sprintf("telnet %s", host)
 }

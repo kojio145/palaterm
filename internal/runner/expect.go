@@ -199,6 +199,22 @@ func (e *expecter) StartRaw(sink func([]byte)) {
 	}
 }
 
+// StartRawShown is StartRaw for a session whose output so far is already on
+// screen (streamed by a tee while the login ran): that part goes to logged
+// only, everything after it to sink. Taken and switched in one step, so no
+// byte is shown twice or lost in between.
+func (e *expecter) StartRawShown(sink, logged func([]byte)) {
+	e.mu.Lock()
+	pending := e.transcript.String()
+	e.transcript.Reset()
+	e.buf.Reset()
+	e.rawSink = sink
+	e.mu.Unlock()
+	if pending != "" && logged != nil {
+		logged([]byte(pending))
+	}
+}
+
 // Transcript returns the full captured output so far.
 func (e *expecter) Transcript() string {
 	e.mu.Lock()

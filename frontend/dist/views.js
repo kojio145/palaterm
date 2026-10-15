@@ -287,12 +287,13 @@ function renderDeviceList() {
       </td>
       <td><select class="cell inl-os" data-id="${esc(d.id)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
       <td><select class="cell inl-set" data-id="${esc(d.id)}" data-tip="${esc(d.commandSet || t("（なし）"))}">${cmdSetOptions(d.commandSet)}</select></td>
-      <td style="text-align:right;white-space:nowrap">
+      <td class="ops"><div class="ops-btns">
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
+        ${guiButton(d)}
         <button class="btn sm act-edit" data-edit="${esc(d.id)}">${esc(t("編集"))}</button>
-        <button class="btn sm act-copy" data-copy="${esc(d.id)}">${esc(t("複製"))}</button>
+        <button class="btn sm act-copy" data-copy="${esc(d.id)}" data-tip="${esc(t("この機器を複製します"))}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(d.id)}">${esc(t("削除"))}</button>
-      </td>
+      </div></td>
     </tr>`;
   }).join("");
 
@@ -332,9 +333,9 @@ function renderDeviceList() {
       ${devs.length === 0
         ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
-        : `<table class="fixed" data-colw="devices2"><thead><tr><th style="width:30px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:30px"></th>
+        : `<table class="fixed" data-colw="devices2"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
             ${listViewTh(LV, "name", t("ホスト名"), "width:140px")}${listViewTh(LV, "host", t("IPアドレス"), "width:110px")}${listViewTh(LV, "site", t("拠点名"), "width:84px")}${listViewTh(LV, "role", t("役割"), "width:84px")}${listViewTh(LV, "conn", t("接続"), "width:84px")}
-            ${listViewTh(LV, "os", "OS", "width:120px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:120px")}<th style="width:250px"></th></tr></thead>
+            ${listViewTh(LV, "os", "OS", "width:120px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:120px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
   listViewWire(LV, root, renderDeviceList, focus);
@@ -385,6 +386,7 @@ function renderDeviceList() {
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editDevice(devById(b.dataset.edit)));
   wireConnectButtons(root);
+  wireGUIButtons(root);
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = () => delDevice(b.dataset.del));
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
     try { const nm = await App().CopyDevice(b.dataset.copy); await refreshInventory(); toast(t("複製しました: {n}", { n: nm }), "ok"); }
@@ -571,6 +573,11 @@ async function delDevice(id) {
   catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
 }
 
+// The last choice of 踏み台の認証情報を含めない (a per-PC convenience).
+function exportNoBastionCreds() {
+  try { return localStorage.getItem("palaterm.exportNoBastionCreds") === "1"; } catch (_) { return false; }
+}
+
 // 一式書出: pick a group (or all) → export\bundles\<group>\ holding devices.csv
 // plus the command sets and OS profiles those devices use (for "all devices":
 // every set and profile, i.e. a complete copy of the configuration).
@@ -582,6 +589,8 @@ function exportBundleDialog(defaultGroup) {
     <h3>${esc(t("一式書き出し"))}</h3>
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
     <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
+    <div class="field" style="margin-top:10px;margin-bottom:0"><label style="font-weight:normal"><input type="checkbox" id="cx-nobc" style="width:auto" ${exportNoBastionCreds() ? "checked" : ""}>
+      <span data-tip="${esc(t("踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホストや通り方は残ります）。受け取った人は、設定タブの「自分の踏み台認証」に自分の認証情報を登録すれば、そのまま踏み台を通れます。機器自身のユーザー名・パスワードは書き出されます"))}">${esc(t("踏み台の認証情報を含めない（人に渡す用） ⓘ"))}</span></label></div>
     <div class="muted" style="font-size:12px;margin-top:8px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
@@ -590,9 +599,11 @@ function exportBundleDialog(defaultGroup) {
   node.querySelector("#cx-cancel").onclick = closeModal;
   node.querySelector("#cx-ok").onclick = async () => {
     const v = node.querySelector("#cx-grp").value;
+    const noBC = node.querySelector("#cx-nobc").checked;
+    try { localStorage.setItem("palaterm.exportNoBastionCreds", noBC ? "1" : "0"); } catch (_) {}
     closeModal();
     try {
-      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v);
+      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v, noBC);
       if (!dir) return;
       if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く") })) {
         try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
@@ -768,8 +779,11 @@ function editDevice(dev, preGroup) {
       const prevEl = node.querySelector("#f-port");
       const prev = prevEl ? (parseInt(prevEl.value, 10) || 0) : (d.port || 0);
       const port = (!prev || prev === 22 || prev === 23) ? (c === "ssh" ? 22 : 23) : prev;
-      connExtra.innerHTML = `<div class="field" style="max-width:200px"><label>${esc(t("ポート"))}</label>
-        <input id="f-port" type="number" value="${port}"></div>`;
+      const guiEl = node.querySelector("#f-guiport");
+      const gui = guiEl ? guiEl.value : (d.guiPort || "");
+      connExtra.innerHTML = `<div class="grid-2" style="max-width:420px">
+        <div class="field"><label>${esc(t("ポート"))}</label><input id="f-port" type="number" value="${port}"></div>
+        <div class="field"><label><span data-tip="${esc(t("「GUI」ボタンで開く管理画面のポートです。空欄なら 443（https）。80・8080 は http で開きます。踏み台がある機器は、踏み台の SSH の中を通して開きます"))}">${esc(t("GUIポート ⓘ"))}</span></label><input id="f-guiport" type="number" min="0" max="65535" placeholder="443" value="${esc(String(gui))}"></div></div>`;
     }
     node.querySelector("#fw-authmethod").style.display = c === "ssh" ? "" : "none";
     node.querySelector("#fw-legacy").style.display = c === "ssh" ? "" : "none";
@@ -876,7 +890,7 @@ function editDevice(dev, preGroup) {
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label><span data-tip="${esc(t("空欄にすると、設定タブの「自分の踏み台認証」でホストとポートが一致するものを使います（人ごとに鍵が違う社内の踏み台など）"))}">${esc(t("ユーザー ⓘ"))}</span></label><input class="b-user" value="${esc(b.username || "")}" placeholder="${esc(t("空欄＝自分の踏み台認証"))}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
           <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
@@ -971,6 +985,7 @@ function editDevice(dev, preGroup) {
       out.baud = parseInt(node.querySelector("#f-baud").value, 10) || 9600;
     } else {
       out.port = parseInt(node.querySelector("#f-port").value, 10) || 0;
+      out.guiPort = parseInt(node.querySelector("#f-guiport").value, 10) || 0;
     }
     const chain = collectBastions().filter(b => b.host && b.method);
     if (chain.length) {

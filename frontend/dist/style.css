@@ -78,6 +78,11 @@ html, body {
 .btn.danger { color: var(--err); border-color: #43262b; }
 .btn.danger:hover { background: #2a1a1d; }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
+/* A list's row buttons (接続・GUI・編集・複製・削除): packed tight so the
+   row fits a 1280-wide window in English too. */
+td.ops { padding-left: 4px; padding-right: 4px; text-align: right; white-space: nowrap; }
+td.ops .ops-btns { display: inline-flex; gap: 3px; }
+td.ops .btn.sm { padding: 5px 6px; }
 .btn.run { background: var(--ok); border-color: var(--ok); color: #06210f; font-weight: 650; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 

@@ -146,3 +146,28 @@ func TestTunnelRunTelnetDevice(t *testing.T) {
 		t.Fatalf("did not reach the device prompt:\n%s", res.Transcript)
 	}
 }
+
+func TestMissingHopLogin(t *testing.T) {
+	ssh := model.Bastion{Host: "jump1.example", Method: model.BastionSSH}
+	dev := &model.Device{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Bastions: []model.Bastion{ssh}}
+	if err := missingHopLogin(dev, dev.ActiveBastions()); err == nil || !strings.Contains(err.Error(), "自分の踏み台認証") {
+		t.Errorf("empty first hop: err = %v", err)
+	}
+	withUser := ssh
+	withUser.Username = "ops"
+	// Typed on the first hop's shell: a later hop may leave the user to
+	// the hop's own ssh (e.g. a jump command without {user}).
+	dev.Bastions = []model.Bastion{withUser, ssh}
+	if err := missingHopLogin(dev, dev.ActiveBastions()); err != nil {
+		t.Errorf("shell hop 2 without user refused: %v", err)
+	}
+	dev.BastionMode = model.BastionViaTunnel
+	if err := missingHopLogin(dev, dev.ActiveBastions()); err == nil {
+		t.Error("tunnel hop 2 without user accepted")
+	}
+	telnet := model.Bastion{Host: "jump2.example", Method: model.BastionTelnet}
+	dev.BastionMode, dev.Bastions = model.BastionViaShell, []model.Bastion{telnet}
+	if err := missingHopLogin(dev, dev.ActiveBastions()); err != nil {
+		t.Errorf("telnet hop refused: %v", err)
+	}
+}

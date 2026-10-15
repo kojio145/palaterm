@@ -79,7 +79,10 @@ type Contents struct {
 // command sets and OS profiles they reference. For the whole inventory every
 // command set and profile is included, so an "all devices" bundle is a
 // complete copy of the configuration (settings and host keys aside).
-func Select(inv *model.Inventory, group string) Contents {
+// noBastionCreds leaves the jump hosts' logins out (踏み台の認証情報を含めな
+// い): those are each person's own key, filled in on the receiving PalaTerm
+// from its 自分の踏み台認証.
+func Select(inv *model.Inventory, group string, noBastionCreds bool) Contents {
 	c := Contents{Manifest: Manifest{Group: group}}
 	if inv == nil {
 		return c
@@ -92,6 +95,9 @@ func Select(inv *model.Inventory, group string) Contents {
 			continue
 		}
 		d.NormalizeBastions()
+		if noBastionCreds {
+			d.StripBastionCredentials()
+		}
 		c.Devices = append(c.Devices, d)
 		useSet[d.CommandSet] = true
 		useProf[d.OSType] = true

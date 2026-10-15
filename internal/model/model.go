@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/kojio145/palaterm/internal/logstore"
@@ -158,8 +159,42 @@ type Device struct {
 	// Inventory.ResolveCredentials; the device's own fields are kept as typed.
 	UseGroupCreds bool `json:"useGroupCreds,omitempty"`
 
+	// GUIPort is the port of the device's web GUI (GUI を開く), https
+	// unless it is 80 or 8080; 0 means 443.
+	GUIPort int `json:"guiPort,omitempty"`
+
 	// Whether this device is included in batch runs.
 	Enabled bool `json:"enabled"`
+}
+
+// EffectiveGUIPort is the web GUI's port, 443 when unset.
+func (d *Device) EffectiveGUIPort() int {
+	if d.GUIPort > 0 {
+		return d.GUIPort
+	}
+	return 443
+}
+
+// GUIScheme is how the web GUI is spoken to: plain http on the usual http
+// ports, https otherwise (the network gear this is for: FortiGate & co.).
+func GUIScheme(port int) string {
+	if port == 80 || port == 8080 {
+		return "http"
+	}
+	return "https"
+}
+
+// GUIURL is the address a browser opens for the web GUI at host:port,
+// without the port when it is the scheme's default.
+func GUIURL(host string, port int) string {
+	scheme := GUIScheme(port)
+	if (scheme == "https" && port == 443) || (scheme == "http" && port == 80) {
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]"
+		}
+		return scheme + "://" + host + "/"
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/"
 }
 
 // ActiveBastions returns the configured jump hops in order, capped at
@@ -312,7 +347,12 @@ func (inv *Inventory) Group(name string) *DeviceGroup {
 // credentials substituted when the device asks for them. A device whose
 // group no longer exists keeps its own fields, so a deleted group never
 // silently empties a login.
+//
+// Jump hosts whose username is left empty get this PC user's own login
+// to that host (MyBastionLogins), so a shared device list need not carry
+// anyone's key.
 func (inv *Inventory) ResolveCredentials(d Device) Device {
+	d = inv.resolveBastionLogins(d)
 	if !d.UseGroupCreds {
 		return d
 	}
@@ -322,6 +362,134 @@ func (inv *Inventory) ResolveCredentials(d Device) Device {
 	}
 	d.Username, d.Password, d.EnablePassword = g.Username, g.Password, g.EnablePassword
 	return d
+}
+
+// BastionLogin is the user's own login to a jump host (自分の踏み台認証):
+// kept in their vault, never exported, and used for every hop with the same
+// host and port whose username is empty — the shape a device list shared
+// without credentials arrives in.
+type BastionLogin struct {
+	Host          string     `json:"host"`
+	Port          int        `json:"port,omitempty"` // 0 => 22
+	Username      string     `json:"username"`
+	Password      string     `json:"password,omitempty"`
+	AuthMethod    AuthMethod `json:"authMethod,omitempty"`
+	KeyFile       string     `json:"keyFile,omitempty"`
+	KeyPassphrase string     `json:"keyPassphrase,omitempty"`
+}
+
+// EffectivePort is the login's port, 22 when unset.
+func (l BastionLogin) EffectivePort() int {
+	if l.Port > 0 {
+		return l.Port
+	}
+	return 22
+}
+
+// Validate checks a login before it is saved. The username may be typed
+// into a previous hop's shell ("ssh user@host"), so it must be a plain word.
+func (l BastionLogin) Validate() error {
+	if !validHostOrIP(l.Host) {
+		return fmt.Errorf("踏み台のホスト形式が不正です: %q", l.Host)
+	}
+	if l.Port < 0 || l.Port > 65535 {
+		return fmt.Errorf("踏み台（%s）のポート番号が範囲外です: %d（0〜65535）", l.Host, l.Port)
+	}
+	if l.Username == "" {
+		return fmt.Errorf("踏み台（%s）のユーザー名を入力してください", l.Host)
+	}
+	if !ShellSafeWord(l.Username) {
+		return fmt.Errorf("踏み台（%s）のユーザー名に使えない文字（空白・記号 ; | & $ など）が含まれています: %q", l.Host, l.Username)
+	}
+	if l.AuthMethod != "" && l.AuthMethod != AuthPassword && l.AuthMethod != AuthPublicKey {
+		return fmt.Errorf("踏み台（%s）の認証方式が不正です", l.Host)
+	}
+	if isUNCPath(l.KeyFile) {
+		return fmt.Errorf("踏み台（%s）の秘密鍵にネットワーク上のパスは指定できません: %q", l.Host, l.KeyFile)
+	}
+	return nil
+}
+
+// ValidateBastionLogins checks every login and that no host:port is listed
+// twice (which one would apply would be a guess).
+func ValidateBastionLogins(ls []BastionLogin) error {
+	seen := map[string]bool{}
+	for _, l := range ls {
+		if err := l.Validate(); err != nil {
+			return err
+		}
+		k := strings.ToLower(HopAddr(l.Host, l.EffectivePort()))
+		if seen[k] {
+			return fmt.Errorf("踏み台 %s が2回登録されています", HopAddr(l.Host, l.EffectivePort()))
+		}
+		seen[k] = true
+	}
+	return nil
+}
+
+// BastionLoginFor returns the user's own login for a hop, if one matches
+// its host (case-insensitively) and port. Only SSH hops: a Telnet hop's
+// port defaults differ and its login is answered in-stream anyway.
+func (inv *Inventory) BastionLoginFor(b Bastion) (BastionLogin, bool) {
+	if b.Method != BastionSSH {
+		return BastionLogin{}, false
+	}
+	port := b.Port
+	if port == 0 {
+		port = 22
+	}
+	for _, l := range inv.MyBastionLogins {
+		if strings.EqualFold(l.Host, b.Host) && l.EffectivePort() == port {
+			return l, true
+		}
+	}
+	return BastionLogin{}, false
+}
+
+// resolveBastionLogins fills the hops of d that have no username from the
+// user's own logins. The chain is copied first: d shares it with the vault.
+func (inv *Inventory) resolveBastionLogins(d Device) Device {
+	if len(inv.MyBastionLogins) == 0 {
+		return d
+	}
+	d.NormalizeBastions()
+	if len(d.Bastions) == 0 {
+		return d
+	}
+	d.Bastions = append([]Bastion(nil), d.Bastions...)
+	for i := range d.Bastions {
+		b := &d.Bastions[i]
+		if b.Username != "" {
+			continue
+		}
+		if l, ok := inv.BastionLoginFor(*b); ok {
+			b.Username, b.Password, b.AuthMethod = l.Username, l.Password, l.AuthMethod
+			b.KeyFile, b.KeyPassphrase = l.KeyFile, l.KeyPassphrase
+		}
+	}
+	return d
+}
+
+// WithoutBastions returns d reached directly, its jump hosts left out —
+// for a run or a terminal the user asked to open without them (踏み台を使わ
+// ずに接続: on site, plugged into the device's network).
+func (d Device) WithoutBastions() Device {
+	d.Bastions, d.Bastion, d.BastionMode = nil, nil, BastionViaShell
+	return d
+}
+
+// StripBastionCredentials empties every hop's login (username, password,
+// key and its passphrase) — 共有用 exports, where those are personal.
+func (d *Device) StripBastionCredentials() {
+	d.NormalizeBastions()
+	if len(d.Bastions) == 0 {
+		return
+	}
+	d.Bastions = append([]Bastion(nil), d.Bastions...)
+	for i := range d.Bastions {
+		b := &d.Bastions[i]
+		b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase = "", "", "", "", ""
+	}
 }
 
 // Stage is when in a maintenance window a batch is run: before the work,
@@ -491,6 +659,17 @@ type Inventory struct {
 	// passwords like the devices do, so it lives here in the vault and
 	// survives a lock or a restart until saved or thrown away.
 	GridDrafts map[string]GridDraft `json:"gridDrafts,omitempty"`
+
+	// MyBastionLogins are the user's own jump-host logins (自分の踏み台認証;
+	// see BastionLogin). Personal: no export carries them.
+	MyBastionLogins []BastionLogin `json:"myBastionLogins,omitempty"`
+
+	// KnownGUICerts pins the certificate (SHA-256) of each device's web GUI
+	// opened in PalaTerm's GUI window, trust on first use like the SSH host
+	// keys: a self-signed GUI opens without the browser's warning page, and a
+	// different certificate later stops it. Keyed "gui <host:port>", or
+	// "gui <first hop>><host:port>" through jump hosts.
+	KnownGUICerts map[string]string `json:"knownGUICerts,omitempty"`
 }
 
 // GridUngrouped is the table editor's scope for the devices in no group.
@@ -659,6 +838,9 @@ func (d *Device) Validate() error {
 	}
 	if isUNCPath(d.KeyFile) {
 		return fmt.Errorf("秘密鍵にネットワーク上のパス（\\\\サーバー\\…）は指定できません: %q", d.KeyFile)
+	}
+	if d.GUIPort < 0 || d.GUIPort > 65535 {
+		return fmt.Errorf("GUIポートが範囲外です: %d（0〜65535）", d.GUIPort)
 	}
 	bastions := d.ActiveBastions()
 	if d.BastionMode != BastionViaShell && d.BastionMode != BastionViaTunnel {

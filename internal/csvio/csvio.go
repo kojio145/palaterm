@@ -46,6 +46,7 @@ var deviceCols = []col{
 	{"username", "ユーザー名"}, {"password", "パスワード"}, {"enablePassword", "enableパスワード"},
 	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
 	{"legacyAlgos", "旧暗号を許可"}, {"bastionMode", "踏み台の通り方"},
+	{"guiPort", "GUIポート"},
 }
 
 // hopFields are one jump host's columns (prefixed bastion<n> / 踏み台<n>_).
@@ -120,6 +121,7 @@ func ExportLang(devices []model.Device, lang string) (string, error) {
 			d.Username, d.Password, d.EnablePassword,
 			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
 			boolOut(d.LegacyAlgos, ja), modeOut(d.BastionMode, len(d.Bastions) > 0, ja),
+			itoa(d.GUIPort),
 		}
 		for n := 0; n < hops; n++ {
 			if n < len(d.Bastions) {
@@ -244,6 +246,7 @@ func Import(text string) ([]model.Device, error) {
 			Enabled:        parseBool(get(row, "enabled"), true),
 			UseGroupCreds:  parseBool(get(row, "useGroupCreds"), false),
 			BastionMode:    modeIn(get(row, "bastionMode")),
+			GUIPort:        atoi(get(row, "guiPort")),
 		}
 		if perHop {
 			// One column per jump-host field. A hop is there when its host is.

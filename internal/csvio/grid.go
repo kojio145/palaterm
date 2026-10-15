@@ -33,7 +33,7 @@ var deviceKinds = map[string]string{
 	"group": "group", "conn": "conn", "port": "int", "baud": "int",
 	"osType": "os", "commandSet": "set", "enabled": "bool", "useGroupCreds": "bool",
 	"password": "secret", "enablePassword": "secret", "keyPassphrase": "secret",
-	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode",
+	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode", "guiPort": "int",
 }
 
 var hopKinds = map[string]string{
@@ -67,6 +67,7 @@ func DeviceCells(d model.Device) map[string]string {
 		"username": d.Username, "password": d.Password, "enablePassword": d.EnablePassword,
 		"authMethod": orDefault(string(d.AuthMethod), "password"), "keyFile": d.KeyFile, "keyPassphrase": d.KeyPassphrase,
 		"legacyAlgos": boolOut(d.LegacyAlgos, false), "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0, false),
+		"guiPort": itoa(d.GUIPort),
 	}
 	for i, b := range d.Bastions {
 		if i >= model.MaxBastions {
@@ -157,7 +158,7 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		Enabled: flag("enabled", true), UseGroupCreds: flag("useGroupCreds", false),
 		Username: get("username"), Password: c["password"], EnablePassword: c["enablePassword"],
 		AuthMethod: auth("authMethod"), KeyFile: get("keyFile"), KeyPassphrase: c["keyPassphrase"],
-		LegacyAlgos: flag("legacyAlgos", false),
+		LegacyAlgos: flag("legacyAlgos", false), GUIPort: num("guiPort"),
 	}
 	switch m := modeIn(get("bastionMode")); m {
 	case model.BastionViaShell, model.BastionViaTunnel:
@@ -228,6 +229,8 @@ func ErrorColumn(msg string) string {
 	switch {
 	case strings.Contains(msg, "すべて SSH"):
 		return "bastion1Method"
+	case strings.Contains(msg, "GUIポート"):
+		return "guiPort"
 	case strings.Contains(msg, "踏み台の通り方"):
 		return "bastionMode"
 	case strings.Contains(msg, "シリアル接続の機器は踏み台"):

@@ -184,6 +184,7 @@ func (a *App) flushPersist() { a.writePending() }
 
 // shutdown runs when the main window closes.
 func (a *App) shutdown(ctx context.Context) {
+	a.StopGUI("")
 	a.flushPersist()
 	trayHide()
 	armWake(time.Time{})
@@ -605,6 +606,8 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 // Lock forgets the password and inventory from memory — all but what the
 // enabled 予約 need to run while locked (schedCopy).
 func (a *App) Lock() {
+	// A GUI forward is an open door to the device: it closes with the vault.
+	a.StopGUI("")
 	a.flushPersist()
 	a.mu.Lock()
 	if a.inv != nil {
@@ -1397,6 +1400,29 @@ func (a *App) DeleteCommandSet(name string) error {
 }
 
 // SaveSettings replaces the run-wide settings.
+// SaveBastionLogins replaces the user's own jump-host logins (自分の踏み台
+// 認証), which fill in any hop whose username is empty.
+func (a *App) SaveBastionLogins(ls []model.BastionLogin) error {
+	for i := range ls {
+		ls[i].Host, ls[i].Username = strings.TrimSpace(ls[i].Host), strings.TrimSpace(ls[i].Username)
+		ls[i].KeyFile = strings.TrimSpace(ls[i].KeyFile)
+		if ls[i].AuthMethod != model.AuthPublicKey {
+			ls[i].KeyFile, ls[i].KeyPassphrase = "", ""
+		}
+	}
+	if err := model.ValidateBastionLogins(ls); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	a.inv.MyBastionLogins = ls
+	a.mu.Unlock()
+	return a.persist()
+}
+
 func (a *App) SaveSettings(s model.Settings) error {
 	a.mu.Lock()
 	if a.inv == nil {
@@ -1453,6 +1479,9 @@ type RunRequest struct {
 	// typed in the run tab, wins over it.
 	CommandSet string          `json:"commandSet,omitempty"`
 	AdHoc      []model.Command `json:"adHoc,omitempty"`
+	// Direct reaches every device without its jump hosts, for this run only
+	// (踏み台を使わずに接続: on site, on the devices' own network).
+	Direct bool `json:"direct,omitempty"`
 }
 
 // AdHocSetName names the commands typed in the run tab for one run (in the
@@ -1507,6 +1536,9 @@ func snapshotOf(inv *model.Inventory, req RunRequest) (*model.Inventory, error) 
 				continue
 			}
 			d.Enabled = true
+		}
+		if req.Direct {
+			d = d.WithoutBastions()
 		}
 		sel = append(sel, snap.ResolveCredentials(d))
 	}
@@ -2017,7 +2049,9 @@ type termClosed struct {
 // each window resizes freely. The master password is handed to the child on
 // stdin so it never appears in the process arguments. manual opens the line
 // without the automatic login (see Term.manual).
-func (a *App) SpawnTerminal(id string, manual bool) error {
+//
+// direct opens it without the device's jump hosts (踏み台を使わずに接続).
+func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	a.mu.Lock()
 	locked := a.inv == nil
 	pw := a.password
@@ -2041,6 +2075,9 @@ func (a *App) SpawnTerminal(id string, manual bool) error {
 	args := []string{"--connect", id, "--label", label}
 	if manual {
 		args = append(args, "--manual")
+	}
+	if direct {
+		args = append(args, "--direct")
 	}
 	cmd := exec.Command(exe, args...)
 	cmd.Env = childEnv()
@@ -2179,7 +2216,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.2"
+const appVersion = "1.7.3"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2304,13 +2341,16 @@ func bundleDir(group string) string {
 // hand-over unit: copy it to another PalaTerm and pick its
 // palaterm-bundle.json in 読込. devices.csv inside it is the same CSV as
 // before, so Excel editing still works.
-func (a *App) ExportBundle(group string) (string, error) {
+//
+// noBastionCreds leaves the jump hosts' logins out (each person's own key;
+// the receiver's 自分の踏み台認証 fills them in).
+func (a *App) ExportBundle(group string, noBastionCreds bool) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return "", fmt.Errorf("vault is locked")
 	}
-	c := bundle.Select(a.inv, group)
+	c := bundle.Select(a.inv, group, noBastionCreds)
 	c.Lang = a.lang
 	a.mu.Unlock()
 	if group != "" && len(c.Devices) == 0 {

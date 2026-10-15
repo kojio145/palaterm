@@ -292,7 +292,7 @@ function runSetOf(d) {
 // The RunWith / CheckDangerousCommands request for names in the chosen group.
 function runRequest(names, dryRun) {
   return {
-    names, group: runGroupName(), ungrouped: runGroupSel === RUN_UNGROUPED, stage: runStage, dryRun: !!dryRun,
+    names, group: runGroupName(), ungrouped: runGroupSel === RUN_UNGROUPED, stage: runStage, dryRun: !!dryRun, direct: runDirect,
     commandSet: runSetSel && runSetSel !== RUN_ADHOC ? runSetSel : "",
     adHoc: runSetSel === RUN_ADHOC ? runAdHocCommands() : [],
   };
@@ -302,6 +302,15 @@ function runRequest(names, dryRun) {
 // maintenance job can be told apart, and the 実行履歴 tab can pair a before
 // with an after and show what changed.
 let runStage = "";
+// 踏み台を使わずに接続: this run (and the 接続 buttons of the run tab) reach
+// every device directly, its jump hosts left out — on site, plugged into
+// the devices' network. Nothing is saved.
+let runDirect = false;
+function devHasBastion(d) { return (d.bastions || []).some(b => b.host) || !!(d.bastion && d.bastion.host); }
+// The line a run's confirmation adds when it goes without jump hosts.
+function directNote(direct) {
+  return direct ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("踏み台を使わずに、この PC から各機器へ直接接続します"))}</span>` : "";
+}
 const STAGES = ["", "before", "during", "after"];
 // Excel-like sort and filter of the run table. Display only: the backend
 // runs devices in inventory order. While a filter is active, only the
@@ -412,6 +421,7 @@ function renderRun() {
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
           ? `<button class="btn sm" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} style="color:var(--err);border-color:var(--err)" data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
+        ${guiButton(d)}
       </td>
     </tr>`;
   }).join("");
@@ -435,6 +445,10 @@ function renderRun() {
   // so the scroll position - and a scrollbar drag in progress - survive.
   // A different group / filter / sort starts from the top as before.
   const oldPanel = root.querySelector(".panel.scrollx");
+  // The jump-host choice shows only for a group that has jump hosts (and is
+  // off for one that has none, so it is never on unseen).
+  const anyBastion = devs.some(devHasBastion);
+  if (!anyBastion) runDirect = false;
   const viewKey = JSON.stringify([runGroupSel, runFilter, runSort]);
   const html = `
     <div class="page-head">
@@ -456,6 +470,10 @@ function renderRun() {
       <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
       </select>
+      ${anyBastion ? `<select id="run-route" class="btn" style="padding-right:8px${runDirect ? ";color:var(--warn);border-color:var(--warn)" : ""}" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
+        <option value="" ${runDirect ? "" : "selected"}>${esc(t("踏み台: 機器の設定どおり"))}</option>
+        <option value="direct" ${runDirect ? "selected" : ""}>${esc(t("踏み台: 使わない（直接接続）"))}</option>
+      </select>` : ""}
       <select id="run-set" class="btn" style="padding-right:8px;max-width:260px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行だけ、全機器で使うコマンドセットを差し替えます（機器の割り当ては変わりません）。「今回だけ入力…」で、その場で打ったコマンドを流せます"))}">
         <option value="" ${!runSetSel ? "selected" : ""}>${esc(t("コマンド: 機器ごとの設定どおり"))}</option>
         ${(INV.commandSets || []).map(cs => `<option value="${esc(cs.name)}" ${cs.name === runSetSel ? "selected" : ""}>${esc(t("コマンド: {s}（今回のみ）", { s: cs.name }))}</option>`).join("")}
@@ -554,6 +572,8 @@ function renderRun() {
   if (adEdit) adEdit.onclick = async () => { if (await adHocDialog()) renderRun(); };
   const stageSel = document.getElementById("run-stage");
   if (stageSel) stageSel.onchange = () => { runStage = stageSel.value; };
+  const routeSel = document.getElementById("run-route");
+  if (routeSel) routeSel.onchange = () => { runDirect = routeSel.value === "direct"; renderRun(); };
   document.getElementById("btn-cancel").onclick = async () => {
     // Stopping is immediate for queued devices; a device in the middle of a
     // command stops as soon as that command's read returns. The confirm
@@ -615,7 +635,8 @@ function renderRun() {
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   root.querySelectorAll("[data-stop]").forEach(el => el.onclick = () => stopDevice(el.dataset.stop));
   root.querySelectorAll("[data-watch]").forEach(el => el.onclick = () => App().OpenWatchWindow(el.dataset.watch).catch(e => toast(t("画面を開けません") + ": " + terr(e), "err")));
-  wireConnectButtons(root);
+  wireConnectButtons(root, () => runDirect);
+  wireGUIButtons(root, () => runDirect);
   updateCounts();
 }
 
@@ -682,7 +703,7 @@ async function startRun(dryRun) {
   if (dryRun) {
     const ok = await uiConfirm({
       title: t("接続確認のみ"),
-      message: t("{s}<b>{n} 台</b>に接続してログインまで確認します。<br>コマンドは送らず、ログも残しません。よろしいですか？", { s: scope, n: targets.length }),
+      message: t("{s}<b>{n} 台</b>に接続してログインまで確認します。<br>コマンドは送らず、ログも残しません。よろしいですか？", { s: scope, n: targets.length }) + directNote(runDirect),
       okLabel: t("⚡ 接続確認"),
     });
     if (!ok) return;
@@ -704,7 +725,7 @@ async function startRun(dryRun) {
       + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "");
     const ok = await uiConfirm({
       title: t("一括実行"),
-      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage,
+      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + directNote(runDirect),
       okLabel: stageRunLabel(runStage),
     });
     if (!ok) return;
@@ -763,10 +784,10 @@ function reqCommandCount(req, d) {
 // the toolbar shows now), spelled out in its confirmation.
 function rerunDetail() {
   const r = lastRunReq || {};
-  if (lastRunDry) return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じく接続確認のみです（コマンドは送りません）"))}</span>`;
+  if (lastRunDry) return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じく接続確認のみです（コマンドは送りません）"))}</span>` + directNote(r.direct);
   const cmds = r.adHoc && r.adHoc.length ? t("今回だけ入力: {s}", { s: r.adHoc.map(c => c.text).join(" / ") })
     : r.commandSet ? t("{s}（今回のみ）", { s: r.commandSet }) : t("機器ごとの設定どおり");
-  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>`;
+  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>` + directNote(r.direct);
 }
 
 // A re-run passes the same change warning a first run does.
@@ -1088,7 +1109,7 @@ function applyRunDone(payload) {
   const active = document.querySelector(".tab.active");
   if (active && active.id === "tab-run") renderRun();
   // Clear the "実行中" notice on the settings tab (unless mid-edit).
-  else if (active && active.id === "tab-settings" && !settingsDirty) renderSettings();
+  else if (active && active.id === "tab-settings" && !settingsDirty && !myLoginsDirty) renderSettings();
   if (wasCancel) {
     const v = Object.values(runState);
     toast(t("中止しました（完了 {a}・失敗 {b}・中断/未実行 {c}）", {
@@ -1108,19 +1129,21 @@ function applyRunDone(payload) {
 
 // True while the settings form has edits that were not saved yet.
 let settingsDirty = false;
+// The 自分の踏み台認証 panel is saved on its own (SaveBastionLogins).
+let myLoginsDirty = false;
 
 // Gate for leaving the settings tab (called by switchTab / lock in app.js):
 // warns before unsaved edits are silently lost.
 async function canLeaveSettings(nextTab) {
   const active = document.querySelector(".nav-btn.active");
-  if (!active || active.dataset.tab !== "settings" || nextTab === "settings" || !settingsDirty) return true;
+  if (!active || active.dataset.tab !== "settings" || nextTab === "settings" || !(settingsDirty || myLoginsDirty)) return true;
   const ok = await uiConfirm({
     title: t("未保存の変更"),
     message: t("設定に保存されていない変更があります。<br>保存せずに移動しますか？"),
     okLabel: t("破棄して移動"),
     danger: true,
   });
-  if (ok) settingsDirty = false;
+  if (ok) settingsDirty = myLoginsDirty = false;
   return ok;
 }
 
@@ -1178,10 +1201,18 @@ function renderSettings() {
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
+    </div>
+    <div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="my-logins">
+      <div style="font-weight:600;margin-bottom:4px">${esc(t("自分の踏み台認証"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("機器の踏み台でユーザー名が空欄の段は、ホストとポートが一致するここの認証情報でログインします。社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録してください。この PC の vault にだけ保存され、一式書出には入りません。一式書出で「踏み台の認証情報を含めない」を選ぶと、受け取った人は自分の認証情報をここに登録するだけで使えます。"))}</div>
+      <div id="ml-rows"></div>
+      <button class="btn sm" id="ml-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
+      <div class="modal-actions"><button class="btn primary" id="ml-save">${esc(t("保存"))}</button></div>
     </div>`;
+  renderMyLogins();
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
-  settingsDirty = false;
+  settingsDirty = myLoginsDirty = false;
   ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
@@ -1217,6 +1248,85 @@ function renderSettings() {
     out.rightClickPasteConfirm = !!document.getElementById("set-rc-confirm").checked;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+  };
+}
+
+// 自分の踏み台認証: the user's own logins to jump hosts, used for every hop
+// with the same host and port whose username is empty (model.BastionLogin).
+function renderMyLogins() {
+  const panel = document.getElementById("my-logins");
+  if (!panel) return;
+  let rows = (INV.myBastionLogins || []).map(x => ({ ...x }));
+  const host = panel.querySelector("#ml-rows");
+  const collect = () => [...host.querySelectorAll("[data-ml-row]")].map(r => ({
+    host: r.querySelector(".ml-host").value.trim(),
+    port: parseInt(r.querySelector(".ml-port").value, 10) || 0,
+    username: r.querySelector(".ml-user").value.trim(),
+    authMethod: r.querySelector(".ml-auth").value,
+    password: r.querySelector(".ml-pw").value,
+    keyFile: r.querySelector(".ml-key").value.trim(),
+    keyPassphrase: r.querySelector(".ml-keypass").value,
+  }));
+  const draw = () => {
+    host.innerHTML = rows.length ? rows.map((l, i) => {
+      const key = l.authMethod === "publickey";
+      return `<div class="card" data-ml-row style="padding:14px 16px;margin:10px 0">
+        <div class="row-inline" style="justify-content:space-between;margin-bottom:8px">
+          <b>${esc(l.host || t("（新しい踏み台）"))}</b>
+          <button class="btn sm act-del" type="button" data-ml-rm="${i}">${esc(t("削除"))}</button></div>
+        <div class="grid-3">
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input class="ml-host" value="${esc(l.host || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label><input class="ml-port" type="number" value="${esc(String(l.port || 22))}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="ml-user" value="${esc(l.username || "")}"></div>
+        </div>
+        <div class="grid-3">
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("SSH認証"))}</label><select class="ml-auth">
+            <option value="password" ${key ? "" : "selected"}>${esc(t("パスワード"))}</option>
+            <option value="publickey" ${key ? "selected" : ""}>${esc(t("公開鍵"))}</option></select></div>
+          <div class="field" style="margin-bottom:8px${key ? ";display:none" : ""}" data-ml-pw><label>${esc(t("パスワード"))}</label><input class="ml-pw" type="password" value="${esc(l.password || "")}"></div>
+        </div>
+        <div class="grid-2" data-ml-keyrow ${key ? "" : 'style="display:none"'}>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
+            <div class="row-inline" style="gap:6px"><input class="ml-key" style="flex:1" value="${esc(l.keyFile || "")}">
+              <button class="btn sm ml-key-pick" type="button">${esc(t("参照…"))}</button></div></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label><input class="ml-keypass" type="password" value="${esc(l.keyPassphrase || "")}"></div>
+        </div></div>`;
+    }).join("") : `<div class="muted" style="font-size:12px">${esc(t("登録はありません"))}</div>`;
+    host.querySelectorAll("input,select").forEach(el => {
+      el.addEventListener("input", () => { myLoginsDirty = true; });
+      el.addEventListener("change", () => { myLoginsDirty = true; });
+    });
+    host.querySelectorAll("[data-ml-rm]").forEach(b => b.onclick = () => {
+      rows = collect(); rows.splice(parseInt(b.dataset.mlRm, 10), 1); myLoginsDirty = true; draw();
+    });
+    host.querySelectorAll(".ml-auth").forEach(sel => sel.onchange = () => {
+      const r = sel.closest("[data-ml-row]");
+      const key = sel.value === "publickey";
+      r.querySelector("[data-ml-pw]").style.display = key ? "none" : "";
+      r.querySelector("[data-ml-keyrow]").style.display = key ? "" : "none";
+      const inp = r.querySelector(".ml-key");
+      if (key && !inp.value && (INV.settings || {}).lastKeyFile) inp.value = INV.settings.lastKeyFile;
+      myLoginsDirty = true;
+    });
+    host.querySelectorAll(".ml-key-pick").forEach(b => b.onclick = async () => {
+      try {
+        const p = await App().PickKeyFile();
+        if (p) { b.closest("[data-ml-row]").querySelector(".ml-key").value = p; myLoginsDirty = true; }
+      } catch (e) { toast(t("選択失敗") + ": " + terr(e), "err"); }
+    });
+    wirePasswordToggles(host);
+  };
+  draw();
+  panel.querySelector("#ml-add").onclick = () => {
+    rows = collect(); rows.push({ port: 22, authMethod: "publickey" }); myLoginsDirty = true; draw();
+  };
+  panel.querySelector("#ml-save").onclick = async () => {
+    try {
+      await App().SaveBastionLogins(collect());
+      myLoginsDirty = false;
+      await refreshInventory();
+      toast(t("保存しました"), "ok");
+    } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
 }
 

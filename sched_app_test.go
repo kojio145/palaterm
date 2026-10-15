@@ -288,3 +288,30 @@ func TestSchedLogStage(t *testing.T) {
 		t.Errorf("hand run: %q", got)
 	}
 }
+
+// 踏み台を使わずに接続 drops the jump hosts for that run only; otherwise
+// the hops whose username is empty get the user's own login.
+func TestSnapshotDirectAndOwnBastionLogin(t *testing.T) {
+	inv := &model.Inventory{
+		Devices: []model.Device{{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Group: "A社", Enabled: true,
+			Bastions: []model.Bastion{{Host: "jump1.example", Method: model.BastionSSH}}}},
+		MyBastionLogins: []model.BastionLogin{{Host: "jump1.example", Username: "ops"}},
+	}
+	snap, err := snapshotOf(inv, RunRequest{Group: "A社"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.Devices[0].ActiveBastions(); len(b) != 1 || b[0].Username != "ops" {
+		t.Errorf("hops = %+v, want the own login", b)
+	}
+	snap, err = snapshotOf(inv, RunRequest{Group: "A社", Direct: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.Devices[0].ActiveBastions(); len(b) != 0 {
+		t.Errorf("direct run still goes through %+v", b)
+	}
+	if len(inv.Devices[0].Bastions) != 1 || inv.Devices[0].Bastions[0].Username != "" {
+		t.Error("the vault's device was changed")
+	}
+}

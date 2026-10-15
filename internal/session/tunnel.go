@@ -22,43 +22,13 @@ import (
 // opts.Legacy is the device's setting; each hop uses its own. Host keys are
 // pinned under model.TunnelName, the chain that leads to the endpoint.
 func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, opts DialOpts) (Session, error) {
-	if len(hops) == 0 {
-		return nil, errors.New("踏み台がありません")
+	clients, via, err := dialChain(hops, timeout, opts)
+	if err != nil {
+		return nil, err
 	}
-	var clients []*ssh.Client
 	fail := func(err error) (Session, error) {
 		closeHops(clients)
 		return nil, err
-	}
-	via := ""
-	for i := range hops {
-		b := &hops[i]
-		if b.Method != model.BastionSSH {
-			return fail(fmt.Errorf("SSH トンネルで通る踏み台はすべて SSH にしてください（%d段目が %s）", i+1, b.Method))
-		}
-		port := b.Port
-		if port == 0 {
-			port = 22
-		}
-		addr := model.HopAddr(b.Host, port)
-		hopOpts := opts
-		hopOpts.Legacy = effectiveBastionLegacy(b, opts)
-		cfg, err := sshConfig(b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, timeout, hopOpts)
-		if err != nil {
-			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
-		}
-		conn, err := tunnelConn(clients, via, addr, timeout)
-		if err != nil {
-			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
-		}
-		name := model.TunnelName(via, addr)
-		c, err := sshHandshake(conn, name, cfg, timeout)
-		if err != nil {
-			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, sshDialError(name, err, b.Username, b.AuthMethod, hopOpts)))
-		}
-		startKeepalive(c)
-		clients = append(clients, c)
-		via = name
 	}
 
 	addr := model.HopAddr(dev.Host, dev.EffectivePort())
@@ -101,6 +71,51 @@ func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, 
 		conn.Close()
 		return fail(fmt.Errorf("SSH トンネルで接続できるのは SSH と Telnet の機器だけです（%s）", dev.Conn))
 	}
+}
+
+// dialChain logs into each jump host in turn from this PC, every next one
+// through a channel of the previous (see DialTunnel), and returns the
+// clients with the name the last one is pinned under. All hops must be SSH.
+func dialChain(hops []model.Bastion, timeout time.Duration, opts DialOpts) ([]*ssh.Client, string, error) {
+	if len(hops) == 0 {
+		return nil, "", errors.New("踏み台がありません")
+	}
+	var clients []*ssh.Client
+	fail := func(err error) ([]*ssh.Client, string, error) {
+		closeHops(clients)
+		return nil, "", err
+	}
+	via := ""
+	for i := range hops {
+		b := &hops[i]
+		if b.Method != model.BastionSSH {
+			return fail(fmt.Errorf("SSH トンネルで通る踏み台はすべて SSH にしてください（%d段目が %s）", i+1, b.Method))
+		}
+		port := b.Port
+		if port == 0 {
+			port = 22
+		}
+		addr := model.HopAddr(b.Host, port)
+		hopOpts := opts
+		hopOpts.Legacy = effectiveBastionLegacy(b, opts)
+		cfg, err := sshConfig(b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, timeout, hopOpts)
+		if err != nil {
+			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
+		}
+		conn, err := tunnelConn(clients, via, addr, timeout)
+		if err != nil {
+			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
+		}
+		name := model.TunnelName(via, addr)
+		c, err := sshHandshake(conn, name, cfg, timeout)
+		if err != nil {
+			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, sshDialError(name, err, b.Username, b.AuthMethod, hopOpts)))
+		}
+		startKeepalive(c)
+		clients = append(clients, c)
+		via = name
+	}
+	return clients, via, nil
 }
 
 // tunnelConn opens a TCP stream to addr: straight from this PC for the first

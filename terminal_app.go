@@ -37,7 +37,9 @@ type Term struct {
 	// profile login, no pager step, no jump-host traversal — the console the
 	// way Tera Term opens one. For initial setup over serial, a device with
 	// no password yet, or any screen the OS profile does not anticipate.
-	manual    bool
+	manual bool
+	// direct leaves the device's jump hosts out (踏み台を使わずに接続).
+	direct    bool
 	vaultPath string
 	profiles  *profile.Registry
 	runner    *runpkg.Runner
@@ -90,7 +92,7 @@ func (t *Term) isLocked() bool {
 
 // NewTerm builds the terminal-window backend and starts reading the password
 // line from stdin in the background.
-func NewTerm(device, label string, manual bool) *Term {
+func NewTerm(device, label string, manual, direct bool) *Term {
 	reg := profile.NewRegistry()
 	if label == "" {
 		label = device
@@ -99,6 +101,7 @@ func NewTerm(device, label string, manual bool) *Term {
 		deviceArg: device,
 		label:     label,
 		manual:    manual,
+		direct:    direct,
 		vaultPath: defaultVaultPath(),
 		profiles:  reg,
 		runner:    runpkg.New(reg),
@@ -206,7 +209,11 @@ func (t *Term) connect(pw string) {
 	t.runner.HostKeys = hk
 	var dev *model.Device
 	if i := inv.DeviceIndex(t.deviceArg); i >= 0 {
-		d := inv.ResolveCredentials(inv.Devices[i])
+		d := inv.Devices[i]
+		if t.direct {
+			d = d.WithoutBastions()
+		}
+		d = inv.ResolveCredentials(d)
 		dev = &d
 	}
 	t.mu.Lock()
@@ -282,7 +289,15 @@ func (t *Term) connect(pw string) {
 		cancel()
 	}
 	t.mu.Unlock()
-	exp, _, err := t.runner.Connect(ctx, dev, inv.Settings, nil)
+	// The device's output is shown as it arrives, login included (view
+	// only: keys go nowhere until attach), so a login that stalls shows
+	// where it is waiting — a jump host's prompt, "Password:", a banner —
+	// without switching to manual first.
+	tee := func(b []byte) {
+		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label,
+			Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(string(b), dev)))})
+	}
+	exp, _, err := t.runner.ConnectTee(ctx, dev, inv.Settings, tee)
 	close(progressDone)
 	t.mu.Lock()
 	t.cancelLogin = nil
@@ -296,6 +311,7 @@ func (t *Term) connect(pw string) {
 		// itself cannot be opened, say so plainly — "manual" cannot help
 		// there: SSH authenticates while opening the connection, so wrong
 		// credentials or an unreachable host fail before any screen exists.
+		shown := exp != nil // the login so far is on screen (tee)
 		if exp == nil {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
@@ -308,7 +324,7 @@ func (t *Term) connect(pw string) {
 			}
 		}
 		t.manual = true
-		t.attach(exp, dev, inv.Settings, false)
+		t.attach(exp, dev, inv.Settings, shown)
 		return
 	}
 	if err != nil {
@@ -316,14 +332,8 @@ func (t *Term) connect(pw string) {
 			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
 			return
 		}
-		// Show what the device said before the error line, the way a
-		// successful connect replays the login. An error alone ("認証に
-		// 失敗しました") leaves the reader guessing which prompt the
-		// device was really at; the transcript is the evidence.
-		if tr := exp.Transcript(); tr != "" {
-			runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label,
-				Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(tr, dev)))})
-		}
+		// What the device said is already on screen above the error line
+		// (the tee): the reader sees which prompt it was really at.
 		// The line itself is still open: the device is sitting at whatever
 		// screen the profile could not get past — an initial-setup dialog, a
 		// forced password change, a prompt nobody wrote a profile for. The
@@ -338,7 +348,7 @@ func (t *Term) connect(pw string) {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Takeover: true})
 		return
 	}
-	t.attach(exp, dev, inv.Settings, false)
+	t.attach(exp, dev, inv.Settings, true)
 }
 
 // SwitchToManual abandons the automatic login that is running and hands the
@@ -406,8 +416,9 @@ func (t *Term) Discard() {
 }
 
 // attach starts the session log and hands the open session to the terminal.
-// shown says the transcript so far is already on screen (a failed login
-// being taken over): it then goes to the log only, not to the screen again.
+// shown says the transcript so far is already on screen (the login streamed
+// as it ran, or a failed login being taken over): it then goes to the log
+// only, not to the screen again.
 func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Settings, shown bool) {
 	d := *dev
 	// The transcript goes to one file, named at connect time by the same
@@ -424,11 +435,6 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		secrets = runpkg.SecretsOf(&d)
 	}
 	slog := logstore.NewStream(logPath, secrets)
-	if shown {
-		if tr := exp.TakeTranscript(); tr != "" {
-			slog.Write([]byte(tr))
-		}
-	}
 	sink := func(b []byte) {
 		slog.Write(b)
 		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label, Data: base64.StdEncoding.EncodeToString(b)})
@@ -461,7 +467,14 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		}
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, LogPath: p})
 	}
-	send, resize, closeFn := t.runner.StartInteractive(exp, sink, onClose)
+	var send func(string) error
+	var resize func(cols, rows int) error
+	var closeFn func() error
+	if shown {
+		send, resize, closeFn = t.runner.StartInteractiveShown(exp, sink, func(b []byte) { slog.Write(b) }, onClose)
+	} else {
+		send, resize, closeFn = t.runner.StartInteractive(exp, sink, onClose)
+	}
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
 	t.mu.Unlock()

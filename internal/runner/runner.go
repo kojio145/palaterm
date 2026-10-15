@@ -249,7 +249,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		defer exp.Close()
 	}
 	if err != nil {
-		res.Error = err.Error()
+		res.Error = err.Error() + lastShown(ctx, exp, dev, err.Error())
 		ph := finishPhase(ctx, &res)
 		if exp != nil {
 			res.Transcript = exp.Transcript()
@@ -529,6 +529,15 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 	return r.connect(ctx, dev, s, emit, nil)
 }
 
+// ConnectTee is Connect with tee getting every byte the device sends from
+// the first one on: the interactive window shows the login as it happens,
+// so a login that stalls shows where (a hop's prompt, "Password:", a
+// banner) without switching to manual. Hand the session over with
+// StartInteractiveShown, the output so far being on screen already.
+func (r *Runner) ConnectTee(ctx context.Context, dev *model.Device, s model.Settings, tee func([]byte)) (*expecter, profile.Profile, error) {
+	return r.connect(ctx, dev, s, nil, tee)
+}
+
 // connect is Connect with tee getting a copy of every byte read (see
 // newExpecterTee): a batch device's live log.
 func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc, tee func([]byte)) (*expecter, profile.Profile, error) {
@@ -618,6 +627,9 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 // SSH/Telnet connection, or — behind a jump-host chain — the connection to
 // the first hop. Nothing is read or sent; the caller owns the session.
 func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions []model.Bastion, connTimeout time.Duration, emit EmitFunc) (session.Session, error) {
+	if err := missingHopLogin(dev, bastions); err != nil {
+		return nil, err
+	}
 	var sess session.Session
 	var err error
 	if len(bastions) > 0 && dev.Tunneled() {
@@ -644,6 +656,50 @@ func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions 
 		return nil, err
 	}
 	return sess, nil
+}
+
+// OpenForward carries a local port of this PC (on the loopback address
+// listen) through the device's jump hosts to its web GUI (GUI を開く). This PC logs into the hops itself, so
+// they must all be SSH, and a chain of several only through an SSH tunnel:
+// typed on a hop's shell, the next hop's login (its key) is not ours to use.
+func (r *Runner) OpenForward(dev *model.Device, s model.Settings, listen string) (*session.Forward, error) {
+	bastions := dev.ActiveBastions()
+	if len(bastions) == 0 {
+		return nil, errors.New("踏み台がありません")
+	}
+	for i, b := range bastions {
+		if b.Method != model.BastionSSH {
+			return nil, fmt.Errorf("踏み台経由で GUI を開くには踏み台が SSH である必要があります（%d段目が %s）", i+1, b.Method)
+		}
+	}
+	if len(bastions) > 1 && !dev.Tunneled() {
+		return nil, errors.New("踏み台が2段以上のときは、踏み台の通り方を「SSH トンネル」にすると GUI を開けます")
+	}
+	if err := missingHopLogin(dev, bastions); err != nil {
+		return nil, err
+	}
+	timeout := time.Duration(s.ConnectTimeout) * time.Second
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	return session.DialForward(bastions, model.HopAddr(dev.Host, dev.EffectiveGUIPort()), listen, timeout, r.dialOpts(dev))
+}
+
+// missingHopLogin refuses an SSH hop this PC logs into itself (the first
+// one, or every one through a tunnel) that has no username — what a device
+// list shared without jump-host logins looks like before the user has
+// registered their own (自分の踏み台認証). An SSH login as "" would only
+// fail later as a bare authentication error.
+func missingHopLogin(dev *model.Device, bastions []model.Bastion) error {
+	for i, b := range bastions {
+		if i > 0 && !dev.Tunneled() {
+			break
+		}
+		if b.Method == model.BastionSSH && b.Username == "" {
+			return fmt.Errorf("踏み台%d段目（%s）のユーザー名がありません。設定タブの「自分の踏み台認証」に登録するか、機器の踏み台の欄に入力してください", i+1, b.Host)
+		}
+	}
+	return nil
 }
 
 // Open dials the device's transport and returns the expecter untouched:
@@ -679,6 +735,19 @@ func (r *Runner) StartInteractive(exp *expecter, sink func([]byte), onClose func
 	exp.onClose = onClose
 	exp.mu.Unlock()
 	exp.StartRaw(sink)
+	return func(data string) error { return exp.SendRaw(data) },
+		func(cols, rows int) error { return exp.Resize(cols, rows) },
+		exp.Close
+}
+
+// StartInteractiveShown is StartInteractive for a session whose output so
+// far is already on screen (ConnectTee, or a failed login being taken
+// over): that part goes to logged only (see expecter.StartRawShown).
+func (r *Runner) StartInteractiveShown(exp *expecter, sink, logged func([]byte), onClose func()) (send func(string) error, resize func(cols, rows int) error, closeFn func() error) {
+	exp.mu.Lock()
+	exp.onClose = onClose
+	exp.mu.Unlock()
+	exp.StartRawShown(sink, logged)
 	return func(data string) error { return exp.SendRaw(data) },
 		func(cols, rows int) error { return exp.Resize(cols, rows) },
 		exp.Close
@@ -1028,9 +1097,30 @@ func pendingAnswer(exp *expecter, answers []profile.Step) (profile.Step, bool) {
 	return profile.Step{}, false
 }
 
+// lastShown is what a failed connection adds to its error: the line the
+// device (or jump host) was showing, so a 接続確認 that stops says where —
+// at a hop's shell, at "Password:", at a banner — without opening the
+// device in manual. Empty when nothing was received, when the run was
+// stopped, or when msg already quotes it.
+func lastShown(ctx context.Context, exp *expecter, dev *model.Device, msg string) string {
+	if exp == nil || ctx.Err() != nil || strings.Contains(msg, "機器の最後の表示") {
+		return ""
+	}
+	last := lastLine(exp.Transcript())
+	if last == "" {
+		return ""
+	}
+	return fmt.Sprintf("（機器の最後の表示: %q）", RedactSecrets(last, dev))
+}
+
+// reEscape matches terminal escape sequences (colors, cursor moves, title
+// and charset switches), which mean nothing in an error message.
+var reEscape = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-Za-z]|[=>78])`)
+
 // lastLine is the last non-blank line of out, trimmed and cut to 100 runes
-// (for an error message).
+// (for an error message), escape sequences removed.
 func lastLine(out string) string {
+	out = reEscape.ReplaceAllString(out, "")
 	lines := strings.Split(strings.ReplaceAll(out, "\r", "\n"), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if l := strings.TrimSpace(lines[i]); l != "" {

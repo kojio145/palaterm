@@ -21,16 +21,18 @@ var assets embed.FS
 
 func main() {
 	// Standalone terminal window mode:
-	// "PalaTerm.exe --connect <device ID> [--manual] [--label <name>]".
+	// "PalaTerm.exe --connect <device ID> [--manual] [--direct] [--label <name>]".
 	// --manual opens the line without the automatic login (initial setup
 	// over serial, a device with no password yet, an unexpected screen);
 	// --label is the name the window shows (the ID means nothing to a person).
 	if len(os.Args) >= 3 && os.Args[1] == "--connect" {
-		manual, label := false, ""
+		manual, direct, label := false, false, ""
 		for i := 3; i < len(os.Args); i++ {
 			switch os.Args[i] {
 			case "--manual":
 				manual = true
+			case "--direct":
+				direct = true
 			case "--label":
 				if i+1 < len(os.Args) {
 					label = os.Args[i+1]
@@ -38,7 +40,13 @@ func main() {
 				}
 			}
 		}
-		runTerminalWindow(os.Args[2], label, manual)
+		runTerminalWindow(os.Args[2], label, manual, direct)
+		return
+	}
+	// GUI window: "--gui" (a device's web GUI, logged in; what to open
+	// arrives on stdin — see guiLaunch).
+	if len(os.Args) >= 2 && os.Args[1] == "--gui" {
+		runGUIWindow()
 		return
 	}
 	// Log-viewer window: "--view <file>" (opened from the main window's and the
@@ -218,11 +226,14 @@ func runMainApp() {
 	}
 }
 
-func runTerminalWindow(device, label string, manual bool) {
-	t := NewTerm(device, label, manual)
+func runTerminalWindow(device, label string, manual, direct bool) {
+	t := NewTerm(device, label, manual, direct)
 	title := "PalaTerm - " + t.label
 	if manual {
 		title += " - " + winWord("手動接続", "manual")
+	}
+	if direct {
+		title += " - " + winWord("踏み台なし", "no jump host")
 	}
 	err := wails.Run(&options.App{
 		Title:     title,
