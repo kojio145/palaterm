@@ -39,10 +39,13 @@ type StageTokens struct {
 	// Schedule is a 予約's word: its folder carries it where the stage goes,
 	// and so do its log files when it has no stage of its own.
 	Schedule string `json:"schedule"`
+	// None is the word a run with no stage (作業タイミング: 指定なし) puts in
+	// its log file names. Its folder carries no stage word at all.
+	None string `json:"none"`
 }
 
 // DefaultStageTokens is the naming a new vault starts with.
-var DefaultStageTokens = StageTokens{Before: "before", Work: StageWork, After: "after", Schedule: "reserve"}
+var DefaultStageTokens = StageTokens{Before: "before", Work: StageWork, After: "after", Schedule: "reserve", None: "Current"}
 
 // StageSchedule is the stage a 予約's folder (and its stage-less log files)
 // is named for; it expands to StageTokens.Schedule.
@@ -62,17 +65,21 @@ func (t StageTokens) Filled() StageTokens {
 	if strings.TrimSpace(t.Schedule) == "" {
 		t.Schedule = DefaultStageTokens.Schedule
 	}
-	return StageTokens{Before: strings.TrimSpace(t.Before), Work: strings.TrimSpace(t.Work), After: strings.TrimSpace(t.After), Schedule: strings.TrimSpace(t.Schedule)}
+	if strings.TrimSpace(t.None) == "" {
+		t.None = DefaultStageTokens.None
+	}
+	return StageTokens{Before: strings.TrimSpace(t.Before), Work: strings.TrimSpace(t.Work), After: strings.TrimSpace(t.After),
+		Schedule: strings.TrimSpace(t.Schedule), None: strings.TrimSpace(t.None)}
 }
 
-// Token is what {stage} expands to: a plain capture with no stage is a
-// "Config" log (the historical default name); before, during / work and
-// after take the configured word.
+// Token is what {stage} expands to: a plain capture with no stage takes the
+// 指定なし word (default "Current"; "Config" before v1.7.2); before, during /
+// work and after take the configured word.
 func (t StageTokens) Token(stage string) string {
 	t = t.Filled()
 	switch stage {
 	case "":
-		return "Config"
+		return t.None
 	case "before":
 		return t.Before
 	case "during", StageWork:
@@ -109,7 +116,7 @@ func (t StageTokens) Canonical(tok string) string {
 // same for two stages, or that would be read as a different stage.
 func (t StageTokens) Validate() error {
 	t = t.Filled()
-	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}, {"予約", t.Schedule}}
+	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}, {"予約", t.Schedule}, {"指定なし", t.None}}
 	seen := map[string]string{}
 	for _, x := range words {
 		if len([]rune(x.w)) > 32 {
@@ -135,7 +142,7 @@ func (t StageTokens) Validate() error {
 	}
 	// A word that is another stage's default would be read back as that
 	// stage ("after" for 作業前 would list the run as 作業後).
-	defaults := map[string]string{"before": "作業前", "work": "作業中", "during": "作業中", "after": "作業後", "reserve": "予約", "schedule": "予約", "config": "指定なし"}
+	defaults := map[string]string{"before": "作業前", "work": "作業中", "during": "作業中", "after": "作業後", "reserve": "予約", "schedule": "予約", "config": "指定なし", "current": "指定なし"}
 	for _, x := range words {
 		if lbl, ok := defaults[strings.ToLower(x.w)]; ok && lbl != x.label {
 			return fmt.Errorf("%sの付与文字列 %q は「%s」の既定語なので使えません", x.label, x.w, lbl)

@@ -616,8 +616,8 @@ type schedDirRec struct {
 
 // schedLogStage is the stage a run's log file names are made with: for a
 // 予約 (it has its own folder, dir) without a stage, the 予約 word set in
-// 設定 (default "reserve") — the plain capture's "Config" read as
-// "Config_Config" under a template that already says Config. Otherwise ""
+// 設定 (default "reserve") — not the plain capture's 指定なし word, which
+// the first templates also wrote as a fixed "Config". Otherwise ""
 // (the stage's own word).
 func schedLogStage(dir, stage string) string {
 	if dir != "" && stage == "" {

@@ -490,7 +490,15 @@ function gridPaintSel(fillTo) {
     fill.classList.remove("hidden");
   } else if (fill) fill.classList.add("hidden");
 }
-function gridEnsureVisible(r, c) {
+// gridShowSel scrolls the selection's moving end into view, except along a
+// whole row or column: as in Excel, picking a row by its number (or Shift+
+// Space) must not slide the table to its last column, nor a column header
+// to the last row.
+function gridShowSel() {
+  const g = gridRange(), R = G.view.length - 1, C = G.vc.length - 1;
+  gridEnsureVisible(G.sel.fr, G.sel.fc, C > 0 && g.c0 === 0 && g.c1 === C, R > 0 && g.r0 === 0 && g.r1 === R);
+}
+function gridEnsureVisible(r, c, keepX, keepY) {
   const td = G.tds[r] && G.tds[r][c];
   if (!td) return;
   const w = G.wrap, wr = w.getBoundingClientRect(), tr = td.getBoundingClientRect();
@@ -498,16 +506,18 @@ function gridEnsureVisible(r, c) {
   let left = 46;
   const stick = document.querySelector("#g-table thead th.g-stick");
   if (stick && c > 0) left += stick.getBoundingClientRect().width;
-  if (tr.top < wr.top + head) w.scrollTop -= wr.top + head - tr.top;
+  if (keepY) { /* whole column: stay */ }
+  else if (tr.top < wr.top + head) w.scrollTop -= wr.top + head - tr.top;
   else if (tr.bottom > wr.bottom - 14) w.scrollTop += tr.bottom - wr.bottom + 14;
-  if (tr.left < wr.left + left) w.scrollLeft -= wr.left + left - tr.left;
+  if (keepX) { /* whole row: stay */ }
+  else if (tr.left < wr.left + left) w.scrollLeft -= wr.left + left - tr.left;
   else if (tr.right > wr.right - 14) w.scrollLeft += tr.right - wr.right + 14;
 }
 function gridSelect(ar, ac, fr, fc) {
   G.sel = { ar, ac, fr: fr ?? ar, fc: fc ?? ac };
   gridClampSel();
   gridPaintSel();
-  gridEnsureVisible(G.sel.fr, G.sel.fc);
+  gridShowSel();
 }
 function gridMove(dr, dc, extend) {
   const s = G.sel;
@@ -806,7 +816,7 @@ function gridPasteText(text) {
   G.pasting = false;
   G.sel = { ar: g.r0, ac: g.c0, fr: Math.min(endR, G.view.length - 1), fc: endC };
   gridPaintSel();
-  gridEnsureVisible(G.sel.fr, G.sel.fc);
+  gridShowSel();
 }
 function gridClear() {
   if (!G.view.length) return;
@@ -1031,7 +1041,7 @@ function gridMoveRows(dir) {
   const idx = sel.map(r => G.view.findIndex(i => G.rows[i] === r));
   G.sel = { ar: Math.min(...idx), ac: keep.c0, fr: Math.max(...idx), fc: keep.c1 };
   gridPaintSel();
-  gridEnsureVisible(G.sel.fr, G.sel.fc);
+  gridShowSel();
 }
 // The rows as sorted become the table's order (and so the saved order).
 function gridSortFix() {

@@ -706,6 +706,113 @@ func TestNecIXPagerMigration(t *testing.T) {
 	}
 }
 
+// TestNecQXLoginMigration covers a vault seeded while NEC QX still waited for
+// "sername:": the device prints "login:", so the row never matched. Unlocking
+// must fix a pristine row and leave one the user edited alone.
+func TestNecQXLoginMigration(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	setFirst := func(app *App, expect string) {
+		app.mu.Lock()
+		for i := range app.inv.CustomProfiles {
+			if app.inv.CustomProfiles[i].Key == "nec-qx" {
+				app.inv.CustomProfiles[i].Login[0].Expect = expect
+			}
+		}
+		app.mu.Unlock()
+		if err := app.persist(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := func(expect string) {
+		t.Helper()
+		app := NewApp()
+		app.vaultPath = a.vaultPath
+		if err := app.Unlock("master"); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range app.GetInventory().CustomProfiles {
+			if p.Key == "nec-qx" {
+				if p.Login[0].Expect != expect || p.Login[0].Send != "{user}" {
+					t.Errorf("first login row = %+v, want expect %q", p.Login[0], expect)
+				}
+				return
+			}
+		}
+		t.Fatal("nec-qx profile missing")
+	}
+	first("ogin:") // a new vault already has it
+	setFirst(a, "sername:")
+	first("ogin:")
+	setFirst(a, "User Name:")
+	first("User Name:")
+}
+
+// TestNecQXPagerMigration covers a vault seeded while NEC QX sent "screen-length
+// disable" as its pager: that runs after system-view, where the command does
+// not exist. Unlocking moves it into the login steps before system-view, once,
+// and leaves a pager the user edited alone.
+func TestNecQXPagerMigration(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	oldLogin := []profile.Step{{Expect: "ogin:", Send: "{user}"}, {Expect: "assword:", Send: "{password}"}, {Expect: ">", Send: "system-view"}}
+	rewind := func(pager string) {
+		a.mu.Lock()
+		for i := range a.inv.CustomProfiles {
+			if p := &a.inv.CustomProfiles[i]; p.Key == "nec-qx" {
+				p.Login = append([]profile.Step{}, oldLogin...)
+				p.Pager = []profile.Step{{Send: pager}}
+			}
+		}
+		a.mu.Unlock()
+		if err := a.persist(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	qx := func() profile.Profile {
+		t.Helper()
+		app := NewApp()
+		app.vaultPath = a.vaultPath
+		if err := app.Unlock("master"); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range app.GetInventory().CustomProfiles {
+			if p.Key == "nec-qx" {
+				return p
+			}
+		}
+		t.Fatal("nec-qx profile missing")
+		return profile.Profile{}
+	}
+	want := []string{"{user}", "{password}", "screen-length disable", "system-view"}
+	check := func(p profile.Profile) {
+		t.Helper()
+		if len(p.Pager) != 0 || len(p.Login) != len(want) {
+			t.Fatalf("pager = %+v, login = %+v", p.Pager, p.Login)
+		}
+		for i, w := range want {
+			if p.Login[i].Send != w {
+				t.Errorf("login[%d] = %+v, want send %q", i, p.Login[i], w)
+			}
+		}
+		if p.Login[2].Expect != ">" {
+			t.Errorf("screen-length row waits for %q, want >", p.Login[2].Expect)
+		}
+	}
+	check(qx()) // a new vault already has it
+	rewind("screen-length disable")
+	check(qx())
+	check(qx()) // and stays so: nothing is added twice
+	rewind("my-own-pager")
+	if p := qx(); len(p.Pager) != 1 || p.Pager[0].Send != "my-own-pager" || len(p.Login) != len(oldLogin) {
+		t.Errorf("user-edited profile was changed: pager = %+v, login = %+v", p.Pager, p.Login)
+	}
+}
+
 // TestNecIXPagerMigrationFromInterim covers the vault of an intermediate build
 // that entered configure mode with plain "configure": that fails outright with
 // "% CONFIG process is occupied." whenever another session holds the mode, so

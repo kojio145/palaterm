@@ -93,11 +93,13 @@ var defaults = []Profile{
 		Name:   "NEC QX",
 		Prompt: "]",
 		Login: []Step{
-			{Expect: "sername:", Send: "{user}"},
+			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
+			// screen-length disable is a user-view command: it must be sent
+			// before system-view, so it is a login step, not the pager.
+			{Expect: ">", Send: "screen-length disable"},
 			{Expect: ">", Send: "system-view"},
 		},
-		Pager:      []Step{{Send: "screen-length disable"}},
 		Disconnect: []Step{{Send: "quit"}},
 	},
 	{

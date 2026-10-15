@@ -17,6 +17,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/kojio145/palaterm/internal/bundle"
+	"github.com/kojio145/palaterm/internal/csvio"
 	"github.com/kojio145/palaterm/internal/guard"
 	"github.com/kojio145/palaterm/internal/history"
 	"github.com/kojio145/palaterm/internal/logstore"
@@ -505,6 +506,38 @@ func (a *App) Unlock(password string) error {
 			}
 			seed = true
 		}
+	}
+	// NEC QX asks for the user name with "login:", not "Username:", so the
+	// built-in row (copied from the Cisco profiles) never matched: over Telnet,
+	// serial or a bastion the login stalled until the command timeout. Fix the
+	// row where it is still the built-in one; one the user edited is theirs.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key != "nec-qx" || len(p.Login) == 0 {
+			continue
+		}
+		if first := &p.Login[0]; first.Expect == "sername:" && first.Send == "{user}" {
+			first.Expect = "ogin:"
+			seed = true
+		}
+	}
+	// QX's "screen-length disable" only exists in user view, but the pager is
+	// sent after login, by then in system-view, so it was refused and output
+	// kept paging. Move it into the login steps just before system-view, where
+	// both the pager and the system-view row are still the built-in ones.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key != "nec-qx" || len(p.Pager) != 1 || p.Pager[0] != (profile.Step{Send: "screen-length disable"}) {
+			continue
+		}
+		n := len(p.Login)
+		if n == 0 || p.Login[n-1] != (profile.Step{Expect: ">", Send: "system-view"}) {
+			continue
+		}
+		login := append([]profile.Step{}, p.Login[:n-1]...)
+		p.Login = append(login, profile.Step{Expect: ">", Send: "screen-length disable"}, p.Login[n-1])
+		p.Pager = nil
+		seed = true
 	}
 	// Vaults still on an earlier default log name move to the current one
 	// (site, role and stage in the name); a template the user changed is theirs.
@@ -1378,6 +1411,7 @@ func (a *App) SaveSettings(s model.Settings) error {
 	// they can produce a bad file name or a mislabelled history row.
 	s.StageTokenBefore, s.StageTokenWork, s.StageTokenAfter = strings.TrimSpace(s.StageTokenBefore), strings.TrimSpace(s.StageTokenWork), strings.TrimSpace(s.StageTokenAfter)
 	s.StageTokenSchedule = strings.TrimSpace(s.StageTokenSchedule)
+	s.StageTokenNone = strings.TrimSpace(s.StageTokenNone)
 	if err := s.StageTokens().Validate(); err != nil {
 		a.mu.Unlock()
 		return err
@@ -1393,6 +1427,9 @@ func (a *App) SaveSettings(s model.Settings) error {
 	}
 	if s.StageTokenSchedule == logstore.DefaultStageTokens.Schedule {
 		s.StageTokenSchedule = ""
+	}
+	if s.StageTokenNone == logstore.DefaultStageTokens.None {
+		s.StageTokenNone = ""
 	}
 	a.inv.Settings = s
 	a.mu.Unlock()
@@ -2142,7 +2179,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.1"
+const appVersion = "1.7.2"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2366,6 +2403,64 @@ func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bund
 		return nil, err
 	}
 	return &s, nil
+}
+
+// RunFailure is one failed row of the run tab as the table shows it.
+type RunFailure struct {
+	Device  string `json:"device"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// ExportRunFailures writes the run tab's failed devices to
+// export\run-results\<group>_failed_<date>_<time>.csv (dryRun: connect-failed)
+// and returns the file, so the failures can be sorted out from a table in
+// Excel. The UI passes what it showed; the device details come from the
+// inventory, credentials left out.
+func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (string, error) {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return "", fmt.Errorf("vault is locked")
+	}
+	byName := map[string]model.Device{}
+	for _, d := range a.inv.Devices {
+		byName[d.Name] = d
+	}
+	lang := a.lang
+	a.mu.Unlock()
+	var out []csvio.RunResult
+	for _, r := range rows {
+		d, ok := byName[r.Device]
+		if !ok {
+			d = model.Device{Name: r.Device} // deleted since the run: name only
+		}
+		out = append(out, csvio.RunResult{Device: d, Status: r.Status, Message: r.Message})
+	}
+	if len(out) == 0 {
+		return "", fmt.Errorf("失敗した機器がありません")
+	}
+	text, err := csvio.ExportRunResults(out, lang)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(exeDir(), "export", "run-results")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	kind := "failed"
+	if dryRun {
+		kind = "connect-failed"
+	}
+	name := kind + "_" + time.Now().Format("20060102_150405") + ".csv"
+	if group != "" {
+		name = bundle.FileNameSafe(group) + "_" + name
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // OpenExportFolder opens a folder under export\ in Explorer (offered after

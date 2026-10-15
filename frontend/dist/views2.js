@@ -446,6 +446,7 @@ function renderRun() {
       <button class="btn" id="btn-dry" ${running || enabledCount === 0 ? "disabled" : ""} data-tip="${esc(t("接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に"))}">${esc(t("⚡ 接続確認のみ"))}</button>
       <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
       ${!running && (failedCount || canceledCount) ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(retryLabel)}</button>` : ""}
+      ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、ホスト名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
       ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「待機」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
       ${groups.length || ungroupedCount ? `<select id="run-grp" class="btn" style="padding-right:8px" ${running ? "disabled" : ""}>
         <option value="">${esc(t("グループで対象を選択…"))}</option>
@@ -572,6 +573,8 @@ function renderRun() {
   };
   const btnRetry = document.getElementById("btn-retry");
   if (btnRetry) btnRetry.onclick = retryUnfinished;
+  const btnFailCsv = document.getElementById("btn-fail-csv");
+  if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
   if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
@@ -978,6 +981,21 @@ async function stopDevice(name) {
   if (!(await App().CancelDevice(name).catch(() => false))) { cur.stopping = false; renderRun(); }
 }
 
+// The failed devices as a CSV table (export\run-results), to sort them out
+// in Excel: in the group's order, with the 状態 and メッセージ as shown.
+async function exportRunFailures() {
+  const inGroup = runGroupDevices().map(d => d.name);
+  const names = [...inGroup, ...Object.keys(runState).filter(n => !inGroup.includes(n))]
+    .filter(n => runState[n] && runState[n].phase === "error");
+  const rows = names.map(n => ({ device: n, status: statusLabel("error"), message: runMsg(runState[n]) }));
+  try {
+    const path = await App().ExportRunFailures(runGroupName(), lastRunDry, rows);
+    if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く") })) {
+      try { await App().OpenExportFolder(path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")))); } catch (e) { toast(terr(e), "err"); }
+    }
+  } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
+}
+
 // ログ表示 opens the file in its own window (PalaTerm.exe --view), so it can
 // sit beside the run table or another log instead of covering the app.
 async function showLog(path) {
@@ -987,6 +1005,24 @@ async function showLog(path) {
 
 // live events from the backend
 let runRenderPending = false;
+// A click is a press and a release on the same element. During a busy run the
+// table is rebuilt every frame, so the 画面 / ログ表示 / 中止 under the
+// pointer was a new element by the release and the click never came. While a
+// button is held on the run tab (since runHeld, ms) redraws wait, and the
+// release brings them up to date — after the click has gone through. The
+// 5-second cap covers a release that never arrives.
+let runHeld = 0, runHeldRender = false;
+document.addEventListener("mousedown", e => { if (e.target.closest && e.target.closest("#tab-run")) runHeld = Date.now(); }, true);
+window.addEventListener("mouseup", () => {
+  if (!runHeld) return;
+  runHeld = 0;
+  if (!runHeldRender) return;
+  runHeldRender = false;
+  setTimeout(() => {
+    const active = document.querySelector(".tab.active");
+    if (active && active.id === "tab-run" && !imeComposing) renderRun();
+  }, 0);
+}, true);
 function wireEvents() {
   rt().EventsOn("run:event", ev => {
     const prev = runState[ev.device] || {};
@@ -1014,6 +1050,8 @@ function wireEvents() {
       runRenderPending = false;
       // Not under an IME composition in the filter box: the commit re-renders.
       if (imeComposing) return;
+      // Not while a mouse button is held on the tab (see runHeld).
+      if (runHeld && Date.now() - runHeld < 5000) { runHeldRender = true; return; }
       const active = document.querySelector(".tab.active");
       if (active && active.id === "tab-run") renderRun();
     });
@@ -1112,12 +1150,13 @@ function renderSettings() {
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
-      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
+      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前（before）"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中（work）"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業後（after）"))}</span><input id="set-st-after" style="flex:1" placeholder="after" value="${esc(s.stageTokenAfter || "after")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("予約のログフォルダ名と、作業タイミングを指定していない予約のログファイル名に付きます"))}">${esc(t("予約（reserve）"))}</span><input id="set-st-sched" style="flex:1" placeholder="reserve" value="${esc(s.stageTokenSchedule || "reserve")}"></div>
+          <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("作業タイミングを「指定なし」で実行したときのログファイル名に付きます（フォルダ名には付きません）"))}">${esc(t("指定なし（Current）"))}</span><input id="set-st-none" style="flex:1" placeholder="Current" value="${esc(s.stageTokenNone || "Current")}"></div>
         </div></div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中はロックしません）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
@@ -1135,7 +1174,7 @@ function renderSettings() {
         <tr><td class="mono">{os}</td><td>${esc(t("OS種別"))}</td><td class="mono">{hhmm}</td><td>${esc(t("時刻（hhmm）"))}</td></tr>
         <tr><td class="mono">{group}</td><td>${esc(t("グループ名"))}</td><td class="mono">{site}</td><td>${esc(t("拠点名"))}</td></tr>
         <tr><td class="mono">{role}</td><td colspan="3">${esc(t("役割（機器編集の「役割（任意）」。空なら詰められます）"))}</td></tr>
-        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve。上の欄で変更可）。指定なしは Config（予約では reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
+        <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve・指定なし=Current。上の欄で変更可。予約で指定なしのときは reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
@@ -1143,7 +1182,7 @@ function renderSettings() {
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-st-before", "set-st-work", "set-st-after"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
@@ -1168,6 +1207,7 @@ function renderSettings() {
       stageTokenWork: document.getElementById("set-st-work").value.trim(),
       stageTokenAfter: document.getElementById("set-st-after").value.trim(),
       stageTokenSchedule: document.getElementById("set-st-sched").value.trim(),
+      stageTokenNone: document.getElementById("set-st-none").value.trim(),
     };
     const lockMin = parseInt(document.getElementById("set-lock").value, 10);
     out.autoLockOff = !(lockMin > 0);

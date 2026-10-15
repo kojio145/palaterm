@@ -200,7 +200,7 @@ type Options struct {
 	Dir string
 	// LogStage, when set, is the word {stage} becomes in the log file names
 	// instead of Stage's: a 予約 run with no stage is named "予約" rather
-	// than the plain-capture "Config".
+	// than the plain capture's 指定なし word ("Current").
 	LogStage string
 }
 

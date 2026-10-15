@@ -23,8 +23,8 @@ func TestStageInNames(t *testing.T) {
 	if got := expandName("{host}_Config_{date}_{time}.txt", Fields{Host: "r1"}, now); got != "r1_Config_20261009_123456.txt" {
 		t.Errorf("no stage: %q", got)
 	}
-	if got := expandName("{host}_{stage}.txt", Fields{Host: "r1"}, now); got != "r1_Config.txt" {
-		t.Errorf("no-stage placeholder should read Config: %q", got)
+	if got := expandName("{host}_{stage}.txt", Fields{Host: "r1"}, now); got != "r1_Current.txt" {
+		t.Errorf("no-stage placeholder should read Current: %q", got)
 	}
 	root := t.TempDir()
 	d := RunDir(root, "", "A社", "after", StageTokens{}, now)
@@ -54,9 +54,9 @@ func TestStageInNames(t *testing.T) {
 	if got := filepath.Base(RunDir(root, "{date}_{group}_{stage}", "A社", "", StageTokens{}, now)); got != "20261009_A社_2" {
 		t.Errorf("unique suffix: %q", got)
 	}
-	// The default template: site and stage tokens, Config when no stage,
+	// The default template: site and stage tokens, Current when no stage,
 	// work for 作業中 / interactive, no doubled underscores for a blank site.
-	if got := expandName(DefaultTemplate, Fields{Host: "r1", Site: "本社"}, now); got != "r1_本社_Config_20261009_123456.txt" {
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Site: "本社"}, now); got != "r1_本社_Current_20261009_123456.txt" {
 		t.Errorf("default no stage: %q", got)
 	}
 	if got := expandName(DefaultTemplate, Fields{Host: "r1", Site: "本社", Stage: "during"}, now); got != "r1_本社_work_20261009_123456.txt" {
@@ -96,7 +96,7 @@ func TestStageInNames(t *testing.T) {
 		{"{host} {site} {date}.txt", "r1 20261009.txt"},
 		{"{host}.{site}.txt", "r1.txt"},
 		{"{host}__{site}__{date}.txt", "r1___20261009.txt"}, // exactly one separator goes; the rest is what the user typed
-		{"{host}({site}).txt", "r1().txt"},                 // only separators are dropped
+		{"{host}({site}).txt", "r1().txt"},                  // only separators are dropped
 	}
 	for _, c := range cases {
 		if got := expandName(c.tmpl, Fields{Host: "r1"}, now); got != c.want {
@@ -131,8 +131,19 @@ func TestStageTokens(t *testing.T) {
 	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: StageWork, Tokens: tok}, now); got != "r1_mid_20261009_123456.txt" {
 		t.Errorf("custom work: %q", got)
 	}
-	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "", Tokens: tok}, now); got != "r1_Config_20261009_123456.txt" {
-		t.Errorf("no stage keeps Config: %q", got)
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "", Tokens: tok}, now); got != "r1_Current_20261009_123456.txt" {
+		t.Errorf("no stage keeps its default word: %q", got)
+	}
+	// The 指定なし word is set like the others (file names only).
+	none := StageTokens{None: "Config"}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "", Tokens: none}, now); got != "r1_Config_20261009_123456.txt" {
+		t.Errorf("custom no-stage word: %q", got)
+	}
+	if got := expandName(DefaultTemplate, Fields{Host: "r1", Stage: "before", Tokens: none}, now); got != "r1_before_20261009_123456.txt" {
+		t.Errorf("a stage is not the no-stage word: %q", got)
+	}
+	if dir := RunDir(t.TempDir(), "", "A", "", none, now); filepath.Base(dir) != "20261009_123456_A" {
+		t.Errorf("a run folder carries no 指定なし word: %q", dir)
 	}
 	// Partly set: the empty ones keep their default.
 	half := StageTokens{After: "post"}
@@ -156,13 +167,17 @@ func TestStageTokens(t *testing.T) {
 		{Before: "same", After: "same"}, // duplicate
 		{Before: "After"},               // another stage's default word
 		{Work: "config"},                // the no-stage word
+		{Work: "Current"},               // the no-stage default
+		{None: "before"},                // another stage's default word
+		{None: "x y"},                   // space
+		{None: "same", After: "same"},   // duplicate
 		{Before: strings.Repeat("あ", 33)},
 	} {
 		if bad.Validate() == nil {
 			t.Errorf("%+v should be rejected", bad)
 		}
 	}
-	for _, ok := range []StageTokens{{}, tok, {Before: "事前", Work: "作業", After: "事後"}, {Before: "before", Work: "work", After: "after"}} {
+	for _, ok := range []StageTokens{{}, tok, {Before: "事前", Work: "作業", After: "事後"}, {Before: "before", Work: "work", After: "after"}, {None: "Config"}, {None: "通常"}} {
 		if err := ok.Validate(); err != nil {
 			t.Errorf("%+v rejected: %v", ok, err)
 		}

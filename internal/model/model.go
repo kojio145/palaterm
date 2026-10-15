@@ -561,8 +561,11 @@ type Settings struct {
 	StageTokenAfter  string `json:"stageTokenAfter,omitempty"`
 	// StageTokenSchedule is the word for a 予約 (empty = "reserve").
 	StageTokenSchedule string `json:"stageTokenSchedule,omitempty"`
-	ConnectTimeout     int    `json:"connectTimeout"` // seconds
-	CommandTimeout     int    `json:"commandTimeout"` // seconds per expect
+	// StageTokenNone is the word in the log file names of a run with no stage
+	// (empty = "Current").
+	StageTokenNone string `json:"stageTokenNone,omitempty"`
+	ConnectTimeout int    `json:"connectTimeout"` // seconds
+	CommandTimeout int    `json:"commandTimeout"` // seconds per expect
 
 	// LastKeyFile is the most recently chosen SSH private-key path; the device
 	// editor pre-fills it when public-key auth is selected.
@@ -610,7 +613,7 @@ func (s Settings) RightClickPaste() string {
 
 // StageTokens returns the stage words for log names, defaults filled in.
 func (s Settings) StageTokens() logstore.StageTokens {
-	return logstore.StageTokens{Before: s.StageTokenBefore, Work: s.StageTokenWork, After: s.StageTokenAfter, Schedule: s.StageTokenSchedule}.Filled()
+	return logstore.StageTokens{Before: s.StageTokenBefore, Work: s.StageTokenWork, After: s.StageTokenAfter, Schedule: s.StageTokenSchedule, None: s.StageTokenNone}.Filled()
 }
 
 // DefaultAutoLockMin is the idle time before the vault locks itself when the
