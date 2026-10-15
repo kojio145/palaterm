@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.7.0";
+const APP_VERSION = "1.7.1";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -196,11 +196,21 @@ function listViewFocus() {
   const el = document.activeElement;
   return el && el.id && el.id.startsWith("lv-text-") ? { id: el.id, pos: el.selectionStart } : null;
 }
+// A filter box that re-renders its tab (and so itself) on every keystroke:
+// while an IME is composing, re-rendering would cut the composition off
+// (era → えrあ), so the change is applied once the text is committed.
+let imeComposing = false;
+function wireFilterInput(el, onChange) {
+  el.addEventListener("compositionstart", () => { imeComposing = true; });
+  el.addEventListener("compositionend", () => { imeComposing = false; onChange(); });
+  el.addEventListener("input", e => { if (!e.isComposing && !imeComposing) onChange(); });
+  el.addEventListener("blur", () => { imeComposing = false; });
+}
 function listViewWire(key, root, rerender, focus) {
   const v = listView(key);
   const txt = root.querySelector(`#lv-text-${CSS.escape(key)}`);
   if (txt) {
-    txt.addEventListener("input", () => { v.text = txt.value; rerender(); });
+    wireFilterInput(txt, () => { v.text = txt.value; rerender(); });
     if (focus && focus.id === txt.id) { txt.focus(); try { txt.setSelectionRange(focus.pos, focus.pos); } catch (e) { } }
   }
   root.querySelectorAll(`.lv-sel[data-lv="${CSS.escape(key)}"]`).forEach(s => s.onchange = () => { v.sel[s.dataset.sel] = s.value; rerender(); });

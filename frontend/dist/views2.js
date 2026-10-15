@@ -430,7 +430,13 @@ function renderRun() {
   const hasResults = vals.length > 0;
   const groups = INV.deviceGroups || [];
   const ungroupedCount = (INV.devices || []).filter(d => !d.group).length;
-  root.innerHTML = `
+  // The table panel scrolls inside itself and a run re-renders on every
+  // device event: the old panel element is kept (only its contents swapped)
+  // so the scroll position - and a scrollbar drag in progress - survive.
+  // A different group / filter / sort starts from the top as before.
+  const oldPanel = root.querySelector(".panel.scrollx");
+  const viewKey = JSON.stringify([runGroupSel, runFilter, runSort]);
+  const html = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
         <div class="page-sub">${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
@@ -481,12 +487,28 @@ function renderRun() {
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
            <th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
+  // A detached element loses its scroll offset, so the old panel stays in
+  // the DOM: the nodes around it and its children are swapped instead.
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const newPanel = tpl.content.querySelector(".panel.scrollx");
+  if (oldPanel && newPanel && oldPanel.parentNode === root && newPanel.parentNode === tpl.content && oldPanel.dataset.view === viewKey) {
+    [...root.childNodes].forEach(n => { if (n !== oldPanel) n.remove(); });
+    const nodes = [...tpl.content.childNodes];
+    const at = nodes.indexOf(newPanel);
+    oldPanel.before(...nodes.slice(0, at));
+    oldPanel.after(...nodes.slice(at + 1));
+    oldPanel.replaceChildren(...newPanel.childNodes);
+  } else {
+    if (newPanel) newPanel.dataset.view = viewKey;
+    root.replaceChildren(tpl.content);
+  }
 
   // Filter / sort wiring. The text box re-renders on every keystroke and the
   // focus is put back afterwards (see focusId above).
   const fIn = document.getElementById("run-filter");
   if (fIn) {
-    fIn.addEventListener("input", () => { runFilter.text = fIn.value; renderRun(); });
+    wireFilterInput(fIn, () => { runFilter.text = fIn.value; renderRun(); });
     if (focusId === "run-filter") { fIn.focus(); try { fIn.setSelectionRange(focusPos, focusPos); } catch (e) { } }
   }
   const fSite = document.getElementById("run-filter-site");
@@ -964,6 +986,7 @@ async function showLog(path) {
 }
 
 // live events from the backend
+let runRenderPending = false;
 function wireEvents() {
   rt().EventsOn("run:event", ev => {
     const prev = runState[ev.device] || {};
@@ -984,8 +1007,16 @@ function wireEvents() {
       logPath: ["done", "error", "canceled"].includes(ev.phase) ? (ev.logPath || "") : (ev.logPath || prev.logPath),
       // 中止 pressed on this row, until the device's last event.
       stopping: !["done", "error", "canceled"].includes(ev.phase) && !!prev.stopping };
-    const active = document.querySelector(".tab.active");
-    if (active && active.id === "tab-run") renderRun();
+    // Hundreds of devices send events in bursts: one re-render per frame.
+    if (runRenderPending) return;
+    runRenderPending = true;
+    requestAnimationFrame(() => {
+      runRenderPending = false;
+      // Not under an IME composition in the filter box: the commit re-renders.
+      if (imeComposing) return;
+      const active = document.querySelector(".tab.active");
+      if (active && active.id === "tab-run") renderRun();
+    });
   });
   rt().EventsOn("run:done", applyRunDone);
 }
