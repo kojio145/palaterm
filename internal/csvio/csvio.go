@@ -303,10 +303,9 @@ func schemeIn(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "http":
 		return "http"
-	case "https":
-		return "https"
 	}
-	return ""
+	return "" // https (the default) and anything else
+
 }
 
 // ---- the fixed values, in the words of the export's language ----

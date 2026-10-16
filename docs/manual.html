@@ -194,7 +194,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.7.4</div>
+    <div class="hero-tag">使い方マニュアル / v1.7.5</div>
   </header>
 
   <nav class="toc">
@@ -356,8 +356,8 @@
     </ol>
     <figure class="shot" data-shot="01_groups"><img src="img/manual/01_groups.png" alt="機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ" loading="lazy"><figcaption>機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ</figcaption></figure>
     <figure class="shot" data-shot="01b_group_dup"><img src="img/manual/01b_group_dup.png" alt="グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）" loading="lazy"><figcaption>グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）</figcaption></figure>
-    <figure class="shot" data-shot="02_devices"><img src="img/manual/02_devices.png" alt="グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除・「表で編集」" loading="lazy"><figcaption>グループ内の機器一覧。セルの直接編集・接続・編集・複製・削除・「表で編集」</figcaption></figure>
-    <figure class="shot" data-shot="03_device_edit"><img src="img/manual/03_device_edit.png" alt="機器の編集画面（上部: 基本項目と認証情報。赤い「必須」以外は任意）" loading="lazy"><figcaption>機器の編集画面（上部: 基本項目と認証情報。赤い「必須」以外は任意）</figcaption></figure>
+    <figure class="shot" data-shot="02_devices"><img src="img/manual/02_devices.png" alt="グループ内の機器一覧。セルの直接編集・接続・GUI（「GUI を使う」の機器だけ押せる）・編集・複製・削除・「表で編集」" loading="lazy"><figcaption>グループ内の機器一覧。セルの直接編集・接続・GUI（「GUI を使う」の機器だけ押せる）・編集・複製・削除・「表で編集」</figcaption></figure>
+    <figure class="shot" data-shot="03_device_edit"><img src="img/manual/03_device_edit.png" alt="機器の編集画面（上部: 基本項目・CLI / GUI を使う・GUI の方式とポート・接続方式。赤い「必須」以外は任意）" loading="lazy"><figcaption>機器の編集画面（上部: 基本項目・CLI / GUI を使う・GUI の方式とポート・接続方式。赤い「必須」以外は任意）</figcaption></figure>
     <p>グループ一覧の画面では、各グループの機器台数が表示され、<strong>カードをドラッグして並び順を変更</strong>できます。
     グループ内の一覧では、上部の<strong>「グループ名変更」「グループ削除」</strong>が使えます（削除しても機器自体は残り、グループ未設定になります）。
     機器名（ホスト名）は<strong>同じグループの中でだけ重複できません</strong>。別のグループなら同じ名前を使えるので、グループの<strong>「複製」</strong>は機器名をそのままコピーします（接尾辞を入力すれば末尾に付きます）。</p>
@@ -393,7 +393,7 @@
     機器側は編集画面の「認証情報の扱い」を「グループ既定を使う」にします。一覧では<span class="pill" style="background:#2a3442;color:#c7d0dc">既定</span>のバッジが付きます。ダイアログの「このグループの全機器を切り替える」にチェックすると、グループ内の機器をまとめて既定に切り替えられます。
     グループ既定を使う機器も、<strong>個別のパスワードが必要な機器だけ「この機器に個別に設定」に戻せば</strong>、その機器は自分の認証情報でログインします。一式書出・読込にもグループ既定は含まれます。</p>
 
-    <figure class="shot" data-shot="03b_device_edit_bastion"><img src="img/manual/03b_device_edit_bastion.png" alt="機器の編集画面（下部: 踏み台チェーン。ジャンプコマンドの例はクリックでコピー）" loading="lazy"><figcaption>機器の編集画面（下部: 踏み台チェーン。ジャンプコマンドの例はクリックでコピー）</figcaption></figure>
+    <figure class="shot" data-shot="03b_device_edit_bastion"><img src="img/manual/03b_device_edit_bastion.png" alt="機器の編集画面（下部: 「自分の踏み台（設定タブ）を先に通る」と、その先の機器ごとの踏み台）" loading="lazy"><figcaption>機器の編集画面（下部: 「自分の踏み台（設定タブ）を先に通る」と、その先の機器ごとの踏み台）</figcaption></figure>
     <h3>踏み台サーバ（任意・最大5段）</h3>
     <p><strong>「＋ 踏み台を追加」</strong>で、踏み台（ジャンプサーバ）を<strong>最大5段まで</strong>登録できます。
     外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
@@ -405,7 +405,7 @@
     <p>「踏み台上でコマンドを打つ」で次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。テンプレートが空欄の標準コマンドでは、次の段（または機器）のポートが 22（Telnet は 23）以外なら <code>ssh -p 2222 user@host</code> のようにポートが付きます。踏み台を1つも追加しなければ直接接続です。</p>
     <div class="callout tip"><span class="ic">i</span><p><strong>人ごとに秘密鍵が違う社内の踏み台</strong>は、各自が<a href="#settings">設定</a>の<strong>「自分の踏み台」</strong>（最大5段）に IP・ユーザー名・秘密鍵を登録し、機器では<strong>「自分の踏み台（設定タブ）を先に通る」</strong>にチェックするだけにします。機器には「使う」ことだけが保存されるので、機器一式を同僚と共有しても踏み台の IP や鍵は渡らず、受け取った人は自分の踏み台を登録すればそのまま使えます。その先に機器ごとの踏み台を足すこともできます。</p></div>
     <h3>CLI を使う / GUI を使う</h3>
-    <p>機器ごとに、<strong>CLI</strong>（SSH / Telnet / シリアルでのログイン）と <strong>GUI</strong>（ブラウザの管理画面）を使うかを選べます（既定は CLI オン・GUI オフ）。CLI をオフにした GUI だけの機器は「接続」が押せず、一括実行・接続確認・予約の対象にもなりません。</p>
+    <p>機器ごとに、<strong>CLI</strong>（SSH / Telnet / シリアルでのログイン）と <strong>GUI</strong>（ブラウザの管理画面）を使うかを選べます（既定は CLI オン・GUI オフ）。CLI をオフにした GUI だけの機器は「接続」が押せず、一括実行・接続確認・予約の対象にもなりません（一覧では「GUI のみ」と表示）。「自分の踏み台を先に通る」「CLI を使う」「GUI を使う」は、複数台を選んだ「一括変更…」でもまとめて変えられます。</p>
 
     <h3>GUI を開く（FortiGate などの管理画面に自動ログイン）</h3>
     <p>「GUI を使う」をオンにした機器は、機器一覧の<strong>「GUI」</strong>で管理画面を<strong>PalaTerm の窓</strong>で開き、機器のユーザー名・パスワード（グループ既定を使う機器はそちら）で<strong>自動ログイン</strong>します（オフの機器はボタンが押せません）。<strong>踏み台は通らず、機器のアドレスへ直接</strong>開きます。編集画面で<strong>GUIの方式</strong>（https / http）と<strong>GUIポート</strong>（https は 443、http は 80 が既定。変えている番号はそのまま）を指定します。</p>
@@ -430,6 +430,7 @@
 
     <h3>表で編集（Excel のようにまとめて編集）</h3>
     <figure class="shot" data-shot="02c_grid"><img src="img/manual/02c_grid.png" alt="表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）" loading="lazy"><figcaption>表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）</figcaption></figure>
+    <figure class="shot" data-shot="02d_grid_list"><img src="img/manual/02d_grid_list.png" alt="表で編集の一覧選択。選んだセルの ▼ から選ぶと、選択中のセルすべてに入る" loading="lazy"><figcaption>表で編集の一覧選択。選んだセルの ▼ から選ぶと、選択中のセルすべてに入る</figcaption></figure>
     <p>機器一覧の<strong>「表で編集」</strong>で、そのグループの機器を<strong>CSV と同じ列の表</strong>として、Excel と同じ操作でまとめて編集できます。CSV を書き出して Excel で直して読み込む手間がいりません（認証情報・踏み台 1〜5 段・踏み台の通り方の列もあり、<strong>「列の表示…」</strong>で出す列を選べます）。</p>
     <ul>
       <li><strong>選択・入力</strong>: クリック／<kbd>Shift</kbd>+クリック／ドラッグで範囲、行番号・見出しで行・列全体、<kbd>Ctrl</kbd>+<kbd>A</kbd> で全体。文字を打つか <kbd>F2</kbd>・ダブルクリックで編集、<kbd>Enter</kbd>／<kbd>Tab</kbd> で確定して移動、<kbd>Esc</kbd> で取消、<kbd>Delete</kbd> で空に、<kbd>Ctrl</kbd>+<kbd>Enter</kbd> で選んだセルすべてに同じ値。</li>
@@ -675,6 +676,7 @@
       </tbody>
     </table></div>
     <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
+    <figure class="shot" data-shot="16b_my_bastion"><img src="img/manual/16b_my_bastion.png" alt="設定タブの「自分の踏み台」。人ごとの踏み台を最大5段まで登録（この PC の vault にだけ保存）" loading="lazy"><figcaption>設定タブの「自分の踏み台」。人ごとの踏み台を最大5段まで登録（この PC の vault にだけ保存）</figcaption></figure>
     <div class="callout tip"><span class="ic">i</span><p>変更したら<strong>「保存」</strong>を忘れずに。未保存のまま他のタブへ移ろうとすると確認が出ます。</p></div>
 
     <h3>初期化（全データ削除）</h3>
@@ -794,7 +796,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.7.4 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.7.5 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

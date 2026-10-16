@@ -167,6 +167,9 @@ function wireGridBadges(root) {
 
 // ---- open / close ----
 async function openGrid(scope) {
+  // Another scope's table open (a draft badge clicked): its cell being typed
+  // in and its pending draft are kept first.
+  if (G) await gridBeforeLeave();
   if (!GRID_COLS) GRID_COLS = await App().GridColumns();
   const fresh = await App().GridRows(scope);
   const draft = await App().GetGridDraft(scope);
@@ -551,8 +554,13 @@ function gridPickList(i) {
   const o = L.opts[i];
   gridCloseList();
   if (!o) return;
-  const g = gridRange(), cells = [];
-  for (let r = g.r0; r <= g.r1; r++) for (let c = g.c0; c <= g.c1; c++) if (G.vc[c] && G.vc[c].kind === L.kind) cells.push([r, c, o.v]);
+  // Over several rows (a whole column picked by its header) the empty rows
+  // below the devices stay empty: a value there would make each an error row.
+  const g = gridRange(), cells = [], many = g.r1 > g.r0;
+  for (let r = g.r0; r <= g.r1; r++) {
+    if (many && gridIsBlank(gridRowAt(r))) continue;
+    for (let c = g.c0; c <= g.c1; c++) if (G.vc[c] && G.vc[c].kind === L.kind) cells.push([r, c, o.v]);
+  }
   gridSetCells(cells);
   gridPaintSel();
   G.wrap.focus({ preventScroll: true });
@@ -1612,7 +1620,8 @@ function gridWire(root) {
   $g("g-redo").onclick = () => gridUndo(true);
   $g("g-find").onclick = () => gridFind(true);
   $g("g-cols").onclick = gridColsDialog;
-  $g("g-pw").onclick = () => { G.showPw = !G.showPw; renderGrid(true); };
+  // The filters match what is shown (●●●● while hidden): worked out again.
+  $g("g-pw").onclick = () => { G.showPw = !G.showPw; gridRefilter(); renderGrid(true); };
   $g("g-save").onclick = () => gridSave().catch(e => toast(t("保存失敗") + ": " + terr(e), "err"));
   $g("g-addrow").onclick = gridAddRow;
   $g("g-discard").onclick = async () => {

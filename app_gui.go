@@ -65,7 +65,9 @@ func (a *App) OpenGUI(id string) (*GUIInfo, error) {
 		return nil, fmt.Errorf("機器が見つかりません")
 	}
 	d := a.inv.ResolveCredentials(a.inv.Devices[i])
-	pins := a.inv.KnownGUICerts
+	// Per device: two sites' devices often share a private address.
+	key := "gui " + d.ID + " " + model.HopAddr(d.Host, d.EffectiveGUIPort())
+	pin := a.inv.KnownGUICerts[key] // read under the lock: setGUICert writes the map
 	lang := a.lang
 	a.mu.Unlock()
 	if !d.GUIOn {
@@ -74,11 +76,9 @@ func (a *App) OpenGUI(id string) (*GUIInfo, error) {
 	if d.Host == "" {
 		return nil, fmt.Errorf("IPアドレスが入っていません")
 	}
-	// Per device: two sites' devices often share a private address.
-	key := "gui " + d.ID + " " + model.HopAddr(d.Host, d.EffectiveGUIPort())
 	info := GUIInfo{ID: d.ID, Device: d.Name, URL: d.GUIURL()}
 	if err := a.spawnGUIWindow(guiLaunch{URL: info.URL, Title: d.Name, User: d.Username, Password: d.Password,
-		PinKey: key, Pin: pins[key], Lang: lang}); err != nil {
+		PinKey: key, Pin: pin, Lang: lang}); err != nil {
 		return nil, err
 	}
 	return &info, nil

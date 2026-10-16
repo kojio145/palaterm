@@ -529,7 +529,7 @@ async function bootTerminalWindow() {
   document.getElementById("tw-hk-cancel").onclick = () => { hkDlg.classList.add("hidden"); term.focus(); };
   document.getElementById("tw-hk-ok").onclick = () => {
     hkDlg.classList.add("hidden");
-    closed = false; connecting = true;
+    closed = false; connecting = true; typedHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[ホストキーを更新して再接続します]") + "\x1b[0m\r\n");
@@ -582,7 +582,7 @@ async function bootTerminalWindow() {
   function reconnect() {
     reconnecting = true;
     reconnectBtn.classList.add("hidden");
-    closed = false; connecting = true;
+    closed = false; connecting = true; typedHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[再接続します]") + "\x1b[0m\r\n");
@@ -668,10 +668,21 @@ async function bootTerminalWindow() {
   }, 15000);
   try { Term().SetLang(LANG); } catch (e) {}
 
+  // Keys typed while the automatic login runs go nowhere (the line is the
+  // login's until it is done): said once per connection, with the way to
+  // take over.
+  let typedHint = false;
   term.onData(d => {
     if (locked) return;
     // After a disconnect, Enter opens the session again (the 再接続 button).
     if (closed) { if (d === "\r" && canReconnect()) reconnect(); return; }
+    if (connecting && !switchBtn.classList.contains("hidden")) {
+      if (!typedHint) {
+        typedHint = true;
+        term.write("\r\n\x1b[33m" + t("[自動ログイン中のため、キー入力は機器に送られません。手で操作するときは上の「手動に切り替え」を押してください]") + "\x1b[0m\r\n");
+      }
+      return;
+    }
     Term().Send(bytesToB64(new TextEncoder().encode(d))).catch(() => {});
   });
   // Close drops the live session; Discard drops a line held for takeover.

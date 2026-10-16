@@ -155,7 +155,9 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 
 	scheme := func(k string) string {
 		switch v := strings.ToLower(get(k)); v {
-		case "", "http", "https":
+		case "", "https":
+			return "" // https is the default, stored as ""
+		case "http":
 			return v
 		}
 		bad(k, "GUIの方式は http / https のどちらかです")

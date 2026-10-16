@@ -280,13 +280,16 @@ function renderDeviceList() {
       <td><input class="cell inl-host mono" data-id="${esc(d.id)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
       <td><input class="cell inl-site" data-id="${esc(d.id)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
       <td><input class="cell inl-role" data-id="${esc(d.id)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
+      ${d.cliOff ? `<td colspan="3"><span class="badge" data-tip="${esc(t("CLI を使わない機器です（GUI だけ）。機器の編集で「CLI を使う」をオンにすると接続方式・OS・コマンドセットを設定できます"))}">${esc(t("GUI のみ"))}</span>
+        <span class="muted mono" style="font-size:12px;margin-left:6px">${esc((d.guiScheme === "http" ? "http" : "https") + ":" + (d.guiPort || (d.guiScheme === "http" ? 80 : 443)))}</span>
+        ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}</td>` : `
       <td>
         <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) + (d.bastionMode === "tunnel" ? " " + t("（SSH トンネル）") : "") : ""))}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
       <td><select class="cell inl-os" data-id="${esc(d.id)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
-      <td><select class="cell inl-set" data-id="${esc(d.id)}" data-tip="${esc(d.commandSet || t("（なし）"))}">${cmdSetOptions(d.commandSet)}</select></td>
+      <td><select class="cell inl-set" data-id="${esc(d.id)}" data-tip="${esc(d.commandSet || t("（なし）"))}">${cmdSetOptions(d.commandSet)}</select></td>`}
       <td class="ops"><div class="ops-btns">
         <button class="btn sm act-conn" data-term="${esc(d.id)}" ${d.cliOff ? "disabled" : ""} data-tip="${esc(d.cliOff ? t("CLI を使わない機器です（機器の編集で「CLI を使う」をオンにすると使えます）") : CONNECT_TIP)}">${esc(t("接続"))}</button>
         ${guiButton(d)}
@@ -334,8 +337,8 @@ function renderDeviceList() {
         ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
         : `<table class="fixed" data-colw="devices2"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
-            ${listViewTh(LV, "name", t("ホスト名"), "width:140px")}${listViewTh(LV, "host", t("IPアドレス"), "width:110px")}${listViewTh(LV, "site", t("拠点名"), "width:84px")}${listViewTh(LV, "role", t("役割"), "width:84px")}${listViewTh(LV, "conn", t("接続"), "width:84px")}
-            ${listViewTh(LV, "os", "OS", "width:120px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:120px")}<th style="width:242px"></th></tr></thead>
+            ${listViewTh(LV, "name", t("ホスト名"), "width:130px")}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
+            ${listViewTh(LV, "os", "OS", "width:112px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:112px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
   listViewWire(LV, root, renderDeviceList, focus);
@@ -509,6 +512,10 @@ function bulkEditDialog(ids) {
       <div class="field"><label>${esc(t("コマンドセット"))}</label><select id="bk-set">${keep}<option value="">${esc(t("（なし）"))}</option>${sets}</select></div>
       <div class="field"><label>${esc(t("OSタイプ"))}</label><select id="bk-os">${keep}${oses}</select></div>
       <div class="field"><label>${esc(t("認証情報"))}</label><select id="bk-cred">${keep}<option value="group">${esc(t("グループ既定を使う"))}</option><option value="own">${esc(t("この機器に個別に設定"))}</option></select></div>
+      <div class="field"><label>${esc(t("自分の踏み台（設定タブ）"))}</label><select id="bk-mine">${keep}<option value="on">${esc(t("先に通る"))}</option><option value="off">${esc(t("通らない"))}</option></select></div>
+      <div class="field"><label>${esc(t("CLI / GUI"))}</label>
+        <div class="row-inline" style="gap:6px"><select id="bk-cli" style="flex:1">${keep}<option value="on">${esc(t("CLI を使う"))}</option><option value="off">${esc(t("CLI を使わない"))}</option></select>
+          <select id="bk-gui" style="flex:1">${keep}<option value="on">${esc(t("GUI を使う"))}</option><option value="off">${esc(t("GUI を使わない"))}</option></select></div></div>
       <div class="field"><label><input type="checkbox" id="bk-site-on" style="width:auto"> ${esc(t("拠点を変更"))}</label><input id="bk-site" placeholder="${esc(t("空欄にすると拠点を消します"))}"></div>
       <div class="field"><label><input type="checkbox" id="bk-role-on" style="width:auto"> ${esc(t("役割を変更"))}</label><input id="bk-role" placeholder="${esc(t("空欄にすると役割を消します"))}"></div>
     </div>
@@ -539,6 +546,8 @@ function bulkEditDialog(ids) {
     pick("#bk-group", "group"); pick("#bk-set", "commandSet"); pick("#bk-os", "osType");
     const cred = $n("#bk-cred").value;
     if (cred !== "__keep__") patch.useGroupCreds = cred === "group";
+    const onOff = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v === "on"; };
+    onOff("#bk-mine", "useMyBastion"); onOff("#bk-cli", "cli"); onOff("#bk-gui", "gui");
     if ($n("#bk-site-on").checked) patch.site = $n("#bk-site").value;
     if ($n("#bk-role-on").checked) patch.role = $n("#bk-role").value;
     if (!Object.keys(patch).length) { toast(t("変更する項目を選んでください"), "err"); return; }

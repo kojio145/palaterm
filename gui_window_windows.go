@@ -191,13 +191,35 @@ func (w *guiWin) removeProfile() {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+	// Left behind by windows that were killed: only those whose process is
+	// gone — another open window's files must not be touched.
 	if ents, err := os.ReadDir(guiProfileRoot()); err == nil {
 		for _, e := range ents {
-			if e.IsDir() && strings.HasPrefix(e.Name(), "w-") {
-				_ = os.RemoveAll(filepath.Join(guiProfileRoot(), e.Name()))
+			var pid uint32
+			var ns int64
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), "w-") {
+				continue
 			}
+			if n, _ := fmt.Sscanf(e.Name(), "w-%d-%d", &pid, &ns); n != 2 || pid == uint32(os.Getpid()) || processAlive(pid) {
+				continue
+			}
+			_ = os.RemoveAll(filepath.Join(guiProfileRoot(), e.Name()))
 		}
 	}
+}
+
+// processAlive reports that a process with this ID is running.
+func processAlive(pid uint32) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	if windows.GetExitCodeProcess(h, &code) != nil {
+		return false
+	}
+	return code == 259 // STILL_ACTIVE
 }
 
 func (w *guiWin) alert(msg string) {

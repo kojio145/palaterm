@@ -214,8 +214,12 @@ func (a *App) ClearHostKeys(id string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("機器が見つかりません")
 	}
-	dev := &a.inv.Devices[idx]
-	for _, addr := range dev.HostKeyNames() {
+	// The keys are pinned under the chain as connected: the own jump host
+	// in front when the device goes through it. The names without it go too
+	// (pinned before the device used the own jump host).
+	dev := a.inv.Devices[idx]
+	resolved := a.inv.ResolveCredentials(dev)
+	for _, addr := range append(dev.HostKeyNames(), resolved.HostKeyNames()...) {
 		delete(a.inv.KnownHostKeys, addr)
 	}
 	a.mu.Unlock()
@@ -947,6 +951,9 @@ type DevicePatch struct {
 	OSType        *string `json:"osType,omitempty"`
 	CommandSet    *string `json:"commandSet,omitempty"`
 	UseGroupCreds *bool   `json:"useGroupCreds,omitempty"`
+	UseMyBastion  *bool   `json:"useMyBastion,omitempty"`
+	CLI           *bool   `json:"cli,omitempty"` // CLI を使う (Device.CLIOff = !CLI)
+	GUI           *bool   `json:"gui,omitempty"` // GUI を使う
 }
 
 // UpdateDevices applies p to the devices with the given IDs, all or none:
@@ -985,6 +992,15 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 		}
 		if p.UseGroupCreds != nil {
 			d.UseGroupCreds = *p.UseGroupCreds && d.Group != ""
+		}
+		if p.UseMyBastion != nil {
+			d.UseMyBastion = *p.UseMyBastion
+		}
+		if p.CLI != nil {
+			d.CLIOff = !*p.CLI
+		}
+		if p.GUI != nil {
+			d.GUIOn = *p.GUI
 		}
 		// A device moved out of every group has no group defaults to use.
 		if d.Group == "" {
@@ -1432,6 +1448,27 @@ func (a *App) SaveMyBastions(chain []model.Bastion) error {
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
+	}
+	// A device reaching its jump hosts by SSH tunnel needs every hop SSH,
+	// the own ones included: refused here, not on every connection later.
+	for i, b := range out {
+		if b.Method == model.BastionSSH {
+			continue
+		}
+		var tun []string
+		for _, d := range a.inv.Devices {
+			if d.UseMyBastion && !d.CLIOff && d.BastionMode == model.BastionViaTunnel {
+				tun = append(tun, d.Name)
+			}
+		}
+		if len(tun) > 0 {
+			a.mu.Unlock()
+			if len(tun) > 5 {
+				tun = append(tun[:5], "…")
+			}
+			return fmt.Errorf("自分の踏み台%d段目が Telnet ですが、自分の踏み台を SSH トンネルで通る機器があります（%s）。トンネルではすべて SSH にしてください", i+1, strings.Join(tun, ", "))
+		}
+		break
 	}
 	a.inv.MyBastions = out
 	a.mu.Unlock()
@@ -2238,7 +2275,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.4"
+const appVersion = "1.7.5"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2487,7 +2524,9 @@ func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (s
 	}
 	byName := map[string]model.Device{}
 	for _, d := range a.inv.Devices {
-		byName[d.Name] = d
+		if d.Group == group {
+			byName[d.Name] = d
+		}
 	}
 	lang := a.lang
 	a.mu.Unlock()

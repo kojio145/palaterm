@@ -107,3 +107,31 @@ func TestPinWhileLockedIsSavedAtUnlock(t *testing.T) {
 		t.Errorf("pin after unlock = %q", got)
 	}
 }
+
+// A device through the own jump host is pinned under the chain as connected
+// (the own hop in front): ClearHostKeys drops those names too.
+func TestClearHostKeysThroughMyBastion(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	if err := a.SaveMyBastions([]model.Bastion{{Host: "jump1.example", Method: model.BastionSSH, Username: "ops"}}); err != nil {
+		t.Fatal(err)
+	}
+	dev := model.Device{Name: "fw1", Host: "192.0.2.10", Port: 22, Conn: model.ConnSSH, OSType: "nec-ix",
+		Username: "u", Password: "p", Enabled: true, UseMyBastion: true, BastionMode: model.BastionViaTunnel}
+	if err := a.SaveDevice(dev); err != nil {
+		t.Fatalf("save device: %v", err)
+	}
+	a.SetHostKey("jump1.example:22", "ssh-ed25519 SHA256:hop")
+	a.SetHostKey("jump1.example:22>192.0.2.10:22", "ssh-ed25519 SHA256:dev")
+	if err := a.ClearHostKeys("fw1"); err != nil {
+		t.Fatalf("clear host keys: %v", err)
+	}
+	if k := a.GetHostKey("jump1.example:22>192.0.2.10:22"); k != "" {
+		t.Errorf("device key through the own jump host still pinned: %q", k)
+	}
+	if k := a.GetHostKey("jump1.example:22"); k != "" {
+		t.Errorf("own jump host key still pinned: %q", k)
+	}
+}
