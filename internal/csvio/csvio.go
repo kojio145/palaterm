@@ -45,8 +45,8 @@ var deviceCols = []col{
 	{"useGroupCreds", "グループ既定の認証情報を使う"},
 	{"username", "ユーザー名"}, {"password", "パスワード"}, {"enablePassword", "enableパスワード"},
 	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
-	{"legacyAlgos", "旧暗号を許可"}, {"bastionMode", "踏み台の通り方"},
-	{"guiPort", "GUIポート"},
+	{"legacyAlgos", "旧暗号を許可"}, {"useMyBastion", "自分の踏み台を使う"}, {"bastionMode", "踏み台の通り方"},
+	{"cli", "CLIを使う"}, {"gui", "GUIを使う"}, {"guiScheme", "GUIの方式"}, {"guiPort", "GUIポート"},
 }
 
 // hopFields are one jump host's columns (prefixed bastion<n> / 踏み台<n>_).
@@ -120,8 +120,8 @@ func ExportLang(devices []model.Device, lang string) (string, error) {
 			boolOut(d.UseGroupCreds, ja),
 			d.Username, d.Password, d.EnablePassword,
 			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
-			boolOut(d.LegacyAlgos, ja), modeOut(d.BastionMode, len(d.Bastions) > 0, ja),
-			itoa(d.GUIPort),
+			boolOut(d.LegacyAlgos, ja), boolOut(d.UseMyBastion, ja), modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, ja),
+			boolOut(!d.CLIOff, ja), boolOut(d.GUIOn, ja), d.EffectiveGUIScheme(), itoa(d.GUIPort),
 		}
 		for n := 0; n < hops; n++ {
 			if n < len(d.Bastions) {
@@ -246,7 +246,11 @@ func Import(text string) ([]model.Device, error) {
 			Enabled:        parseBool(get(row, "enabled"), true),
 			UseGroupCreds:  parseBool(get(row, "useGroupCreds"), false),
 			BastionMode:    modeIn(get(row, "bastionMode")),
+			UseMyBastion:   parseBool(get(row, "useMyBastion"), false),
 			GUIPort:        atoi(get(row, "guiPort")),
+			CLIOff:         !parseBool(get(row, "cli"), true),
+			GUIOn:          parseBool(get(row, "gui"), false),
+			GUIScheme:      schemeIn(get(row, "guiScheme")),
 		}
 		if perHop {
 			// One column per jump-host field. A hop is there when its host is.
@@ -292,6 +296,17 @@ func Import(text string) ([]model.Device, error) {
 		out = append(out, d)
 	}
 	return out, nil
+}
+
+// schemeIn reads a GUI scheme: http, or https (also for anything else).
+func schemeIn(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "http":
+		return "http"
+	case "https":
+		return "https"
+	}
+	return ""
 }
 
 // ---- the fixed values, in the words of the export's language ----

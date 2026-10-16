@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/wailsapp/go-webview2/pkg/edge"
@@ -51,10 +52,9 @@ var (
 )
 
 const (
-	wmSize        = 0x0005
-	wmSetFocus    = 0x0007
-	wmCommand     = 0x0111
-	wmGUINavigate = 0x8000 + 20
+	wmSize     = 0x0005
+	wmSetFocus = 0x0007
+	wmCommand  = 0x0111
 
 	wsOverlappedWindow = 0x00CF0000
 	cwUseDefault       = 0x80000000
@@ -65,6 +65,8 @@ const (
 	menuReload  = 2
 	menuRelogin = 3
 	menuAllow   = 4
+
+	wmGUINavigate = 0x8000 + 20
 )
 
 type guiWndClass struct {
@@ -104,16 +106,28 @@ type guiWin struct {
 	base     *url.URL // where the window was opened (scheme://host:port)
 
 	mu sync.Mutex
-	// submitted: the login was sent automatically once and has not been
-	// seen to succeed since; a login form showing again is then only
-	// filled in (a wrong password must not be retried into a lockout).
-	submitted bool
+	// autoSent: the login was sent automatically — once per window, until
+	// the menu's ログインし直す (a wrong password must not be retried into
+	// a lockout).
+	autoSent bool
+	// loggedIn: a page of the device without a login form came after the
+	// login: from then on nothing is filled in or clicked (a password field
+	// on a settings page is not a login).
+	loggedIn bool
+	// tofuNow: the certificate was seen for the first time in this window
+	// and recorded: the login is filled in but not sent.
+	tofuNow bool
+	// certErr: the device's address had a certificate error in this window
+	// (none on https = the browser trusted it).
+	certErr bool
 	// badCert is the fingerprint refused as different from the pin; the
-	// menu's 証明書の変更を許可 accepts it.
+	// menu's 証明書の変更を許可 accepts it. badShown: its page is up.
 	badCert   string
+	badShown  bool
 	allowMenu bool    // 証明書の変更を許可 is on the menu
 	c14       uintptr // ICoreWebView2_14 (certificate errors), 0 if the runtime is older
 	ready     bool
+	dataDir   string // this window's own WebView2 profile, removed on exit
 }
 
 func runGUIWindow() {
@@ -152,6 +166,38 @@ func runGUIWindow() {
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
+	w.removeProfile()
+}
+
+// guiProfileRoot holds the GUI windows' WebView2 profiles: one per window,
+// removed when it closes, so no device session (cookies, cache, form data)
+// outlives the window — a later window, or anyone with a shell on this PC
+// while PalaTerm is locked, finds nothing to reuse.
+func guiProfileRoot() string {
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "GUI")
+}
+
+// removeProfile deletes this window's profile once its browser processes
+// have let go of the files (they exit just after the window), and any left
+// behind by a window that did not get to (killed): those still in use by
+// another open window fail to delete and stay.
+func (w *guiWin) removeProfile() {
+	if w.dataDir == "" {
+		return
+	}
+	for i := 0; i < 40; i++ {
+		if os.RemoveAll(w.dataDir) == nil {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if ents, err := os.ReadDir(guiProfileRoot()); err == nil {
+		for _, e := range ents {
+			if e.IsDir() && strings.HasPrefix(e.Name(), "w-") {
+				_ = os.RemoveAll(filepath.Join(guiProfileRoot(), e.Name()))
+			}
+		}
+	}
 }
 
 func (w *guiWin) alert(msg string) {
@@ -187,7 +233,7 @@ func (w *guiWin) create() error {
 	add := func(id int, ja, en string) {
 		procAppendMenuW.Call(menu, mfString, uintptr(id), uintptr(unsafe.Pointer(u16(winWord(ja, en)))))
 	}
-	add(menuBrowser, "既定のブラウザで開く", "Open in default browser")
+	add(menuBrowser, "既定のブラウザで開く（自動ログインなし）", "Open in default browser (no auto login)")
 	add(menuReload, "再読み込み", "Reload")
 	add(menuRelogin, "ログインし直す", "Log in again")
 	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16("PalaTerm"))),
@@ -201,7 +247,8 @@ func (w *guiWin) create() error {
 	procUpdateWindow.Call(hwnd)
 
 	c := edge.NewChromium()
-	c.DataPath = filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "GUI")
+	w.dataDir = filepath.Join(guiProfileRoot(), fmt.Sprintf("w-%d-%d", os.Getpid(), time.Now().UnixNano()))
+	c.DataPath = w.dataDir
 	if guiProbeArgs != "" {
 		c.AdditionalBrowserArgs = []string{guiProbeArgs}
 	}
@@ -211,8 +258,17 @@ func (w *guiWin) create() error {
 	w.chromium = c
 	c.Embed(hwnd)
 	c.Resize()
+	// No DevTools (a typed password would be one click away), no autofill or
+	// saved passwords of the browser's own.
+	if st, err := c.GetSettings(); err == nil && st != nil {
+		_ = st.PutAreDevToolsEnabled(false)
+		if s4 := st.GetICoreWebView2Settings4(); s4 != nil {
+			_ = s4.PutIsGeneralAutofillEnabled(false)
+			_ = s4.PutIsPasswordAutosaveEnabled(false)
+		}
+	}
 	w.hook()
-	c.Init(guiPageScript)
+	c.Init(guiPageScript(strings.ToLower(w.base.Scheme + "://" + w.base.Host)))
 	w.mu.Lock()
 	w.ready = true
 	w.mu.Unlock()
@@ -228,14 +284,15 @@ func (w *guiWin) create() error {
 // methods.) Slot numbers count IUnknown's three first.
 const (
 	slotGetSource                  = 4   // ICoreWebView2::get_Source
-	slotAddNavigationStarting      = 7   // ICoreWebView2::add_NavigationStarting
+	slotAddNewWindowRequested      = 44  // ICoreWebView2::add_NewWindowRequested
+	slotNewWinArgsGetUri           = 3   // ICoreWebView2NewWindowRequestedEventArgs::get_Uri
+	slotNewWinArgsPutHandled       = 6   // …::put_Handled
+	slotCertArgsGetRequestUri      = 4   // …ServerCertificateErrorDetectedEventArgs::get_RequestUri
 	slotAddServerCertErrorDetected = 106 // ICoreWebView2_14: 3 + 58 (ICoreWebView2) + 45 (_2…_13)
 	slotClearServerCertErrorActs   = 108 // ICoreWebView2_14::ClearServerCertificateErrorActions
 	slotCertArgsGetCert            = 5   // …ServerCertificateErrorDetectedEventArgs::get_ServerCertificate
 	slotCertArgsPutAction          = 7   // …::put_Action
 	slotCertToPem                  = 9   // ICoreWebView2Certificate::ToPemEncoding
-	slotNavArgsGetUri              = 3   // ICoreWebView2NavigationStartingEventArgs::get_Uri
-	slotNavArgsPutCancel           = 8   // …::put_Cancel
 	certActionAllow                = 0   // COREWEBVIEW2_SERVER_CERTIFICATE_ERROR_ACTION_ALWAYS_ALLOW
 	certActionCancel               = 1
 )
@@ -275,7 +332,16 @@ var comHandlers []*comHandler // kept reachable: WebView2 holds raw pointers
 func newComHandler(invoke func(sender, args uintptr)) *comHandler {
 	h := &comHandler{invoke: invoke}
 	h.vtbl = &[4]uintptr{
-		windows.NewCallback(func(this, riid, out uintptr) uintptr { return 0x80004002 }), // E_NOINTERFACE
+		// QueryInterface: the object is what WebView2 asks for (it only asks
+		// for IUnknown or the handler interface it registered).
+		windows.NewCallback(func(this, riid, out uintptr) uintptr {
+			if out == 0 {
+				return 0x80004003 // E_POINTER
+			}
+			dst := *(*unsafe.Pointer)(unsafe.Pointer(&out))
+			*(*uintptr)(dst) = this
+			return 0
+		}),
 		windows.NewCallback(func(this uintptr) uintptr { return 1 }),
 		windows.NewCallback(func(this uintptr) uintptr { return 1 }),
 		windows.NewCallback(func(this, sender, args uintptr) uintptr { h.invoke(sender, args); return 0 }),
@@ -300,16 +366,16 @@ func (w *guiWin) source() string {
 
 // hook adds the handlers the edge wrapper does not: certificate errors
 // (self-signed GUIs open without the browser's warning page, against the
-// recorded certificate) and navigations (a redirect to the device's own
-// address is brought back through the forward).
+// recorded certificate) and new windows (kept in this window, where the
+// certificate check and the page script run, or sent to the browser).
 func (w *guiWin) hook() {
 	core := w.core()
 	if core == 0 {
 		return
 	}
 	var token int64
-	nav := newComHandler(w.navigationStarting)
-	comCall(core, slotAddNavigationStarting, uintptr(unsafe.Pointer(nav)), uintptr(unsafe.Pointer(&token)))
+	nw := newComHandler(w.newWindow)
+	comCall(core, slotAddNewWindowRequested, uintptr(unsafe.Pointer(nw)), uintptr(unsafe.Pointer(&token)))
 	var c14 uintptr
 	if hr := comCall(core, 0, uintptr(unsafe.Pointer(&iidICoreWebView2_14)), uintptr(unsafe.Pointer(&c14))); int32(hr) >= 0 && c14 != 0 {
 		cert := newComHandler(w.certificateError)
@@ -318,12 +384,21 @@ func (w *guiWin) hook() {
 	}
 }
 
-// open navigates to the GUI. WebView2 remembers an allowed certificate
-// error for as long as its browser process runs (shared by every GUI
-// window), so the decisions are cleared first: each window checks the
-// certificate against the pin again.
+// open navigates to the GUI. WebView2 remembers certificate decisions for
+// as long as its browser process runs, so they are cleared first: each
+// window checks the certificate against the pin again. A runtime too old
+// to report certificate errors gets no https GUI at all (no pin check).
 func (w *guiWin) open() {
+	w.mu.Lock()
+	w.badShown = false
+	w.mu.Unlock()
 	if w.c14 == 0 {
+		if w.base.Scheme == "https" {
+			w.chromium.NavigateToString(guiNotice(winWord(
+				"この PC の WebView2 ランタイムが古いため、証明書を確かめられず https の GUI を開けません。Windows Update で Microsoft Edge WebView2 Runtime を更新するか、メニューの「既定のブラウザで開く」を使ってください。",
+				"This PC's WebView2 runtime is too old to check certificates, so the https GUI is not opened. Update the Microsoft Edge WebView2 Runtime, or use \"Open in default browser\" in the menu.")))
+			return
+		}
 		w.chromium.Navigate(w.cfg.URL)
 		return
 	}
@@ -333,7 +408,21 @@ func (w *guiWin) open() {
 	}
 }
 
+// sameOrigin reports that raw is the device's GUI (scheme, host and port
+// the window was opened at).
+func (w *guiWin) sameOrigin(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == w.base.Scheme && strings.EqualFold(u.Host, w.base.Host)
+}
+
+// certificateError decides a certificate error against the device's pin —
+// only for the device's own address: another host's error (a resource the
+// page loads from elsewhere) is refused and never touches the pin.
 func (w *guiWin) certificateError(_, args uintptr) {
+	if !w.sameOrigin(comString(args, slotCertArgsGetRequestUri)) {
+		comCall(args, slotCertArgsPutAction, certActionCancel)
+		return
+	}
 	fp := ""
 	var cert uintptr
 	if hr := comCall(args, slotCertArgsGetCert, uintptr(unsafe.Pointer(&cert))); int32(hr) >= 0 && cert != 0 {
@@ -346,42 +435,42 @@ func (w *guiWin) certificateError(_, args uintptr) {
 		comCall(cert, 2) // Release
 	}
 	w.mu.Lock()
-	pin := w.cfg.Pin
-	w.mu.Unlock()
+	defer w.mu.Unlock()
+	w.certErr = true
 	action := uintptr(certActionCancel)
 	switch {
 	case fp == "":
-	case pin == "" || pin == fp:
-		if pin == "" {
-			w.mu.Lock()
-			w.cfg.Pin = fp
-			w.mu.Unlock()
-			fmt.Printf("%s %s %s\n", guiEventCert, w.cfg.PinKey, fp)
-		}
+	case w.cfg.Pin == "":
+		// First sight (trust on first use): recorded, opened — but nothing
+		// is sent automatically on a certificate nobody has seen before.
+		w.cfg.Pin, w.tofuNow = fp, true
+		fmt.Printf("%s %s\n", guiEventCert, fp)
+		action = certActionAllow
+	case w.cfg.Pin == fp:
 		action = certActionAllow
 	default:
-		w.mu.Lock()
+		// Different from the pin — or the device once had a certificate the
+		// browser trusted ("ca") and now presents one it does not.
 		w.badCert = fp
-		w.mu.Unlock()
 	}
 	comCall(args, slotCertArgsPutAction, action)
 }
 
-func (w *guiWin) navigationStarting(_, args uintptr) {
-	if w.cfg.Via == 0 || w.cfg.DeviceHost == "" {
+// newWindow keeps a page's new window (target=_blank, window.open) in this
+// window when it is the device's GUI, and sends anything else to the
+// default browser: a WebView2 window of its own would have neither the
+// certificate check nor the page script.
+func (w *guiWin) newWindow(_, args uintptr) {
+	uri := comString(args, slotNewWinArgsGetUri)
+	comCall(args, slotNewWinArgsPutHandled, 1)
+	if w.sameOrigin(uri) {
+		guiNavigate.Store(uri)
+		procPostMessageW.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
 		return
 	}
-	u, err := url.Parse(comString(args, slotNavArgsGetUri))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !strings.EqualFold(u.Hostname(), w.cfg.DeviceHost) ||
-		strings.EqualFold(u.Host, w.base.Host) {
-		return
+	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
+		_ = windows.ShellExecute(0, u16("open"), u16(uri), nil, nil, 1)
 	}
-	// The device sent the window to its own address, which this PC cannot
-	// reach: the same page through the forward instead.
-	u.Scheme, u.Host = w.base.Scheme, w.base.Host
-	comCall(args, slotNavArgsPutCancel, 1)
-	guiNavigate.Store(u.String())
-	procPostMessageW.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
 }
 
 var guiNavigate syncString
@@ -393,6 +482,11 @@ type syncString struct {
 
 func (s *syncString) Store(v string) { s.mu.Lock(); s.s = v; s.mu.Unlock() }
 func (s *syncString) Take() string   { s.mu.Lock(); defer s.mu.Unlock(); v := s.s; s.s = ""; return v }
+
+// guiNotice is a page of PalaTerm's own in the window.
+func guiNotice(html string) string {
+	return `<html><body style="font-family:sans-serif;padding:24px">` + html + `</body></html>`
+}
 
 func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
@@ -421,7 +515,7 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		switch int(wp & 0xffff) {
 		case menuBrowser:
 			src := w.cfg.URL
-			if s := w.source(); strings.HasPrefix(s, "http") {
+			if s := w.source(); strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 				src = s
 			}
 			_ = windows.ShellExecute(0, u16("open"), u16(src), nil, nil, 1)
@@ -429,7 +523,7 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			w.chromium.Eval("location.reload()")
 		case menuRelogin:
 			w.mu.Lock()
-			w.submitted = false
+			w.autoSent, w.loggedIn = false, false
 			w.mu.Unlock()
 			w.title("")
 			w.chromium.Navigate(w.cfg.URL)
@@ -442,8 +536,13 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			}
 			w.mu.Unlock()
 			if fp != "" {
-				fmt.Printf("%s %s %s\n", guiEventCert, w.cfg.PinKey, fp)
+				fmt.Printf("%s %s\n", guiEventCert, fp)
 				w.title("")
+				if menu, _, _ := user32.NewProc("GetMenu").Call(uintptr(w.hwnd)); menu != 0 && w.allowMenu {
+					user32.NewProc("DeleteMenu").Call(menu, menuAllow, 0) // MF_BYCOMMAND
+					user32.NewProc("DrawMenuBar").Call(uintptr(w.hwnd))
+					w.allowMenu = false
+				}
 				w.open() // the refusal is remembered too: cleared first
 			}
 		}
@@ -459,19 +558,23 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	return r
 }
 
-// onNavigated shows why a page was refused for its certificate.
+// onNavigated shows why a page was refused for its certificate (once: the
+// notice page completes a navigation of its own).
 func (w *guiWin) onNavigated() {
 	w.mu.Lock()
-	bad := w.badCert
+	bad, shown := w.badCert, w.badShown
+	if bad != "" {
+		w.badShown = true
+	}
 	w.mu.Unlock()
-	if bad == "" {
+	if bad == "" || shown {
 		return
 	}
 	w.title(winWord("証明書が前回と異なります", "certificate changed"))
 	html := winWord(
 		`<h2 style="color:#c00">証明書が前回と異なります</h2><p>この機器の GUI が、前回記録した証明書と違う証明書を出しました。機器の入れ替えや証明書の更新なら問題ありませんが、通信の途中で別のものに差し替えられている可能性もあるため、開くのを止めました。</p><p>心当たりがある場合だけ、メニューの「証明書の変更を許可」を押してください。</p>`,
 		`<h2 style="color:#c00">The certificate has changed</h2><p>This device's GUI presented a different certificate from the one recorded last time. A replaced device or a renewed certificate is fine, but it could also be something in between, so the page was not opened.</p><p>Only if you expect the change, choose "Allow the new certificate" in the menu.</p>`)
-	w.chromium.NavigateToString(`<html><body style="font-family:sans-serif;padding:24px">` + html + `<p style="color:#666;font-size:12px">SHA-256: ` + bad + `</p></body></html>`)
+	w.chromium.NavigateToString(guiNotice(html + `<p style="color:#666;font-size:12px">SHA-256: ` + bad + `</p>`))
 	menu, _, _ := user32.NewProc("GetMenu").Call(uintptr(w.hwnd))
 	if menu != 0 && !w.allowMenu {
 		w.allowMenu = true
@@ -480,30 +583,59 @@ func (w *guiWin) onNavigated() {
 	}
 }
 
-// onMessage answers the page script (guiPageScript).
+// onMessage answers the page script (guiPageScript). Only pages of the
+// device's own address count.
 func (w *guiWin) onMessage(msg string) {
+	if !w.onDevicePage() {
+		return
+	}
+	w.mu.Lock()
 	switch msg {
 	case "pt:login":
-		if !w.onDevicePage() {
+		if w.loggedIn {
+			w.mu.Unlock()
 			return
 		}
-		w.mu.Lock()
-		submit := !w.submitted
-		w.submitted = true
+		// Sent on its own only once per window, and not on a certificate seen
+		// for the first time just now; a plain https page without any
+		// certificate error is one the browser trusted ("ca" recorded).
+		if w.base.Scheme == "https" && !w.certErr && w.cfg.Pin == "" {
+			w.cfg.Pin = "ca"
+			fmt.Printf("%s %s\n", guiEventCert, "ca")
+		}
+		submit := !w.autoSent && !w.tofuNow
+		if submit {
+			w.autoSent = true
+		}
+		tofu := w.tofuNow
 		w.mu.Unlock()
 		w.chromium.Eval(guiFillScript(w.cfg.User, w.cfg.Password, submit))
-		if !submit {
+		switch {
+		case tofu:
+			w.title(winWord("初めて開く機器です。証明書を記録しました。内容を確かめて「ログイン」を押してください", "first time: certificate recorded; check and log in"))
+		case !submit:
 			w.title(winWord("自動ログインは1回だけです。内容を確かめてログインしてください", "auto login runs once; check and log in"))
 		}
+		return
 	case "pt:nologin":
-		// A page without the login form after the login was sent: it went
-		// through, and a later login form (session timeout) may be sent
-		// again.
-		w.mu.Lock()
-		w.submitted = false
+		// A page of the device without a login form after the login was
+		// sent: logged in. Nothing more is filled in or clicked.
+		if w.autoSent || w.tofuNow {
+			w.loggedIn = true
+		}
 		w.mu.Unlock()
 		w.title("")
+		return
+	case "pt:accept":
+		// A login disclaimer, before or right after the login only.
+		ok := !w.loggedIn
+		w.mu.Unlock()
+		if ok {
+			w.chromium.Eval(`window.__ptAcceptBtn && window.__ptAcceptBtn.click()`)
+		}
+		return
 	}
+	w.mu.Unlock()
 }
 
 // onDevicePage reports that the window shows the device's GUI, not some
@@ -529,17 +661,22 @@ f.p.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:
 })(%s,%s,%v)`, ju, jp, submit)
 }
 
-// guiPageScript runs in every page of the window: it finds a login form
-// (known GUIs first, then any visible password field) and tells the window,
-// presses the Accept of a login disclaimer, and reports a page without a
-// login form once the login went through.
-const guiPageScript = `(function(){
-if (window.top !== window) return;
+// guiPageScript runs in every page of the window: on the device's own
+// address (origin) only, it finds a login form — a page with exactly one
+// password field (two or more: a password change, not a login) — and tells
+// the window; it offers a login disclaimer's Accept to the window, which
+// presses it only around the login; and it reports a page without a login
+// form (logged in).
+func guiPageScript(origin string) string {
+	jo, _ := json.Marshal(origin)
+	return `(function(){
+if (window.top !== window || location.origin !== ` + string(jo) + `) return;
 function vis(e){ if(!e) return false; var r=e.getBoundingClientRect(); var s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=="hidden"&&s.display!=="none"; }
 function q(sel){ var l=document.querySelectorAll(sel); for(var i=0;i<l.length;i++) if(vis(l[i])) return l[i]; return null; }
 window.__ptFind = function(){
-  var p = q("#secretkey,#passwd,input[name=secretkey],input[name=passwd],input[type=password]");
-  if (!p) return null;
+  var pws = [].filter.call(document.querySelectorAll("input[type=password]"), vis);
+  if (pws.length !== 1) return null;
+  var p = pws[0];
   var form = p.form || null, scope = form || document;
   var u = q("#username,#user,input[name=username],input[name=user],input[name=login],input[name=userName]");
   if (!u) {
@@ -553,15 +690,15 @@ window.__ptFind = function(){
   }
   return {u:u, p:p, form:form, btn:btn};
 };
-var sent=false, accepted=false, start=Date.now();
+var sent=false, offered=false, start=Date.now();
 function tick(){
   if (Date.now()-start > 60000) return;
   var f = window.__ptFind();
   if (f && !sent) { sent=true; window.chrome.webview.postMessage("pt:login"); }
   if (!f && sent) { sent=false; }
-  if (!f && !accepted && Date.now()-start < 15000 && /disclaimer|免責|同意|terms|notice/i.test(document.body ? document.body.innerText.slice(0,4000) : "")) {
+  if (!f && !offered && Date.now()-start < 15000 && /disclaimer|免責|同意|terms|notice/i.test(document.body ? document.body.innerText.slice(0,4000) : "")) {
     var bs=document.querySelectorAll("button,input[type=button],input[type=submit],a");
-    for (var i=0;i<bs.length;i++){ var t=(bs[i].innerText||bs[i].value||"").trim(); if (vis(bs[i]) && /^(accept|i accept|agree|i agree|同意|同意する|承諾|承諾する)$/i.test(t)) { accepted=true; bs[i].click(); break; } }
+    for (var i=0;i<bs.length;i++){ var t=(bs[i].innerText||bs[i].value||"").trim(); if (vis(bs[i]) && /^(accept|i accept|agree|i agree|同意|同意する|承諾|承諾する)$/i.test(t)) { offered=true; window.__ptAcceptBtn=bs[i]; window.chrome.webview.postMessage("pt:accept"); break; } }
   }
   setTimeout(tick, 500);
 }
@@ -569,3 +706,4 @@ function reportNoLogin(){ if (!window.__ptFind()) window.chrome.webview.postMess
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ tick(); setTimeout(reportNoLogin, 4000); });
 else { tick(); setTimeout(reportNoLogin, 4000); }
 })();`
+}

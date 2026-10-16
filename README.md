@@ -25,10 +25,11 @@ Windows exe — no installation required.
 - 🏢 **Jump host support** — multi-hop connections through bastion servers
   (SSH public-key auth: Ed25519/RSA/ECDSA plus legacy PEM DSA for old jump servers, passphrase-protected keys supported;
   an SSH tunnel mode, like OpenSSH's ProxyJump, logs into every hop from your PC with its own key;
-  your own jump-host login is kept apart from the device list, so a group's devices can be handed to a colleague without your key;
+  your own jump hosts (up to 5 hops, with your key) are kept apart from the device list — a device only says "go through my jump host",
+  so a group's devices can be handed to a colleague without your key;
   a run or a window can skip the jump hosts when you are on site)
-- 🌐 **Web GUI login** — open a device's management page (FortiGate & co.) in a PalaTerm window, logged in with its credentials,
-  directly or through the jump hosts; self-signed certificates are pinned on first use instead of clicked through
+- 🌐 **Web GUI login** — open a device's management page (FortiGate & co.) in a PalaTerm window, logged in with its credentials
+  (http or https, any port); self-signed certificates are pinned on first use instead of clicked through. GUI-only devices are supported too
 - 📊 **Edit as a table** — edit many devices at once like a spreadsheet: copy and paste with Excel, Ctrl+D, fill series, undo, find and replace;
   changes stay an encrypted draft until saved, and rows with errors can be kept back while the rest are saved
 - 🤖 **Login automation** — 17 built-in OS profiles (Cisco IOS/ASA, JUNOS, FortiGate,

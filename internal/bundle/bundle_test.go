@@ -511,15 +511,43 @@ func TestSelectWithoutBastionCredsRoundTrip(t *testing.T) {
 	if c.Devices[0].Username != "u" || c.Devices[0].Password != "p" {
 		t.Errorf("device login must still travel: %+v", c.Devices[0])
 	}
-	recv := &model.Inventory{MyBastionLogins: []model.BastionLogin{{Host: "192.0.2.9", Username: "theirs", AuthMethod: model.AuthPublicKey, KeyFile: `C:\k`}}}
+}
+
+// 自分の踏み台を使う travels as a flag only: the sender's own jump host
+// (address and login) is not in any file, and the receiver's is used.
+func TestMyBastionTravelsAsFlagOnly(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[0].UseMyBastion = true
+	inv.MyBastions = []model.Bastion{{Host: "192.0.2.77", Method: model.BastionSSH, Username: "sender-user", Password: "sender-secret"}}
+	dir := t.TempDir()
+	mp, err := Write(dir, Select(inv, "A社", false), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"devices.csv", ManifestName} {
+		data, _ := os.ReadFile(filepath.Join(dir, f))
+		for _, secret := range []string{"192.0.2.77", "sender-user", "sender-secret"} {
+			if strings.Contains(string(data), secret) {
+				t.Errorf("%s contains the sender's own jump host (%q)", f, secret)
+			}
+		}
+	}
+	c, err := Read(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recv := &model.Inventory{MyBastions: []model.Bastion{{Host: "192.0.2.88", Method: model.BastionSSH, Username: "theirs"}}}
 	Apply(recv, c, Options{})
 	for _, d := range recv.Devices {
-		if d.Name != "a-fw1" {
+		if d.Name != "a-rt1" {
 			continue
 		}
+		if !d.UseMyBastion {
+			t.Fatal("flag lost on the way")
+		}
 		r := recv.ResolveCredentials(d)
-		if r.Bastions[0].Username != "theirs" || r.Bastions[0].KeyFile != `C:\k` {
-			t.Errorf("receiver's own login not used: %+v", r.Bastions[0])
+		if hops := r.ActiveBastions(); len(hops) != 1 || hops[0].Host != "192.0.2.88" || hops[0].Username != "theirs" {
+			t.Errorf("receiver's own jump host not used: %+v", hops)
 		}
 	}
 }

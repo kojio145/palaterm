@@ -658,45 +658,32 @@ func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions 
 	return sess, nil
 }
 
-// OpenForward carries a local port of this PC (on the loopback address
-// listen) through the device's jump hosts to its web GUI (GUI を開く). This PC logs into the hops itself, so
-// they must all be SSH, and a chain of several only through an SSH tunnel:
-// typed on a hop's shell, the next hop's login (its key) is not ours to use.
-func (r *Runner) OpenForward(dev *model.Device, s model.Settings, listen string) (*session.Forward, error) {
-	bastions := dev.ActiveBastions()
-	if len(bastions) == 0 {
-		return nil, errors.New("踏み台がありません")
-	}
-	for i, b := range bastions {
-		if b.Method != model.BastionSSH {
-			return nil, fmt.Errorf("踏み台経由で GUI を開くには踏み台が SSH である必要があります（%d段目が %s）", i+1, b.Method)
-		}
-	}
-	if len(bastions) > 1 && !dev.Tunneled() {
-		return nil, errors.New("踏み台が2段以上のときは、踏み台の通り方を「SSH トンネル」にすると GUI を開けます")
-	}
-	if err := missingHopLogin(dev, bastions); err != nil {
-		return nil, err
-	}
-	timeout := time.Duration(s.ConnectTimeout) * time.Second
-	if timeout <= 0 {
-		timeout = 20 * time.Second
-	}
-	return session.DialForward(bastions, model.HopAddr(dev.Host, dev.EffectiveGUIPort()), listen, timeout, r.dialOpts(dev))
-}
-
 // missingHopLogin refuses an SSH hop this PC logs into itself (the first
 // one, or every one through a tunnel) that has no username — what a device
 // list shared without jump-host logins looks like before the user has
 // registered their own (自分の踏み台認証). An SSH login as "" would only
 // fail later as a bare authentication error.
 func missingHopLogin(dev *model.Device, bastions []model.Bastion) error {
+	// Hops are numbered as their editors show them: the own jump hosts in
+	// Settings, the device's own from 1 after them.
+	mine := 0
+	for _, b := range bastions {
+		if b.Mine {
+			mine++
+		}
+	}
 	for i, b := range bastions {
 		if i > 0 && !dev.Tunneled() {
 			break
 		}
+		if b.Mine && b.Host == "" {
+			return errors.New("「自分の踏み台を使う」機器ですが、自分の踏み台が登録されていません。設定タブの「自分の踏み台」に登録してください")
+		}
+		if b.Mine && b.Method == model.BastionSSH && b.Username == "" {
+			return fmt.Errorf("自分の踏み台%d段目のユーザー名がありません。設定タブの「自分の踏み台」に入力してください", i+1)
+		}
 		if b.Method == model.BastionSSH && b.Username == "" {
-			return fmt.Errorf("踏み台%d段目（%s）のユーザー名がありません。設定タブの「自分の踏み台認証」に登録するか、機器の踏み台の欄に入力してください", i+1, b.Host)
+			return fmt.Errorf("踏み台%d段目（%s）のユーザー名がありません。機器の踏み台の欄に入力してください", i+1-mine, b.Host)
 		}
 	}
 	return nil
@@ -1106,11 +1093,12 @@ func lastShown(ctx context.Context, exp *expecter, dev *model.Device, msg string
 	if exp == nil || ctx.Err() != nil || strings.Contains(msg, "機器の最後の表示") {
 		return ""
 	}
-	last := lastLine(exp.Transcript())
+	// Masked before it is cut: a password across the cut would show its half.
+	last := lastLine(RedactSecrets(exp.Transcript(), dev))
 	if last == "" {
 		return ""
 	}
-	return fmt.Sprintf("（機器の最後の表示: %q）", RedactSecrets(last, dev))
+	return fmt.Sprintf("（機器の最後の表示: %q）", last)
 }
 
 // reEscape matches terminal escape sequences (colors, cursor moves, title

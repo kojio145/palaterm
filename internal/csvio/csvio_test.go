@@ -352,3 +352,18 @@ func TestBastionModeRoundTrip(t *testing.T) {
 		t.Errorf("「SSH トンネル」 read as %q", back[0].BastionMode)
 	}
 }
+
+// A CSV from before the CLI / GUI columns reads as CLI on, GUI off.
+func TestImportWithoutCLIGUIColumns(t *testing.T) {
+	ds, err := Import("name,host,conn\nrt1,192.0.2.1,ssh\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ds) != 1 || ds[0].CLIOff || ds[0].GUIOn || ds[0].GUIScheme != "" {
+		t.Errorf("devices = %+v, want CLI on, GUI off", ds)
+	}
+	ds, _ = Import("name,host,conn,cli,gui,guiScheme,guiPort\nfw1,192.0.2.2,ssh,no,yes,HTTP,8080\n")
+	if len(ds) != 1 || !ds[0].CLIOff || !ds[0].GUIOn || ds[0].GUIScheme != "http" || ds[0].GUIPort != 8080 {
+		t.Errorf("devices = %+v", ds)
+	}
+}

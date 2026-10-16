@@ -33,7 +33,8 @@ var deviceKinds = map[string]string{
 	"group": "group", "conn": "conn", "port": "int", "baud": "int",
 	"osType": "os", "commandSet": "set", "enabled": "bool", "useGroupCreds": "bool",
 	"password": "secret", "enablePassword": "secret", "keyPassphrase": "secret",
-	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode", "guiPort": "int",
+	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode", "guiPort": "int", "useMyBastion": "bool",
+	"cli": "bool", "gui": "bool", "guiScheme": "scheme",
 }
 
 var hopKinds = map[string]string{
@@ -66,8 +67,10 @@ func DeviceCells(d model.Device) map[string]string {
 		"enabled": boolOut(d.Enabled, false), "useGroupCreds": boolOut(d.UseGroupCreds, false),
 		"username": d.Username, "password": d.Password, "enablePassword": d.EnablePassword,
 		"authMethod": orDefault(string(d.AuthMethod), "password"), "keyFile": d.KeyFile, "keyPassphrase": d.KeyPassphrase,
-		"legacyAlgos": boolOut(d.LegacyAlgos, false), "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0, false),
-		"guiPort": itoa(d.GUIPort),
+		"legacyAlgos": boolOut(d.LegacyAlgos, false), "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, false),
+		"useMyBastion": boolOut(d.UseMyBastion, false),
+		"guiPort":      itoa(d.GUIPort),
+		"cli":          boolOut(!d.CLIOff, false), "gui": boolOut(d.GUIOn, false), "guiScheme": d.GUIScheme,
 	}
 	for i, b := range d.Bastions {
 		if i >= model.MaxBastions {
@@ -150,6 +153,15 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		return model.AuthPassword
 	}
 
+	scheme := func(k string) string {
+		switch v := strings.ToLower(get(k)); v {
+		case "", "http", "https":
+			return v
+		}
+		bad(k, "GUIの方式は http / https のどちらかです")
+		return ""
+	}
+
 	d := model.Device{
 		Name: get("name"), Group: get("group"), Site: get("site"), Role: get("role"),
 		Host: get("host"), Conn: model.ConnMethod(conn("conn", "ssh", "telnet", "serial")),
@@ -158,7 +170,8 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		Enabled: flag("enabled", true), UseGroupCreds: flag("useGroupCreds", false),
 		Username: get("username"), Password: c["password"], EnablePassword: c["enablePassword"],
 		AuthMethod: auth("authMethod"), KeyFile: get("keyFile"), KeyPassphrase: c["keyPassphrase"],
-		LegacyAlgos: flag("legacyAlgos", false), GUIPort: num("guiPort"),
+		LegacyAlgos: flag("legacyAlgos", false), GUIPort: num("guiPort"), UseMyBastion: flag("useMyBastion", false),
+		CLIOff: !flag("cli", true), GUIOn: flag("gui", false), GUIScheme: scheme("guiScheme"),
 	}
 	switch m := modeIn(get("bastionMode")); m {
 	case model.BastionViaShell, model.BastionViaTunnel:
@@ -193,7 +206,7 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 			JumpCommand:   get(p + "JumpCommand"),
 		})
 	}
-	if len(d.Bastions) == 0 {
+	if len(d.Bastions) == 0 && !d.UseMyBastion {
 		d.BastionMode = model.BastionViaShell
 	}
 	// A device outside every group has no group defaults to use.
@@ -231,6 +244,10 @@ func ErrorColumn(msg string) string {
 		return "bastion1Method"
 	case strings.Contains(msg, "GUIポート"):
 		return "guiPort"
+	case strings.Contains(msg, "GUIの方式"):
+		return "guiScheme"
+	case strings.Contains(msg, "CLI と GUI"):
+		return "cli"
 	case strings.Contains(msg, "踏み台の通り方"):
 		return "bastionMode"
 	case strings.Contains(msg, "シリアル接続の機器は踏み台"):

@@ -35,7 +35,7 @@ function slotLabel(s) {
 // have no list: then the group's checked devices, as it ran then).
 function schedDeviceList(sc) {
   if (sc.names) return sc.names;
-  return (INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group) && d.enabled).map(d => d.name);
+  return (INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group) && d.enabled && !d.cliOff).map(d => d.name);
 }
 function schedDevicesLabel(sc) {
   const g = sc.ungrouped ? t("（グループ未設定）") : sc.group;
@@ -376,7 +376,7 @@ function editSchedule(sc, prefill) {
   let lastClick = -1;
   const groupDevs = () => {
     const g = grpSel.value;
-    return !g ? [] : (INV.devices || []).filter(d => g === RUN_UNGROUPED ? !d.group : d.group === g);
+    return !g ? [] : (INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && !d.cliOff);
   };
   const shownDevs = () => {
     const q = filterIn.value.trim().toLowerCase();
@@ -400,7 +400,7 @@ function editSchedule(sc, prefill) {
   }
   grpSel.onchange = () => {
     const g = grpSel.value;
-    picked = new Set((INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && d.enabled).map(d => d.name));
+    picked = new Set((INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && d.enabled && !d.cliOff).map(d => d.name));
     filterIn.value = ""; lastClick = -1;
     renderDevs();
   };

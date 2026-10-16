@@ -271,8 +271,10 @@ let runGroupSel = "";
 const RUN_UNGROUPED = "__ungrouped__";
 function runGroupName() { return runGroupSel === RUN_UNGROUPED ? "" : runGroupSel; }
 function runGroupLabel() { return runGroupSel === RUN_UNGROUPED ? t("（グループ未設定）") : runGroupSel; }
+// The run tab's devices: the chosen group's, those with a CLI (a GUI-only
+// device has nothing to run).
 function runGroupDevices() {
-  return runGroupSel ? (INV.devices || []).filter(d => (d.group || "") === runGroupName()) : [];
+  return runGroupSel ? (INV.devices || []).filter(d => (d.group || "") === runGroupName() && !d.cliOff) : [];
 }
 // The command set for the next run only: "" = each device's own; a set's
 // name = that set on every target; RUN_ADHOC = the commands typed in runAdHoc
@@ -306,10 +308,16 @@ let runStage = "";
 // every device directly, its jump hosts left out — on site, plugged into
 // the devices' network. Nothing is saved.
 let runDirect = false;
-function devHasBastion(d) { return (d.bastions || []).some(b => b.host) || !!(d.bastion && d.bastion.host); }
-// The line a run's confirmation adds when it goes without jump hosts.
-function directNote(direct) {
-  return direct ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("踏み台を使わずに、この PC から各機器へ直接接続します"))}</span>` : "";
+function devHasBastion(d) { return !!d.useMyBastion || (d.bastions || []).some(b => b.host) || !!(d.bastion && d.bastion.host); }
+// The line a run's confirmation adds when it goes without jump hosts — or,
+// going through them, when devices ask for My jump host and none is
+// registered (each of them would only fail).
+function directNote(direct, names) {
+  if (direct) return `<br><span style="font-size:12px;color:var(--warn)">${esc(t("踏み台を使わずに、この PC から各機器へ直接接続します"))}</span>`;
+  const set = new Set(names || []);
+  const n = runGroupDevices().filter(d => set.has(d.name) && d.useMyBastion).length;
+  if (n && !(INV.myBastions || []).some(b => b.host)) return `<br><span style="font-size:12px;color:var(--err)">${esc(t("⚠ 「自分の踏み台を先に通る」機器が {n} 台ありますが、自分の踏み台が登録されていません（設定タブ）。この機器は接続できません", { n }))}</span>`;
+  return "";
 }
 const STAGES = ["", "before", "during", "after"];
 // Excel-like sort and filter of the run table. Display only: the backend
@@ -421,7 +429,6 @@ function renderRun() {
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
           ? `<button class="btn sm" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} style="color:var(--err);border-color:var(--err)" data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
-        ${guiButton(d)}
       </td>
     </tr>`;
   }).join("");
@@ -617,6 +624,9 @@ function renderRun() {
     // Each device keeps its own チェック state — switching groups no longer
     // rewrites Enabled flags, so selections survive group changes.
     runGroupSel = runGrp.value;
+    // 踏み台を使わない is for the group it was chosen for: another group
+    // starts from its devices' own settings again.
+    runDirect = false;
     renderRun();
     if (runGroupSel) toast(t("グループ「{g}」を選択しました", { g: runGroupLabel() }), "ok");
   };
@@ -636,7 +646,6 @@ function renderRun() {
   root.querySelectorAll("[data-stop]").forEach(el => el.onclick = () => stopDevice(el.dataset.stop));
   root.querySelectorAll("[data-watch]").forEach(el => el.onclick = () => App().OpenWatchWindow(el.dataset.watch).catch(e => toast(t("画面を開けません") + ": " + terr(e), "err")));
   wireConnectButtons(root, () => runDirect);
-  wireGUIButtons(root, () => runDirect);
   updateCounts();
 }
 
@@ -703,7 +712,7 @@ async function startRun(dryRun) {
   if (dryRun) {
     const ok = await uiConfirm({
       title: t("接続確認のみ"),
-      message: t("{s}<b>{n} 台</b>に接続してログインまで確認します。<br>コマンドは送らず、ログも残しません。よろしいですか？", { s: scope, n: targets.length }) + directNote(runDirect),
+      message: t("{s}<b>{n} 台</b>に接続してログインまで確認します。<br>コマンドは送らず、ログも残しません。よろしいですか？", { s: scope, n: targets.length }) + directNote(runDirect, targets),
       okLabel: t("⚡ 接続確認"),
     });
     if (!ok) return;
@@ -725,7 +734,7 @@ async function startRun(dryRun) {
       + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "");
     const ok = await uiConfirm({
       title: t("一括実行"),
-      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + directNote(runDirect),
+      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + directNote(runDirect, targets),
       okLabel: stageRunLabel(runStage),
     });
     if (!ok) return;
@@ -1202,14 +1211,14 @@ function renderSettings() {
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
     </div>
-    <div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="my-logins">
-      <div style="font-weight:600;margin-bottom:4px">${esc(t("自分の踏み台認証"))}</div>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("機器の踏み台でユーザー名が空欄の段は、ホストとポートが一致するここの認証情報でログインします。社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録してください。この PC の vault にだけ保存され、一式書出には入りません。一式書出で「踏み台の認証情報を含めない」を選ぶと、受け取った人は自分の認証情報をここに登録するだけで使えます。"))}</div>
-      <div id="ml-rows"></div>
-      <button class="btn sm" id="ml-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
-      <div class="modal-actions"><button class="btn primary" id="ml-save">${esc(t("保存"))}</button></div>
+    <div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="my-bastion">
+      <div style="font-weight:600;margin-bottom:4px">${esc(t("自分の踏み台"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書出・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
+      <div id="mb-rows"></div>
+      <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
+      <div class="modal-actions"><button class="btn primary" id="mb-save">${esc(t("保存"))}</button></div>
     </div>`;
-  renderMyLogins();
+  renderMyBastion();
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = myLoginsDirty = false;
@@ -1251,81 +1260,102 @@ function renderSettings() {
   };
 }
 
-// 自分の踏み台認証: the user's own logins to jump hosts, used for every hop
-// with the same host and port whose username is empty (model.BastionLogin).
-function renderMyLogins() {
-  const panel = document.getElementById("my-logins");
+// 自分の踏み台: the user's own jump host chain (model Inventory.MyBastions,
+// up to 5 hops), gone through first by every device marked 自分の踏み台を
+// 使う. Saved on its own (SaveMyBastions); rows without a host are dropped.
+function renderMyBastion() {
+  const panel = document.getElementById("my-bastion");
   if (!panel) return;
-  let rows = (INV.myBastionLogins || []).map(x => ({ ...x }));
-  const host = panel.querySelector("#ml-rows");
-  const collect = () => [...host.querySelectorAll("[data-ml-row]")].map(r => ({
-    host: r.querySelector(".ml-host").value.trim(),
-    port: parseInt(r.querySelector(".ml-port").value, 10) || 0,
-    username: r.querySelector(".ml-user").value.trim(),
-    authMethod: r.querySelector(".ml-auth").value,
-    password: r.querySelector(".ml-pw").value,
-    keyFile: r.querySelector(".ml-key").value.trim(),
-    keyPassphrase: r.querySelector(".ml-keypass").value,
+  let rows = (INV.myBastions || []).map(x => ({ ...x }));
+  const host = panel.querySelector("#mb-rows");
+  const collect = () => [...host.querySelectorAll("[data-mb-row]")].map(r => ({
+    host: r.querySelector(".mb-host").value.trim(),
+    method: r.querySelector(".mb-method").value,
+    port: parseInt(r.querySelector(".mb-port").value, 10) || 0,
+    username: r.querySelector(".mb-user").value.trim(),
+    authMethod: r.querySelector(".mb-auth").value,
+    password: r.querySelector(".mb-pw").value,
+    keyFile: r.querySelector(".mb-key").value.trim(),
+    keyPassphrase: r.querySelector(".mb-keypass").value,
+    legacyAlgos: r.querySelector(".mb-legacy").checked,
+    jumpCommand: r.querySelector(".mb-jump").value.trim(),
   }));
+  const dirty = () => { myLoginsDirty = true; };
   const draw = () => {
-    host.innerHTML = rows.length ? rows.map((l, i) => {
-      const key = l.authMethod === "publickey";
-      return `<div class="card" data-ml-row style="padding:14px 16px;margin:10px 0">
+    host.innerHTML = rows.length ? rows.map((b, i) => {
+      const ssh = (b.method || "ssh") === "ssh", key = ssh && b.authMethod !== "password";
+      return `<div class="card" data-mb-row style="padding:14px 16px;margin:10px 0">
         <div class="row-inline" style="justify-content:space-between;margin-bottom:8px">
-          <b>${esc(l.host || t("（新しい踏み台）"))}</b>
-          <button class="btn sm act-del" type="button" data-ml-rm="${i}">${esc(t("削除"))}</button></div>
+          <b>${esc(t("{n}段目の踏み台", { n: i + 1 }))}</b>
+          <button class="btn sm act-del" type="button" data-mb-rm="${i}">${esc(t("削除"))}</button></div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input class="ml-host" value="${esc(l.host || "")}"></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label><input class="ml-port" type="number" value="${esc(String(l.port || 22))}"></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="ml-user" value="${esc(l.username || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input class="mb-host" value="${esc(b.host || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("接続方式"))}</label><select class="mb-method">
+            <option value="ssh" ${ssh ? "selected" : ""}>SSH</option>
+            <option value="telnet" ${ssh ? "" : "selected"}>Telnet</option></select></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label><input class="mb-port" type="number" value="${esc(String(b.port || (ssh ? 22 : 23)))}"></div>
         </div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("SSH認証"))}</label><select class="ml-auth">
-            <option value="password" ${key ? "" : "selected"}>${esc(t("パスワード"))}</option>
-            <option value="publickey" ${key ? "selected" : ""}>${esc(t("公開鍵"))}</option></select></div>
-          <div class="field" style="margin-bottom:8px${key ? ";display:none" : ""}" data-ml-pw><label>${esc(t("パスワード"))}</label><input class="ml-pw" type="password" value="${esc(l.password || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))}${i === 0 ? ` <span class="req">${esc(t("必須"))}</span>` : ""}</label><input class="mb-user" value="${esc(b.username || "")}"></div>
+          <div class="field" style="margin-bottom:8px${ssh ? "" : ";display:none"}" data-mb-ssh><label>${esc(t("SSH認証"))}</label><select class="mb-auth">
+            <option value="publickey" ${key ? "selected" : ""}>${esc(t("公開鍵"))}</option>
+            <option value="password" ${key ? "" : "selected"}>${esc(t("パスワード"))}</option></select></div>
+          <div class="field" style="margin-bottom:8px${key ? ";display:none" : ""}" data-mb-pw><label>${esc(t("パスワード"))}</label><input class="mb-pw" type="password" value="${esc(b.password || "")}"></div>
         </div>
-        <div class="grid-2" data-ml-keyrow ${key ? "" : 'style="display:none"'}>
+        <div class="grid-2" data-mb-key ${key ? "" : 'style="display:none"'}>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
-            <div class="row-inline" style="gap:6px"><input class="ml-key" style="flex:1" value="${esc(l.keyFile || "")}">
-              <button class="btn sm ml-key-pick" type="button">${esc(t("参照…"))}</button></div></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label><input class="ml-keypass" type="password" value="${esc(l.keyPassphrase || "")}"></div>
-        </div></div>`;
+            <div class="row-inline" style="gap:6px"><input class="mb-key" style="flex:1" value="${esc(b.keyFile || "")}">
+              <button class="btn sm mb-key-pick" type="button">${esc(t("参照…"))}</button></div></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label><input class="mb-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
+        </div>
+        <div class="field" style="margin-bottom:8px${ssh ? "" : ";display:none"}" data-mb-ssh><label style="font-weight:normal"><input type="checkbox" class="mb-legacy" style="width:auto" ${b.legacyAlgos ? "checked" : ""}> ${esc(t("この踏み台にレガシー暗号を許可"))}</label></div>
+        <div class="field" style="margin-bottom:0"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>
+          <input class="mb-jump mono" value="${esc(b.jumpCommand || "")}" placeholder="ssh {user}@{host}"></div>
+      </div>`;
     }).join("") : `<div class="muted" style="font-size:12px">${esc(t("登録はありません"))}</div>`;
-    host.querySelectorAll("input,select").forEach(el => {
-      el.addEventListener("input", () => { myLoginsDirty = true; });
-      el.addEventListener("change", () => { myLoginsDirty = true; });
-    });
-    host.querySelectorAll("[data-ml-rm]").forEach(b => b.onclick = () => {
-      rows = collect(); rows.splice(parseInt(b.dataset.mlRm, 10), 1); myLoginsDirty = true; draw();
-    });
-    host.querySelectorAll(".ml-auth").forEach(sel => sel.onchange = () => {
-      const r = sel.closest("[data-ml-row]");
-      const key = sel.value === "publickey";
-      r.querySelector("[data-ml-pw]").style.display = key ? "none" : "";
-      r.querySelector("[data-ml-keyrow]").style.display = key ? "" : "none";
-      const inp = r.querySelector(".ml-key");
+    host.querySelectorAll("input,select").forEach(el => { el.addEventListener("input", dirty); el.addEventListener("change", dirty); });
+    host.querySelectorAll("[data-mb-rm]").forEach(b => b.onclick = () => { rows = collect(); rows.splice(+b.dataset.mbRm, 1); dirty(); draw(); });
+    host.querySelectorAll(".mb-auth").forEach(sel => sel.onchange = () => {
+      const r = sel.closest("[data-mb-row]"), key = sel.value === "publickey";
+      r.querySelector("[data-mb-pw]").style.display = key ? "none" : "";
+      r.querySelector("[data-mb-key]").style.display = key ? "" : "none";
+      const inp = r.querySelector(".mb-key");
       if (key && !inp.value && (INV.settings || {}).lastKeyFile) inp.value = INV.settings.lastKeyFile;
-      myLoginsDirty = true;
+      dirty();
     });
-    host.querySelectorAll(".ml-key-pick").forEach(b => b.onclick = async () => {
+    // Telnet: a password only (no SSH auth choice, key or ciphers).
+    host.querySelectorAll(".mb-method").forEach(sel => sel.onchange = () => {
+      const r = sel.closest("[data-mb-row]"), inp = r.querySelector(".mb-port"), p = parseInt(inp.value, 10) || 0;
+      if (!p || p === 22 || p === 23) inp.value = sel.value === "ssh" ? 22 : 23;
+      const ssh = sel.value === "ssh", key = ssh && r.querySelector(".mb-auth").value === "publickey";
+      r.querySelectorAll("[data-mb-ssh]").forEach(el => { el.style.display = ssh ? "" : "none"; });
+      r.querySelector("[data-mb-pw]").style.display = key ? "none" : "";
+      r.querySelector("[data-mb-key]").style.display = key ? "" : "none";
+      dirty();
+    });
+    host.querySelectorAll(".mb-key-pick").forEach(b => b.onclick = async () => {
       try {
         const p = await App().PickKeyFile();
-        if (p) { b.closest("[data-ml-row]").querySelector(".ml-key").value = p; myLoginsDirty = true; }
+        if (p) { b.closest("[data-mb-row]").querySelector(".mb-key").value = p; dirty(); }
       } catch (e) { toast(t("選択失敗") + ": " + terr(e), "err"); }
     });
     wirePasswordToggles(host);
+    panel.querySelector("#mb-add").style.display = rows.length >= 5 ? "none" : "";
   };
   draw();
-  panel.querySelector("#ml-add").onclick = () => {
-    rows = collect(); rows.push({ port: 22, authMethod: "publickey" }); myLoginsDirty = true; draw();
+  panel.querySelector("#mb-add").onclick = () => {
+    rows = collect();
+    if (rows.length >= 5) return;
+    rows.push({ method: "ssh", authMethod: "publickey" });
+    dirty(); draw();
   };
-  panel.querySelector("#ml-save").onclick = async () => {
+  panel.querySelector("#mb-save").onclick = async () => {
+    const chain = collect();
     try {
-      await App().SaveBastionLogins(collect());
+      await App().SaveMyBastions(chain);
       myLoginsDirty = false;
       await refreshInventory();
-      toast(t("保存しました"), "ok");
+      toast(chain.some(b => b.host) ? t("保存しました") : t("自分の踏み台の登録を消しました"), "ok");
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
 }

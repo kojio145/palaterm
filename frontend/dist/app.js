@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.7.3";
+const APP_VERSION = "1.7.4";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -385,48 +385,24 @@ function wireConnectButtons(root, direct) {
   });
 }
 
-// GUI を開く: the device's web GUI in the default browser — straight to its
-// address, or behind jump hosts through a forward of this PC's (App.OpenGUI).
-// Shift+click or a right-click opens it without the jump hosts; direct,
-// when given, is the run tab's 踏み台: 使わない.
+// GUI を開く: the device's web GUI in a PalaTerm window, logged in with the
+// device's credentials (App.OpenGUI), always straight to its address. The
+// button is there for every device but only works with GUI を使う on.
 function guiButton(d) {
-  if (d.conn === "serial") return "";
-  const hop = devHasBastion(d);
-  const tip = hop ? t("管理画面を PalaTerm の窓で開き、機器のユーザー名・パスワードで自動ログインします。踏み台の SSH の中を通して開きます。Shift+クリック（または右クリック）で踏み台を使わずに直接開きます")
-    : t("管理画面を PalaTerm の窓で開き、機器のユーザー名・パスワードで自動ログインします");
-  return `<button class="btn sm act-gui" data-gui="${esc(d.id)}" data-tip="${esc(tip)}">${esc(t("GUI"))}</button>`;
+  const on = !!d.guiOn;
+  const tip = on ? t("管理画面を PalaTerm の窓で開き、この機器のユーザー名・パスワードで自動ログインします")
+    : t("機器の編集で「GUI を使う」をオンにすると使えます");
+  return `<button class="btn sm act-gui" data-gui="${esc(d.id)}" ${on ? "" : "disabled"} data-tip="${esc(tip)}">${esc(t("GUI"))}</button>`;
 }
-function wireGUIButtons(root, direct) {
-  const open = async (btn, forceDirect) => {
-    const dir = forceDirect || !!(direct && direct());
-    btn.disabled = true;
+function wireGUIButtons(root) {
+  root.querySelectorAll("[data-gui]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
     try {
-      const g = await App().OpenGUI(btn.dataset.gui, dir);
-      toast(g.via ? t("{d} の GUI を開きました（踏み台 {n} 段経由・{u}）", { d: g.device, n: g.via, u: g.url })
-        : t("{d} の GUI を開きました（{u}）", { d: g.device, u: g.url }), "ok");
+      const g = await App().OpenGUI(b.dataset.gui);
+      toast(t("{d} の GUI を開きました（{u}）", { d: g.device, u: g.url }), "ok");
     } catch (e) { toast(t("GUI を開けません") + ": " + terr(e), "err"); }
-    finally { btn.disabled = false; }
-  };
-  root.querySelectorAll("[data-gui]").forEach(b => {
-    b.onclick = e => open(b, !!e.shiftKey);
-    b.oncontextmenu = e => { e.preventDefault(); open(b, true); };
+    finally { b.disabled = false; }
   });
-}
-
-// The sidebar's list of running GUI forwards (stopped on lock and exit).
-async function refreshGUIForwards() {
-  const box = document.getElementById("gui-fwd");
-  if (!box) return;
-  let list = [];
-  try { list = await App().ListGUI(); } catch (_) {}
-  if (!list.length) { box.innerHTML = ""; box.style.display = "none"; return; }
-  box.style.display = "";
-  box.innerHTML = `<div class="muted" style="font-size:11px;margin-bottom:4px" data-tip="${esc(t("踏み台経由で開いた GUI の転送です。この PC のループバックアドレス（127.0.0.x）だけで待ち受け、ロック・終了で止まります。機器名のクリックで既定のブラウザに開きます"))}">${esc(t("GUI 転送中（{n}）", { n: list.length }))}</div>` +
-    list.map(g => `<div class="row-inline" style="gap:4px;font-size:12px;margin-bottom:2px">
-      <span class="link" data-gui-open="${esc(g.url)}" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-tip="${esc(g.url + " → " + g.target)}">${esc(g.device)}</span>
-      <button class="btn sm" data-gui-stop="${esc(g.id)}" style="padding:0 6px" data-tip="${esc(t("この転送を止めます"))}">✕</button></div>`).join("");
-  box.querySelectorAll("[data-gui-stop]").forEach(b => b.onclick = async () => { await App().StopGUI(b.dataset.guiStop); refreshGUIForwards(); });
-  box.querySelectorAll("[data-gui-open]").forEach(b => b.onclick = () => rt().BrowserOpenURL(b.dataset.guiOpen));
 }
 
 // Click-to-copy for .ph-table variable cells inside scope.
@@ -644,7 +620,6 @@ async function boot() {
   // × with terminal windows open or a batch running: the backend holds the
   // close and asks here (Windows' own Yes/No box looked out of place).
   // キャンセル has the focus.
-  rt().EventsOn("gui:changed", () => refreshGUIForwards());
   let quitAsking = false;
   rt().EventsOn("app:quit-request", async q => {
     if (quitAsking) return;
@@ -716,7 +691,6 @@ async function enterApp() {
   PROFILES = await App().ListProfiles();
   SERIAL = await App().ListSerialPorts() || [];
   await refreshInventory();
-  refreshGUIForwards();
   switchTab(restoredTab || "devices");
   restoredTab = null;
   // Locked while a batch ran: it went on meanwhile. Still going -> keep

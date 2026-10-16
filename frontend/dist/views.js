@@ -271,7 +271,7 @@ function renderDeviceList() {
     { site: d => d.site || "" });
   const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
   const rows = visible.map(d => {
-    const nb = (d.bastions || []).length || (d.bastion && d.bastion.host ? 1 : 0);
+    const nb = ((d.bastions || []).length || (d.bastion && d.bastion.host ? 1 : 0)) + (d.useMyBastion ? Math.max((INV.myBastions || []).filter(b => b.host).length, 1) : 0);
     return `
     <tr data-row="${esc(d.id)}" data-key="${esc(d.id)}">
       <td><input type="checkbox" class="dev-sel" data-enable="${esc(d.id)}" ${devSel.has(d.id) ? "checked" : ""}></td>
@@ -288,7 +288,7 @@ function renderDeviceList() {
       <td><select class="cell inl-os" data-id="${esc(d.id)}" data-tip="${esc(profileName(d.osType))}">${osOptions(d.osType)}</select></td>
       <td><select class="cell inl-set" data-id="${esc(d.id)}" data-tip="${esc(d.commandSet || t("（なし）"))}">${cmdSetOptions(d.commandSet)}</select></td>
       <td class="ops"><div class="ops-btns">
-        <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
+        <button class="btn sm act-conn" data-term="${esc(d.id)}" ${d.cliOff ? "disabled" : ""} data-tip="${esc(d.cliOff ? t("CLI を使わない機器です（機器の編集で「CLI を使う」をオンにすると使えます）") : CONNECT_TIP)}">${esc(t("接続"))}</button>
         ${guiButton(d)}
         <button class="btn sm act-edit" data-edit="${esc(d.id)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-copy="${esc(d.id)}" data-tip="${esc(t("この機器を複製します"))}">${esc(t("複製"))}</button>
@@ -590,12 +590,17 @@ function exportBundleDialog(defaultGroup) {
     <div class="field"><label>${esc(t("書き出す対象"))}</label><select id="cx-grp">${opts}</select></div>
     <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
     <div class="field" style="margin-top:10px;margin-bottom:0"><label style="font-weight:normal"><input type="checkbox" id="cx-nobc" style="width:auto" ${exportNoBastionCreds() ? "checked" : ""}>
-      <span data-tip="${esc(t("踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホストや通り方は残ります）。受け取った人は、設定タブの「自分の踏み台認証」に自分の認証情報を登録すれば、そのまま踏み台を通れます。機器自身のユーザー名・パスワードは書き出されます"))}">${esc(t("踏み台の認証情報を含めない（人に渡す用） ⓘ"))}</span></label></div>
+      <span data-tip="${esc(t("機器ごとに登録した踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホストや通り方は残ります）。「自分の踏み台を使う」機器は、もともと踏み台の IP や認証情報が書き出されません。機器自身のユーザー名・パスワードは書き出されます"))}">${esc(t("踏み台の認証情報を含めない（人に渡す用） ⓘ"))}</span></label></div>
+    <div style="font-size:12px;margin-top:6px;color:var(--warn)" id="cx-backup-warn" class="hidden">${esc(t("⚠ このチェックが入っていると、「全機器」でも機器ごとの踏み台の認証情報が入らず、完全なバックアップになりません"))}</div>
     <div class="muted" style="font-size:12px;margin-top:8px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
   openModal(node, "mid");
+  const syncWarn = () => node.querySelector("#cx-backup-warn").classList.toggle("hidden", !(node.querySelector("#cx-nobc").checked && node.querySelector("#cx-grp").value === "__ALL__"));
+  node.querySelector("#cx-nobc").onchange = syncWarn;
+  node.querySelector("#cx-grp").onchange = syncWarn;
+  syncWarn();
   node.querySelector("#cx-cancel").onclick = closeModal;
   node.querySelector("#cx-ok").onclick = async () => {
     const v = node.querySelector("#cx-grp").value;
@@ -708,6 +713,21 @@ function editDevice(dev, preGroup) {
     <div class="grid-2">
       <div class="field"><label><span data-tip="${esc(t("機器の役割を表す自由なラベルです。拠点と同じく、設定タブのテンプレートで {role} として使えます"))}">${esc(t("役割（任意） ⓘ"))}</span></label><input id="f-role" value="${esc(d.role || "")}" placeholder="${esc(t("例: コア / エッジ / FW"))}"></div>
     </div>
+    <div class="row-inline" style="gap:28px;margin:2px 0 10px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="f-cli" ${d.cliOff ? "" : "checked"} style="width:auto">
+        <span data-tip="${esc(t("SSH / Telnet / シリアルでログインする機器です（一括実行・接続確認・予約・「接続」）。GUI だけの機器はオフにします"))}">${esc(t("CLI を使う ⓘ"))}</span></label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="f-gui" ${d.guiOn ? "checked" : ""} style="width:auto">
+        <span data-tip="${esc(t("オンにすると、機器一覧の「GUI」で管理画面を PalaTerm の窓で開き、この機器のユーザー名・パスワードで自動ログインします（踏み台は通らず直接開きます）"))}">${esc(t("GUI を使う ⓘ"))}</span></label>
+    </div>
+    <div class="grid-2" id="fw-gui" style="max-width:420px">
+      <div class="field"><label>${esc(t("GUIの方式"))}</label><select id="f-guischeme">
+        <option value="https" ${d.guiScheme === "http" ? "" : "selected"}>https</option>
+        <option value="http" ${d.guiScheme === "http" ? "selected" : ""}>http</option></select></div>
+      <div class="field"><label><span data-tip="${esc(t("https は 443、http は 80 が既定です（方式を切り替えると既定のポートに合わせます）。管理画面のポートを変えている機器は、その番号を入れてください"))}">${esc(t("GUIポート ⓘ"))}</span></label>
+        <input id="f-guiport" type="number" min="1" max="65535" value="${esc(String(d.guiPort || (d.guiScheme === "http" ? 80 : 443)))}"></div>
+    </div>
+    <div class="muted" id="f-http-warn" style="font-size:12px;margin:-4px 0 8px;color:var(--warn)">${esc(t("⚠ http では、自動ログインのユーザー名・パスワードが暗号化されずに送られます"))}</div>
+    <div id="fw-cli1">
     <div class="grid-3">
       <div class="field"><label>${esc(t("接続方式"))} <span class="req">${esc(t("必須"))}</span></label><select id="f-conn">
         <option value="ssh" ${d.conn === "ssh" ? "selected" : ""}>SSH</option>
@@ -717,6 +737,7 @@ function editDevice(dev, preGroup) {
       <div class="field"><label>${esc(t("コマンドセット"))}</label><select id="f-set">${setOpts}</select></div>
     </div>
     <div id="conn-extra"></div>
+    </div>
 
     <div class="section-label">${esc(t("認証情報（暗号化保存）"))}</div>
     <div class="field" id="fw-credmode"><label><span data-tip="${esc(t("「グループ既定を使う」にすると、ユーザー名・パスワード・enable パスワードはグループの既定（機器一覧の「グループ既定の認証情報…」）が使われ、この機器の欄は使われません。同じグループでもパスワードが違う機器は「個別に設定」のままにします"))}">${esc(t("認証情報の扱い ⓘ"))}</span></label>
@@ -733,7 +754,7 @@ function editDevice(dev, preGroup) {
     </div>
     <div class="grid-2" id="fw-pwrow">
       <div class="field"><label>${esc(t("パスワード"))}</label><input id="f-pw" type="password" value="${esc(d.password || "")}"></div>
-      <div class="field"><label>${esc(t("enable / 昇格パスワード（任意・ない機種は空欄）"))}</label><input id="f-en" type="password" value="${esc(d.enablePassword || "")}"></div>
+      <div class="field" id="fw-enable"><label>${esc(t("enable / 昇格パスワード（任意・ない機種は空欄）"))}</label><input id="f-en" type="password" value="${esc(d.enablePassword || "")}"></div>
     </div>
     <div class="field" id="fw-keyfile"><label>${esc(t("秘密鍵ファイル"))}</label>
       <div class="row-inline" style="gap:6px">
@@ -748,7 +769,12 @@ function editDevice(dev, preGroup) {
         <span data-tip="${esc(t("SSHで古い暗号方式（SHA-1系の鍵交換・CBC・3DES）も候補に含めます。通常はオフのまま（強い方式のみ）。新しい方式に対応していない古い機器で接続エラーになる場合だけ有効にしてください"))}">${esc(t("レガシー暗号を許可（古い機器向け・通常はオフ） ⓘ"))}</span>
       </label></div>
 
+    <div id="fw-cli2">
     <div class="section-label">${esc(t("踏み台サーバ（任意・最大5段。外側＝手前から順に）"))}</div>
+    <div class="field" style="margin-bottom:6px">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="f-mybastion" ${d.useMyBastion ? "checked" : ""} style="width:auto">
+        <span data-tip="${esc(t("設定タブで登録した「自分の踏み台」（IP・ユーザー名・秘密鍵など。最大5段）を先に通ってから、下の踏み台・機器へ進みます。機器には「使う」ことだけが保存され、書き出しても踏み台の IP や認証情報は入りません。受け取った人は自分の踏み台を登録すればそのまま使えます"))}">${esc(t("自分の踏み台（設定タブ）を先に通る ⓘ"))}</span></label>
+      <div class="muted" id="f-mybastion-note" style="font-size:12px;margin-top:4px"></div></div>
     <div class="field" id="fw-bmode" style="margin-bottom:4px"><label><span data-tip="${esc(t("踏み台上でコマンドを打つ: 手前の踏み台の画面で ssh / telnet を打って次へ進みます。ルーターなどシェルのある踏み台ならどれでも使えますが、2段目以降と機器へのログインは踏み台側の ssh が行います。SSH トンネル: 踏み台の SSH の中を通して、この PC から各段と機器へ直接 SSH ログインします（OpenSSH の ProxyJump と同じ）。全段で秘密鍵・レガシー暗号・ホストキー確認が効きます。踏み台はすべて SSH で、TCP 転送を許可している必要があります（Linux の OpenSSH は標準で許可）"))}">${esc(t("踏み台の通り方 ⓘ"))}</span></label>
       <select id="f-bmode">
         <option value="" ${d.bastionMode === "tunnel" ? "" : "selected"}>${esc(t("踏み台上でコマンドを打つ（標準・ルーターの踏み台も可）"))}</option>
@@ -756,6 +782,7 @@ function editDevice(dev, preGroup) {
       </select></div>
     <div id="bastions-host"></div>
     <button class="btn sm" id="add-bastion" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
+    </div>
 
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
@@ -779,16 +806,11 @@ function editDevice(dev, preGroup) {
       const prevEl = node.querySelector("#f-port");
       const prev = prevEl ? (parseInt(prevEl.value, 10) || 0) : (d.port || 0);
       const port = (!prev || prev === 22 || prev === 23) ? (c === "ssh" ? 22 : 23) : prev;
-      const guiEl = node.querySelector("#f-guiport");
-      const gui = guiEl ? guiEl.value : (d.guiPort || "");
-      connExtra.innerHTML = `<div class="grid-2" style="max-width:420px">
-        <div class="field"><label>${esc(t("ポート"))}</label><input id="f-port" type="number" value="${port}"></div>
-        <div class="field"><label><span data-tip="${esc(t("「GUI」ボタンで開く管理画面のポートです。空欄なら 443（https）。80・8080 は http で開きます。踏み台がある機器は、踏み台の SSH の中を通して開きます"))}">${esc(t("GUIポート ⓘ"))}</span></label><input id="f-guiport" type="number" min="0" max="65535" placeholder="443" value="${esc(String(gui))}"></div></div>`;
+      connExtra.innerHTML = `<div class="field" style="max-width:200px"><label>${esc(t("ポート"))}</label>
+        <input id="f-port" type="number" value="${port}"></div>`;
     }
     node.querySelector("#fw-authmethod").style.display = c === "ssh" ? "" : "none";
     node.querySelector("#fw-legacy").style.display = c === "ssh" ? "" : "none";
-    // A serial device has no address: the IP field stops being required.
-    node.querySelector("#f-host-req").style.display = c === "serial" ? "none" : "";
     syncAuth();
   }
   function syncAuth() {
@@ -801,7 +823,33 @@ function editDevice(dev, preGroup) {
     if (key && !keyInp.value && (INV.settings || {}).lastKeyFile) {
       keyInp.value = INV.settings.lastKeyFile;
     }
+    syncUse();
   }
+  // CLI / GUI: what the device is used through. With the CLI off it is a
+  // GUI-only device: the connection, OS type, command set, key and jump-host
+  // fields go away (the username and password stay — the GUI logs in with
+  // them); the GUI's scheme and port show only with the GUI on.
+  function syncUse() {
+    const cli = node.querySelector("#f-cli").checked, gui = node.querySelector("#f-gui").checked;
+    node.querySelector("#fw-cli1").style.display = cli ? "" : "none";
+    node.querySelector("#fw-cli2").style.display = cli ? "" : "none";
+    node.querySelector("#fw-gui").style.display = gui ? "" : "none";
+    node.querySelector("#f-http-warn").style.display = gui && node.querySelector("#f-guischeme").value === "http" ? "" : "none";
+    node.querySelector("#fw-enable").style.display = cli ? "" : "none";
+    if (!cli) ["#fw-authmethod", "#fw-keyfile", "#fw-keypass", "#fw-legacy"].forEach(s => { node.querySelector(s).style.display = "none"; });
+    // A serial device has no address: the IP field is required only for a
+    // network CLI or a GUI.
+    const c = node.querySelector("#f-conn").value;
+    node.querySelector("#f-host-req").style.display = gui || (cli && c !== "serial") ? "" : "none";
+  }
+  // The GUI port follows the scheme while it is a scheme's default.
+  node.querySelector("#f-guischeme").onchange = () => {
+    const inp = node.querySelector("#f-guiport"), p = parseInt(inp.value, 10) || 0;
+    if (!p || p === 80 || p === 443) inp.value = node.querySelector("#f-guischeme").value === "http" ? 80 : 443;
+    syncUse();
+  };
+  node.querySelector("#f-cli").onchange = () => { syncConn(); };
+  node.querySelector("#f-gui").onchange = syncUse;
   // Credential mode: the group choice only exists while a group is named,
   // and the device's own fields hide while the group's defaults are in use.
   const credMode = node.querySelector("#f-credmode");
@@ -868,14 +916,21 @@ function editDevice(dev, preGroup) {
   // hop's key and legacy fields apply and no jump command is typed.
   const bmode = node.querySelector("#f-bmode");
   bmode.onchange = () => { bastions = collectBastions(); renderBastions(); };
+  const mineBox = node.querySelector("#f-mybastion");
+  mineBox.onchange = () => { bastions = collectBastions(); renderBastions(); };
   function renderBastions() {
     const tun = bmode.value === "tunnel";
-    node.querySelector("#fw-bmode").style.display = bastions.length ? "" : "none";
-    const hide = i => i > 0 && !tun;
+    const mbs = (INV.myBastions || []).filter(b => b.host);
+    const mine = mineBox.checked;
+    node.querySelector("#fw-bmode").style.display = bastions.length || mine ? "" : "none";
+    node.querySelector("#f-mybastion-note").innerHTML = !mine ? ""
+      : mbs.length ? esc(t("自分の踏み台: {c}。その先に踏み台があれば下に足します", { c: mbs.map((b, i) => t("{n}段目 {h}", { n: i + 1, h: b.host + ":" + (b.port || ((b.method || "ssh") === "ssh" ? 22 : 23)) }) + (b.username ? "（" + b.username + "）" : "")).join(" → ") }))
+      : `<span style="color:var(--warn)">${esc(t("⚠ 自分の踏み台がまだ登録されていません。設定タブの「自分の踏み台」で登録してください"))}</span>`;
+    const hide = i => (i > 0 || mine) && !tun;
     bhost.innerHTML = (tun && bastions.length ? `<div class="muted" style="font-size:12px;margin:4px 0">${esc(t("SSH トンネルでは踏み台はすべて SSH にしてください。踏み台の sshd が TCP 転送を許可していないと接続できません"))}</div>` : "") + bastions.map((b, i) => `
       <div class="card" data-bastion-row style="padding:14px 16px;margin:10px 0">
         <div class="row-inline" style="justify-content:space-between;margin-bottom:8px">
-          <b>${esc(t("{n}段目の踏み台", { n: i + 1 }))}</b>
+          <b>${esc(mine ? t("{n}段目の踏み台（自分の踏み台の後）", { n: i + 1 }) : t("{n}段目の踏み台", { n: i + 1 }))}</b>
           <button class="btn sm act-del" type="button" data-rm="${i}">${esc(t("削除"))}</button>
         </div>
         <div class="grid-3">
@@ -890,7 +945,7 @@ function editDevice(dev, preGroup) {
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label><span data-tip="${esc(t("空欄にすると、設定タブの「自分の踏み台認証」でホストとポートが一致するものを使います（人ごとに鍵が違う社内の踏み台など）"))}">${esc(t("ユーザー ⓘ"))}</span></label><input class="b-user" value="${esc(b.username || "")}" placeholder="${esc(t("空欄＝自分の踏み台認証"))}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
           <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
@@ -935,7 +990,7 @@ function editDevice(dev, preGroup) {
       const portInp = row.querySelector(".b-port");
       const p = parseInt(portInp.value, 10) || 0;
       if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
-      const first = row === bhost.querySelector("[data-bastion-row]");
+      const first = row === bhost.querySelector("[data-bastion-row]") && !mineBox.checked;
       row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || (!first && bmode.value !== "tunnel") ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
@@ -979,21 +1034,26 @@ function editDevice(dev, preGroup) {
       legacyAlgos: node.querySelector("#f-legacy").checked,
       useGroupCreds: !!node.querySelector("#f-group").value.trim() && node.querySelector("#f-credmode").value === "group",
       enabled: d.enabled !== false,
+      cliOff: !node.querySelector("#f-cli").checked,
+      guiOn: node.querySelector("#f-gui").checked,
+      guiScheme: node.querySelector("#f-guischeme").value === "http" ? "http" : "",
+      useMyBastion: mineBox.checked,
     };
+    // The scheme's own port is stored as 0 (= follow the scheme).
+    const gp = parseInt(node.querySelector("#f-guiport").value, 10) || 0;
+    out.guiPort = gp === (out.guiScheme === "http" ? 80 : 443) ? 0 : gp;
+    if (out.cliOff && !out.guiOn) { toast(t("CLI と GUI のどちらかはオンにしてください"), "err"); return; }
     if (conn === "serial") {
       out.serialPort = node.querySelector("#f-serial").value;
       out.baud = parseInt(node.querySelector("#f-baud").value, 10) || 9600;
     } else {
       out.port = parseInt(node.querySelector("#f-port").value, 10) || 0;
-      out.guiPort = parseInt(node.querySelector("#f-guiport").value, 10) || 0;
     }
     const chain = collectBastions().filter(b => b.host && b.method);
-    if (chain.length) {
-      out.bastions = chain.slice(0, 5);
-      out.bastionMode = bmode.value;
-    }
+    if (chain.length) out.bastions = chain.slice(0, 5);
+    if (chain.length || out.useMyBastion) out.bastionMode = bmode.value;
     if (!out.name) { toast(t("ホスト名は必須です"), "err"); return; }
-    if (conn !== "serial" && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
+    if ((out.guiOn || (!out.cliOff && conn !== "serial")) && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
     // A name only has to be unique within its group (it names the log
     // files; a run is one group). The backend checks again on save.
     const nameChanged = !dev || out.name !== dev.name || out.group !== (dev.group || "");

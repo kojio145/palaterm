@@ -150,8 +150,17 @@ func TestTunnelRunTelnetDevice(t *testing.T) {
 func TestMissingHopLogin(t *testing.T) {
 	ssh := model.Bastion{Host: "jump1.example", Method: model.BastionSSH}
 	dev := &model.Device{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Bastions: []model.Bastion{ssh}}
-	if err := missingHopLogin(dev, dev.ActiveBastions()); err == nil || !strings.Contains(err.Error(), "自分の踏み台認証") {
+	if err := missingHopLogin(dev, dev.ActiveBastions()); err == nil || !strings.Contains(err.Error(), "ユーザー名がありません") {
 		t.Errorf("empty first hop: err = %v", err)
+	}
+	// The own jump host, not registered / without a username: said by name.
+	mine := &model.Device{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Bastions: []model.Bastion{{Mine: true, Method: model.BastionSSH}}}
+	if err := missingHopLogin(mine, mine.ActiveBastions()); err == nil || !strings.Contains(err.Error(), "自分の踏み台が登録されていません") {
+		t.Errorf("unregistered own jump host: err = %v", err)
+	}
+	mine.Bastions[0].Host = "jump1.example"
+	if err := missingHopLogin(mine, mine.ActiveBastions()); err == nil || !strings.Contains(err.Error(), "自分の踏み台1段目のユーザー名") {
+		t.Errorf("own jump host without a username: err = %v", err)
 	}
 	withUser := ssh
 	withUser.Username = "ops"

@@ -293,16 +293,15 @@ func TestSchedLogStage(t *testing.T) {
 // the hops whose username is empty get the user's own login.
 func TestSnapshotDirectAndOwnBastionLogin(t *testing.T) {
 	inv := &model.Inventory{
-		Devices: []model.Device{{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Group: "A社", Enabled: true,
-			Bastions: []model.Bastion{{Host: "jump1.example", Method: model.BastionSSH}}}},
-		MyBastionLogins: []model.BastionLogin{{Host: "jump1.example", Username: "ops"}},
+		Devices: []model.Device{{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Group: "A社", Enabled: true, UseMyBastion: true}},
+		MyBastions: []model.Bastion{{Host: "jump1.example", Method: model.BastionSSH, Username: "ops"}},
 	}
 	snap, err := snapshotOf(inv, RunRequest{Group: "A社"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := snap.Devices[0].ActiveBastions(); len(b) != 1 || b[0].Username != "ops" {
-		t.Errorf("hops = %+v, want the own login", b)
+	if b := snap.Devices[0].ActiveBastions(); len(b) != 1 || b[0].Username != "ops" || !b[0].Mine {
+		t.Errorf("hops = %+v, want the own jump host", b)
 	}
 	snap, err = snapshotOf(inv, RunRequest{Group: "A社", Direct: true})
 	if err != nil {
@@ -311,7 +310,22 @@ func TestSnapshotDirectAndOwnBastionLogin(t *testing.T) {
 	if b := snap.Devices[0].ActiveBastions(); len(b) != 0 {
 		t.Errorf("direct run still goes through %+v", b)
 	}
-	if len(inv.Devices[0].Bastions) != 1 || inv.Devices[0].Bastions[0].Username != "" {
+	if len(inv.Devices[0].Bastions) != 0 || !inv.Devices[0].UseMyBastion {
 		t.Error("the vault's device was changed")
+	}
+}
+
+// A GUI-only device (CLI off) is never run or scheduled.
+func TestSnapshotSkipsGUIOnlyDevices(t *testing.T) {
+	inv := &model.Inventory{Devices: []model.Device{
+		{Name: "rt1", Host: "192.0.2.1", Conn: model.ConnSSH, Group: "A社", Enabled: true},
+		{Name: "gui1", Host: "192.0.2.2", Conn: model.ConnSSH, Group: "A社", Enabled: true, CLIOff: true, GUIOn: true},
+	}}
+	snap, err := snapshotOf(inv, RunRequest{Group: "A社", Names: []string{"rt1", "gui1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Devices) != 1 || snap.Devices[0].Name != "rt1" {
+		t.Errorf("devices = %+v, want rt1 only", snap.Devices)
 	}
 }

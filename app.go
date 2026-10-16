@@ -184,7 +184,7 @@ func (a *App) flushPersist() { a.writePending() }
 
 // shutdown runs when the main window closes.
 func (a *App) shutdown(ctx context.Context) {
-	a.StopGUI("")
+	closeGUIWindows()
 	a.flushPersist()
 	trayHide()
 	armWake(time.Time{})
@@ -340,6 +340,10 @@ func (a *App) Unlock(password string) error {
 	}
 	inv.NormalizeGroups()
 	seed := false
+	// v1.7.3's per-host jump-host logins become the single own jump host.
+	if inv.MigrateMyBastion() {
+		seed = true
+	}
 	// Devices from before IDs get one now, saved at once: the terminal window
 	// loads the vault on its own and must find the same IDs.
 	for _, d := range inv.Devices {
@@ -606,8 +610,8 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 // Lock forgets the password and inventory from memory — all but what the
 // enabled 予約 need to run while locked (schedCopy).
 func (a *App) Lock() {
-	// A GUI forward is an open door to the device: it closes with the vault.
-	a.StopGUI("")
+	// The GUI windows are logged-in sessions: they close with the vault.
+	closeGUIWindows()
 	a.flushPersist()
 	a.mu.Lock()
 	if a.inv != nil {
@@ -1400,17 +1404,28 @@ func (a *App) DeleteCommandSet(name string) error {
 }
 
 // SaveSettings replaces the run-wide settings.
-// SaveBastionLogins replaces the user's own jump-host logins (自分の踏み台
-// 認証), which fill in any hop whose username is empty.
-func (a *App) SaveBastionLogins(ls []model.BastionLogin) error {
-	for i := range ls {
-		ls[i].Host, ls[i].Username = strings.TrimSpace(ls[i].Host), strings.TrimSpace(ls[i].Username)
-		ls[i].KeyFile = strings.TrimSpace(ls[i].KeyFile)
-		if ls[i].AuthMethod != model.AuthPublicKey {
-			ls[i].KeyFile, ls[i].KeyPassphrase = "", ""
+// SaveMyBastions sets the user's own jump host chain (自分の踏み台), the
+// first hops of every device marked 自分の踏み台を使う. Rows without a host
+// are dropped; none left removes it.
+func (a *App) SaveMyBastions(chain []model.Bastion) error {
+	var out []model.Bastion
+	for _, b := range chain {
+		b.Host, b.Username = strings.TrimSpace(b.Host), strings.TrimSpace(b.Username)
+		b.KeyFile, b.JumpCommand = strings.TrimSpace(b.KeyFile), strings.TrimSpace(b.JumpCommand)
+		b.Mine = false
+		if b.Method == "" {
+			b.Method = model.BastionSSH
+		}
+		if b.AuthMethod != model.AuthPublicKey {
+			b.KeyFile, b.KeyPassphrase = "", ""
+		}
+		if b.Host != "" {
+			out = append(out, b)
+		} else if b.Username != "" || b.Password != "" || b.KeyFile != "" || b.JumpCommand != "" {
+			return fmt.Errorf("自分の踏み台%d段目のホストが空です（この段を使わないなら「削除」してください）", len(out)+1)
 		}
 	}
-	if err := model.ValidateBastionLogins(ls); err != nil {
+	if err := model.ValidateMyBastions(out); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -1418,7 +1433,7 @@ func (a *App) SaveBastionLogins(ls []model.BastionLogin) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	a.inv.MyBastionLogins = ls
+	a.inv.MyBastions = out
 	a.mu.Unlock()
 	return a.persist()
 }
@@ -1530,6 +1545,9 @@ func snapshotOf(inv *model.Inventory, req RunRequest) (*model.Inventory, error) 
 	for _, d := range snap.Devices {
 		if d.Group != req.Group {
 			continue
+		}
+		if d.CLIOff {
+			continue // GUI only: nothing to log into
 		}
 		if want != nil {
 			if !want[d.Name] {
@@ -2055,10 +2073,11 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	a.mu.Lock()
 	locked := a.inv == nil
 	pw := a.password
-	label := ""
+	label, cliOff := "", false
 	if !locked {
 		if i := a.inv.DeviceIndex(id); i >= 0 {
 			label = a.inv.Devices[i].Name
+			cliOff = a.inv.Devices[i].CLIOff
 		}
 	}
 	a.mu.Unlock()
@@ -2067,6 +2086,9 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	}
 	if label == "" {
 		return fmt.Errorf("機器が見つかりません")
+	}
+	if cliOff {
+		return fmt.Errorf("この機器は CLI を使わない設定です（機器の編集で「CLI を使う」をオンにしてください）")
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -2216,7 +2238,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.3"
+const appVersion = "1.7.4"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

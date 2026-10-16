@@ -44,6 +44,7 @@ function gridOptionsBuild(kind) {
     case "os": return PROFILES.map(p => ({ v: p.key, label: p.name }));
     case "set": return [{ v: "", label: t("（なし）"), alias: ["（なし）"] }].concat((INV.commandSets || []).map(s => ({ v: s.name, label: s.name })));
     case "group": return (INV.deviceGroups || []).map(g => ({ v: g.name, label: g.name }));
+    case "scheme": return [{ v: "https", label: "https" }, { v: "http", label: "http" }];
   }
   return null;
 }
@@ -359,6 +360,8 @@ function renderGrid(force) {
       </table>
       <div class="g-fill hidden" id="g-fill" title="${esc(t("ドラッグで連番・コピー（Ctrl を押しながらで連番とコピーを入れ替え）。ダブルクリックで最後の行まで"))}"></div>
       <div class="g-clip hidden" id="g-clip"></div>
+      <button class="g-dd hidden" id="g-dd" type="button" tabindex="-1" title="${esc(t("一覧から選ぶ（ダブルクリック・Space・F4 でも開きます。複数のセルを選んでいればまとめて入ります）"))}">▼</button>
+      <div class="g-list hidden" id="g-list" tabindex="-1"></div>
     </div>
     <datalist id="g-dl"></datalist>`;
   G.mounted = true;
@@ -489,6 +492,93 @@ function gridPaintSel(fillTo) {
     fill.style.top = (cr.bottom - wr.top + G.wrap.scrollTop - 10) + "px";
     fill.classList.remove("hidden");
   } else if (fill) fill.classList.add("hidden");
+  // The ▼ of a column with choices sits at the right end of the current cell.
+  const dd = document.getElementById("g-dd");
+  const ccol = G.vc[G.sel.fc];
+  if (dd && cur && !G.edit && gridChoices(ccol)) {
+    const wr = G.wrap.getBoundingClientRect(), cr = cur.getBoundingClientRect();
+    dd.style.left = (cr.right - wr.left + G.wrap.scrollLeft - 20) + "px";
+    dd.style.top = (cr.top - wr.top + G.wrap.scrollTop + 1) + "px";
+    dd.style.height = Math.max(cr.height - 2, 16) + "px";
+    dd.classList.remove("hidden");
+  } else if (dd) dd.classList.add("hidden");
+}
+
+// ---- choice list (▼): pick a column's value from a list, as Excel's
+// data-validation dropdown. Applies to every selected cell of a column with
+// the same choices, so a whole block of rows is set in one pick. ----
+// (group is free text — a new group's name is typed — so it keeps the
+// suggestions of the text editor instead.)
+function gridChoices(col) {
+  if (!col || col.kind === "secret" || col.kind === "text" || col.kind === "int" || col.kind === "group") return null;
+  const opts = gridOptions(col.kind);
+  return opts && opts.length ? opts : null;
+}
+function gridOpenList() {
+  if (G.edit || G.busy || !G.view.length) return;
+  const col = G.vc[G.sel.fc], row = gridRowAt(G.sel.fr), td = G.tds[G.sel.fr] && G.tds[G.sel.fr][G.sel.fc];
+  const opts = gridChoices(col);
+  const list = document.getElementById("g-list");
+  if (!opts || !row || !td || !list) return;
+  gridEnsureVisible(G.sel.fr, G.sel.fc);
+  const cur = row.cells[col.key] || "";
+  list.innerHTML = opts.map((o, i) => `<div class="g-opt${o.v === cur ? " on" : ""}" data-i="${i}">${esc(o.label)}</div>`).join("");
+  const wr = G.wrap.getBoundingClientRect(), cr = td.getBoundingClientRect();
+  list.style.left = (cr.left - wr.left + G.wrap.scrollLeft) + "px";
+  list.style.minWidth = Math.max(cr.width, 160) + "px";
+  list.classList.remove("hidden");
+  // Below the cell, or above it when the table has no room left below.
+  const below = wr.bottom - cr.bottom, h = Math.min(list.scrollHeight, 280);
+  list.style.top = (below < h + 8 && cr.top - wr.top > below ? cr.top - wr.top + G.wrap.scrollTop - h - 2 : cr.bottom - wr.top + G.wrap.scrollTop + 1) + "px";
+  G.list = { opts, i: Math.max(0, opts.findIndex(o => o.v === cur)), kind: col.kind };
+  gridListHL();
+  list.focus({ preventScroll: true });
+}
+function gridListHL() {
+  const list = document.getElementById("g-list");
+  list.querySelectorAll(".g-opt").forEach((el, i) => el.classList.toggle("hl", i === G.list.i));
+  const el = list.querySelector(`.g-opt[data-i="${G.list.i}"]`);
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+function gridCloseList() {
+  const list = document.getElementById("g-list");
+  if (list) list.classList.add("hidden");
+  if (G) G.list = null;
+}
+function gridPickList(i) {
+  const L = G.list;
+  if (!L) return;
+  const o = L.opts[i];
+  gridCloseList();
+  if (!o) return;
+  const g = gridRange(), cells = [];
+  for (let r = g.r0; r <= g.r1; r++) for (let c = g.c0; c <= g.c1; c++) if (G.vc[c] && G.vc[c].kind === L.kind) cells.push([r, c, o.v]);
+  gridSetCells(cells);
+  gridPaintSel();
+  G.wrap.focus({ preventScroll: true });
+}
+function gridListKey(e) {
+  const L = G && G.list;
+  if (!L) return;
+  e.stopPropagation();
+  const n = L.opts.length;
+  const go = i => { e.preventDefault(); L.i = Math.max(0, Math.min(n - 1, i)); gridListHL(); };
+  if (e.key === "ArrowDown") return go(L.i + 1);
+  if (e.key === "ArrowUp") return go(L.i - 1);
+  if (e.key === "PageDown") return go(L.i + 10);
+  if (e.key === "PageUp") return go(L.i - 10);
+  if (e.key === "Home") return go(0);
+  if (e.key === "End") return go(n - 1);
+  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); gridPickList(L.i); return; }
+  if (e.key === "Escape") { e.preventDefault(); gridCloseList(); G.wrap.focus({ preventScroll: true }); return; }
+  // A letter jumps to the next choice that starts with it.
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey) {
+    const ch = e.key.toLowerCase();
+    for (let k = 1; k <= n; k++) {
+      const j = (L.i + k) % n;
+      if (L.opts[j].label.toLowerCase().startsWith(ch)) return go(j);
+    }
+  }
 }
 // gridShowSel scrolls the selection's moving end into view, except along a
 // whole row or column: as in Excel, picking a row by its number (or Shift+
@@ -1541,9 +1631,23 @@ function gridWire(root) {
   root.querySelectorAll(".g-hmenu").forEach(b => b.onclick = e => { e.stopPropagation(); gridHeaderMenu(b.dataset.hmenu, b); });
   const wrap = G.wrap;
   wrap.addEventListener("scroll", () => { if (!gridDrag) gridPaintSel(); });
+  const glist = document.getElementById("g-list");
+  glist.addEventListener("keydown", gridListKey);
+  glist.addEventListener("blur", () => setTimeout(() => { if (G && G.list && document.activeElement !== glist) gridCloseList(); }, 0));
   wrap.addEventListener("mousedown", e => {
     if (e.target.closest(".g-editor") || e.target.closest(".g-hmenu")) return;
     if (e.button !== 0) return;
+    const opt = e.target.closest(".g-opt");
+    if (opt) { e.preventDefault(); gridPickList(+opt.dataset.i); return; }
+    if (e.target.closest("#g-list")) { e.preventDefault(); return; }
+    if (e.target.id === "g-dd") {
+      e.preventDefault();
+      const open = !!G.list;
+      gridCloseList();
+      if (!open) gridOpenList(); else G.wrap.focus({ preventScroll: true });
+      return;
+    }
+    if (G.list) gridCloseList();
     if (G.edit) gridCommitEdit();
     const ins = e.target.closest(".g-ins");
     if (ins) { e.preventDefault(); gridInsertBelowRow(+ins.dataset.ins); return; }
@@ -1584,7 +1688,10 @@ function gridWire(root) {
     const rz = e.target.closest(".g-rz");
     if (rz) { gridAutoFit(+rz.dataset.rz); return; }
     const at = gridCellAt(e.clientX, e.clientY);
-    if (at && at.r != null && at.c != null) { gridSelect(at.r, at.c); gridBeginEdit(null); }
+    if (at && at.r != null && at.c != null) {
+      gridSelect(at.r, at.c);
+      if (gridChoices(G.vc[at.c])) gridOpenList(); else gridBeginEdit(null);
+    }
   });
   wrap.addEventListener("contextmenu", e => {
     e.preventDefault(); e.stopPropagation();
@@ -1759,6 +1866,7 @@ function gridKey(e) {
   if (k === "Home") { done(); gridMove(0, -G.sel.fc, e.shiftKey); return; }
   if (k === "End") { done(); gridMove(0, C - G.sel.fc, e.shiftKey); return; }
   if (k === "F2") { done(); gridBeginEdit(null); return; }
+  if ((k === " " || k === "F4") && !e.shiftKey && gridChoices(G.vc[G.sel.fc])) { done(); gridOpenList(); return; }
   if (k === "Delete") { done(); gridClear(); return; }
   if (k === "Backspace") { done(); gridBeginEdit(""); return; }
   if (k === "Escape") { done(); G.clip = null; gridSelect(G.sel.fr, G.sel.fc); return; }
