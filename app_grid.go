@@ -209,6 +209,9 @@ type GridReport struct {
 	Saved map[string]model.GridRow `json:"saved"`
 	// SavedDeletes are the IDs of the devices deleted.
 	SavedDeletes []string `json:"savedDeletes"`
+	// dropPins are the GUI certificate pins of deleted or re-addressed
+	// devices, removed by ApplyGrid once the vault write succeeded.
+	dropPins []string `json:"-"`
 }
 
 // ApplyGrid checks and saves the table.
@@ -230,6 +233,13 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	// putting these back undoes only this save.
 	prevDevices, prevGroups := a.inv.Devices, append([]model.DeviceGroup(nil), a.inv.DeviceGroups...)
 	prevSched := cloneSchedules(a.inv.Schedules)
+	prevPins := a.inv.KnownGUICerts
+	if prevPins != nil {
+		prevPins = make(map[string]string, len(a.inv.KnownGUICerts))
+		for k, v := range a.inv.KnownGUICerts {
+			prevPins[k] = v
+		}
+	}
 	for group, m := range renames {
 		renameSchedDevices(a.inv, group, m)
 	}
@@ -238,8 +248,11 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	}
 	a.inv.Devices = next
 	a.inv.EnsureDeviceIDs()
+	for _, k := range rep.dropPins {
+		delete(a.inv.KnownGUICerts, k)
+	}
 	if err := vault.Save(a.vaultPath, a.password, a.inv); err != nil {
-		a.inv.Devices, a.inv.DeviceGroups, a.inv.Schedules = prevDevices, prevGroups, prevSched
+		a.inv.Devices, a.inv.DeviceGroups, a.inv.Schedules, a.inv.KnownGUICerts = prevDevices, prevGroups, prevSched, prevPins
 		return nil, err
 	}
 	return rep, nil
@@ -342,19 +355,19 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 		if r.ID != "" {
 			if i, ok := idx[r.ID]; !ok {
 				if !over[r.UID] {
-					conflict(r.UID, r.ID, r.Base, r.Cells, true)
+					conflict(r.UID, r.ID, csvio.UpgradeBase(r.Base), r.Cells, true)
 					c.conflict = true
 				}
 				// Saved over a device deleted elsewhere: it comes back as new.
 			} else {
-				if !model.SameCells(csvio.DeviceCells(inv.Devices[i]), r.Base) && !over[r.UID] {
-					conflict(r.UID, r.ID, r.Base, r.Cells, false)
+				if !model.SameCells(csvio.DeviceCells(inv.Devices[i]), csvio.UpgradeBase(r.Base)) && !over[r.UID] {
+					conflict(r.UID, r.ID, csvio.UpgradeBase(r.Base), r.Cells, false)
 					c.conflict = true
 				}
 				d.ID = r.ID
 			}
 		}
-		if err := d.Validate(); err != nil {
+		if err := inv.ValidateIn(&d); err != nil {
 			addErr(r.UID, csvio.ErrorColumn(err.Error()), err.Error())
 		}
 		if !profiles[d.OSType] {
@@ -374,8 +387,8 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 			gone = append(gone, r.ID)
 			continue
 		}
-		if !model.SameCells(csvio.DeviceCells(inv.Devices[i]), r.Base) && !over["del:"+r.ID] {
-			conflict("del:"+r.ID, r.ID, r.Base, nil, false)
+		if !model.SameCells(csvio.DeviceCells(inv.Devices[i]), csvio.UpgradeBase(r.Base)) && !over["del:"+r.ID] {
+			conflict("del:"+r.ID, r.ID, csvio.UpgradeBase(r.Base), nil, false)
 			continue
 		}
 		deleting[r.ID] = true
@@ -456,6 +469,8 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 	for _, d := range inv.Devices {
 		if !deleting[d.ID] {
 			next = append(next, d)
+		} else {
+			rep.dropPins = append(rep.dropPins, d.GUICertKey()) // the pin goes with the device (after the save)
 		}
 	}
 	for id := range deleting {
@@ -481,6 +496,11 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 					renames[d.Group] = map[string]string{}
 				}
 				renames[d.Group][old.Name] = d.Name
+			}
+			// A GUI pin names the address: moved, the device starts over
+			// there (trust on first use) and the old pin goes.
+			if old := next[i]; old.GUICertKey() != d.GUICertKey() {
+				rep.dropPins = append(rep.dropPins, old.GUICertKey())
 			}
 			next[i] = d
 		} else {

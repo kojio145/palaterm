@@ -154,12 +154,35 @@ func pick(ja bool, a, b string) string {
 // header names (English or Japanese), so users may reorder or omit optional
 // columns.
 func Import(text string) ([]model.Device, error) {
+	ds, _, err := ImportInfo(text)
+	return ds, err
+}
+
+// ImportInfo is Import that also names the device columns the file does
+// not have (by their English key): a file from an older PalaTerm leaves
+// those at their defaults, and an import that replaces existing devices
+// should say so.
+func ImportInfo(text string) ([]model.Device, []string, error) {
+	ds, has, err := importWith(text)
+	if err != nil {
+		return nil, nil, err
+	}
+	var missing []string
+	for _, key := range []string{"useMyBastion", "cli", "gui", "guiScheme", "guiPort"} {
+		if !has(key) {
+			missing = append(missing, key)
+		}
+	}
+	return ds, missing, nil
+}
+
+func importWith(text string) ([]model.Device, func(string) bool, error) {
 	if !utf8.ValidString(text) {
 		// Saved again by Excel as 「CSV（コンマ区切り）」: Shift_JIS, and
 		// every Japanese header and value would otherwise be unreadable.
 		dec, err := japanese.ShiftJIS.NewDecoder().String(text)
 		if err != nil || strings.ContainsRune(dec, utf8.RuneError) {
-			return nil, fmt.Errorf("文字コードを読み取れません。Excel では「CSV UTF-8（コンマ区切り）」で保存してください")
+			return nil, nil, fmt.Errorf("文字コードを読み取れません。Excel では「CSV UTF-8（コンマ区切り）」で保存してください")
 		}
 		text = dec
 	}
@@ -168,10 +191,10 @@ func Import(text string) ([]model.Device, error) {
 	r.FieldsPerRecord = -1 // tolerate ragged rows
 	rows, err := r.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("empty CSV")
+		return nil, nil, fmt.Errorf("empty CSV")
 	}
 	// Header → column index, keyed by the lower-case English key: a Japanese
 	// header is mapped to its key first.
@@ -194,7 +217,7 @@ func Import(text string) ([]model.Device, error) {
 		idx[h] = i
 	}
 	if _, ok := idx["name"]; !ok {
-		return nil, fmt.Errorf("1 行目（見出し）に「機器名」（name）の列がありません")
+		return nil, nil, fmt.Errorf("1 行目（見出し）に「機器名」（name）の列がありません")
 	}
 	has := func(key string) bool { _, ok := idx[strings.ToLower(key)]; return ok }
 	get := func(row []string, key string) string {
@@ -295,7 +318,7 @@ func Import(text string) ([]model.Device, error) {
 		}
 		out = append(out, d)
 	}
-	return out, nil
+	return out, has, nil
 }
 
 // schemeIn reads a GUI scheme: http, or https (also for anything else).

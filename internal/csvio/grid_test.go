@@ -67,3 +67,28 @@ func TestErrorColumn(t *testing.T) {
 		}
 	}
 }
+
+// A draft saved by v1.7.5 or before has the GUI scheme https as "" in its
+// Base; brought to the current spelling it must not read as a change.
+func TestUpgradeBaseOldScheme(t *testing.T) {
+	d := model.Device{Name: "rt1", Host: "192.0.2.1", Conn: model.ConnSSH, OSType: "cisco-ios"}
+	now := DeviceCells(d)
+	old := map[string]string{}
+	for k, v := range now {
+		old[k] = v
+	}
+	old["guiScheme"] = ""
+	if model.SameCells(now, old) {
+		t.Fatal("test premise: the old spelling must differ from the current one")
+	}
+	if !model.SameCells(now, UpgradeBase(old)) {
+		t.Errorf("old draft base still reads as changed: %v vs %v", UpgradeBase(old)["guiScheme"], now["guiScheme"])
+	}
+	if UpgradeBase(nil) != nil {
+		t.Error("nil base must stay nil")
+	}
+	http := map[string]string{"guiScheme": "http"}
+	if UpgradeBase(http)["guiScheme"] != "http" {
+		t.Error("http must stay http")
+	}
+}

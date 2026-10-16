@@ -135,3 +135,57 @@ func TestClearHostKeysThroughMyBastion(t *testing.T) {
 		t.Errorf("own jump host key still pinned: %q", k)
 	}
 }
+
+// 踏み台を使わない (direct) pins the device under its bare address; a
+// device that normally tunnels through its own jump hosts loses that pin
+// too when its keys are cleared.
+func TestClearHostKeysDropsDirectPin(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	dev := model.Device{Name: "fw1", Host: "192.0.2.10", Port: 22, Conn: model.ConnSSH, OSType: "nec-ix",
+		Username: "u", Password: "p", Enabled: true, BastionMode: model.BastionViaTunnel,
+		Bastions: []model.Bastion{{Host: "192.0.2.1", Port: 22, Method: model.BastionSSH, Username: "j"}}}
+	if err := a.SaveDevice(dev); err != nil {
+		t.Fatalf("save device: %v", err)
+	}
+	a.SetHostKey("192.0.2.1:22>192.0.2.10:22", "ssh-ed25519 SHA256:viahop")
+	a.SetHostKey("192.0.2.10:22", "ssh-ed25519 SHA256:direct")
+	if err := a.ClearHostKeys("fw1"); err != nil {
+		t.Fatalf("clear host keys: %v", err)
+	}
+	for _, k := range []string{"192.0.2.1:22>192.0.2.10:22", "192.0.2.10:22"} {
+		if v := a.GetHostKey(k); v != "" {
+			t.Errorf("%s still pinned: %q", k, v)
+		}
+	}
+}
+
+// Deleting a device takes its GUI certificate pin with it.
+func TestDeleteDeviceDropsGUICert(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	for _, n := range []string{"g1", "g2"} {
+		if err := a.SaveDevice(model.Device{Name: n, Host: "192.0.2.5", Conn: model.ConnSSH, OSType: "nec-ix", GUIOn: true, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv := a.GetInventory()
+	for _, d := range inv.Devices {
+		a.setGUICert(d.GUICertKey(), "ab")
+	}
+	g1 := inv.Devices[0]
+	if err := a.DeleteDevice(g1.ID); err != nil {
+		t.Fatal(err)
+	}
+	after := a.GetInventory()
+	if _, ok := after.KnownGUICerts[g1.GUICertKey()]; ok {
+		t.Error("deleted device's GUI pin still there")
+	}
+	if _, ok := after.KnownGUICerts[inv.Devices[1].GUICertKey()]; !ok {
+		t.Error("the other device's pin (same address, other ID) was dropped")
+	}
+}

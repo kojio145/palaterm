@@ -266,8 +266,8 @@ function renderDeviceList() {
   const LV = "devices";
   const focus = listViewFocus();
   const visible = listViewApply(LV, devs,
-    d => [d.name, d.host, d.site, d.role, d.conn, profileName(d.osType), d.commandSet],
-    (d, k) => k === "os" ? profileName(d.osType) : d[k],
+    d => d.cliOff ? [d.name, d.host, d.site, d.role, t("GUI のみ")] : [d.name, d.host, d.site, d.role, d.conn, profileName(d.osType), d.commandSet],
+    (d, k) => d.cliOff && (k === "conn" || k === "os" || k === "commandSet") ? "" : k === "os" ? profileName(d.osType) : d[k],
     { site: d => d.site || "" });
   const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
   const rows = visible.map(d => {
@@ -672,6 +672,7 @@ function importDialog(defaultGroup) {
     if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
     if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
     if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
+    if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join("・"), n: s.missingColumnsReset }));
     if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));
     if ((s.duplicate || []).length) lines.push(t("⚠ 同じグループに同じ機器名の行が重複しているため、2 行目以降は読み込みません: {g}", { g: s.duplicate.join(", ") }));
     if ((s.jumpCommands || []).length) lines.push(t("⚠ 踏み台のジャンプコマンドが設定された行があります。この文字列は踏み台でそのまま実行されるので、内容を確認してください: {g}", { g: s.jumpCommands.join(" ／ ") }));

@@ -1,6 +1,9 @@
 package model
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func myBastionInventory() *Inventory {
 	return &Inventory{
@@ -198,5 +201,40 @@ func TestMigrateMyBastionKeepsEveryLogin(t *testing.T) {
 	b := inv.Devices[1]
 	if b.UseMyBastion || len(b.Bastions) != 1 || b.Bastions[0].Username != "ops" || b.Bastions[0].JumpCommand == "" {
 		t.Errorf("b = %+v, want its hop (jump command kept) filled in place", b)
+	}
+}
+
+// A device tunnelling through the own jump hosts needs them all SSH: said
+// when the device is saved (ValidateIn), not on every connection.
+func TestValidateInRefusesTunnelThroughTelnetOwnHop(t *testing.T) {
+	inv := &Inventory{MyBastions: []Bastion{{Host: "jump1.example", Method: BastionTelnet}}}
+	d := Device{Name: "fw1", Host: "192.0.2.10", Conn: ConnSSH, UseMyBastion: true, BastionMode: BastionViaTunnel}
+	if err := inv.ValidateIn(&d); err == nil || !strings.Contains(err.Error(), "Telnet") {
+		t.Errorf("tunnel through a Telnet own hop accepted: %v", err)
+	}
+	d.BastionMode = BastionViaShell
+	if err := inv.ValidateIn(&d); err != nil {
+		t.Errorf("typing on the hop is fine: %v", err)
+	}
+	d.BastionMode, d.CLIOff, d.GUIOn = BastionViaTunnel, true, true
+	if err := inv.ValidateIn(&d); err != nil {
+		t.Errorf("a GUI-only device never tunnels: %v", err)
+	}
+}
+
+// A GUI is opened at the device's address: a device using one needs it.
+func TestValidateGUINeedsHost(t *testing.T) {
+	d := Device{Name: "gui1", Conn: ConnSerial, SerialPort: "COM3", GUIOn: true}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "IPアドレス") {
+		t.Errorf("GUI without an address accepted: %v", err)
+	}
+	d.Host = "192.0.2.5"
+	if err := d.Validate(); err != nil {
+		t.Errorf("serial CLI + GUI at an address: %v", err)
+	}
+	d.GUIOn = false
+	d.Host = ""
+	if err := d.Validate(); err != nil {
+		t.Errorf("a serial device without a GUI needs no address: %v", err)
 	}
 }

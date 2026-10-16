@@ -34,7 +34,12 @@ function slotLabel(s) {
 // The devices a schedule runs on, as names (a schedule from v1.6.0–1 may
 // have no list: then the group's checked devices, as it ran then).
 function schedDeviceList(sc) {
-  if (sc.names) return sc.names;
+  // A named device turned GUI-only since is not run (snapshotOf skips it).
+  if (sc.names) {
+    // Names are unique within a group only: the GUI-only devices of this group.
+    const off = new Set((INV.devices || []).filter(d => d.cliOff && (sc.ungrouped ? !d.group : d.group === sc.group)).map(d => d.name));
+    return sc.names.filter(n => !off.has(n));
+  }
   return (INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group) && d.enabled && !d.cliOff).map(d => d.name);
 }
 function schedDevicesLabel(sc) {

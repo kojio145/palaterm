@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -357,5 +359,64 @@ func TestApplyGridDeletionOfGoneDeviceIsDone(t *testing.T) {
 	rep, _ := a.ApplyGrid(GridApply{Deleted: []model.GridRow{rows[2]}, Mode: "all"})
 	if len(rep.SavedDeletes) != 1 || rep.SavedDeletes[0] != rows[2].ID {
 		t.Fatalf("savedDeletes = %v", rep.SavedDeletes)
+	}
+}
+
+// Pins of rows the table deletes go only once the vault write succeeded;
+// a failed write puts them back with the devices.
+func TestApplyGridDropsPinsAfterSave(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"g1", "g2"} {
+		if err := a.SaveDevice(model.Device{Name: n, Host: "192.0.2.5", Conn: model.ConnSSH, OSType: "nec-ix", GUIOn: true, Enabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv := a.GetInventory()
+	for _, d := range inv.Devices {
+		a.setGUICert(d.GUICertKey(), "ab")
+	}
+	g1, g2 := inv.Devices[0], inv.Devices[1]
+	rows, _ := a.GridRows("")
+	var keep []model.GridRow
+	var del []model.GridRow
+	for _, r := range rows {
+		if r.ID == g1.ID {
+			del = append(del, r)
+		} else {
+			keep = append(keep, r)
+		}
+	}
+	// A write that cannot succeed: a path whose parent "directory" is a
+	// plain file (the writer creates missing directories, but not inside a
+	// file).
+	good := a.vaultPath
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a.vaultPath = filepath.Join(blocker, "x", "vault.enc")
+	if _, err := a.ApplyGrid(GridApply{Mode: "all", Rows: keep, Deleted: del}); err == nil {
+		t.Fatal("save into an impossible path succeeded")
+	}
+	after := a.GetInventory()
+	if _, ok := after.KnownGUICerts[g1.GUICertKey()]; !ok {
+		t.Error("failed save lost the deleted row's pin")
+	}
+	if len(after.Devices) != 2 {
+		t.Errorf("failed save left %d devices", len(after.Devices))
+	}
+	a.vaultPath = good
+	if _, err := a.ApplyGrid(GridApply{Mode: "all", Rows: keep, Deleted: del}); err != nil {
+		t.Fatal(err)
+	}
+	after = a.GetInventory()
+	if _, ok := after.KnownGUICerts[g1.GUICertKey()]; ok {
+		t.Error("deleted row's pin still there after a successful save")
+	}
+	if _, ok := after.KnownGUICerts[g2.GUICertKey()]; !ok {
+		t.Error("the kept device's pin went too")
 	}
 }

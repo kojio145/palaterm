@@ -70,7 +70,7 @@ func DeviceCells(d model.Device) map[string]string {
 		"legacyAlgos": boolOut(d.LegacyAlgos, false), "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, false),
 		"useMyBastion": boolOut(d.UseMyBastion, false),
 		"guiPort":      itoa(d.GUIPort),
-		"cli":          boolOut(!d.CLIOff, false), "gui": boolOut(d.GUIOn, false), "guiScheme": d.GUIScheme,
+		"cli":          boolOut(!d.CLIOff, false), "gui": boolOut(d.GUIOn, false), "guiScheme": d.EffectiveGUIScheme(),
 	}
 	for i, b := range d.Bastions {
 		if i >= model.MaxBastions {
@@ -89,6 +89,26 @@ func DeviceCells(d model.Device) map[string]string {
 		c[p+"JumpCommand"] = b.JumpCommand
 	}
 	return c
+}
+
+// UpgradeBase brings a draft row's Base (the cells as the table read the
+// device, kept in the vault) to the current cell spelling, so a draft saved
+// by an older PalaTerm is not every row "changed elsewhere": v1.7.5 and
+// before wrote the GUI scheme https as "" where DeviceCells now writes
+// "https".
+func UpgradeBase(base map[string]string) map[string]string {
+	if base == nil {
+		return nil
+	}
+	if v, ok := base["guiScheme"]; ok && v == "" {
+		out := make(map[string]string, len(base))
+		for k, x := range base {
+			out[k] = x
+		}
+		out["guiScheme"] = "https"
+		return out
+	}
+	return base
 }
 
 // CellError is a problem with one cell of a row.
@@ -227,6 +247,11 @@ var reHopN = regexp.MustCompile(`(?:踏み台|（)(\d)段目`)
 // ErrorColumn names the column a Validate message is about, so the table
 // can mark the cell; a message it cannot place goes on the name.
 func ErrorColumn(msg string) string {
+	// "自分の踏み台N段目…" is about the own jump host (Settings), not one of
+	// the device's hops: the cell is the device's choice to use it.
+	if strings.Contains(msg, "自分の踏み台") {
+		return "useMyBastion"
+	}
 	if m := reHopN.FindStringSubmatch(msg); m != nil {
 		p := "bastion" + m[1]
 		switch {

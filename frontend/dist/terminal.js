@@ -244,6 +244,7 @@ async function bootTerminalWindow() {
   const pasteInfo = document.getElementById("tw-paste-info");
   function sendText(text) {
     if (closed || !text) return;
+    if (connecting && !switchBtn.classList.contains("hidden")) { if (switchBtn.disabled) switchingHint(); else loginHint(); return; }
     Term().Send(bytesToB64(new TextEncoder().encode(text))).catch(() => {});
   }
   // The confirmation is its own OS window (Tera Term style, see
@@ -529,7 +530,7 @@ async function bootTerminalWindow() {
   document.getElementById("tw-hk-cancel").onclick = () => { hkDlg.classList.add("hidden"); term.focus(); };
   document.getElementById("tw-hk-ok").onclick = () => {
     hkDlg.classList.add("hidden");
-    closed = false; connecting = true; typedHint = false;
+    closed = false; connecting = true; typedHint = false; switchHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[ホストキーを更新して再接続します]") + "\x1b[0m\r\n");
@@ -582,7 +583,7 @@ async function bootTerminalWindow() {
   function reconnect() {
     reconnecting = true;
     reconnectBtn.classList.add("hidden");
-    closed = false; connecting = true; typedHint = false;
+    closed = false; connecting = true; typedHint = false; switchHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[再接続します]") + "\x1b[0m\r\n");
@@ -668,19 +669,41 @@ async function bootTerminalWindow() {
   }, 15000);
   try { Term().SetLang(LANG); } catch (e) {}
 
-  // Keys typed while the automatic login runs go nowhere (the line is the
-  // login's until it is done): said once per connection, with the way to
-  // take over.
-  let typedHint = false;
+  // Keys typed (or text pasted) while the automatic login runs go nowhere:
+  // the line is the login's until it is done. Said once per connection,
+  // with the way to take over — unless 手動に切り替え was already pressed
+  // (the line is being handed over; nothing to press any more).
+  let typedHint = false, switchHint = false;
+  // 手動に切り替え pressed, the line not yet handed over: nothing to press.
+  function switchingHint() {
+    if (switchHint) return;
+    switchHint = true;
+    term.write("\r\n\x1b[33m" + t("[手動に切り替え中です。接続が渡るまで少しお待ちください]") + "\x1b[0m\r\n");
+  }
+  function loginHint() {
+    if (typedHint) return;
+    typedHint = true;
+    term.write("\r\n\x1b[33m" + t("[自動ログイン中のため、キー入力は機器に送られません。手で操作するときは上の「手動に切り替え」を押してください]") + "\x1b[0m\r\n");
+  }
+  // xterm.js answers a terminal query the device sends (ESC[c, ESC[6n,
+  // ESC[5n …) through onData too; that is no typing of the user's. Only
+  // those reply shapes: Esc, the arrows and F-keys start with ESC as well
+  // and are keys.
+  // Replies: DA (ESC[?…c / ESC[>…c), CPR (ESC[r;cR, ESC[?r;cR), DSR (ESC[0n),
+  // DECRPM (ESC[…$y), focus in/out (ESC[I / ESC[O), window ops (ESC[…t),
+  // OSC colour replies (ESC]…), DCS replies (ESC P … ESC \). A key with a
+  // modifier can look like a CPR (Shift+F3 = ESC[1;2R): a reply's row is at
+  // least 1 and a key's first number is 1 with a modifier 2–8 — told apart
+  // by xterm.js only for "1;N" with N ≤ 8, which no terminal query answers.
+  const isTermReply = d => /^\x1b(\[(\?[\d;]*c|>[\d;]*c|\??\d+;\d+R|0n|\??[\d;]*\$y|[IO]|[\d;]*t)|\][^\x07]*(\x07|\x1b\\)|P[^\x1b]*\x1b\\)$/.test(d)
+    && !/^\x1b\[1;[2-8]R$/.test(d);
   term.onData(d => {
     if (locked) return;
     // After a disconnect, Enter opens the session again (the 再接続 button).
     if (closed) { if (d === "\r" && canReconnect()) reconnect(); return; }
     if (connecting && !switchBtn.classList.contains("hidden")) {
-      if (!typedHint) {
-        typedHint = true;
-        term.write("\r\n\x1b[33m" + t("[自動ログイン中のため、キー入力は機器に送られません。手で操作するときは上の「手動に切り替え」を押してください]") + "\x1b[0m\r\n");
-      }
+      if (isTermReply(d)) return;
+      if (switchBtn.disabled) switchingHint(); else loginHint();
       return;
     }
     Term().Send(bytesToB64(new TextEncoder().encode(d))).catch(() => {});

@@ -471,6 +471,7 @@ type BastionLogin struct {
 //     its own, so nothing is lost — drops that hop for UseMyBastion;
 //   - every other hop v1.7.3 would have filled gets the matching login
 //     written into it, so it keeps logging in exactly as before.
+//
 // Reports whether anything changed.
 func (inv *Inventory) MigrateMyBastion() bool {
 	if len(inv.MyBastionLogins) == 0 {
@@ -907,6 +908,14 @@ func (d *Device) Validate() error {
 	if d.CLIOff && !d.GUIOn {
 		return errors.New("CLI と GUI のどちらかはオンにしてください")
 	}
+	// A GUI is opened at the device's address: it needs one (a serial
+	// device's CLI does not).
+	if d.GUIOn && strings.TrimSpace(d.Host) == "" {
+		return errors.New("GUI を使う機器には IPアドレスが必要です")
+	}
+	if d.GUIOn && !validHostOrIP(d.Host) {
+		return fmt.Errorf("IPアドレスの形式が不正です: %q", d.Host)
+	}
 	// A GUI-only device is never logged into: its (hidden) jump-host and
 	// connection fields are kept as they are, unchecked.
 	if d.CLIOff {
@@ -951,6 +960,28 @@ func (d *Device) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateIn is Validate plus the checks that need the inventory: a device
+// reaching the user's own jump hosts by SSH tunnel needs every one of them
+// SSH (said when the device is saved, not on every connection later).
+func (inv *Inventory) ValidateIn(d *Device) error {
+	if err := d.Validate(); err != nil {
+		return err
+	}
+	if d.UseMyBastion && !d.CLIOff && d.BastionMode == BastionViaTunnel && inv != nil {
+		for i, b := range inv.MyBastions {
+			if b.Host != "" && b.Method != BastionSSH {
+				return fmt.Errorf("自分の踏み台%d段目が Telnet なので、SSH トンネルでは通れません（踏み台の通り方を「踏み台上でコマンドを打つ」にするか、設定タブで自分の踏み台を SSH にしてください）", i+1)
+			}
+		}
+	}
+	return nil
+}
+
+// GUICertKey names the device's GUI certificate pin (Inventory.KnownGUICerts).
+func (d *Device) GUICertKey() string {
+	return "gui " + d.ID + " " + HopAddr(d.Host, d.EffectiveGUIPort())
 }
 
 // ShellSafeWord reports whether s can be typed into a shell as one plain

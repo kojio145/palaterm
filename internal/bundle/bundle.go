@@ -73,6 +73,9 @@ type Contents struct {
 	Devices     []model.Device
 	CommandSets []model.CommandSet
 	Profiles    []profile.Profile
+	// MissingColumns are device columns the CSV did not have (an older
+	// file): those fields of an updated device reset to their defaults.
+	MissingColumns []string
 }
 
 // Select picks the devices of group (every device when group is ""), plus the
@@ -372,7 +375,7 @@ func Read(manifestPath string) (Contents, error) {
 		if err != nil {
 			return c, fmt.Errorf("機器CSVが読めません: %w", err)
 		}
-		if c.Devices, err = csvio.Import(string(text)); err != nil {
+		if c.Devices, c.MissingColumns, err = csvio.ImportInfo(string(text)); err != nil {
 			return c, fmt.Errorf("機器CSV: %w", err)
 		}
 	}
@@ -417,16 +420,23 @@ func Read(manifestPath string) (Contents, error) {
 // ReadDevicesCSV loads a bare devices CSV as a bundle with only devices, so
 // the one import path handles both.
 func ReadDevicesCSV(path string) (Contents, error) {
-	var c Contents
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return c, err
+		return Contents{}, err
 	}
-	c.Devices, err = csvio.Import(string(data))
+	return ReadDevicesCSVText(string(data), filepath.Base(path))
+}
+
+// ReadDevicesCSVText is ReadDevicesCSV over the file's text; name is the
+// file's name for the manifest.
+func ReadDevicesCSVText(text, name string) (Contents, error) {
+	var c Contents
+	var err error
+	c.Devices, c.MissingColumns, err = csvio.ImportInfo(text)
 	if err != nil {
 		return c, err
 	}
-	c.Manifest = Manifest{Devices: filepath.Base(path), DeviceCount: len(c.Devices)}
+	c.Manifest = Manifest{Devices: name, DeviceCount: len(c.Devices)}
 	return c, nil
 }
 
@@ -460,6 +470,10 @@ type Summary struct {
 	// imports; it runs with the generic profile / no command set).
 	MissingSets     []string `json:"missingSets"`
 	MissingProfiles []string `json:"missingProfiles"`
+	// MissingColumns: device columns the file lacks (older PalaTerm), and
+	// how many existing devices the import resets them on.
+	MissingColumns      []string `json:"missingColumns"`
+	MissingColumnsReset int      `json:"missingColumnsReset"`
 	// Rows left out: Invalid failed the device checks ("name: reason" — a
 	// bad address, a username with shell syntax behind a jump host, a key
 	// on a network share); Duplicate repeat a group + name already earlier
@@ -478,12 +492,9 @@ type Summary struct {
 
 // Preview reports what Apply would do without changing inv.
 func Preview(inv *model.Inventory, c Contents, opt Options) Summary {
-	cp := *inv
-	cp.Devices = append([]model.Device(nil), inv.Devices...)
-	cp.CommandSets = append([]model.CommandSet(nil), inv.CommandSets...)
-	cp.CustomProfiles = append([]profile.Profile(nil), inv.CustomProfiles...)
-	cp.DeviceGroups = append([]model.DeviceGroup(nil), inv.DeviceGroups...)
-	s, _ := Apply(&cp, c, opt)
+	// A deep copy: Apply also edits maps (the GUI certificate pins), which
+	// a shallow copy would share with the real inventory.
+	s, _ := Apply(inv.Clone(), c, opt)
 	return s
 }
 
@@ -506,6 +517,7 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.Duplicate = []string{}
 	s.JumpCommands = []string{}
 	s.CredsKept = []string{}
+	s.MissingColumns = append([]string{}, c.MissingColumns...)
 
 	// Profiles first: they may rename keys the devices use.
 	keyMap := map[string]string{}
@@ -635,7 +647,7 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		if i, ok := devByKey[devKey(d)]; ok && !inFile[devKey(d)] {
 			credsKept = keepCredentials(&d, inv.Devices[i])
 		}
-		if err := d.Validate(); err != nil {
+		if err := inv.ValidateIn(&d); err != nil {
 			s.Invalid = append(s.Invalid, label+": "+err.Error())
 			continue
 		}
@@ -671,6 +683,14 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		}
 		if i, ok := devByKey[devKey(d)]; ok {
 			d.ID = inv.Devices[i].ID
+			if len(c.MissingColumns) > 0 {
+				s.MissingColumnsReset++
+			}
+			// A GUI pin names the address: a device moved to another one
+			// starts over there (trust on first use), the old pin goes.
+			if old := inv.Devices[i]; old.GUICertKey() != d.GUICertKey() {
+				delete(inv.KnownGUICerts, old.GUICertKey())
+			}
 			inv.Devices[i] = d
 			s.DevicesUpdated++
 		} else {

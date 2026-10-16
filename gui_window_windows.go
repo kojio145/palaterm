@@ -115,8 +115,11 @@ type guiWin struct {
 	// on a settings page is not a login).
 	loggedIn bool
 	// tofuNow: the certificate was seen for the first time in this window
-	// and recorded: the login is filled in but not sent.
-	tofuNow bool
+	// and recorded: the login is filled in but not sent. swappedNow: the
+	// pinned self-signed certificate gave way to one the browser trusts;
+	// filled in, not sent, either.
+	tofuNow    bool
+	swappedNow bool
 	// certErr: the device's address had a certificate error in this window
 	// (none on https = the browser trusted it).
 	certErr bool
@@ -589,7 +592,9 @@ func (w *guiWin) onNavigated() {
 		w.badShown = true
 	}
 	w.mu.Unlock()
-	if bad == "" || shown {
+	// "ca": the page loaded fine with a trusted certificate; the notice is
+	// in the title and the menu, the page stays.
+	if bad == "" || bad == "ca" || shown {
 		return
 	}
 	w.title(winWord("証明書が前回と異なります", "certificate changed"))
@@ -597,6 +602,11 @@ func (w *guiWin) onNavigated() {
 		`<h2 style="color:#c00">証明書が前回と異なります</h2><p>この機器の GUI が、前回記録した証明書と違う証明書を出しました。機器の入れ替えや証明書の更新なら問題ありませんが、通信の途中で別のものに差し替えられている可能性もあるため、開くのを止めました。</p><p>心当たりがある場合だけ、メニューの「証明書の変更を許可」を押してください。</p>`,
 		`<h2 style="color:#c00">The certificate has changed</h2><p>This device's GUI presented a different certificate from the one recorded last time. A replaced device or a renewed certificate is fine, but it could also be something in between, so the page was not opened.</p><p>Only if you expect the change, choose "Allow the new certificate" in the menu.</p>`)
 	w.chromium.NavigateToString(guiNotice(html + `<p style="color:#666;font-size:12px">SHA-256: ` + bad + `</p>`))
+	w.showAllowMenu()
+}
+
+// showAllowMenu adds 証明書の変更を許可 to the menu bar (once).
+func (w *guiWin) showAllowMenu() {
 	menu, _, _ := user32.NewProc("GetMenu").Call(uintptr(w.hwnd))
 	if menu != 0 && !w.allowMenu {
 		w.allowMenu = true
@@ -625,14 +635,26 @@ func (w *guiWin) onMessage(msg string) {
 			w.cfg.Pin = "ca"
 			fmt.Printf("%s %s\n", guiEventCert, "ca")
 		}
-		submit := !w.autoSent && !w.tofuNow
+		// The pin is a self-signed fingerprint but this page came with no
+		// certificate error: the device now presents a certificate this PC
+		// trusts — a renewal, or something in between with a CA of its own.
+		// Filled in, not sent; the user decides (and 証明書の変更を許可
+		// records the new state).
+		swapped := w.base.Scheme == "https" && !w.certErr && w.cfg.Pin != "" && w.cfg.Pin != "ca"
+		submit := !w.autoSent && !w.tofuNow && !swapped
 		if submit {
 			w.autoSent = true
 		}
 		tofu := w.tofuNow
+		if swapped {
+			w.badCert, w.swappedNow = "ca", true
+		}
 		w.mu.Unlock()
 		w.chromium.Eval(guiFillScript(w.cfg.User, w.cfg.Password, submit))
 		switch {
+		case swapped:
+			w.title(winWord("前回は自己署名の証明書でしたが、今回はこの PC が信頼する証明書です。心当たりがあればメニューの「証明書の変更を許可」を押してください", "the certificate changed from self-signed to a trusted one; allow it in the menu if expected"))
+			w.showAllowMenu()
 		case tofu:
 			w.title(winWord("初めて開く機器です。証明書を記録しました。内容を確かめて「ログイン」を押してください", "first time: certificate recorded; check and log in"))
 		case !submit:
@@ -642,7 +664,7 @@ func (w *guiWin) onMessage(msg string) {
 	case "pt:nologin":
 		// A page of the device without a login form after the login was
 		// sent: logged in. Nothing more is filled in or clicked.
-		if w.autoSent || w.tofuNow {
+		if w.autoSent || w.tofuNow || w.swappedNow {
 			w.loggedIn = true
 		}
 		w.mu.Unlock()

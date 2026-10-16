@@ -95,6 +95,8 @@ const I18N_EN_PATTERNS = [
   [/^自分の踏み台([0-9]+)段目の秘密鍵にネットワーク上のパスは指定できません: (.+)$/, "My jump host #$1: a private key on a network path cannot be used: $2"],
   [/^自分の踏み台([0-9]+)段目のホストが空です（この段を使わないなら「削除」してください）$/, "My jump host #$1 has no host (use Delete if the hop is not needed)"],
   [/^CLI と GUI のどちらかはオンにしてください$/, "Turn on CLI or GUI (or both)"],
+  [/^GUI を使う機器には IPアドレスが必要です$/, "A device that uses a GUI needs an IP address"],
+  [/^自分の踏み台([0-9]+)段目が Telnet なので、SSH トンネルでは通れません（踏み台の通り方を「踏み台上でコマンドを打つ」にするか、設定タブで自分の踏み台を SSH にしてください）$/, "My jump host #$1 is Telnet, so it cannot be passed by SSH tunnel (set how jump hosts are passed to \"type commands on the jump host\", or make My jump host SSH in Settings)"],
   [/^踏み台のホスト形式が不正です: (.+)$/, "Invalid jump host address: $1"],
   [/^踏み台([0-9]+)段目のポート番号が範囲外です: (.+)（0〜65535）$/, "Jump host #$1: port out of range: $2 (0–65535)"],
   [/^踏み台([0-9]+)段目のホスト形式が不正です: (.+)$/, "Jump host #$1: invalid host: $2"],
@@ -1442,4 +1444,6 @@ const I18N_EN = {
   "GUI のみ": "GUI only",
   "CLI を使わない機器です（GUI だけ）。機器の編集で「CLI を使う」をオンにすると接続方式・OS・コマンドセットを設定できます": "A device without a CLI (GUI only). Turn on \"Use CLI\" in its settings to set the connection, OS and command set.",
   "[自動ログイン中のため、キー入力は機器に送られません。手で操作するときは上の「手動に切り替え」を押してください]": "[Logging in automatically: keys are not sent to the device. To type yourself, press \"Switch to manual\" above]",
+  "[手動に切り替え中です。接続が渡るまで少しお待ちください]": "[Switching to manual: the line is being handed over, one moment]",
+  "⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります": "⚠ Older file: it has no {c} column(s). On {n} existing device(s) these fields reset to their defaults (CLI on, GUI off, no My jump host, https)",
 };

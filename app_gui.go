@@ -9,8 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-
-	"github.com/kojio145/palaterm/internal/model"
 )
 
 // GUI を開く: the device's web GUI (FortiGate & co.) in a window of
@@ -66,7 +64,7 @@ func (a *App) OpenGUI(id string) (*GUIInfo, error) {
 	}
 	d := a.inv.ResolveCredentials(a.inv.Devices[i])
 	// Per device: two sites' devices often share a private address.
-	key := "gui " + d.ID + " " + model.HopAddr(d.Host, d.EffectiveGUIPort())
+	key := d.GUICertKey()
 	pin := a.inv.KnownGUICerts[key] // read under the lock: setGUICert writes the map
 	lang := a.lang
 	a.mu.Unlock()

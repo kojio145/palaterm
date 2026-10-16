@@ -551,3 +551,57 @@ func TestMyBastionTravelsAsFlagOnly(t *testing.T) {
 		}
 	}
 }
+
+// An import is checked against the receiving inventory too: a device that
+// tunnels through the own jump hosts is refused while one of them is Telnet
+// (otherwise the own jump host could never be saved again).
+func TestApplyValidatesAgainstInventory(t *testing.T) {
+	inv := &model.Inventory{MyBastions: []model.Bastion{{Host: "192.0.2.9", Method: model.BastionTelnet}}}
+	c := Contents{Devices: []model.Device{{Name: "fw1", Host: "192.0.2.10", Conn: model.ConnSSH, Group: "A社", OSType: "generic",
+		UseMyBastion: true, BastionMode: model.BastionViaTunnel, Enabled: true}}}
+	s, _ := Apply(inv, c, Options{})
+	if len(inv.Devices) != 0 || len(s.Invalid) != 1 || !strings.Contains(s.Invalid[0], "Telnet") {
+		t.Errorf("devices=%d invalid=%v", len(inv.Devices), s.Invalid)
+	}
+}
+
+// A CSV without the v1.7.3+ columns says so, with how many existing devices
+// it resets.
+func TestImportNamesMissingColumns(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[0].GUIOn, inv.Devices[0].UseMyBastion = true, true
+	c, err := ReadDevicesCSVText("name,group,host,conn\na-rt1,A社,192.0.2.1,ssh\nnew1,A社,192.0.2.99,ssh\n", "devices.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.MissingColumns) != 5 {
+		t.Fatalf("missing columns = %v", c.MissingColumns)
+	}
+	s, _ := Apply(inv, c, Options{})
+	if s.MissingColumnsReset != 1 || len(s.MissingColumns) != 5 {
+		t.Errorf("reset=%d cols=%v (want 1 updated device counted, new one not)", s.MissingColumnsReset, s.MissingColumns)
+	}
+}
+
+// Preview only looks: the inventory it was shown — maps included — is as
+// it was afterwards (an import that moves a device's address would drop
+// its GUI certificate pin; the preview must not).
+func TestPreviewLeavesInventoryAlone(t *testing.T) {
+	inv := sampleInventory()
+	inv.Devices[0].GUIOn = true
+	inv.Devices[0].ID = "dev-a"
+	key := inv.Devices[0].GUICertKey()
+	inv.KnownGUICerts = map[string]string{key: "abc"}
+	before := inv.Clone()
+	c := Contents{Devices: []model.Device{{Name: "a-rt1", Host: "192.0.2.77", Conn: model.ConnSSH, Group: "A社", OSType: "cisco-ios", GUIOn: true, Enabled: true}}}
+	s := Preview(inv, c, Options{})
+	if s.DevicesUpdated != 1 {
+		t.Fatalf("preview did not see the update: %+v", s)
+	}
+	if inv.KnownGUICerts[key] != "abc" {
+		t.Error("preview dropped the GUI pin from the real inventory")
+	}
+	if inv.Devices[0].Host != before.Devices[0].Host {
+		t.Error("preview changed the real device")
+	}
+}

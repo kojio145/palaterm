@@ -219,7 +219,9 @@ func (a *App) ClearHostKeys(id string) error {
 	// (pinned before the device used the own jump host).
 	dev := a.inv.Devices[idx]
 	resolved := a.inv.ResolveCredentials(dev)
-	for _, addr := range append(dev.HostKeyNames(), resolved.HostKeyNames()...) {
+	direct := dev.WithoutBastions() // 踏み台を使わない: pinned under the bare address
+	names := append(dev.HostKeyNames(), resolved.HostKeyNames()...)
+	for _, addr := range append(names, direct.HostKeyNames()...) {
 		delete(a.inv.KnownHostKeys, addr)
 	}
 	a.mu.Unlock()
@@ -877,6 +879,10 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
+	if err := a.inv.ValidateIn(&d); err != nil {
+		a.mu.Unlock()
+		return err
+	}
 	idx := -1
 	if d.ID != "" {
 		for i := range a.inv.Devices {
@@ -895,6 +901,11 @@ func (a *App) SaveDevice(d model.Device) error {
 	if idx >= 0 {
 		if old := a.inv.Devices[idx]; old.Group == d.Group && old.Name != d.Name {
 			renameSchedDevice(a.inv, d.Group, old.Name, d.Name)
+		}
+		// A GUI pin names the address: a device moved to another one starts
+		// over there (trust on first use), the old pin goes.
+		if old := a.inv.Devices[idx]; old.GUICertKey() != d.GUICertKey() {
+			delete(a.inv.KnownGUICerts, old.GUICertKey())
 		}
 		a.inv.Devices[idx] = d
 	} else {
@@ -937,6 +948,7 @@ func (a *App) DeleteDevice(id string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("機器が見つかりません")
 	}
+	delete(a.inv.KnownGUICerts, a.inv.Devices[idx].GUICertKey())
 	a.inv.Devices = append(a.inv.Devices[:idx], a.inv.Devices[idx+1:]...)
 	a.mu.Unlock()
 	return a.persist()
@@ -1002,13 +1014,13 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 		if p.GUI != nil {
 			d.GUIOn = *p.GUI
 		}
+		if err := a.inv.ValidateIn(d); err != nil {
+			a.mu.Unlock()
+			return fmt.Errorf("%s: %w", d.Name, err)
+		}
 		// A device moved out of every group has no group defaults to use.
 		if d.Group == "" {
 			d.UseGroupCreds = false
-		}
-		if err := d.Validate(); err != nil {
-			a.mu.Unlock()
-			return fmt.Errorf("%s: %w", d.Name, err)
 		}
 	}
 	if p.Group != nil {
@@ -1050,6 +1062,7 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 	for _, d := range a.inv.Devices {
 		if sel[d.ID] {
 			n++
+			delete(a.inv.KnownGUICerts, d.GUICertKey())
 			continue
 		}
 		out = append(out, d)
@@ -2275,7 +2288,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.5"
+const appVersion = "1.7.6"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
