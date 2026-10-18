@@ -1,0 +1,5 @@
+name,group,site,role,host,conn,port,serialPort,baud,osType,commandSet,enabled,useGroupCreds,username,password,enablePassword,authMethod,keyFile,keyPassphrase,legacyAlgos,useMyBastion,bastionMode,cli,gui,guiScheme,guiPort,bastion1Method,bastion1Host,bastion1Port,bastion1Username,bastion1Password,bastion1AuthMethod,bastion1KeyFile,bastion1KeyPassphrase,bastion1LegacyAlgos,bastion1JumpCommand
+core-sw1,lab,lab,core,192.0.2.11,ssh,22,,,cisco-ios,,true,false,ops,changeme,changeme,password,,,false,false,,true,false,https,443,,,,,,,,,,
+edge-rt1,lab,lab,edge,192.0.2.12,ssh,22,,,nec-ix,,true,false,ops,changeme,,password,,,false,false,shell,true,false,https,443,ssh,192.0.2.1,22,ops,changeme,password,,,false,
+old-sw1,lab,lab,access,192.0.2.13,telnet,23,,,cisco-ios,,true,false,ops,changeme,changeme,password,,,false,false,,true,false,https,443,,,,,,,,,,
+fw1,lab,lab,fw,192.0.2.14,ssh,22,,,fortinet-fortios,,true,false,admin,changeme,,password,,,false,false,,false,true,https,443,,,,,,,,,,

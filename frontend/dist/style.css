@@ -245,6 +245,14 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 
 /* Truncate long cell text; the full value is shown via the data-tip tooltip */
 .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines at most (the run table's error messages), then an ellipsis;
+   the whole text is a click away. */
+.clip2 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  white-space: normal; word-break: break-word; line-height: 1.35; }
+.run-msg { cursor: pointer; }
+.run-msg:hover { text-decoration: underline; }
+/* The row the diff window's search landed on */
+.dw-table tr.dw-found td { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Instant styled tooltip (see data-tip wiring in app.js) */
 .tip { position: fixed; z-index: 9999; background: var(--bg-3); color: var(--text);
@@ -283,7 +291,7 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--bg-3); border: 1px solid var(--border); color: var(--text);
-  padding: 12px 20px; border-radius: 10px; z-index: 100;
+  padding: 12px 20px; border-radius: 10px; z-index: 100; cursor: pointer;
   box-shadow: 0 10px 30px rgba(0,0,0,.4);
 }
 .toast.err { border-color: var(--err); }

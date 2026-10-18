@@ -33,3 +33,6 @@ Thumbs.db
 # Secrets (API keys) — other projects use the same convention
 .env
 .env.*
+
+# WSL lab key used by the screen-operation probes (never commit)
+pckey*

@@ -44,7 +44,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	// PREVIOUS hop's shell, so that hop's JumpCommand template applies.
 	for i := 1; i < len(bastions); i++ {
 		next := bastions[i]
-		keyed, err := jumpToKey(ctx, exp, bastions[i-1].JumpCommand, next.Method, next.Host, next.Username, next.Port, next.KeyPassphrase, timeout)
+		keyed, err := jumpToKey(ctx, exp, bastions[i-1].JumpCommand, next.Method, next.Host, next.Username, next.Port, next.AuthMethod, next.KeyPassphrase, next.LegacyAlgos, timeout)
 		if err != nil {
 			return fmt.Errorf("踏み台%d段目へのジャンプに失敗: %w", i+1, err)
 		}
@@ -68,7 +68,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 		method = model.BastionSSH
 	}
 	last := bastions[len(bastions)-1]
-	if _, err := jumpToKey(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, dev.KeyPassphrase, timeout); err != nil {
+	if _, err := jumpToKey(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, dev.AuthMethod, dev.KeyPassphrase, dev.LegacyAlgos, timeout); err != nil {
 		return fmt.Errorf("機器へのジャンプに失敗: %w", err)
 	}
 	return nil
@@ -106,8 +106,8 @@ const maxNegotiateRetries = 4
 // standard command; {user} {host} {port} are substituted (port 0 => "").
 // An OpenSSH "Unable to negotiate" refusal is answered by retrying with the
 // device's offered algorithms allowed (see reNegotiate).
-func jumpTo(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, timeout time.Duration) error {
-	_, err := jumpToKey(ctx, exp, template, method, host, user, port, "", timeout)
+func jumpTo(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, legacy bool, timeout time.Duration) error {
+	_, err := jumpToKey(ctx, exp, template, method, host, user, port, model.AuthPassword, "", legacy, timeout)
 	return err
 }
 
@@ -116,7 +116,15 @@ func jumpTo(ctx context.Context, exp *expecter, template string, method model.Ba
 // the 秘密鍵のパスフレーズ of the device or bastion being reached. keyed
 // reports that it did: the far end then logs in with the key, and no login
 // or password prompt follows.
-func jumpToKey(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, passphrase string, timeout time.Duration) (keyed bool, err error) {
+//
+// auth is the far end's SSH authentication method: the passphrase goes only
+// when it is 公開鍵 — a password-authenticated far end that asks for one is
+// not the hop's ssh talking but the far end's banner, and the passphrase of
+// a key kept on the hop is nothing it should learn. legacy is the far end's
+// レガシー暗号を許可: only then is a refused negotiation retried with the
+// offered (old) algorithms allowed, as a direct connection would only offer
+// them with it set.
+func jumpToKey(ctx context.Context, exp *expecter, template string, method model.BastionMethod, host, user string, port int, auth model.AuthMethod, passphrase string, legacy bool, timeout time.Duration) (keyed bool, err error) {
 	// The user name is typed into the hop's shell. Checked here, on the value
 	// actually used — a device on its group's default credentials sends the
 	// group's name, which the device's own checks never see.
@@ -149,6 +157,9 @@ func jumpToKey(ctx context.Context, exp *expecter, template string, method model
 			}
 		}
 		if seen == "passphrase" {
+			if auth != model.AuthPublicKey {
+				return false, fmt.Errorf("%s で %s へ入るときに鍵のパスフレーズを聞かれましたが、この接続先の SSH 認証方式は「公開鍵」ではないため送りませんでした。踏み台の上にある鍵で入るなら、その機器（踏み台なら踏み台）の認証方式を「公開鍵」にしてパスフレーズを「秘密鍵のパスフレーズ」欄に入れてください", shellName(exp), host)
+			}
 			return true, answerPassphrase(ctx, exp, host, passphrase)
 		}
 		if seen != "negotiate" {
@@ -159,6 +170,9 @@ func jumpToKey(ctx context.Context, exp *expecter, template string, method model
 		_ = exp.Expect(ctx, `Their offer: [^\s]+`, 2*time.Second)
 		opt := negotiateFix(exp.Transcript())
 		_ = exp.Expect(ctx, reShellDone, 3*time.Second)
+		if !legacy {
+			return false, fmt.Errorf("%s の ssh が %s と暗号方式を合意できません（%s）。機器が古い方式しか持たない場合は、その機器（踏み台なら踏み台）の「レガシー暗号を許可」をオンにするか、踏み台のジャンプコマンド欄で -o オプションを指定してください", shellName(exp), host, lastNegotiateLine(exp.Transcript()))
+		}
 		if opt == "" || attempt >= maxNegotiateRetries || containsStr(extra, opt) {
 			return false, fmt.Errorf("%s の ssh が %s と暗号方式を合意できません（%s）。機器が古い方式しか持たない場合は踏み台のジャンプコマンド欄で -o オプションを指定してください", shellName(exp), host, lastNegotiateLine(exp.Transcript()))
 		}

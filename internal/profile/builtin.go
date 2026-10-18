@@ -110,6 +110,10 @@ var defaults = []Profile{
 			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
 		},
+		// The pager commands change the unit's console setting for good, and
+		// a VDOM-enabled unit refuses them outside "config global": the
+		// --More-- net keeps a long show moving either way.
+		MorePrompt: "--More--",
 		Pager: []Step{
 			{Send: "config system console"},
 			{Send: "set output standard"},
@@ -125,6 +129,7 @@ var defaults = []Profile{
 			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
 		},
+		MorePrompt: "--More--",
 		Pager: []Step{
 			{Send: "config system console"},
 			{Send: "set output standard"},
@@ -214,6 +219,9 @@ var defaults = []Profile{
 		Name:   "Yamaha RTX",
 		Prompt: "#",
 		Login: []Step{
+			// Telnet / serial with a login password set ask for it first
+			// (skipped when it does not come: SSH, or no login password).
+			{Expect: "assword:", Send: "{password}"},
 			{Expect: ">", Send: "administrator"},
 			{Expect: "assword:", Send: "{enable}"},
 			{Expect: "#", Send: "console character ja.utf8"},

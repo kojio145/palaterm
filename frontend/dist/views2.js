@@ -28,10 +28,10 @@ function renderCommands() {
 
   root.innerHTML = `
     <div class="page-head">
-      <div><div class="page-title">${esc(t("コマンドセット"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("コマンドセット一覧"))}</div>
         <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書出（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
       <div class="row-inline">
-        <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読込"))}</button>
+        <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
       </div>
     </div>
@@ -71,8 +71,13 @@ function renderCommands() {
     catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
   });
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
-    if (!(await uiConfirm({ title: t("コマンドセットを削除"), message: t("コマンドセット「<b>{n}</b>」を削除しますか？", { n: esc(b.dataset.del) }), okLabel: t("削除"), danger: true }))) return;
-    await App().DeleteCommandSet(b.dataset.del); await refreshInventory(); toast(t("削除しました"), "ok");
+    // The devices on this set are named: deleting it leaves them with a
+    // set that no longer exists (they then only log in).
+    const users = (INV.devices || []).filter(d => d.commandSet === b.dataset.del);
+    const note = users.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ このセットを割り当てている機器が {n} 台あります。削除すると、その機器はコマンドセット未割り当て（ログインのみ）になります: {list}", { n: users.length, list: users.slice(0, 10).map(d => d.name).join(", ") + (users.length > 10 ? " …" : "") }))}</span>` : "";
+    if (!(await uiConfirm({ title: t("コマンドセットを削除"), message: t("コマンドセット「<b>{n}</b>」を削除しますか？", { n: esc(b.dataset.del) }) + note, okLabel: t("削除"), danger: true }))) return;
+    try { await App().DeleteCommandSet(b.dataset.del); await refreshInventory(); toast(t("削除しました"), "ok"); }
+    catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
   });
 }
 
@@ -128,7 +133,7 @@ function editCommandSet(set) {
     <div class="scroll"><table style="margin-top:6px">
       <thead><tr>
         <th style="width:26px"></th><th style="width:36px">#</th><th>${esc(t("コマンド"))}</th>
-        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行がこの文字列で終わったら次のコマンドを送ります（例: (config)#）。文字そのまま・行末で一致（行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプト（showコマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
+        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行がこの文字列で終わったら次のコマンドを送ります（例: (config)#）。文字そのまま・行末で一致（行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプト（コマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
         <th style="width:110px">${esc(t("待機(リモート)"))}</th><th style="width:110px">${esc(t("待機(シリアル)"))}</th><th style="width:76px"></th>
       </tr></thead>
       <tbody id="cmd-rows"></tbody>
@@ -193,6 +198,14 @@ function editCommandSet(set) {
       const inputs = tbody.querySelectorAll(".c-text");
       if (inputs[i + 1]) inputs[i + 1].focus();
     });
+    // Enter in a command field opens the next row (the ＋ of this row), the
+    // way a list is typed; Ctrl+Enter saves (app.js).
+    tbody.querySelectorAll(".c-text").forEach((inp, i) => inp.addEventListener("keydown", e => {
+      if (e.key !== "Enter" || e.ctrlKey || e.metaKey || e.isComposing) return;
+      e.preventDefault();
+      const ins = tbody.querySelector(`[data-ins="${i}"]`);
+      if (ins) ins.click();
+    }));
     // Multi-line paste in a command field splits into multiple rows.
     tbody.querySelectorAll(".c-text").forEach((inp, i) => inp.addEventListener("paste", e => {
       const txt = (e.clipboardData || window.clipboardData).getData("text");
@@ -232,7 +245,10 @@ function editCommandSet(set) {
       // An edited set may have been renamed: move it (and the devices that
       // use it) to the new name first, then save the commands under it.
       if (set && name !== set.name) await App().RenameCommandSet(set.name, name);
-      await App().SaveCommandSet({ name, commands, pauseOff: !usePause.checked });
+      // A new set must not land on an existing name (SaveCommandSet replaces
+      // by name: a typo of "backup" used to overwrite backup's 30 lines).
+      if (set) await App().SaveCommandSet({ name, commands, pauseOff: !usePause.checked });
+      else await App().CreateCommandSet({ name, commands, pauseOff: !usePause.checked });
       closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
     }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
@@ -286,6 +302,11 @@ function runAdHocCommands() {
 }
 // The set name the run tab shows for a device, and the set object it runs.
 function runSetName(d) { return runSetSel === RUN_ADHOC ? t("（今回のみ入力したコマンド）") : (runSetSel || d.commandSet || ""); }
+// A device's own set that was deleted (or renamed by hand in a CSV): the
+// row says so instead of showing the name as if it still ran.
+function runSetMissing(d) {
+  return !runSetSel && !!d.commandSet && !(INV.commandSets || []).some(s => s.name === d.commandSet);
+}
 function runSetOf(d) {
   if (runSetSel === RUN_ADHOC) return { commands: runAdHocCommands() };
   const name = runSetSel || (d && d.commandSet);
@@ -332,9 +353,9 @@ function runVisible(devs) {
   const q = runFilter.text.trim().toLowerCase();
   let out = devs.filter(d => {
     const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" };
-    if (q && ![d.name, d.host, d.site || "", d.role || "", runSetName(d)].some(v => String(v).toLowerCase().includes(q))) return false;
+    if (q && ![d.name, d.host, d.site || "", d.role || "", runSetName(d), profileName(d.osType)].some(v => String(v).toLowerCase().includes(q))) return false;
     if (runFilter.site && (d.site || "") !== runFilter.site) return false;
-    if (runFilter.status && st.phase !== runFilter.status) return false;
+    if (runFilter.status && !(st.phase === runFilter.status || (runFilter.status === "running" && ["connecting", "login", "saving"].includes(st.phase)))) return false;
     return true;
   });
   if (runSort.key) {
@@ -342,7 +363,8 @@ function runVisible(devs) {
       if (runSort.key === "phase") { const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" }; return PHASE_ORDER[st.phase] ?? 9; }
       return String(d[runSort.key] || "").toLowerCase();
     };
-    out = out.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * runSort.dir; });
+    // Natural order: 10.0.0.9 before 10.0.0.10, sw2 before sw10.
+    out = out.slice().sort((a, b) => { const x = val(a), y = val(b); return (typeof x === "number" ? (x < y ? -1 : x > y ? 1 : 0) : x.localeCompare(y, undefined, { numeric: true })) * runSort.dir; });
   }
   return out;
 }
@@ -421,13 +443,15 @@ function renderRun() {
       <td class="mono"><div class="clip" data-tip="${esc(d.host)}">${esc(d.host)}</div></td>
       <td><div class="clip" data-tip="${esc(d.site || "")}">${esc(d.site || "")}</div></td>
       <td><div class="clip" data-tip="${esc(d.role || "")}">${esc(d.role || "")}</div></td>
-      <td class="muted"><div class="clip" data-tip="${esc(runSetName(d) || t("コマンドセット未割り当て: ログインのみで終わります"))}" ${runSetSel ? 'style="color:var(--accent)"' : (runSetName(d) ? "" : 'style="color:var(--warn)"')}>${esc(runSetName(d) || t("（なし）"))}</div></td>
-      <td class="muted mono"><div class="clip" data-tip="${esc(runMsg(st))}">${esc(runMsg(st))}</div></td>
+      <td class="muted"><div class="clip" data-tip="${esc(runSetMissing(d) ? t("コマンドセット「{s}」は存在しません（削除または改名）。機器の編集で割り当て直してください。このままだとログインのみで終わります", { s: d.commandSet }) : runSetName(d) || t("コマンドセット未割り当て: ログインのみで終わります"))}" ${runSetSel ? 'style="color:var(--accent)"' : (runSetMissing(d) || !runSetName(d) ? 'style="color:var(--warn)"' : "")}>${esc(runSetMissing(d) ? t("{s}（存在しません）", { s: d.commandSet }) : runSetName(d) || t("（なし）"))}</div></td>
+      <td class="muted mono"><div class="${st.phase === "error" || (st.warnings && st.warnings.length) ? "clip2 run-msg" : "clip"}" ${st.phase === "error" || (st.warnings && st.warnings.length) ? `data-msg="${esc(d.name)}" data-tip="${esc(t("クリックで全文を表示"))}"` : `data-tip="${esc(runMsg(st))}"`}>${esc(runMsgShort(st))}</div></td>
       <td style="text-align:right;white-space:nowrap">
+        ${st.output ? `<span class="link" data-output="${esc(d.name)}" data-tip="${esc(t("接続確認で機器が表示した内容を見ます（ログは残していません）"))}">${esc(t("出力"))}</span> ` : ""}
         ${st.logPath ? `<span class="link" data-watch="${esc(st.logPath)}" data-tip="${esc(t("機器の画面を表示のみで開きます（実行中は出力をそのまま追います）"))}">${esc(t("画面"))}</span> <span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
         ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.id)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
           ? `<button class="btn sm" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} style="color:var(--err);border-color:var(--err)" data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
+        ${!running ? `<button class="btn sm" data-editdev="${esc(d.id)}" data-tip="${esc(t("この機器の設定（アドレス・認証情報・踏み台など）を開きます。失敗の原因をここで直して ↻ で再実行"))}">${esc(t("編集"))}</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
@@ -441,8 +465,8 @@ function renderRun() {
   const vals = Object.values(runState);
   const failedCount = vals.filter(s => s.phase === "error").length;
   const canceledCount = vals.filter(s => s.phase === "canceled").length;
-  const retryLabel = failedCount && canceledCount ? t("↻ 失敗・中断のみ再実行（{n}台）", { n: failedCount + canceledCount })
-    : canceledCount ? t("↻ 中断分のみ再実行（{n}台）", { n: canceledCount })
+  const retryLabel = failedCount && canceledCount ? t("↻ 失敗・中止のみ再実行（{n}台）", { n: failedCount + canceledCount })
+    : canceledCount ? t("↻ 中止分のみ再実行（{n}台）", { n: canceledCount })
     : t("↻ 失敗のみ再実行（{n}台）", { n: failedCount });
   const hasResults = vals.length > 0;
   const groups = INV.deviceGroups || [];
@@ -461,14 +485,25 @@ function renderRun() {
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
         <div class="page-sub">${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
+      <div class="row-inline" style="gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+        <div class="run-stat" style="margin-left:0">
+          <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
+          <div>${esc(t("失敗"))} <b id="rc-err" style="color:var(--err)">0</b></div>
+          <div>${esc(t("実行中"))} <b id="rc-run">0</b></div>
+          <div><span data-tip="${esc(t("完了済みコマンド数と経過時間から算出した全体の予想残り時間。実行が進むほど精度が上がります"))}">${esc(t("予想残り"))}</span> <b id="rc-eta">${running ? computeEta() : "—"}</b></div>
+        </div>
+        ${!running && lastRunDir ? `<button class="btn" id="btn-rundir" data-tip="${esc(t("直前の一括実行のログが入ったフォルダを開きます: {d}", { d: lastRunDir }))}">${esc(t("📂 この実行のフォルダ"))}</button>` : ""}
+        <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
+      </div>
     </div>
     <div class="run-toolbar">
       <button class="btn run" id="btn-run" ${running || enabledCount === 0 ? "disabled" : ""}>${esc(filtered ? t("▶ 表示中の {n} 台を実行", { n: enabledCount }) : t("▶ 一括実行"))}</button>
       <button class="btn" id="btn-dry" ${running || enabledCount === 0 ? "disabled" : ""} data-tip="${esc(t("接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に"))}">${esc(t("⚡ 接続確認のみ"))}</button>
       <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
       ${!running && (failedCount || canceledCount) ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(retryLabel)}</button>` : ""}
-      ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、ホスト名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
-      ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「待機」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
+      ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、機器名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
+      ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「順番待ち」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
+      <div style="flex-basis:100%;height:0;margin:-4px 0 0"></div>
       ${groups.length || ungroupedCount ? `<select id="run-grp" class="btn" style="padding-right:8px" ${running ? "disabled" : ""}>
         <option value="">${esc(t("グループで対象を選択…"))}</option>
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
@@ -487,17 +522,10 @@ function renderRun() {
         <option value="${RUN_ADHOC}" ${runSetSel === RUN_ADHOC ? "selected" : ""}>${esc(runSetSel === RUN_ADHOC ? t("コマンド: 今回だけ入力（{n} 行）", { n: runAdHocCommands().length }) : t("コマンド: 今回だけ入力…"))}</option>
       </select>
       ${runSetSel === RUN_ADHOC && !running ? `<button class="btn sm" id="run-adhoc-edit">${esc(t("入力を編集…"))}</button>` : ""}
-      <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
-      <div class="run-stat">
-        <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
-        <div>${esc(t("失敗"))} <b id="rc-err" style="color:var(--err)">0</b></div>
-        <div>${esc(t("実行中"))} <b id="rc-run">0</b></div>
-        <div><span data-tip="${esc(t("完了済みコマンド数と経過時間から算出した全体の予想残り時間。実行が進むほど精度が上がります"))}">${esc(t("予想残り"))}</span> <b id="rc-eta">${running ? computeEta() : "—"}</b></div>
-      </div>
     </div>
     ${runLidNote()}
     ${runGroupSel && devs.length ? `<div class="run-toolbar" style="margin-top:-8px;gap:8px">
-      <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（ホスト名・IP・拠点・役割・コマンドセット）"))}" value="${esc(runFilter.text)}">
+      <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（機器名・IP・拠点・役割・OS・コマンドセット）"))}" value="${esc(runFilter.text)}">
       <select id="run-filter-site" class="btn" style="padding-right:8px"><option value="">${esc(t("拠点: すべて"))}</option>${sites.map(s => `<option value="${esc(s)}" ${s === runFilter.site ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <select id="run-filter-status" class="btn" style="padding-right:8px"><option value="">${esc(t("状態: すべて"))}</option>${["queued", "off", "done", "error", "canceled", "running"].map(p => `<option value="${p}" ${p === runFilter.status ? "selected" : ""}>${esc(statusLabel(p))}</option>`).join("")}</select>
       ${filtered ? `<button class="btn sm" id="run-filter-clear">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
@@ -509,7 +537,7 @@ function renderRun() {
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
         : `<table class="fixed" data-colw="run"><thead><tr>
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
-           ${th("phase", t("状態"), "126px")}${th("name", t("ホスト名"), "132px")}${th("host", t("IPアドレス"), "112px")}
+           ${th("phase", t("状態"), "126px")}${th("name", t("機器名"), "132px")}${th("host", t("IPアドレス"), "112px")}
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
            <th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
@@ -604,7 +632,11 @@ function renderRun() {
   if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
   if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
-  document.getElementById("btn-logdir").onclick = () => App().OpenLogDir();
+  document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
+  const btnRunDir = document.getElementById("btn-rundir");
+  if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
+  // 編集 on a row: a failed login is fixed where it failed, and ↻ re-runs it.
+  root.querySelectorAll("[data-editdev]").forEach(b => b.onclick = () => { const d = devById(b.dataset.editdev); if (d) editDevice(d); });
   wireGridBadges(root);
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
@@ -614,7 +646,7 @@ function renderRun() {
     if (failed) {
       const ok = await uiConfirm({
         title: t("実行結果のクリア"),
-        message: t("グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中断 {n}台）は消えます。<br>切り替えますか？", { n: failed }),
+        message: t("グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。<br>切り替えますか？", { n: failed }),
         okLabel: t("切り替える"),
         danger: true,
       });
@@ -627,8 +659,7 @@ function renderRun() {
     // 踏み台を使わない is for the group it was chosen for: another group
     // starts from its devices' own settings again.
     runDirect = false;
-    renderRun();
-    if (runGroupSel) toast(t("グループ「{g}」を選択しました", { g: runGroupLabel() }), "ok");
+    renderRun(); // the heading names the group: no toast on top
   };
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
@@ -643,6 +674,8 @@ function renderRun() {
   if (runChkAll) runChkAll.onclick = () => applyEnable(visible.map(d => d.id), runChkAll.checked);
   wireShiftRange("run:" + runGroupSel, [...root.querySelectorAll("[data-enable]")], applyEnable);
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
+  root.querySelectorAll("[data-output]").forEach(el => el.onclick = () => showRunOutput(el.dataset.output));
+  root.querySelectorAll("[data-msg]").forEach(el => el.onclick = () => showRunMessage(el.dataset.msg));
   root.querySelectorAll("[data-stop]").forEach(el => el.onclick = () => stopDevice(el.dataset.stop));
   root.querySelectorAll("[data-watch]").forEach(el => el.onclick = () => App().OpenWatchWindow(el.dataset.watch).catch(e => toast(t("画面を開けません") + ": " + terr(e), "err")));
   wireConnectButtons(root, () => runDirect);
@@ -656,6 +689,44 @@ function renderRun() {
 function runMsg(st) {
   if (st.warnings && st.warnings.length) return "⚠ " + st.warnings.join(" ／ ");
   return fmtRunMsg(st.message);
+}
+// The message as the table shows it: a finished device's log path (the
+// whole absolute path took the column; ログ表示 is right beside it) becomes
+// the file name; everything else as it is, the cell wrapping to two lines.
+function runMsgShort(st) {
+  const m = runMsg(st);
+  if (st.phase === "done" && st.logPath && m === st.logPath) return m.split(/[\\/]/).pop();
+  return m;
+}
+// The whole message of a row, in a dialog: a hint-laden error runs to two
+// or three sentences, and hovering 300 rows one by one does not scale.
+function showRunMessage(name) {
+  const st = runState[name];
+  if (!st) return;
+  const node = h(`<div>
+    <h3>${esc(name)} <span class="muted" style="font-size:13px;font-weight:400">/ ${esc(statusLabel(st.phase))}</span></h3>
+    <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto">${esc(runMsg(st))}</div>
+    <div class="modal-actions"><button class="btn" id="rm-close" autofocus>${esc(t("閉じる"))}</button><button class="btn primary" id="rm-copy">${esc(t("コピー"))}</button></div>
+  </div>`);
+  openModal(node, "mid");
+  node.querySelector("#rm-close").onclick = closeModal;
+  node.querySelector("#rm-copy").onclick = () => copyText(runMsg(st), t("コピーしました"));
+}
+// What the device showed during a failed 接続確認のみ (no log is written
+// for a dry run, so this is the only place to read the hop's banner or the
+// prompt the login stopped at).
+function showRunOutput(name) {
+  const st = runState[name];
+  if (!st || !st.output) return;
+  const node = h(`<div>
+    <h3>${esc(t("接続確認の出力"))} <span class="muted" style="font-size:13px;font-weight:400">/ ${esc(name)}</span></h3>
+    <div class="muted" style="font-size:12px;margin:-4px 0 8px">${esc(t("機器（踏み台）が表示した内容の末尾です。パスワードは伏せています。接続確認はログを残さないため、この画面を閉じると消えます"))}</div>
+    <pre class="log-view" style="max-height:55vh">${esc(st.output)}</pre>
+    <div class="modal-actions"><button class="btn" id="ro-close" autofocus>${esc(t("閉じる"))}</button><button class="btn primary" id="ro-copy">${esc(t("コピー"))}</button></div>
+  </div>`);
+  openModal(node, "wide");
+  node.querySelector("#ro-close").onclick = closeModal;
+  node.querySelector("#ro-copy").onclick = () => copyText(st.output, t("コピーしました"));
 }
 
 // 今回だけ入力: commands typed for one run, one per line (1-second pause).
@@ -684,12 +755,26 @@ function adHocDialog() {
   });
 }
 
+// The developer-shaped fragments the Go side composes ("expect timeout",
+// "login: waiting for …") read in Japanese on the Japanese UI; terr handles
+// the English one.
+const RUN_MSG_JA = [
+  [/login: waiting for prompt: expect timeout/g, "ログイン後のプロンプトを待ちましたが、時間内に出ませんでした"],
+  [/login: waiting for "([^"]*)": expect timeout/g, "ログイン中に「$1」を待ちましたが、時間内に出ませんでした"],
+  [/^login: /g, "ログイン: "],
+  [/command "([^"]*)": expect timeout/g, "コマンド「$1」の応答待ちがタイムアウトしました"],
+  [/^command "([^"]*)": /g, "コマンド「$1」: "],
+  [/expect timeout/g, "応答待ちタイムアウト"],
+  [/\bsend: /g, "送信エラー: "],
+];
 function fmtRunMsg(m) {
-  return terr(String(m || "")).replace(/context canceled/g, t("中止しました"));
+  let s = terr(String(m || "")).replace(/context canceled/g, t("中止しました"));
+  if (LANG === "ja") for (const [re, rep] of RUN_MSG_JA) s = s.replace(re, rep);
+  return s;
 }
 
 function statusLabel(p) {
-  return ({ queued: t("待機"), off: t("対象外"), connecting: t("接続中"), login: t("ログイン中"),
+  return ({ queued: t("順番待ち"), off: t("対象外"), connecting: t("接続中"), login: t("ログイン中"),
     running: t("実行中"), saving: t("保存中"), done: t("完了"), error: t("エラー"), canceled: t("中止") }[p]) || p;
 }
 
@@ -709,14 +794,22 @@ async function startRun(dryRun) {
   const targets = runTargetDevices().map(d => d.name);
   if (!targets.length) return;
   const scope = (runGroupSel ? t("グループ「<b>{g}</b>」の ", { g: esc(runGroupLabel()) }) : "") + (runFilterActive() ? t("（絞り込み表示中の）") : "");
+  // Rows of a run already on the table whose every target failed or was
+  // cut short (the 状態: エラー filter, then ▶): the rows that finished
+  // stay, as they do for ↻ — the run itself uses the toolbar as it is.
+  const keepRows = runFilterActive() && Object.keys(runState).length > 0
+    && targets.every(n => ["error", "canceled"].includes((runState[n] || {}).phase));
   if (dryRun) {
+    // Nothing is sent and nothing is written: no question unless the run
+    // is narrowed (a filter) or routed differently (踏み台を使わない).
+    if (!runFilterActive() && !runDirect) { doRun(targets, true, false, keepRows); return; }
     const ok = await uiConfirm({
       title: t("接続確認のみ"),
       message: t("{s}<b>{n} 台</b>に接続してログインまで確認します。<br>コマンドは送らず、ログも残しません。よろしいですか？", { s: scope, n: targets.length }) + directNote(runDirect, targets),
       okLabel: t("⚡ 接続確認"),
     });
     if (!ok) return;
-    doRun(targets, true);
+    doRun(targets, true, false, keepRows);
     return;
   }
   // Devices that would run no commands at all (no set assigned, none chosen
@@ -724,14 +817,19 @@ async function startRun(dryRun) {
   // discovered in an empty log afterwards.
   const req0 = runRequest(targets, false);
   const noSet = targets.filter(n => reqCommandCount(req0, runDev(n)) === 0);
+  // A set that types a password into a command line ({password} /
+  // {enable}) sends it wherever that line points: named here, with the
+  // note that such a run is logged masked whatever the setting says.
+  const secretNote = secretCommandNote(req0, targets);
   // A command set that changes the device (conf t / write / reload …) gets
   // its own warning with an explicit acknowledgement before anything runs.
   const warnings = await App().CheckDangerousCommands(runRequest(targets, false)).catch(() => []);
   if (warnings && warnings.length) {
-    if (!(await dangerConfirm(warnings, targets.length, scope, runStage))) return;
+    if (!(await dangerConfirm(warnings, targets.length, scope, runStage, secretNote))) return;
   } else {
     const stage = (runSetSel ? `<br><span style="font-size:12px;color:var(--accent)">${esc(t("コマンド（今回のみ）: {s}", { s: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text).join(" / ") : runSetSel }))}</span>` : "")
-      + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "");
+      + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "")
+      + secretNote;
     const ok = await uiConfirm({
       title: t("一括実行"),
       message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + directNote(runDirect, targets),
@@ -739,19 +837,37 @@ async function startRun(dryRun) {
     });
     if (!ok) return;
   }
-  doRun(targets, false);
+  doRun(targets, false, false, keepRows);
+}
+
+// The lines of the targets' command sets (or the typed commands) that
+// expand a password, as a warning for the confirmation ("" when none).
+function secretCommandNote(req, targets) {
+  const hit = s => /\{password\}|\{enable\}/.test(s);
+  const lines = [];
+  if (req.adHoc && req.adHoc.length) {
+    req.adHoc.filter(c => hit(c.text)).forEach(c => lines.push(t("（今回のみ入力したコマンド）") + ": " + c.text));
+  } else {
+    const names = [...new Set(targets.map(n => { const d = runDev(n); return req.commandSet || (d && d.commandSet) || ""; }).filter(Boolean))];
+    names.forEach(nm => {
+      const cs = (INV.commandSets || []).find(s => s.name === nm);
+      (cs ? cs.commands || [] : []).filter(c => hit(c.text)).forEach(c => lines.push(nm + ": " + c.text));
+    });
+  }
+  if (!lines.length) return "";
+  return `<br><span style="font-size:12px;color:var(--warn)">${esc(t("🔒 パスワードを送るコマンド（{password} / {enable}）があります。この実行のログはパスワードを伏せて保存します: {list}", { list: lines.join(" ／ ") }))}</span>`;
 }
 
 // The warning shown before a batch whose command sets contain
 // configuration-changing commands: every flagged command per device, and an
 // acknowledgement checkbox that gates the run button.
-function dangerConfirm(warnings, n, scope, stage) {
+function dangerConfirm(warnings, n, scope, stage, extraNote) {
   return new Promise(resolve => {
     const bySet = {};
     warnings.forEach(w => { (bySet[w.commandSet] = bySet[w.commandSet] || { hits: w.hits, devices: [] }).devices.push(w.device); });
     const blocks = Object.keys(bySet).map(set => `
       <div class="warn-box">
-        <div><b>${esc(t("コマンドセット「{s}」", { s: set === "（今回のみ入力したコマンド）" ? t(set) : set }))}</b> <span class="muted">${esc(t("— 対象 {n} 台: {d}", { n: bySet[set].devices.length, d: bySet[set].devices.join(", ") }))}</span></div>
+        <div><b>${esc(t("コマンドセット「{s}」", { s: set === "（今回のみ入力したコマンド）" ? t(set) : set }))}</b> <span class="muted">${esc(t("— 対象 {n} 台: {d}", { n: bySet[set].devices.length, d: bySet[set].devices.slice(0, 10).join(", ") + (bySet[set].devices.length > 10 ? t(" ほか {n} 台", { n: bySet[set].devices.length - 10 }) : "") }))}</span></div>
         <table style="margin-top:6px"><tbody>
           ${bySet[set].hits.map(h => `<tr><td class="muted" style="padding:3px 8px 3px 0;width:36px">#${h.index + 1}</td><td class="mono" style="padding:3px 8px 3px 0">${esc(h.text)}</td><td class="muted" style="padding:3px 0;color:var(--warn)">${esc(t(h.reason))}</td></tr>`).join("")}
         </tbody></table>
@@ -761,6 +877,7 @@ function dangerConfirm(warnings, n, scope, stage) {
       ${stageBanner(stage || "")}
       <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${t("{s}<b>{n} 台</b>に一括実行します。次のコマンドは機器の設定や状態を<b>変更</b>します。実行前に内容を確認してください。", { s: scope, n })}</p>
       ${blocks}
+      ${extraNote ? `<p style="font-size:14px;line-height:1.8;margin:4px 0 0">${extraNote}</p>` : ""}
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px"><input type="checkbox" id="dg-ack" style="width:auto"> ${esc(t("変更を伴うことを理解したうえで実行します"))}</label>
       <div class="modal-actions">
         <button class="btn" id="dg-cancel">${esc(t("キャンセル"))}</button>
@@ -779,6 +896,10 @@ function dangerConfirm(warnings, n, scope, stage) {
 // Only the named devices run (checkbox state is left untouched). partial
 // keeps the rows of devices that already finished (失敗・中断のみ再実行).
 let lastRunDry = false;
+// The folder of the last finished batch (its logs together), for the
+// 📂 button: handing over a run's logs used to mean opening the log root
+// and finding the right date folder.
+let lastRunDir = "";
 // The request of the last full run. A re-run (失敗・中断のみ / 鍵を許可して
 // 再実行) repeats its choices — group, stage, command set, typed commands —
 // not whatever the toolbar shows by then: switching the set to a change set
@@ -811,11 +932,12 @@ async function confirmRerun(names) {
   return null; // nothing to warn about: the caller asks its own question
 }
 
-async function doRun(names, dryRun, partial) {
+async function doRun(names, dryRun, partial, keepRows) {
   // A full run starts from a clean table; a partial re-run (失敗・中断のみ)
   // resets only its own rows, so the devices that already finished keep
-  // showing 完了 and their ログ表示 link.
-  if (!partial) for (const k in runState) delete runState[k];
+  // showing 完了 and their ログ表示 link. keepRows does the same for a
+  // full run aimed at the failed rows (the 状態 filter, then ▶).
+  if (!partial && !keepRows) for (const k in runState) delete runState[k];
   const targets = names;
   const req = partial && lastRunReq ? { ...lastRunReq, names: targets, dryRun: !!dryRun } : runRequest(targets, dryRun);
   if (!partial) lastRunReq = req;
@@ -961,8 +1083,8 @@ async function retryUnfinished() {
   const danger = await confirmRerun(names);
   if (danger === false) return;
   const ok = danger === true || await uiConfirm({
-    title: t("失敗・中断のみ再実行"),
-    message: t("失敗・中断した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？", { n: names.length }) + rerunDetail(),
+    title: t("失敗・中止のみ再実行"),
+    message: t("失敗・中止した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？", { n: names.length }) + rerunDetail(),
     okLabel: t("↻ 再実行"),
   });
   if (!ok) return;
@@ -1020,7 +1142,7 @@ async function exportRunFailures() {
   const rows = names.map(n => ({ device: n, status: statusLabel("error"), message: runMsg(runState[n]) }));
   try {
     const path = await App().ExportRunFailures(runGroupName(), lastRunDry, rows);
-    if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く") })) {
+    if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
       try { await App().OpenExportFolder(path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")))); } catch (e) { toast(terr(e), "err"); }
     }
   } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
@@ -1100,6 +1222,7 @@ function applyRunDone(payload) {
   // Payload: {results, runDir, dryRun} (a bare array from older builds).
   const results = Array.isArray(payload) ? payload : (payload && payload.results) || [];
   const runDir = (payload && payload.runDir) || "";
+  if (runDir) lastRunDir = runDir; // 📂 この実行のフォルダ
   const wasDry = !!(payload && payload.dryRun);
   (results || []).forEach(r => {
     const prev = runState[r.device] || {};
@@ -1107,6 +1230,7 @@ function applyRunDone(payload) {
       phase: r.success ? "done" : (r.canceled ? "canceled" : "error"),
       message: r.success ? (r.logPath || (wasDry ? t("接続・ログイン OK（コマンドは送っていません）") : "")) : r.error,
       logPath: r.logPath,
+      output: r.output || "",
       done: r.success ? prev.total : prev.done,
       total: prev.total,
       startedAt: prev.startedAt, connectAt: prev.connectAt, finishedAt: prev.finishedAt || Date.now(),
@@ -1121,7 +1245,7 @@ function applyRunDone(payload) {
   else if (active && active.id === "tab-settings" && !settingsDirty && !myLoginsDirty) renderSettings();
   if (wasCancel) {
     const v = Object.values(runState);
-    toast(t("中止しました（完了 {a}・失敗 {b}・中断/未実行 {c}）", {
+    toast(t("中止しました（完了 {a}・失敗 {b}・中止/未実行 {c}）", {
       a: v.filter(s => s.phase === "done").length, b: v.filter(s => s.phase === "error").length, c: v.filter(s => s.phase === "canceled").length }), "ok");
   } else if (wasDry) {
     const v = Object.values(runState);
@@ -1182,7 +1306,7 @@ function renderSettings() {
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
-      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("作業タイミングの付与文字列 ⓘ"))}</span></label>
+      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("ログ名に付く作業タイミングの語 ⓘ"))}</span></label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前（before）"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中（work）"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
@@ -1191,9 +1315,9 @@ function renderSettings() {
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("作業タイミングを「指定なし」で実行したときのログファイル名に付きます（フォルダ名には付きません）"))}">${esc(t("指定なし（Current）"))}</span><input id="set-st-none" style="flex:1" placeholder="Current" value="${esc(s.stageTokenNone || "Current")}"></div>
         </div></div>
       <div class="grid-2">
-        <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中はロックしません）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
+        <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中も。実行は続き、解除すると表に戻ります）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
           <input id="set-lock" type="number" min="0" value="${s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30)}"></div>
-        <div class="field"><label><span data-tip="${esc(t("オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません"))}">${esc(t("ログ内のパスワードをマスクする ⓘ"))}</span></label>
+        <div class="field"><label><span data-tip="${esc(t("オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません。コマンドセットの行に {password} / {enable} を書いた場合だけは機器がその行をエコーするため、オフでもそのログはマスクされます"))}">${esc(t("ログ内のパスワードをマスクする ⓘ"))}</span></label>
           <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-mask" type="checkbox" ${s.maskLogSecrets ? "checked" : ""}> ${esc(t("パスワードを **** に置き換えて保存（既定: オフ）"))}</label></div>
       </div>
       <div class="field"><label><span data-tip="${esc(t("対話窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます"))}">${esc(t("対話窓の右クリック ⓘ"))}</span></label>
@@ -1201,7 +1325,7 @@ function renderSettings() {
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
-        <tr><td class="mono">{host}</td><td>${esc(t("ホスト名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
+        <tr><td class="mono">{host}</td><td>${esc(t("機器名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
         <tr><td class="mono">{ip}</td><td>${esc(t("IPアドレス"))}</td><td class="mono">{time}</td><td>${esc(t("時刻（hhmmss）"))}</td></tr>
         <tr><td class="mono">{os}</td><td>${esc(t("OS種別"))}</td><td class="mono">{hhmm}</td><td>${esc(t("時刻（hhmm）"))}</td></tr>
         <tr><td class="mono">{group}</td><td>${esc(t("グループ名"))}</td><td class="mono">{site}</td><td>${esc(t("拠点名"))}</td></tr>
@@ -1217,8 +1341,14 @@ function renderSettings() {
       <div id="mb-rows"></div>
       <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
       <div class="modal-actions"><button class="btn primary" id="mb-save">${esc(t("保存"))}</button></div>
+    </div>
+    <div class="panel" style="padding:22px;max-width:620px;margin-top:16px;border-color:var(--err)">
+      <div style="font-weight:600;margin-bottom:4px;color:var(--err)">${esc(t("危険な操作"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワードを削除して、はじめての起動の状態に戻します（ログと export フォルダは残ります）。マスターパスワードの入力と 2 回の確認があります。"))}</div>
+      <button class="btn danger" id="set-reset" type="button">${esc(t("すべてのデータをリセット（初期化）"))}</button>
     </div>`;
   renderMyBastion();
+  document.getElementById("set-reset").onclick = resetVaultFlow;
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = myLoginsDirty = false;
@@ -1377,18 +1507,18 @@ function renderOSTypes() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("OSタイプ設定"))}</div>
-        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読込で戻せます。書き出しは「機器」タブの一式書出にまとまっています"))}</div></div>
+        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読み込みで戻せます。書き出しは「機器」タブの一式書き出しにまとまっています"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
-        <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読込"))}</button>
+        <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="prof-add">${esc(t("＋ 追加"))}</button>
       </div>
     </div>
-    ${profiles.length ? listViewBar(LV, t("絞り込み（名前・完了の目印）")) : ""}
+    ${profiles.length ? listViewBar(LV, t("絞り込み（名前・プロンプト）")) : ""}
     <div class="panel scrollx">
       ${profiles.length === 0
         ? `<div class="muted" style="font-size:13px;padding:14px">${esc(t("プロファイルがありません。「読込」で export\\os-profiles\\ のJSONから復元するか、「＋ 追加」で作成してください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するプロファイルがありません"))}</div>`
-        : `<table class="fixed" data-colw="ostypes"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:280px")}${listViewTh(LV, "prompt", t("完了の目印"))}${listViewTh(LV, "login", t("ログイン手順"), "width:110px")}<th style="width:220px"></th></tr></thead><tbody id="prof-body">
+        : `<table class="fixed" data-colw="ostypes"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:280px")}${listViewTh(LV, "prompt", t("プロンプト（完了の目印）"))}${listViewTh(LV, "login", t("ログイン手順"), "width:110px")}<th style="width:220px"></th></tr></thead><tbody id="prof-body">
         ${visible.map(p => `<tr data-key="${esc(p.key)}">
           ${listViewDragCell(LV)}
           <td><div class="clip" data-tip="${esc(p.name)}"><b>${esc(p.name)}</b></div></td>
@@ -1475,7 +1605,7 @@ function editProfile(prof) {
       ${prof ? "" : `<p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("Cisco IOS系の実例を入れてあります。機器に合わせて書き換えてください。"))}</p>`}
       <div class="grid-2">
         <div class="field"><label>${esc(t("プロファイル名"))} <span class="req">${esc(t("必須"))}</span></label><input id="p-name" value="${esc(p.name || "")}" placeholder="${esc(t("例: MyRouter OS"))}"></div>
-        <div class="field"><label><span data-tip="${esc(t("コマンドが打てる状態のときに機器が出す表示（例: Router#）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。「#」のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: FG(console)#）にも一致します"))}">${esc(t("showコマンド完了の目印 ⓘ"))}</span> <span class="req">${esc(t("必須"))}</span></label><input id="p-prompt" class="mono" value="${esc(p.prompt || "")}"></div>
+        <div class="field"><label><span data-tip="${esc(t("コマンドが打てる状態のときに機器が出す表示（例: Router#）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。「#」のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: FG(console)#）にも一致します"))}">${esc(t("プロンプト（コマンド完了の目印） ⓘ"))}</span> <span class="req">${esc(t("必須"))}</span></label><input id="p-prompt" class="mono" value="${esc(p.prompt || "")}"></div>
       </div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("ログイン直後に流す、出力の一時停止（--More--）をなくすコマンド。OSによりコマンドやモードが違うため複数行OK（設定モードに入る手順ごと書けます）。FortiGateのように機器側で設定済みの場合は空欄でかまいません"))}">${esc(t("ページャ解除コマンド（任意・1行1コマンドで複数行可） ⓘ"))}</span></label>
@@ -1483,7 +1613,7 @@ function editProfile(prof) {
         <div class="field"><label><span data-tip="${esc(t("出力の途中一時停止の表示。これが出たらスペースを送って続きを表示します。ページャ解除コマンドで止まらないOSだけ設定します"))}">${esc(t("ページャ表示の目印（任意） ⓘ"))}</span></label>
           <input id="p-more" class="mono" value="${esc(p.morePrompt || "")}" placeholder="--- more ---"></div>
       </div>
-      <label style="font-size:12px;color:var(--text-dim)"><span data-tip="${esc(t("上から順に実行。expect列の表示が出るのを待ち、send列の文字列を入力。認証系の行（{user}/{password}/{enable}を送る行）は表示が出なければ自動でスキップされるため、SSH/Telnetで同じプロファイルが使えます。最後の行の入力が終わると自動で「showコマンド完了の目印」を待つため、目印を待つだけの行は不要です"))}">${esc(t("ログイン手順 ⓘ"))}</span></label>
+      <label style="font-size:12px;color:var(--text-dim)"><span data-tip="${esc(t("上から順に実行。expect列の表示が出るのを待ち、send列の文字列を入力。認証系の行（{user}/{password}/{enable}を送る行）は表示が出なければ自動でスキップされるため、SSH/Telnetで同じプロファイルが使えます。最後の行の入力が終わると自動で「プロンプト（コマンド完了の目印）」を待つため、目印を待つだけの行は不要です"))}">${esc(t("ログイン手順 ⓘ"))}</span></label>
       <div class="scroll"><table style="margin-top:6px">
         <thead><tr><th style="width:26px"></th><th style="width:36px">#</th><th><span data-tip="${esc(t("プロンプト・expectは待ちたい文字をそのまま書きます（例: Password:）。文字の一部が画面に現れた時点で一致します。大文字小文字は区別されます"))}">${esc(t("expect（待つ表示） ⓘ"))}</span></th><th><span data-tip="${esc(t("expectの表示が出たら入力する文字列。変数 {user} {password} {enable} は機器に登録した認証情報に置き換わります。認証系の行（{user}/{password}/{enable}を送る行）は、その表示が出ない機器・接続方式では自動でスキップされます（SSH直接続なら {user}/{password} の行は即スキップ）"))}">${esc(t("send（入力コマンド） ⓘ"))}</span></th><th style="width:76px"></th></tr></thead>
         <tbody id="p-rows"></tbody>
@@ -1505,7 +1635,8 @@ function editProfile(prof) {
       <button class="btn sm" id="p-addans" type="button" style="margin-top:8px">${esc(t("＋ 行を追加"))}</button>
       <div class="modal-actions">
         <button class="btn" id="p-cancel">${esc(t("キャンセル"))}</button>
-        <button class="btn primary" id="p-save">${esc(t("保存"))}</button>
+        <button class="btn" id="p-save-test" data-tip="${esc(t("保存してから実行タブへ移り、この OS タイプの機器を絞り込みます。「⚡ 接続確認のみ」でログインまで試せます"))}">${esc(t("保存して接続確認へ"))}</button>
+        <button class="btn primary" id="p-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
       </div>
     </div>`);
     openModal(node);
@@ -1529,7 +1660,7 @@ function editProfile(prof) {
           <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
           <td class="muted">${i + 1}</td>
           <td><input class="p-exp mono" style="width:100%" value="${esc(s.expect)}"></td>
-          <td><input class="p-snd mono" style="width:100%" value="${esc(s.send)}"></td>
+          <td><input class="p-snd mono" style="width:100%" value="${esc(s.send)}" placeholder="${esc(s.enter ? t("（Enter だけ送る）") : s.sendRaw ? t("（制御文字を送る: {r}）", { r: JSON.stringify(s.sendRaw) }) : "")}"></td>
           <td style="white-space:nowrap">
             <button class="btn sm" type="button" data-ins="${i}">＋</button>
             <button class="btn sm act-del" type="button" data-rm="${i}">×</button>
@@ -1571,7 +1702,25 @@ function editProfile(prof) {
     renderAns();
     node.querySelector("#p-addans").onclick = () => { answers = collectAns(); answers.push({ expect: "", send: "" }); renderAns(); };
     guardDiscard(node, "#p-cancel");
-    node.querySelector("#p-save").onclick = async () => {
+    // 保存して接続確認へ: the run tab, filtered to this OS type's devices,
+    // where ⚡ 接続確認のみ tries the login — a profile for a new vendor
+    // used to mean saving, finding a device, switching tabs, filtering.
+    node.querySelector("#p-save-test").onclick = async () => {
+      const saved = await saveProfile();
+      if (!saved) return;
+      const devs = (INV.devices || []).filter(d => d.osType === saved.key && !d.cliOff);
+      if (!devs.length) { toast(t("この OS タイプの機器がまだありません。機器の編集で OS タイプに「{n}」を選んでから、実行タブの「⚡ 接続確認のみ」で試せます", { n: saved.name }), "warn"); return; }
+      if (!runGroupSel || !devs.some(d => (d.group || "") === (runGroupSel === RUN_UNGROUPED ? "" : runGroupSel))) {
+        for (const k in runState) delete runState[k];
+        runGroupSel = devs[0].group || RUN_UNGROUPED;
+      }
+      runFilter.text = saved.name; runFilter.site = ""; runFilter.status = "";
+      await switchTab("run");
+      toast(t("OS タイプ「{n}」の機器に絞り込みました。「⚡ 接続確認のみ」でログインまで試せます", { n: saved.name }), "ok");
+    };
+    // saveProfile writes the editor's profile; the saved profile (key and
+    // name) comes back, or null when the save failed.
+    async function saveProfile() {
       const login = collect().filter(s => s.expect.trim() || s.send.trim() || s.enter || s.sendRaw)
         .map(s => ({ ...s, expect: s.expect.trim(), send: s.send.trim() }));
       const pagerLines = node.querySelector("#p-pager").value
@@ -1585,11 +1734,12 @@ function editProfile(prof) {
         morePrompt: node.querySelector("#p-more").value.trim(),
         login,
         pager: pagerLines.map(l => ({ send: l })),
-        // The textarea only shows the send of each disconnect step; if left
-        // untouched keep the original steps (their expects included) intact.
+        // The textarea only shows the send of each disconnect step: a step
+        // whose send is still there keeps its expect (an edit of one line
+        // used to drop the expects of all of them).
         disconnect: (discLines.join("\n") === discCmd && (p.disconnect || []).length)
           ? p.disconnect
-          : discLines.map(l => ({ send: l })),
+          : discLines.map(l => { const o = (p.disconnect || []).find(st => (st.send || "") === l); return o ? { ...o } : { send: l }; }),
         answers: collectAns().filter(a => a.expect.trim())
           .map(a => ({ ...a, expect: a.expect.trim(), send: a.send.trim(), enter: !a.send.trim() && !a.sendRaw })),
       };
@@ -1600,8 +1750,10 @@ function editProfile(prof) {
         closeModal();
         renderOSTypes();
         toast(t("保存しました"), "ok");
-      } catch (e) { toast(terr(e), "err"); }
-    };
+        return PROFILES.find(x => (out.key && x.key === out.key) || x.name === out.name) || { key: out.key, name: out.name };
+      } catch (e) { toast(terr(e), "err"); return null; }
+    }
+    node.querySelector("#p-save").onclick = saveProfile;
 }
 
 wireEvents();

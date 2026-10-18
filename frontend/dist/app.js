@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.7.6";
+const APP_VERSION = "1.7.7";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -14,24 +14,29 @@ function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;
 function $(sel) { return document.querySelector(sel); }
 
 let toastTimer;
+// An error stays long enough to be read (a validation message can be a
+// sentence or two) and any toast goes on click.
 function toast(msg, kind) {
   const el = $("#toast");
   el.textContent = msg;
   el.className = "toast " + (kind || "");
+  el.onclick = () => el.classList.add("hidden");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add("hidden"), 3200);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), kind === "err" ? 9000 : 3200);
 }
 
 // Styled in-app confirm dialog (replaces the native "wails.localhost" confirm).
 // message may contain simple markup; escape dynamic values with esc() upstream.
-function uiConfirm({ title = t("確認"), message = "", okLabel = "OK", danger = false } = {}) {
+// Enter confirms a plain question (the OK button has the focus); a danger
+// one starts on キャンセル so Enter never deletes anything.
+function uiConfirm({ title = t("確認"), message = "", okLabel = "OK", cancelLabel = t("キャンセル"), danger = false } = {}) {
   return new Promise(resolve => {
     const node = h(`<div>
       <h3>${esc(title)}</h3>
       <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${message}</p>
       <div class="modal-actions">
-        <button class="btn" id="uc-cancel">${esc(t("キャンセル"))}</button>
-        <button class="btn ${danger ? "danger" : "primary"}" id="uc-ok" autofocus>${esc(okLabel)}</button>
+        <button class="btn" id="uc-cancel" ${danger ? "autofocus" : ""}>${esc(cancelLabel)}</button>
+        <button class="btn ${danger ? "danger" : "primary"}" id="uc-ok" ${danger ? "" : "autofocus"}>${esc(okLabel)}</button>
       </div>
     </div>`);
     openModal(node, "mid");
@@ -40,11 +45,21 @@ function uiConfirm({ title = t("確認"), message = "", okLabel = "OK", danger =
   });
 }
 
+// A dialog is open (an editor, a confirmation) — its contents are not saved.
+function modalOpen() { return !$("#modal-overlay").classList.contains("hidden"); }
+
 function openModal(node, sizeClass) {
   const m = $("#modal");
   m.className = "modal" + (sizeClass ? " " + sizeClass : "");
   m.innerHTML = ""; m.appendChild(node);
   $("#modal-overlay").classList.remove("hidden");
+  // The autofocus attribute only works once per document in Chromium; the
+  // dialogs come and go, so the focus is placed by hand — unless the
+  // caller already put it somewhere inside.
+  requestAnimationFrame(() => {
+    const f = node.querySelector("[autofocus]");
+    if (f && !node.contains(document.activeElement)) { f.focus(); if (f.select && f.tagName === "INPUT") f.select(); }
+  });
 }
 // Closing also drops a calendar left open by a date picker in the dialog
 // (it lives on <body>), and tells the tabs: a list that skipped redrawing
@@ -59,8 +74,15 @@ function closeModal() {
 // editor's "discard changes?" check still runs). Not while a small window
 // sits on top of it (it handles Esc itself) or the copy menu is open.
 document.addEventListener("keydown", e => {
-  if (e.key !== "Escape" || e.defaultPrevented) return;
-  if (document.querySelector(".sub-overlay") || $("#modal-overlay").classList.contains("hidden")) return;
+  if (e.defaultPrevented || document.querySelector(".sub-overlay") || $("#modal-overlay").classList.contains("hidden")) return;
+  // Ctrl+Enter saves (the dialog's primary button): the editors have many
+  // fields, and Enter alone belongs to the field it is typed in.
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    const ok = document.querySelector("#modal .modal-actions button.primary:not([disabled])");
+    if (ok) { e.preventDefault(); ok.click(); }
+    return;
+  }
+  if (e.key !== "Escape") return;
   const btn = [...document.querySelectorAll("#modal .modal-actions button")]
     .find(b => !b.classList.contains("primary") && !b.classList.contains("danger") && !b.disabled);
   if (btn) { e.preventDefault(); btn.click(); }
@@ -156,8 +178,14 @@ function listViewApply(key, items, searchOf, sortVal, selOf) {
     return true;
   });
   if (v.sort.key) {
+    // Natural order for text: 10.0.0.9 before 10.0.0.10, sw2 before sw10
+    // (the table editor sorts the same way).
     const val = it => { const x = sortVal(it, v.sort.key); return typeof x === "number" ? x : String(x ?? "").toLowerCase(); };
-    out = out.slice().sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : 0) * v.sort.dir; });
+    out = out.slice().sort((a, b) => {
+      const x = val(a), y = val(b);
+      const c = typeof x === "number" && typeof y === "number" ? (x < y ? -1 : x > y ? 1 : 0) : String(x).localeCompare(String(y), undefined, { numeric: true });
+      return c * v.sort.dir;
+    });
   }
   return out;
 }
@@ -637,12 +665,20 @@ async function boot() {
   });
   restoredTab = restoreUIState();
   const exists = await App().VaultExists();
+  // Reloaded with the vault still open (the language switch): straight
+  // back in. After ロック the backend is locked and this is false.
+  if (exists && await App().Unlocked().catch(() => false)) { await enterApp(); return; }
   renderLock(exists);
 }
 
 // Translate the static sidebar texts authored in Japanese in index.html.
 function applyStaticI18n() {
-  document.querySelectorAll(".sidebar .nav-btn").forEach(b => b.textContent = t(b.textContent.trim()));
+  document.documentElement.lang = LANG === "ja" ? "ja" : "en";
+  document.querySelectorAll(".sidebar .nav-btn").forEach(b => {
+    // The tab lists the sets: plural in English (the same Japanese word
+    // names a device's one set elsewhere).
+    b.textContent = b.dataset.tab === "commands" && LANG !== "ja" ? t("コマンドセット一覧") : t(b.textContent.trim());
+  });
 }
 
 function renderLock(exists) {
@@ -658,11 +694,14 @@ function renderLock(exists) {
     wirePasswordToggles(body);
   } else {
     body.innerHTML = `
-      <div class="muted" style="margin-bottom:16px;font-size:13px">
-        ${esc(t("はじめての起動です。機器情報を暗号化して保存するためのマスターパスワードを設定してください。"))}</div>
-      <div class="field"><label>${esc(t("マスターパスワード"))}</label><input id="pw" type="password" /></div>
+      <div class="muted" style="margin-bottom:16px;font-size:13px;line-height:1.7">
+        ${esc(t("はじめての起動です。機器情報を暗号化して保存するためのマスターパスワードを設定してください。"))}<br>
+        <span style="font-size:12px">${esc(t("以前の PalaTerm を使っていた場合は、ここで作らずに、旧フォルダの data\\palaterm_vault.enc をこの exe の隣の data\\ に置いてから起動し直してください。"))}</span></div>
+      <div class="field"><label>${esc(t("マスターパスワード"))}</label><input id="pw" type="password" autofocus /></div>
       <div class="field"><label>${esc(t("確認のため再入力"))}</label><input id="pw2" type="password" /></div>
-      <button class="btn primary" id="create" style="width:100%">${esc(t("作成して開始"))}</button>`;
+      <button class="btn primary" id="create" style="width:100%">${esc(t("作成して開始"))}</button>
+      <div class="muted" style="margin-top:12px;font-size:12px;line-height:1.7">${esc(t("機器情報は PalaTerm.exe の隣の data\\palaterm_vault.enc に暗号化して保存されます。マスターパスワードを忘れると復元できません。"))}</div>`;
+    $("#pw2").addEventListener("keydown", e => { if (e.key === "Enter") doCreate(); });
     $("#create").onclick = doCreate;
     wirePasswordToggles(body);
   }
@@ -674,7 +713,12 @@ async function doUnlock() {
   try {
     await App().Unlock(pw);
     await enterApp();
-  } catch (e) { toast(t("パスワードが違うか、ファイルが壊れています"), "err"); }
+  } catch (e) {
+    // The backend tells a wrong password from a file it could not read (a
+    // sync client holding it, a permission): say which, so the password is
+    // not retyped at a file problem.
+    toast(t("ロックを解除できません") + ": " + terr(e), "err");
+  }
 }
 
 async function doCreate() {
@@ -693,6 +737,14 @@ async function enterApp() {
   await refreshInventory();
   switchTab(restoredTab || "devices");
   restoredTab = null;
+  // The idle lock closed a dialog that was being edited: say so, instead
+  // of leaving the user to find the edit gone.
+  try {
+    if (sessionStorage.getItem(LOCK_DISCARDED_KEY)) {
+      sessionStorage.removeItem(LOCK_DISCARDED_KEY);
+      toast(t("自動ロックのため、編集中だったダイアログの内容は破棄されました"), "warn");
+    }
+  } catch (e) { }
   // Locked while a batch ran: it went on meanwhile. Still going -> keep
   // following it (■ 中止 works); finished -> show the results it left.
   if (running) {
@@ -717,21 +769,35 @@ function saveUIState() {
     const tab = document.querySelector(".tab.active");
     sessionStorage.setItem(UI_STATE_KEY, JSON.stringify({
       tab: tab ? tab.id.replace("tab-", "") : "devices",
-      runState, runGroupSel, runStage, runSetSel, runAdHoc, lastRunReq, lastRunDry, deviceView,
+      runState, runGroupSel, runStage, runSetSel, runAdHoc, lastRunReq, lastRunDry, lastRunDir, deviceView,
       // A batch still running goes on in the backend; its progress keeps
       // arriving after the reload (and is checked again at unlock).
       running, cancelling, runTargets, runTotals, runStartMs,
     }));
   } catch (e) { }
 }
+// Where the user was (the tab, the device list's group) comes back after a
+// restart too: nothing secret, kept in localStorage.
+const UI_PLACE_KEY = "palaterm_ui_place";
+function savePlace() {
+  try {
+    const tab = document.querySelector(".tab.active");
+    localStorage.setItem(UI_PLACE_KEY, JSON.stringify({ tab: tab ? tab.id.replace("tab-", "") : "devices", deviceView }));
+  } catch (e) { }
+}
 function restoreUIState() {
   let v = null;
   try { v = JSON.parse(sessionStorage.getItem(UI_STATE_KEY) || "null"); sessionStorage.removeItem(UI_STATE_KEY); } catch (e) { }
-  if (!v) return null;
+  if (!v) {
+    let pl = null;
+    try { pl = JSON.parse(localStorage.getItem(UI_PLACE_KEY) || "null"); } catch (e) { }
+    if (pl && pl.deviceView && typeof pl.deviceView === "object") deviceView = pl.deviceView;
+    return pl && pl.tab && pl.tab !== "settings" ? pl.tab : null;
+  }
   for (const k in runState) delete runState[k];
   Object.assign(runState, v.runState || {});
   runGroupSel = v.runGroupSel || ""; runStage = v.runStage || ""; runSetSel = v.runSetSel || ""; runAdHoc = v.runAdHoc || "";
-  lastRunReq = v.lastRunReq || null; lastRunDry = !!v.lastRunDry;
+  lastRunReq = v.lastRunReq || null; lastRunDry = !!v.lastRunDry; lastRunDir = v.lastRunDir || "";
   if (v.deviceView) deviceView = v.deviceView;
   running = !!v.running; cancelling = !!v.cancelling;
   runTargets = v.runTargets || []; runTotals = v.runTotals || {}; runStartMs = v.runStartMs || 0;
@@ -753,10 +819,11 @@ async function refreshInventory() {
 // ---- navigation ----
 document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
   b.onclick = () => switchTab(b.dataset.tab));
-$("#btn-reset").onclick = resetVaultFlow;
 $("#btn-lock").onclick = async () => {
   // Unsaved settings edits would be lost by the reload — warn first.
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lock"))) return;
+  // So would an editor left open (a device, a schedule, a command set).
+  if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。ロックすると、その内容は保存されずに失われます。ロックしますか？")), t("ロックする")))) return;
   // The ロック button locks the terminal windows too (they stay connected
   // behind their own lock screen); the idle auto-lock below does not, since
   // a terminal can be in use while this window sits idle.
@@ -796,8 +863,9 @@ $("#btn-chpw").onclick = () => {
 };
 
 // ---- reset (delete the vault: every device / set / profile / password) ----
-// Lives at the bottom of the ログ設定 tab (危険な操作), deliberately away from
-// everyday buttons. Requires the master password on top of two confirmations.
+// Lives at the bottom of the 設定 tab (危険な操作, wired by renderSettings),
+// deliberately away from everyday buttons such as ロック. Requires the
+// master password on top of two confirmations.
 async function resetVaultFlow() {
   const ok = await uiConfirm({
     title: t("すべてのデータをリセット"),
@@ -856,7 +924,16 @@ $("#btn-about").onclick = () => {
 {
   const sel = $("#lang-select");
   sel.value = LANG === "ja" ? "ja" : "en";
-  sel.onchange = () => {
+  sel.onchange = async () => {
+    // The reload drops an open editor; the run tab's state and the table
+    // draft are saved the way ロック saves them, and the vault stays open
+    // (boot comes straight back in).
+    if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。言語を切り替えると、その内容は保存されずに失われます。切り替えますか？")), t("切り替える")))) {
+      sel.value = LANG === "ja" ? "ja" : "en";
+      return;
+    }
+    if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
+    saveUIState();
     try { localStorage.setItem("palaterm_lang", sel.value); } catch { }
     location.reload();
   };
@@ -871,6 +948,7 @@ async function switchTab(name) {
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach(el =>
     el.classList.toggle("active", el.id === "tab-" + name));
+  savePlace();
   // Coming from a group's device list with no group chosen in the run tab
   // yet: start on that group instead of an empty table.
   if (name === "run" && !runGroupSel && !running && typeof deviceView !== "undefined" &&
@@ -901,13 +979,22 @@ setInterval(async () => {
   if (!INV || !INV.settings || $("#app").classList.contains("hidden")) return;
   const s = INV.settings;
   const min = s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30);
-  if (!min || (typeof running !== "undefined" && running)) return;
+  if (!min) return;
   if (Date.now() - lastActivityMs < min * 60000) return;
+  // A device GUI window being used counts as activity: locking closes those
+  // windows, and a policy edited there for forty minutes went with them.
+  const guiAgo = await App().GUIActiveAgoMs().catch(() => -1);
+  if (guiAgo >= 0 && guiAgo < min * 60000) { lastActivityMs = Date.now() - guiAgo; return; }
+  // A batch still running is no reason to stay open: it goes on behind the
+  // lock screen and enterApp picks it up again (GetRunStatus) at unlock.
+  // An open editor is lost — noted for a word after the unlock.
+  if (modalOpen()) { try { sessionStorage.setItem(LOCK_DISCARDED_KEY, "1"); } catch (e) { } }
   if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
   saveUIState();
   try { await App().Lock(); } catch (e) { }
   location.reload();
 }, 15000);
+const LOCK_DISCARDED_KEY = "palaterm.lockDiscarded";
 
 function profileName(key) {
   const p = PROFILES.find(p => p.key === key);

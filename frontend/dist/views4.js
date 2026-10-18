@@ -59,7 +59,7 @@ function schedCommandsLabel(sc) {
 }
 
 function schedKindLabel(e) {
-  return ({ run: t("実行"), missed: t("見逃し"), skipped: t("スキップ"), refused: t("拒否"), error: t("エラー") })[e.kind] || e.kind;
+  return ({ run: t("実行"), missed: t("見逃し"), skipped: t("スキップ"), refused: t("拒否"), error: t("エラー"), stopped: t("停止") })[e.kind] || e.kind;
 }
 
 let schedRenderGen = 0;
@@ -141,6 +141,7 @@ function renderSchedulesView() {
         ${finished(sc) ? "" : `<button class="btn sm" data-now="${esc(sc.id)}">${esc(t("今すぐ実行"))}</button>`}
         ${finished(sc) ? "" : sc.enabled ? `<button class="btn sm" data-stop="${esc(sc.id)}">${esc(t("⏸ 止める"))}</button>` : `<button class="btn sm" data-resume="${esc(sc.id)}">${esc(t("▶ 再開"))}</button>`}
         <button class="btn sm" data-edit="${esc(sc.id)}">${esc(t("編集"))}</button>
+        <button class="btn sm act-copy" data-dup="${esc(sc.id)}" data-tip="${esc(t("同じ日時・機器・コマンドで新しい予約を作ります（別のグループに同じ予約を、など）"))}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(sc.id)}">${esc(t("削除"))}</button>
       </td>
     </tr>`).join("");
@@ -149,7 +150,7 @@ function renderSchedulesView() {
     <tr>
       <td class="mono" style="width:170px">${esc(fmtSchedTime(e.due))}</td>
       <td><div class="clip" data-tip="${esc(e.schedule)}">${esc(e.schedule)}${e.manual ? ` <span class="badge">${esc(t("今すぐ"))}</span>` : ""}</div></td>
-      <td style="width:90px"><span class="dot st-${e.kind === "run" ? (e.failed ? "error" : "done") : e.kind === "missed" || e.kind === "skipped" ? "canceled" : "error"}"></span>${esc(schedKindLabel(e))}</td>
+      <td style="width:90px"><span class="dot st-${e.kind === "run" ? (e.failed ? "error" : "done") : e.kind === "missed" || e.kind === "skipped" || e.kind === "stopped" ? "canceled" : "error"}"></span>${esc(schedKindLabel(e))}</td>
       <td style="width:120px">${e.kind === "run" ? `<span style="color:var(--ok)">${e.ok || 0}</span> / <span style="color:var(--err)">${e.failed || 0}</span>` : ""}</td>
       <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
       <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join("　")}</div></td>
@@ -165,7 +166,7 @@ function renderSchedulesView() {
       ${st.queued ? `<div style="color:var(--warn)">${esc(t("順番待ち: {n} 件（ほかの一括実行が終わりしだい実行。30 分を過ぎたらスキップ）", { n: st.queued }))}</div>` : ""}
       <div>${esc(sleepLine)}</div>
       ${canWake ? "" : `<label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:2px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${keep ? "checked" : ""}> ${esc(t("放置してもスリープさせない"))}<span class="muted" style="font-size:12px">${esc(t("（画面ロック・画面オフはそのまま）"))}</span></label>`}
-      <div style="margin-top:4px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b></div>
+      <div style="margin-top:4px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.next && st.nextName ? `<span class="muted" style="font-size:12px">　${esc(st.nextName)}</span>` : ""}</div>
       <details style="margin-top:2px"><summary class="link" style="text-decoration:none;font-size:12px">${esc(t("詳しく"))}</summary>
         <div class="muted" style="font-size:12px;line-height:1.8;margin-top:6px">
         ${esc(t("・× で閉じてもトレイで動き続けます。トレイの「終了」で止まります"))}<br>
@@ -241,6 +242,14 @@ function renderSchedulesView() {
     catch (e) { toast(terr(e), "err"); }
   });
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => editSchedule(list.find(x => x.id === b.dataset.edit)));
+  // 複製: a new schedule prefilled from this one (its slots as saved, its
+  // devices, its commands); nothing is written until 保存.
+  root.querySelectorAll("[data-dup]").forEach(b => b.onclick = () => {
+    const sc = list.find(x => x.id === b.dataset.dup);
+    if (!sc) return;
+    editSchedule(null, { group: sc.group || "", ungrouped: !!sc.ungrouped, names: sc.names ? sc.names.slice() : null,
+      commandSet: sc.commandSet || "", commands: (sc.commands || []).slice(), stage: sc.stage || "", slots: JSON.parse(JSON.stringify(sc.slots || [])) });
+  });
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     const sc = list.find(x => x.id === b.dataset.del);
     if (!(await uiConfirm({ title: t("予約を削除"), message: t("予約「<b>{n}</b>」を削除しますか？", { n: esc(sc ? sc.name : "") }), okLabel: t("削除"), danger: true }))) return;
@@ -301,8 +310,9 @@ function editSchedule(sc, prefill) {
   const s = sc ? JSON.parse(JSON.stringify(sc)) : {
     id: "", enabled: true, group: "", ungrouped: false, names: null, commandSet: "", stage: "", ...pre,
     // Typed commands usually mean "watch this from now on"; otherwise a
-    // nightly run.
-    slots: [typed.length ? { kind: "interval", startNow: true, everySeconds: 60, unit: 1, count: 10 } : { kind: "daily", time: "03:00:00" }],
+    // nightly run. A copy of a schedule brings its own slots.
+    slots: (pre.slots && pre.slots.length) ? pre.slots
+      : [typed.length ? { kind: "interval", startNow: true, everySeconds: 60, unit: 1, count: 10 } : { kind: "daily", time: "03:00:00" }],
   };
   const unitOf = sec => sec && sec % 3600 === 0 ? 3600 : sec && sec % 60 === 0 ? 60 : 1;
   // The default end time is a whole hour at least an hour away (an hour from
@@ -315,10 +325,13 @@ function editSchedule(sc, prefill) {
     const unit = x.unit || unitOf(sec);
     const [ud, ut] = (x.until || "").split(" ");
     return { kind: x.kind, date: x.date || todayStr(0), time: x.time || nextHourStr(), weekdays: x.weekdays || [],
-      unit, every: sec / unit, count: x.count || 10, startNow: !!x.startNow,
+      // A copy (prefill) of an interval schedule that already started: the
+      // copy starts when saved (its old start is in the past and would be
+      // refused).
+      unit, every: sec / unit, count: x.count || 10, startNow: !!x.startNow || (!sc && !!prefill && x.kind === "interval" && !!x.date && `${x.date} ${x.time || ""}` < `${todayStr(0)} ${new Date().toTimeString().slice(0, 8)}`),
       // How a repeat ends: after N times (the default), at a time, or when
-      // stopped from the list.
-      end: x.count ? "count" : x.until ? "until" : (sc && x.kind === "interval" ? "never" : "count"),
+      // stopped from the list — a copy keeps the original's choice.
+      end: x.count ? "count" : x.until ? "until" : ((sc || prefill) && x.kind === "interval" ? "never" : "count"),
       untilDate: ud || ymd(later), untilTime: ut || `${String(later.getHours()).padStart(2, "0")}:00:00`,
       // What a saved slot said: a repeat that began yesterday keeps its
       // start (moving it to today restarted the count and the clock).
@@ -472,7 +485,7 @@ function editSchedule(sc, prefill) {
           <span class="muted" style="font-size:12px;min-width:3em;padding-top:8px">${esc(t("終わり"))}</span>
           <div style="display:flex;flex-direction:column;gap:6px">
           <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="count" style="width:auto" ${sl.end === "count" ? "checked" : ""}><input class="sl-count" type="number" min="1" value="${sl.count || 10}" style="width:80px">${esc(t("回で終わる"))}</label>
-          <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="until" style="width:auto" ${sl.end === "until" ? "checked" : ""}><span class="sl-until-date-host" data-i="${i}"></span><span class="sl-until-time-host" data-i="${i}"></span>${esc(t("まで"))}</label>
+          <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="until" style="width:auto" ${sl.end === "until" ? "checked" : ""}>${LANG === "ja" ? "" : esc(t("まで")) + "&nbsp;"}<span class="sl-until-date-host" data-i="${i}"></span><span class="sl-until-time-host" data-i="${i}"></span>${LANG === "ja" ? esc(t("まで")) : ""}</label>
           <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="never" style="width:auto" ${sl.end === "never" ? "checked" : ""}>${esc(t("止めるまで続ける"))}</label>
           </div>
         </div>

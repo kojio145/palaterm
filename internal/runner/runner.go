@@ -64,6 +64,11 @@ type DeviceResult struct {
 	LogPath    string        `json:"logPath,omitempty"`
 	Elapsed    time.Duration `json:"elapsed"`
 	Transcript string        `json:"-"`
+	// Output is what the device showed, for a 接続確認のみ that failed: a
+	// dry run writes no log, so the row's "出力" is the only way to see the
+	// hop's banner or the prompt the login stopped at. Masked, trimmed to
+	// the last few thousand characters, and never written to disk.
+	Output string `json:"output,omitempty"`
 	// Canceled is set when the batch was stopped (中止) before this device
 	// completed. Success is false; Error says whether it never ran or was
 	// interrupted.
@@ -228,6 +233,13 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	if cmdTimeout <= 0 {
 		cmdTimeout = 30 * time.Second
 	}
+	// A set that types a password into a command line ("{enable}" on its
+	// own, "ping {password}…") gets it echoed by the device: that log is
+	// masked whatever the setting says (the setting's reason — a password
+	// that doubles as a community string — does not cover a typed one).
+	if len(set.SecretCommands()) > 0 {
+		s.MaskLogSecrets = true
+	}
 
 	// The log is written as the output arrives, so ログ表示 shows a device
 	// still running and a batch cut short (quit, power cut, sleep) leaves
@@ -244,9 +256,12 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		emit = live.tag(emit)
 	}
 
-	exp, prof, err := r.connect(ctx, dev, s, emit, tee)
+	exp, prof, pagerWarn, err := r.connect(ctx, dev, s, emit, tee)
 	if exp != nil {
 		defer exp.Close()
+	}
+	if pagerWarn != "" {
+		res.Warnings = append(res.Warnings, pagerWarn)
 	}
 	if err != nil {
 		res.Error = err.Error() + lastShown(ctx, exp, dev, err.Error())
@@ -254,7 +269,9 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		if exp != nil {
 			res.Transcript = exp.Transcript()
 		}
-		if !opts.DryRun {
+		if opts.DryRun {
+			res.Output = dryRunOutput(exp, dev)
+		} else {
 			r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
 		}
 		res.Elapsed = time.Since(start)
@@ -526,7 +543,8 @@ func (r *Runner) disconnect(ctx context.Context, exp *expecter, prof profile.Pro
 // RunDevice uses this before executing a command set; the interactive terminal
 // uses it and then hands the session to raw pass-through.
 func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc) (*expecter, profile.Profile, error) {
-	return r.connect(ctx, dev, s, emit, nil)
+	exp, prof, _, err := r.connect(ctx, dev, s, emit, nil)
+	return exp, prof, err
 }
 
 // ConnectTee is Connect with tee getting every byte the device sends from
@@ -535,13 +553,16 @@ func (r *Runner) Connect(ctx context.Context, dev *model.Device, s model.Setting
 // banner) without switching to manual. Hand the session over with
 // StartInteractiveShown, the output so far being on screen already.
 func (r *Runner) ConnectTee(ctx context.Context, dev *model.Device, s model.Settings, tee func([]byte)) (*expecter, profile.Profile, error) {
-	return r.connect(ctx, dev, s, nil, tee)
+	exp, prof, _, err := r.connect(ctx, dev, s, nil, tee)
+	return exp, prof, err
 }
 
 // connect is Connect with tee getting a copy of every byte read (see
-// newExpecterTee): a batch device's live log.
-func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc, tee func([]byte)) (*expecter, profile.Profile, error) {
-	prof := r.profiles.Get(dev.OSType)
+// newExpecterTee): a batch device's live log. warn names a pager-disable
+// command the device refused ("" when none): the run goes on (--More-- is
+// answered as it comes), but the refusal is worth a word in the result.
+func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Settings, emit EmitFunc, tee func([]byte)) (exp *expecter, prof profile.Profile, warn string, err error) {
+	prof = r.profiles.Get(dev.OSType)
 	connTimeout := time.Duration(s.ConnectTimeout) * time.Second
 	if connTimeout <= 0 {
 		connTimeout = 20 * time.Second
@@ -554,9 +575,9 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	bastions := dev.ActiveBastions()
 	sess, err := r.dialTransport(ctx, dev, bastions, connTimeout, emit)
 	if err != nil {
-		return nil, prof, err
+		return nil, prof, "", err
 	}
-	exp := newExpecterTee(sess, tee)
+	exp = newExpecterTee(sess, tee)
 
 	if dev.Conn == model.ConnSerial {
 		wakeSerial(ctx, exp, prof)
@@ -564,7 +585,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 
 	if len(bastions) > 0 && !dev.Tunneled() {
 		if err := r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
-			return exp, prof, err
+			return exp, prof, "", err
 		}
 	}
 
@@ -577,15 +598,18 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	skipCreds := (len(bastions) == 0 || dev.Tunneled()) && dev.Conn == model.ConnSSH
 	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
 		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
-			return exp, prof, errors.New(hint)
+			return exp, prof, "", errors.New(hint)
 		}
 		if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
-			return exp, prof, errors.New(hint)
+			return exp, prof, "", errors.New(hint)
 		}
 		if backAtLogin(exp.Transcript()) {
-			return exp, prof, errors.New(errAuthRefused)
+			return exp, prof, "", errors.New(errAuthRefused)
 		}
-		return exp, prof, fmt.Errorf("login: %w", err)
+		if hint := enableRefusedHint(prof, exp.Transcript()); hint != "" {
+			return exp, prof, "", errors.New(hint)
+		}
+		return exp, prof, "", fmt.Errorf("login: %w", err)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
 	// sent something (or the list is empty), wait for the operational prompt
@@ -598,30 +622,69 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 			// depends on the profile, so a diagnosis attached to only one of
 			// them disappears the moment a profile changes shape.
 			if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
-				return exp, prof, errors.New(hint)
+				return exp, prof, "", errors.New(hint)
 			}
 			if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
-				return exp, prof, errors.New(hint)
+				return exp, prof, "", errors.New(hint)
 			}
 			if backAtLogin(exp.Transcript()) {
-				return exp, prof, errors.New(errAuthRefused)
+				return exp, prof, "", errors.New(errAuthRefused)
+			}
+			if hint := enableRefusedHint(prof, exp.Transcript()); hint != "" {
+				return exp, prof, "", errors.New(hint)
 			}
 			if hint := promptMismatchHint(prof, exp.Transcript()); hint != "" {
-				return exp, prof, errors.New(hint)
+				return exp, prof, "", errors.New(hint)
 			}
-			return exp, prof, fmt.Errorf("login: waiting for prompt: %w", err)
+			return exp, prof, "", fmt.Errorf("login: waiting for prompt: %w", err)
 		}
 	}
 
-	// Disable paging (non-fatal: some devices have none).
+	// Disable paging (non-fatal: some devices have none). A refusal used
+	// to flash by as a login-phase message and vanish under the first
+	// command's; it comes back as a warning on the result instead.
 	for _, st := range prof.Pager {
+		before := len(exp.Transcript())
 		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), "", cmdTimeout); err != nil {
 			r.emit(emit, dev.Name, PhaseLogin, "pager disable skipped: "+err.Error())
+			warn = fmt.Sprintf("ページャ解除コマンド「%s」が通りませんでした（%v）。出力の途中停止は --More-- への応答で続けます", st.Send, err)
+			break
+		}
+		if line := rejectedLine(exp.Transcript()[before:]); line != "" {
+			warn = fmt.Sprintf("ページャ解除コマンド「%s」を機器が受け付けませんでした: %s", st.Send, RedactSecrets(line, dev))
 			break
 		}
 	}
-	return exp, prof, nil
+	return exp, prof, warn, nil
 }
+
+// enableRefusedHint names the commonest login failure after a wrong
+// password: the enable (privilege) password missing or wrong. The profile
+// sent {enable} and the device is sitting at "Password:" again, waiting
+// for a better answer — which used to end as "login: waiting for prompt:
+// expect timeout（機器の最後の表示: "Password:"）", a riddle.
+func enableRefusedHint(prof profile.Profile, transcript string) string {
+	sendsEnable := false
+	for _, st := range prof.Login {
+		if strings.Contains(st.Send, "{enable}") {
+			sendsEnable = true
+			break
+		}
+	}
+	if !sendsEnable {
+		return ""
+	}
+	tail := transcript
+	if len(tail) > 200 {
+		tail = tail[len(tail)-200:]
+	}
+	if !reAtPassword.MatchString(reEscape.ReplaceAllString(tail, "")) {
+		return ""
+	}
+	return "enable（昇格）パスワードが受け付けられませんでした。機器の編集画面の enable パスワード（グループ既定を使う機器はグループの既定）を確認してください"
+}
+
+var reAtPassword = regexp.MustCompile(`(?i)password:\s*\z`)
 
 // dialTransport opens the device's transport: the serial port, the direct
 // SSH/Telnet connection, or — behind a jump-host chain — the connection to
@@ -653,9 +716,56 @@ func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions 
 		if hint := wrongPortHint(dev, ""); hint != "" && len(bastions) == 0 {
 			return nil, fmt.Errorf("%w — %s", err, errors.New(hint))
 		}
+		// Otherwise the plain reason first ("dial tcp 192.0.2.11:22: i/o
+		// timeout" told a first-time user nothing), the raw error after it.
+		if hint := dialHint(err, dev, bastions); hint != "" {
+			return nil, fmt.Errorf("%s（%w）", hint, err)
+		}
 		return nil, err
 	}
 	return sess, nil
+}
+
+// dialHint says in plain words why a network connection could not be
+// opened, and what to check. "" for a serial port, and for failures that
+// already carry their own explanation (authentication, ciphers, host key).
+func dialHint(err error, dev *model.Device, bastions []model.Bastion) string {
+	if dev.Conn == model.ConnSerial && len(bastions) == 0 {
+		return ""
+	}
+	target := dev.Host
+	if len(bastions) > 0 && !dev.Tunneled() {
+		target = fmt.Sprintf("踏み台1段目（%s）", bastions[0].Host)
+	} else if len(bastions) > 0 {
+		target = fmt.Sprintf("踏み台経由の %s", dev.Host)
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "i/o timeout") || strings.Contains(s, "timed out") || errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("%s に接続できません（応答がありません）。アドレスとポート、この PC からその機器へ通信できるか（VPN・踏み台の要否）を確認してください", target)
+	case strings.Contains(s, "connection refused") || strings.Contains(s, "actively refused"):
+		return fmt.Sprintf("%s に接続を拒否されました。ポート番号と、機器側で SSH / Telnet が有効か（アクセス制限がないか）を確認してください", target)
+	case strings.Contains(s, "no such host") || strings.Contains(s, "lookup ") || strings.Contains(s, "GetAddrInfoW"):
+		return fmt.Sprintf("%s のホスト名を解決できません。アドレスのつづりと DNS を確認してください", target)
+	case strings.Contains(s, "unreachable") || strings.Contains(s, "no route"):
+		return fmt.Sprintf("%s へのネットワーク経路がありません。この PC のネットワーク（VPN・踏み台の要否）を確認してください", target)
+	}
+	return ""
+}
+
+// dryRunOutput is what a failed 接続確認のみ shows for the device: the end
+// of the transcript, escape sequences out, passwords masked.
+func dryRunOutput(exp *expecter, dev *model.Device) string {
+	if exp == nil {
+		return ""
+	}
+	out := reEscape.ReplaceAllString(exp.Transcript(), "")
+	out = strings.ReplaceAll(out, "\r\n", "\n")
+	out = strings.ReplaceAll(out, "\r", "\n")
+	if r := []rune(out); len(r) > 6000 {
+		out = "…" + string(r[len(r)-6000:])
+	}
+	return RedactSecrets(out, dev)
 }
 
 // missingHopLogin refuses an SSH hop this PC logs into itself (the first
@@ -799,8 +909,11 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 	// Clear stale prompts so we wait for the prompt that follows THIS command,
 	// not one left buffered by the previous step.
 	exp.Drain()
+	// Not the text: it is the expanded command, which may carry a password
+	// ({enable} on its own line), and this error goes to the run table, the
+	// history file and the failed-devices CSV. The caller names the command.
 	if err := exp.Send(text); err != nil {
-		return fmt.Errorf("send %q: %w", text, err)
+		return fmt.Errorf("send: %w", err)
 	}
 	if wait != "" {
 		return r.waitTailAnswering(ctx, exp, prof, waitTail(wait), timeout, prof.Answers)

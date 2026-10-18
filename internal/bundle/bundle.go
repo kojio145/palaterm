@@ -154,16 +154,45 @@ func keepCredentials(d *model.Device, cur model.Device) bool {
 	return kept
 }
 
-// FileNameSafe replaces the characters Windows forbids in file names.
+// FileNameSafe turns s into one plain file (or folder) name: the characters
+// Windows forbids become "_", as do the names that would leave the folder
+// ("..", ".") or that Windows reserves (CON, COM1…); a trailing dot or space
+// (dropped by Windows, so "a." and "a" would collide) goes too.
 func FileNameSafe(s string) string {
-	return strings.Map(func(r rune) rune {
+	s = strings.Map(func(r rune) rune {
 		switch r {
 		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
 			return '_'
 		}
+		if r < 0x20 {
+			return '_'
+		}
 		return r
 	}, s)
+	s = strings.TrimRight(s, ". ")
+	if s == "" {
+		return "_"
+	}
+	stem := s
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		stem = s[:i]
+	}
+	if reservedFileName[strings.ToUpper(stem)] {
+		return "_" + s
+	}
+	return s
 }
+
+// reservedFileName lists the device names Windows refuses as file names,
+// with or without an extension.
+var reservedFileName = func() map[string]bool {
+	m := map[string]bool{"CON": true, "PRN": true, "AUX": true, "NUL": true}
+	for i := 1; i <= 9; i++ {
+		m[fmt.Sprintf("COM%d", i)] = true
+		m[fmt.Sprintf("LPT%d", i)] = true
+	}
+	return m
+}()
 
 // uniqueFile returns base+ext, or base_2+ext, … so two names that sanitize
 // to the same file name do not overwrite each other inside one bundle.
@@ -485,6 +514,11 @@ type Summary struct {
 	// jump command ("name: command"). That text is typed into the jump host's
 	// shell as it is, so the import screen shows it for a look first.
 	JumpCommands []string `json:"jumpCommands"`
+	// SecretCommands lists the bundle's command-set lines that type a
+	// password into a command ("set: command"): shown on the import screen
+	// like jump commands, since such a line sends a credential wherever
+	// its author pointed it.
+	SecretCommands []string `json:"secretCommands"`
 	// CredsKept lists existing devices whose row left some credentials
 	// empty and that therefore kept their own (see keepCredentials).
 	CredsKept []string `json:"credsKept"`
@@ -516,6 +550,7 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.Invalid = []string{}
 	s.Duplicate = []string{}
 	s.JumpCommands = []string{}
+	s.SecretCommands = []string{}
 	s.CredsKept = []string{}
 	s.MissingColumns = append([]string{}, c.MissingColumns...)
 
@@ -565,6 +600,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	}
 	for _, cs := range c.CommandSets {
 		s.Sets++
+		for _, line := range cs.SecretCommands() {
+			s.SecretCommands = append(s.SecretCommands, cs.Name+": "+line)
+		}
 		if i, ok := setByName[cs.Name]; ok {
 			if opt.OverwriteShared {
 				inv.CommandSets[i].Commands, inv.CommandSets[i].PauseOff = cs.Commands, cs.PauseOff

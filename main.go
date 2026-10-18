@@ -235,10 +235,15 @@ func runTerminalWindow(device, label string, manual, direct bool) {
 	if direct {
 		title += " - " + winWord("踏み台なし", "no jump host")
 	}
+	// The size the last terminal window was closed at (see rememberSize).
+	w, h := termWin.W, termWin.H
+	if sw, sh, ok := loadTermWinSize(); ok {
+		w, h = sw, sh
+	}
 	err := wails.Run(&options.App{
 		Title:     title,
-		Width:     termWin.W,
-		Height:    termWin.H,
+		Width:     w,
+		Height:    h,
 		MinWidth:  termWin.MinW,
 		MinHeight: termWin.MinH,
 		AssetServer: &assetserver.Options{

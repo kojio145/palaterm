@@ -105,7 +105,7 @@ async function bootTerminalWindow() {
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
         <button class="btn sm" id="tw-font-dec" title="Ctrl+-">A−</button>
         <button class="btn sm" id="tw-font-inc" title="Ctrl++">A＋</button>
-        <button class="btn sm" id="tw-find" title="Ctrl+F">${esc(t("検索"))}</button>
+        <button class="btn sm" id="tw-find" title="Ctrl+Shift+F">${esc(t("検索"))}</button>
         <button class="btn sm" id="tw-paste" title="Alt+V">${esc(t("貼り付け…"))}</button>
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
         <button class="btn sm" id="tw-logview" data-tip="${esc(t("このセッションのログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
@@ -223,7 +223,9 @@ async function bootTerminalWindow() {
     const isIns = e.code === "Insert" || e.key === "Insert";
     if (e.altKey && !e.ctrlKey && isV) { pasteFromClipboard(true); return false; }
     if (e.altKey) return true;
-    if (e.ctrlKey && !e.shiftKey && (e.code === "KeyF" || e.key === "f" || e.key === "F")) { openFind(); return false; }
+    // Ctrl+Shift+F finds in the scrollback; plain Ctrl+F reaches the device
+    // (^F: page down in less / vi, cursor right on IOS) as in Tera Term.
+    if (e.ctrlKey && e.shiftKey && (e.code === "KeyF" || e.key === "f" || e.key === "F")) { openFind(); return false; }
     if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { setFont(fontSize + 1); return false; }
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { setFont(fontSize - 1); return false; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { setFont(FONT_DEF); return false; }
@@ -511,7 +513,8 @@ async function bootTerminalWindow() {
     stateEl.textContent = ev.manual ? t("接続済み（手動）") : t("接続済み"); stateEl.className = "pill ok";
     reconnectBtn.classList.add("hidden");
     breakBtn.classList.toggle("hidden", ev.conn !== "serial");
-    titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}` + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
+    titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}` + (ev.hops ? `  ${t("踏み台 {n} 段経由", { n: ev.hops })}` : "") + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
+    setOSTitle(ev.device, ev.host, "");
     // A console opened by hand shows nothing until the device answers; say
     // which port this is and what to do, so a wrong COM port or baud rate
     // is the first thing checked rather than the last.
@@ -549,6 +552,14 @@ async function bootTerminalWindow() {
     takeoverBar.classList.add("hidden"); doFit();
     Term().Discard().catch(() => {});
   };
+  // The OS window title (the taskbar's label): eight windows side by side
+  // tell a disconnected one from a live one by it.
+  let osTitleDev = "", osTitleHost = "";
+  function setOSTitle(dev, host, state) {
+    if (dev) { osTitleDev = dev; osTitleHost = host || ""; }
+    const base = "PalaTerm - " + osTitleDev + (osTitleHost ? " - " + osTitleHost : "");
+    try { rt().WindowSetTitle(base + (state ? " - " + state : "")); } catch (e) {}
+  }
   rt().EventsOn("term:closed", ev => {
     closed = true;
     connecting = false;
@@ -556,6 +567,7 @@ async function bootTerminalWindow() {
     breakBtn.classList.add("hidden");
     stateEl.textContent = ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断");
     stateEl.className = "pill err";
+    setOSTitle("", "", ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断"));
     if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
       document.getElementById("tw-hk-msg").textContent = terr(ev.error);
       hkDlg.classList.remove("hidden");
@@ -660,12 +672,17 @@ async function bootTerminalWindow() {
   };
   closeDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); hideCloseDlg(); } });
   Term().IsLocked().then(v => { if (v) showLock(); }).catch(() => {});
-  let lastInput = Date.now();
-  ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) lastInput = Date.now(); }, { passive: true }));
+  let lastInput = Date.now(), lockWarned = false;
+  ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) { lastInput = Date.now(); lockWarned = false; } }, { passive: true }));
   setInterval(async () => {
     if (locked) return;
     const min = await Term().AutoLockMinutes().catch(() => 0);
-    if (min > 0 && Date.now() - lastInput >= min * 60000) { await Term().Lock().catch(() => {}); showLock(); }
+    if (!(min > 0)) return;
+    const idle = Date.now() - lastInput;
+    // A minute's notice (someone watching debug output has not typed, but
+    // is here): any key or mouse move cancels it.
+    if (idle >= min * 60000 - 60000 && idle < min * 60000 && !lockWarned) { lockWarned = true; flashNote(t("あと 1 分ほどでロックします（キーかマウスを動かすと延長）"), 8000); }
+    if (idle >= min * 60000) { await Term().Lock().catch(() => {}); showLock(); }
   }, 15000);
   try { Term().SetLang(LANG); } catch (e) {}
 

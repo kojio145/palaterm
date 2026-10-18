@@ -22,6 +22,14 @@ async function bootDiffWindow() {
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-only" style="width:auto"> ${esc(t("差分の周辺だけ表示"))}</label>
       <button class="btn sm" id="dw-font-dec" title="Ctrl+-">A−</button>
       <button class="btn sm" id="dw-font-inc" title="Ctrl++">A＋</button>
+      <button class="btn sm" id="dw-find" title="Ctrl+F">${esc(t("検索"))}</button>
+    </div>
+    <div id="dw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid #2a3442;font-size:12px">
+      <input id="dw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:#e6ecf3;border:1px solid #2a3442;border-radius:6px;padding:4px 8px;font-size:12px">
+      <span id="dw-find-n" class="muted" style="min-width:70px"></span>
+      <button class="btn sm" id="dw-find-prev">▲</button>
+      <button class="btn sm" id="dw-find-next">▼</button>
+      <button class="btn sm" id="dw-find-close">✕</button>
     </div>
     <div style="display:flex;align-items:stretch;border-bottom:1px solid #2a3442;font-size:12px">
       <div style="width:22px"></div>
@@ -114,6 +122,30 @@ async function bootDiffWindow() {
   }
   document.getElementById("dw-next").onclick = () => goTo(cur + 1);
   document.getElementById("dw-prev").onclick = () => goTo(cur - 1);
+  // Find: a text in either side (case-insensitive); the row is scrolled to
+  // and marked. Fifty changed blocks of a running-config are walked by the
+  // interface name this way, not one by one.
+  const fbar = document.getElementById("dw-findbar"), fin = document.getElementById("dw-find-in"), fn = document.getElementById("dw-find-n");
+  let fMatches = [], fIdx = -1, fLast = "";
+  function fCollect(q) { const lq = q.toLowerCase(), res = []; if (!lq) return res; rows.forEach((r, i) => { if ((r.a || "").toLowerCase().includes(lq) || (r.b || "").toLowerCase().includes(lq)) res.push(i); }); return res; }
+  function fShow() {
+    body.querySelectorAll("tr.dw-found").forEach(tr => tr.classList.remove("dw-found"));
+    if (!fMatches.length) { fn.textContent = fLast ? t("該当なし") : ""; return; }
+    const i = fMatches[fIdx];
+    let tr = body.querySelector(`tr[data-i="${i}"]`);
+    if (!tr && document.getElementById("dw-only").checked) { document.getElementById("dw-only").checked = false; render(); tr = body.querySelector(`tr[data-i="${i}"]`); }
+    if (tr) { tr.classList.add("dw-found"); body.scrollTop = Math.max(0, tr.offsetTop - body.clientHeight / 3); }
+    fn.textContent = `${fIdx + 1} / ${fMatches.length}`;
+  }
+  function fNext(dir) { const q = fin.value; if (q !== fLast) { fLast = q; fMatches = fCollect(q); fIdx = dir >= 0 ? -1 : 0; } if (!fMatches.length) { fShow(); return; } fIdx = (fIdx + dir + fMatches.length) % fMatches.length; fShow(); fin.focus(); }
+  function openFind() { fbar.classList.remove("hidden"); fin.focus(); fin.select(); }
+  function closeFind() { fbar.classList.add("hidden"); body.querySelectorAll("tr.dw-found").forEach(tr => tr.classList.remove("dw-found")); }
+  document.getElementById("dw-find").onclick = openFind;
+  document.getElementById("dw-find-next").onclick = () => fNext(1);
+  document.getElementById("dw-find-prev").onclick = () => fNext(-1);
+  document.getElementById("dw-find-close").onclick = closeFind;
+  fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
+  fin.addEventListener("input", () => { fLast = ""; fn.textContent = ""; });
   async function load() {
     const noise = document.getElementById("dw-noise").checked;
     doc = await D().Load(noise);
@@ -152,7 +184,8 @@ async function bootDiffWindow() {
     if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
-    if (e.key === "Escape") { D().Close(); }
+    if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
+    if (e.key === "Escape") { if (!fbar.classList.contains("hidden")) closeFind(); else D().Close(); }
   });
   await load();
 }

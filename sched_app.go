@@ -59,7 +59,8 @@ type SchedLogEntry struct {
 	Schedule   string `json:"schedule"`
 	// Kind: run (it ran; see OK / Failed), missed (slept through or the app
 	// was not able to look), skipped (waited past MaxLate), refused (change
-	// commands in the set), error (could not start).
+	// commands in the set), error (could not start), stopped (disabled by
+	// PalaTerm: its group was deleted or a device it names moved out).
 	Kind    string `json:"kind"`
 	OK      int    `json:"ok,omitempty"`
 	Failed  int    `json:"failed,omitempty"`
@@ -137,6 +138,14 @@ func (a *App) schedLog(e SchedLogEntry) {
 
 // ScheduleLog returns the 予約の実行記録, newest first (at most limit).
 func (a *App) ScheduleLog(limit int) []SchedLogEntry {
+	if a.locked() {
+		return []SchedLogEntry{} // names devices and commands: after unlocking
+	}
+	return a.readSchedLog(limit)
+}
+
+// readSchedLog is ScheduleLog for the app's own use (locked or not).
+func (a *App) readSchedLog(limit int) []SchedLogEntry {
 	a.sched.logMu.Lock()
 	defer a.sched.logMu.Unlock()
 	var list []SchedLogEntry
@@ -186,12 +195,56 @@ func schedCopy(inv *model.Inventory) *model.Inventory {
 	c.Devices = keep
 	// Already put in front of the kept devices' hops above (自分の踏み台).
 	c.MyBastions, c.MyBastionLogins = nil, nil
+	// Table drafts hold other devices' passwords in plain cells, and the GUI
+	// pins are no use to a schedule: neither stays in memory while locked.
+	c.GridDrafts, c.KnownGUICerts = nil, nil
 	for i := range c.DeviceGroups {
 		g := &c.DeviceGroups[i]
 		g.Username, g.Password, g.EnablePassword = "", "", ""
 	}
 	c.Settings.LastKeyFile = ""
 	return c
+}
+
+// stopSchedules disables the group's schedules that target any of names
+// (every one of the group's when names is nil) and prepares the 実行記録
+// lines saying why: a schedule left pointing at a deleted group or a moved
+// device would run, unattended, on whatever later takes that name (a
+// colleague's bundle read in under the same group name). The caller holds
+// a.mu and logs the returned entries after releasing it.
+func stopSchedules(inv *model.Inventory, group string, names map[string]bool, why string) []SchedLogEntry {
+	var out []SchedLogEntry
+	for i := range inv.Schedules {
+		sc := &inv.Schedules[i]
+		if !sc.Enabled || sc.Group != group {
+			continue
+		}
+		if names != nil {
+			hit := false
+			for _, n := range sc.Names {
+				if names[n] {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				continue
+			}
+		}
+		sc.Enabled = false
+		out = append(out, SchedLogEntry{ScheduleID: sc.ID, Schedule: sc.Name, Kind: "stopped", Message: why})
+	}
+	return out
+}
+
+// logStopped writes stopSchedules' lines and wakes the scheduler.
+func (a *App) logStopped(stopped []SchedLogEntry) {
+	for _, e := range stopped {
+		a.schedLog(e)
+	}
+	if len(stopped) > 0 {
+		a.schedKick()
+	}
 }
 
 func containsStr(list []string, s string) bool {
@@ -360,7 +413,33 @@ func (a *App) schedTick(now time.Time) {
 	st := armWake(wakeAt)
 	s.mu.Lock()
 	s.wake = st
+	running, done, total := s.runName, s.runDone, s.runTotal
 	s.mu.Unlock()
+	trayTip(a.trayStatusText(list, now, running, done, total))
+}
+
+// trayStatusText is what the tray icon says: the schedule running now with
+// its progress, else the next firing and whose it is, else that nothing is
+// due.
+func (a *App) trayStatusText(list []schedule.Schedule, now time.Time, running string, done, total int) string {
+	if running != "" {
+		return "PalaTerm — " + winWord(fmt.Sprintf("実行中: %s（%d / %d 台）", running, done, total), fmt.Sprintf("running: %s (%d / %d devices)", running, done, total))
+	}
+	var best time.Time
+	name := ""
+	for _, sc := range list {
+		if n := sc.Next(now); !n.IsZero() && (best.IsZero() || n.Before(best)) {
+			best, name = n, sc.Name
+		}
+	}
+	if best.IsZero() {
+		return "PalaTerm — " + winWord("予約はありません", "no schedule due")
+	}
+	when := best.Format("01/02 15:04")
+	if best.YearDay() == now.YearDay() && best.Year() == now.Year() {
+		when = best.Format("15:04")
+	}
+	return "PalaTerm — " + winWord(fmt.Sprintf("次の実行 %s %s", when, name), fmt.Sprintf("next run %s %s", when, name))
 }
 
 // schedStartNext starts the first waiting job if no batch is running.
@@ -704,6 +783,9 @@ type ScheduleStatus struct {
 
 // ListSchedules returns the vault's schedules with their next firing.
 func (a *App) ListSchedules() []ScheduleView {
+	if a.locked() {
+		return []ScheduleView{}
+	}
 	now := time.Now()
 	a.sched.mu.Lock()
 	runID := a.sched.runID
@@ -885,7 +967,7 @@ func (a *App) stopScheduleRun(id string) {
 // schedNameOf is the name a schedule last had in the 実行記録 (for a line
 // written after it was deleted).
 func (a *App) schedNameOf(id string) string {
-	for _, e := range a.ScheduleLog(0) {
+	for _, e := range a.readSchedLog(0) {
 		if e.ScheduleID == id {
 			return e.Schedule
 		}
@@ -958,6 +1040,14 @@ func (a *App) DeleteSchedule(id string) error {
 // RunScheduleNow queues one schedule to run at once (今すぐ実行), whatever
 // its slots say; it waits its turn like any firing.
 func (a *App) RunScheduleNow(id string) error {
+	// A click, not a firing: it needs the vault open like every other
+	// action from the page (the lock screen is not a way to start a run).
+	a.mu.Lock()
+	locked := a.inv == nil
+	a.mu.Unlock()
+	if locked {
+		return fmt.Errorf("vault is locked")
+	}
 	var job *schedJob
 	for _, sc := range a.schedules() {
 		if sc.ID == id {

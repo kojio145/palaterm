@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // GUI を開く: the device's web GUI (FortiGate & co.) in a window of
@@ -37,10 +39,32 @@ type guiLaunch struct {
 // The main window stores it under the key it handed that window.
 const guiEventCert = "GUICERT"
 
+// guiEventActive is the line a GUI window writes when it is being used
+// (keys, mouse), at most every few seconds. The main window's idle lock
+// counts it as activity: locking closes the GUI windows, and a FortiGate
+// policy edited for forty minutes used to vanish because the main window
+// sat untouched meanwhile.
+const guiEventActive = "ACTIVE"
+
 var (
 	guiWinMu sync.Mutex
 	guiWins  = map[*exec.Cmd]io.WriteCloser{}
+	// guiActiveAt is when a GUI window last reported activity (unix ms).
+	guiActiveAt atomic.Int64
 )
+
+// GUIActiveAgoMs is how long ago a GUI window was last used, in
+// milliseconds; -1 when none is open or none has reported anything.
+func (a *App) GUIActiveAgoMs() int64 {
+	if openGUIWindows() == 0 {
+		return -1
+	}
+	at := guiActiveAt.Load()
+	if at == 0 {
+		return -1
+	}
+	return time.Now().UnixMilli() - at
+}
 
 // GUIInfo describes an opened GUI for the UI.
 type GUIInfo struct {
@@ -119,6 +143,9 @@ func (a *App) spawnGUIWindow(l guiLaunch) error {
 			if len(f) == 2 && f[0] == guiEventCert && validPin(f[1]) {
 				a.setGUICert(l.PinKey, f[1])
 			}
+			if len(f) == 1 && f[0] == guiEventActive {
+				guiActiveAt.Store(time.Now().UnixMilli())
+			}
 		}
 		_ = cmd.Wait()
 		guiWinMu.Lock()
@@ -165,8 +192,17 @@ func (a *App) setGUICert(key, fp string) {
 func closeGUIWindows() {
 	guiWinMu.Lock()
 	defer guiWinMu.Unlock()
-	for cmd, in := range guiWins {
+	// Closing stdin is the close request; the entry goes when the process
+	// has exited (spawnGUIWindow's waiter), so openGUIWindows can tell a
+	// window still deleting its profile from one that is gone.
+	for _, in := range guiWins {
 		_ = in.Close()
-		delete(guiWins, cmd)
 	}
+}
+
+// openGUIWindows is how many GUI window processes are still running.
+func openGUIWindows() int {
+	guiWinMu.Lock()
+	defer guiWinMu.Unlock()
+	return len(guiWins)
 }

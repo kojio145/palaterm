@@ -339,6 +339,29 @@ type CommandSet struct {
 	PauseOff bool `json:"pauseOff,omitempty"`
 }
 
+// SecretCommands returns the commands that type a credential as part of a
+// command line ({password} / {enable}; {user} alone is no secret). The
+// device echoes a command line, unlike a password prompt, so such a run is
+// logged masked whatever the setting says, and an import shows these lines
+// as it shows jump commands.
+func (cs *CommandSet) SecretCommands() []string {
+	if cs == nil {
+		return nil
+	}
+	var out []string
+	for _, c := range cs.Commands {
+		if SendsSecret(c.Text) {
+			out = append(out, c.Text)
+		}
+	}
+	return out
+}
+
+// SendsSecret reports a command text that expands a password.
+func SendsSecret(text string) bool {
+	return strings.Contains(text, "{password}") || strings.Contains(text, "{enable}")
+}
+
 // DeviceGroup is a named group that devices belong to (e.g. a company or site).
 // Membership is driven by Device.Group; Members is legacy and kept only so old
 // vaults migrate cleanly.
@@ -1085,6 +1108,46 @@ func DefaultSettings() Settings {
 		AutoLockMin:     DefaultAutoLockMin,
 	}
 }
+
+// SampleGroupName is the starter group of a new vault, in the UI language
+// the vault is created under (an English UI used to open on a Japanese
+// card as its very first screen).
+func SampleGroupName(lang string) string {
+	if lang == "en" {
+		return "Sample group"
+	}
+	return "サンプルグループ"
+}
+
+// sampleSetNamesEN maps the built-in sample sets' names to their English
+// form: a vault created under the English UI is seeded with these.
+var sampleSetNamesEN = map[string]string{
+	"【サンプル】Cisco_ルータ":     "[Sample] Cisco router",
+	"【サンプル】Cisco_L2SW":    "[Sample] Cisco L2 switch",
+	"【サンプル】Cisco_L3SW":    "[Sample] Cisco L3 switch",
+	"【サンプル】FortiGate":     "[Sample] FortiGate",
+	"【サンプル】IXルータ":        "[Sample] NEC IX router",
+	"【サンプル】ALAXALA_L2SW": "[Sample] ALAXALA L2 switch",
+}
+
+// LocalizeSampleSets renames the sample sets in sets for lang ("en": the
+// English names; anything else leaves them). Only the exact built-in names
+// are touched, so a user's own set is never renamed.
+func LocalizeSampleSets(sets []CommandSet, lang string) []CommandSet {
+	if lang != "en" {
+		return sets
+	}
+	for i := range sets {
+		if en, ok := sampleSetNamesEN[sets[i].Name]; ok {
+			sets[i].Name = en
+		}
+	}
+	return sets
+}
+
+// SampleSetNameEN is the English name of a built-in sample set ("" for any
+// other name).
+func SampleSetNameEN(ja string) string { return sampleSetNamesEN[ja] }
 
 // DefaultCommandSets returns the built-in command sets seeded into a new
 // vault. They mirror the show-command patterns of the legacy Tera Term tool

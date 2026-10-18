@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -109,6 +111,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 		_, _ = bundle.WriteProfileJSON(profDir, p)
 	}
+	// GUI windows killed before they could delete their WebView2 profile
+	// (a forced quit, a power cut) left the device's session on disk.
+	go cleanStaleGUIProfiles()
 	go a.schedLoop()
 }
 
@@ -190,12 +195,15 @@ func (a *App) shutdown(ctx context.Context) {
 	armWake(time.Time{})
 	// Ask the terminal windows to close their sessions first, so each writes
 	// its log summary (killed outright, they left an empty or unsummarised
-	// run in 実行履歴); then end whatever is left.
+	// run in 実行履歴), and give the GUI windows the moment they need to
+	// delete their WebView2 profiles (killed, they leave the device's
+	// cookies on disk until the next GUI window cleans up); then end
+	// whatever is left.
 	if a.openTerminals() > 0 {
 		a.sendToTerminals(termCloseLine)
-		for i := 0; i < 20 && a.openTerminals() > 0; i++ {
-			time.Sleep(100 * time.Millisecond)
-		}
+	}
+	for i := 0; i < 30 && (a.openTerminals() > 0 || openGUIWindows() > 0); i++ {
+		time.Sleep(100 * time.Millisecond)
 	}
 	endChildren()
 }
@@ -316,12 +324,21 @@ func (a *App) CreateVault(password string) error {
 	if password == "" {
 		return fmt.Errorf("master password required")
 	}
+	// The lock screen only offers this when no vault exists; an existing one
+	// is replaced through 初期化 (which asks for the master password), never
+	// by a call that happens to arrive while locked.
+	if vault.Exists(a.vaultPath) {
+		return fmt.Errorf("vault already exists")
+	}
+	// The samples are named in the UI's language: an English UI used to
+	// open on 「サンプルグループ」 and 「【サンプル】Cisco_ルータ」.
+	lang := a.uiLang()
 	inv := &model.Inventory{
 		Version:           1,
 		Settings:          model.DefaultSettings(),
-		CommandSets:       model.DefaultCommandSets(),
+		CommandSets:       model.LocalizeSampleSets(model.DefaultCommandSets(), lang),
 		CommandSetSeedGen: model.CommandSetSeedGen,
-		DeviceGroups:      []model.DeviceGroup{{Name: "サンプルグループ"}},
+		DeviceGroups:      []model.DeviceGroup{{Name: model.SampleGroupName(lang)}},
 		CustomProfiles:    profile.Defaults(),
 		ProfilesSeeded:    true,
 		ProfileSeedGen:    profile.SeedGen,
@@ -342,9 +359,19 @@ func (a *App) CreateVault(password string) error {
 func (a *App) Unlock(password string) error {
 	inv, err := vault.Load(a.vaultPath, password)
 	if err != nil {
+		// Said in the UI's words (the page translates these): the raw
+		// "wrong master password or corrupted vault" reached the Japanese
+		// lock screen as it was.
+		switch {
+		case errors.Is(err, vault.ErrWrongPassword):
+			return errors.New("パスワードが違うか、ファイルが壊れています")
+		case strings.Contains(err.Error(), "not a PalaTerm vault file"):
+			return errors.New("PalaTerm の vault ファイルではありません（data\\palaterm_vault.enc に別のファイルが置かれています）")
+		}
 		return err
 	}
 	inv.NormalizeGroups()
+	lang := a.uiLang()
 	seed := false
 	// v1.7.3's per-host jump-host logins become the single own jump host.
 	if inv.MigrateMyBastion() {
@@ -363,7 +390,7 @@ func (a *App) Unlock(password string) error {
 	// A vault still holding only the pre-【サンプル】 sample sets (all names
 	// untouched, so nothing user-made) is reseeded under the new names.
 	if len(inv.CommandSets) == 0 || onlyLegacyDefaultSets(inv.CommandSets) {
-		inv.CommandSets = model.DefaultCommandSets()
+		inv.CommandSets = model.LocalizeSampleSets(model.DefaultCommandSets(), lang)
 		inv.CommandSetSeedGen = model.CommandSetSeedGen
 		seed = true
 	}
@@ -382,8 +409,11 @@ func (a *App) Unlock(password string) error {
 			have[cs.Name] = true
 		}
 		for _, cs := range model.CommandSetsAddedAfter(inv.CommandSetSeedGen) {
-			if !have[cs.Name] {
-				inv.CommandSets = append(inv.CommandSets, cs)
+			// A vault whose samples are the English ones gets the new
+			// sample in English too (either name present = already there).
+			en := model.SampleSetNameEN(cs.Name)
+			if !have[cs.Name] && !(en != "" && have[en]) {
+				inv.CommandSets = append(inv.CommandSets, model.LocalizeSampleSets([]model.CommandSet{cs}, lang)...)
 			}
 		}
 		inv.CommandSetSeedGen = model.CommandSetSeedGen
@@ -391,7 +421,7 @@ func (a *App) Unlock(password string) error {
 	}
 	// A vault with no groups and no devices also gets the starter group.
 	if len(inv.DeviceGroups) == 0 && len(inv.Devices) == 0 {
-		inv.DeviceGroups = []model.DeviceGroup{{Name: "サンプルグループ"}}
+		inv.DeviceGroups = []model.DeviceGroup{{Name: model.SampleGroupName(lang)}}
 		seed = true
 	}
 	// Seed the default OS profiles into vaults created before profiles became
@@ -550,6 +580,30 @@ func (a *App) Unlock(password string) error {
 		p.Pager = nil
 		seed = true
 	}
+	// Yamaha RTX over Telnet / serial asks for the login password before the
+	// ">" the built-in first row waited for, so the login sat until the
+	// command timeout. Put the password row first where the login still
+	// starts with the built-in administrator row.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key != "yamaha-rtx" || len(p.Login) == 0 {
+			continue
+		}
+		if p.Login[0] == (profile.Step{Expect: ">", Send: "administrator"}) {
+			p.Login = append([]profile.Step{{Expect: "assword:", Send: "{password}"}}, p.Login...)
+			seed = true
+		}
+	}
+	// FortiGate / FortiAnalyzer: a VDOM-enabled unit refuses the pager
+	// commands outside "config global", and every long show then stopped at
+	// --More-- until the command timeout. The prompt is the net under them.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if (p.Key == "fortinet-fortios" || p.Key == "fortinet-analyzer") && p.MorePrompt == "" {
+			p.MorePrompt = "--More--"
+			seed = true
+		}
+	}
 	// Vaults still on an earlier default log name move to the current one
 	// (site, role and stage in the name); a template the user changed is theirs.
 	if inv.Settings.LogNameTemplate == "" || logstore.IsOldDefaultTemplate(inv.Settings.LogNameTemplate) {
@@ -626,6 +680,22 @@ func (a *App) Lock() {
 	a.password, a.inv = "", nil
 	a.mu.Unlock()
 }
+
+// locked reports that no vault is open. The bindings the page can reach
+// only after unlocking refuse with errVaultLocked while it is: the lock screen
+// is the only thing it should get at.
+func (a *App) locked() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inv == nil
+}
+
+var errVaultLocked = fmt.Errorf("vault is locked")
+
+// Unlocked tells a page that reloaded itself (the language switch) whether
+// the vault is still open, so it can go straight back in instead of asking
+// for the master password the backend never forgot.
+func (a *App) Unlocked() bool { return !a.locked() }
 
 // ChangeMasterPassword re-encrypts the vault under a new master password
 // after verifying the current one.
@@ -715,7 +785,9 @@ func (a *App) ListProfiles() []profile.Profile {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
-		return a.profiles.List()
+		// The registry still holds the vault's profiles for the schedules
+		// that run while locked; the page gets nothing until it unlocks.
+		return []profile.Profile{}
 	}
 	out := make([]profile.Profile, len(a.inv.CustomProfiles))
 	copy(out, a.inv.CustomProfiles)
@@ -966,21 +1038,42 @@ type DevicePatch struct {
 	UseMyBastion  *bool   `json:"useMyBastion,omitempty"`
 	CLI           *bool   `json:"cli,omitempty"` // CLI を使う (Device.CLIOff = !CLI)
 	GUI           *bool   `json:"gui,omitempty"` // GUI を使う
+	// The devices' own credentials (a password rotated on fifty devices at
+	// once), and one jump-host hop's (BastionHop is 1-based; devices
+	// without that hop are left as they are).
+	Username        *string `json:"username,omitempty"`
+	Password        *string `json:"password,omitempty"`
+	EnablePassword  *string `json:"enablePassword,omitempty"`
+	BastionHop      *int    `json:"bastionHop,omitempty"`
+	BastionUsername *string `json:"bastionUsername,omitempty"`
+	BastionPassword *string `json:"bastionPassword,omitempty"`
+}
+
+// UpdateReport says what a bulk edit touched: how many devices, and — for a
+// jump-host credential — how many of them had that hop (the others were
+// left alone, which the toast must say: "50 台を変更しました" over a hop
+// set on 12 of them hid a rotation that missed 38).
+type UpdateReport struct {
+	Devices    int `json:"devices"`
+	HopApplied int `json:"hopApplied"`
+	HopMissing int `json:"hopMissing"`
 }
 
 // UpdateDevices applies p to the devices with the given IDs, all or none:
 // a move into a group that already has one of the names (or two selected
 // devices sharing a name) is refused whole, naming them.
-func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
+func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
+	var rep UpdateReport
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return rep, fmt.Errorf("vault is locked")
 	}
 	sel := map[string]bool{}
 	for _, id := range ids {
 		sel[id] = true
 	}
+	hopEdit := p.BastionHop != nil && (p.BastionUsername != nil || p.BastionPassword != nil)
 	next := append([]model.Device(nil), a.inv.Devices...)
 	for i := range next {
 		d := &next[i]
@@ -1014,9 +1107,36 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 		if p.GUI != nil {
 			d.GUIOn = *p.GUI
 		}
+		if p.Username != nil {
+			d.Username = strings.TrimSpace(*p.Username)
+		}
+		if p.Password != nil {
+			d.Password = *p.Password
+		}
+		if p.EnablePassword != nil {
+			d.EnablePassword = *p.EnablePassword
+		}
+		rep.Devices++
+		if hopEdit {
+			// A fresh slice: the copy in next shares the hops with a.inv
+			// until the save goes through (all or none).
+			hops := append([]model.Bastion(nil), d.Bastions...)
+			if i := *p.BastionHop - 1; i >= 0 && i < len(hops) && hops[i].Host != "" {
+				if p.BastionUsername != nil {
+					hops[i].Username = strings.TrimSpace(*p.BastionUsername)
+				}
+				if p.BastionPassword != nil {
+					hops[i].Password = *p.BastionPassword
+				}
+				d.Bastions = hops
+				rep.HopApplied++
+			} else {
+				rep.HopMissing++
+			}
+		}
 		if err := a.inv.ValidateIn(d); err != nil {
 			a.mu.Unlock()
-			return fmt.Errorf("%s: %w", d.Name, err)
+			return UpdateReport{}, fmt.Errorf("%s: %w", d.Name, err)
 		}
 		// A device moved out of every group has no group defaults to use.
 		if d.Group == "" {
@@ -1035,7 +1155,29 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 		}
 		if len(clash) > 0 {
 			a.mu.Unlock()
-			return fmt.Errorf("移動先のグループに同じ機器名があるため移動できません: %s", strings.Join(clash, ", "))
+			return UpdateReport{}, fmt.Errorf("移動先のグループに同じ機器名があるため移動できません: %s", strings.Join(clash, ", "))
+		}
+	}
+	// A schedule naming a device that leaves its group would keep the name
+	// and run on whatever gets it next: stop it, and say so in the record.
+	var stopped []SchedLogEntry
+	if p.Group != nil {
+		moved := map[string]map[string]bool{} // old group → names
+		for i, d := range a.inv.Devices {
+			if sel[d.ID] && next[i].Group != d.Group {
+				if moved[d.Group] == nil {
+					moved[d.Group] = map[string]bool{}
+				}
+				moved[d.Group][d.Name] = true
+			}
+		}
+		for g, names := range moved {
+			list := make([]string, 0, len(names))
+			for n := range names {
+				list = append(list, n)
+			}
+			sort.Strings(list)
+			stopped = append(stopped, stopSchedules(a.inv, g, names, fmt.Sprintf("機器「%s」が別のグループへ移動したため停止しました", strings.Join(list, ", ")))...)
 		}
 	}
 	a.inv.Devices = next
@@ -1043,7 +1185,11 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) error {
 		a.ensureGroupExists(strings.TrimSpace(*p.Group))
 	}
 	a.mu.Unlock()
-	return a.persist()
+	a.logStopped(stopped)
+	if err := a.persist(); err != nil {
+		return UpdateReport{}, err
+	}
+	return rep, nil
 }
 
 // DeleteDevices removes the devices with the given IDs; returns how many.
@@ -1273,7 +1419,9 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 	// The group's table draft was read against devices that are now
 	// ungrouped (and maybe renamed): it would only come back as conflicts.
 	delete(a.inv.GridDrafts, name)
+	stopped := stopSchedules(a.inv, name, nil, fmt.Sprintf("グループ「%s」が削除されたため停止しました", name))
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	return renamed, a.persist()
 }
 
@@ -1333,6 +1481,34 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 	if !found {
 		a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	}
+	a.mu.Unlock()
+	return a.persist()
+}
+
+// CreateCommandSet adds a new set and refuses a name already in use: the
+// editor's 「＋ セットを追加」 used to save through SaveCommandSet, which
+// replaces by name, so a typo of an existing name silently overwrote that
+// set's commands on every device that used it.
+func (a *App) CreateCommandSet(cs model.CommandSet) error {
+	cs.Name = strings.TrimSpace(cs.Name)
+	if cs.Name == "" {
+		return fmt.Errorf("セット名は必須です")
+	}
+	if err := model.CheckCommands(cs.Commands); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	for i := range a.inv.CommandSets {
+		if a.inv.CommandSets[i].Name == cs.Name {
+			a.mu.Unlock()
+			return fmt.Errorf("「%s」は既にあります", cs.Name)
+		}
+	}
+	a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	a.mu.Unlock()
 	return a.persist()
 }
@@ -1849,6 +2025,9 @@ func dangerOf(snap *model.Inventory) []DangerWarning {
 // ListRunHistory returns past batches (newest first) found under the log
 // folder: one row per log_<timestamp>[_<stage>] sub-folder.
 func (a *App) ListRunHistory() ([]history.Run, error) {
+	if a.locked() {
+		return nil, errVaultLocked
+	}
 	a.mu.Lock()
 	var tok logstore.StageTokens
 	if a.inv != nil {
@@ -1866,6 +2045,9 @@ func (a *App) ListRunHistory() ([]history.Run, error) {
 // Both must sit under the log folder. With ignoreNoise, lines that differ
 // only in clock readings, uptimes and traffic counters count as unchanged.
 func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.DiffResult, error) {
+	if a.locked() {
+		return nil, errVaultLocked
+	}
 	for _, p := range []string{pathA, pathB} {
 		if err := a.underLogRoot(p); err != nil {
 			return nil, err
@@ -1888,6 +2070,9 @@ func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.Diff
 
 // OpenRunFolder opens one run's folder in Explorer (log folder only).
 func (a *App) OpenRunFolder(dir string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	if err := a.underLogRoot(dir); err != nil {
 		return err
 	}
@@ -1936,6 +2121,9 @@ type RunStatus struct {
 func (a *App) GetRunStatus() RunStatus {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.inv == nil {
+		return RunStatus{} // the last results name devices: after unlocking
+	}
 	// Active is about a batch started by hand: a 予約 runs apart from the run tab.
 	return RunStatus{Active: a.runActive && a.runSched == "", Last: a.lastDone}
 }
@@ -1964,9 +2152,24 @@ func (a *App) CancelDevice(name string) bool {
 // path is remembered in Settings.LastKeyFile so the device editor can pre-fill
 // it next time. Returns "" if the dialog was cancelled.
 // PickLogDir opens a folder picker for the log output directory.
+// uiLang is the page's language (SetLang), for words the backend itself
+// shows: the native file dialogs' titles and filter names.
+func (a *App) uiLang() string {
+	l, _ := uiLang.Load().(string)
+	return l
+}
+
+// word picks the UI language's word for a native dialog.
+func (a *App) word(ja, en string) string {
+	if a.uiLang() == "en" {
+		return en
+	}
+	return ja
+}
+
 func (a *App) PickLogDir() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "ログ保存フォルダを選択",
+		Title: a.word("ログ保存フォルダを選択", "Choose the log folder"),
 	})
 }
 
@@ -1978,11 +2181,11 @@ func (a *App) PickKeyFile() (string, error) {
 	}
 	a.mu.Unlock()
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "秘密鍵ファイルを選択",
+		Title:            a.word("秘密鍵ファイルを選択", "Choose the private key file"),
 		DefaultDirectory: def,
 		Filters: []runtime.FileFilter{
-			{DisplayName: "秘密鍵 (id_*;*.pem;*.key)", Pattern: "id_*;*.pem;*.key"},
-			{DisplayName: "すべてのファイル", Pattern: "*.*"},
+			{DisplayName: a.word("秘密鍵 (id_*;*.pem;*.key)", "Private keys (id_*;*.pem;*.key)"), Pattern: "id_*;*.pem;*.key"},
+			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
 		},
 	})
 	if err != nil || path == "" {
@@ -2009,6 +2212,9 @@ func (a *App) rememberKeyFile(path string) {
 
 // OpenLogDir opens the log output folder in the system file manager.
 func (a *App) OpenLogDir() error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	a.mu.Lock()
 	dir := "logs"
 	if a.inv != nil && a.inv.Settings.LogDir != "" {
@@ -2024,6 +2230,9 @@ func (a *App) OpenLogDir() error {
 // whether each is present in the after log (see history.StrictVerify). All
 // three files must lie under the log folder.
 func (a *App) StrictVerify(workPath, beforePath, afterPath string) (*history.StrictResult, error) {
+	if a.locked() {
+		return nil, errVaultLocked
+	}
 	read := func(p string) (string, error) {
 		if err := a.underLogRoot(p); err != nil {
 			return "", err
@@ -2066,6 +2275,9 @@ func (a *App) OpenDiffWindow(pathA, pathB, label string) error {
 // running is written out first and opens following its growth, the way an
 // interactive window's log does.
 func (a *App) OpenLogWindow(path string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	if err := a.underLogRoot(path); err != nil {
 		return err
 	}
@@ -2084,6 +2296,9 @@ func (a *App) OpenLogWindow(path string) error {
 // screen, as a Tera Term macro window shows it. Same rule as OpenLogWindow:
 // only files under the log folder.
 func (a *App) OpenWatchWindow(path string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	if err := a.underLogRoot(path); err != nil {
 		return err
 	}
@@ -2152,7 +2367,9 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 		args = append(args, "--direct")
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Env = childEnv()
+	// The window's place in the cascade: five sessions opened in a row used
+	// to land on exactly the same spot, one hiding the next.
+	cmd.Env = childEnv(fmt.Sprintf("%s=%d", cascadeEnv, a.openTerminals()))
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -2288,7 +2505,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.6"
+const appVersion = "1.7.7"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is
@@ -2296,11 +2513,11 @@ const appVersion = "1.7.6"
 // the single-file path; a whole bundle goes through PickImportFile.
 func (a *App) ImportCommandSetFile() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "コマンドセットのファイルを読み込む",
+		Title:            a.word("コマンドセットのファイルを読み込む", "Import a command set file"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "command-sets"),
 		Filters: []runtime.FileFilter{
-			{DisplayName: "コマンドセット (*.csv;*.list;*.txt)", Pattern: "*.csv;*.list;*.txt"},
-			{DisplayName: "すべてのファイル", Pattern: "*.*"},
+			{DisplayName: a.word("コマンドセット (*.csv;*.list;*.txt)", "Command sets (*.csv;*.list;*.txt)"), Pattern: "*.csv;*.list;*.txt"},
+			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
 		},
 	})
 	if err != nil || path == "" {
@@ -2343,11 +2560,11 @@ func (a *App) ImportCommandSetFile() (string, error) {
 // referenced it work again; otherwise the file is added as a new profile.
 func (a *App) ImportOSProfileFile() (string, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "OSタイププロファイルのファイルを読み込む",
+		Title:            a.word("OSタイププロファイルのファイルを読み込む", "Import an OS profile file"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "os-profiles"),
 		Filters: []runtime.FileFilter{
-			{DisplayName: "OSプロファイル (*.json)", Pattern: "*.json"},
-			{DisplayName: "すべてのファイル", Pattern: "*.*"},
+			{DisplayName: a.word("OSプロファイル (*.json)", "OS profiles (*.json)"), Pattern: "*.json"},
+			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
 		},
 	})
 	if err != nil || path == "" {
@@ -2407,6 +2624,31 @@ func bundleDir(group string) string {
 	return filepath.Join(exeDir(), "export", "bundles", name)
 }
 
+// BundleExportInfo is what a 一式書出 of a group would write over: the
+// folder and, when a bundle is already there, when it was exported.
+type BundleExportInfo struct {
+	Dir        string `json:"dir"`
+	Exists     bool   `json:"exists"`
+	ExportedAt string `json:"exportedAt"`
+}
+
+// BundleExportTarget tells the page whether export\bundles\<group>\ holds an
+// earlier export, so it can ask before devices.csv (perhaps open in Excel,
+// half-edited) is overwritten.
+func (a *App) BundleExportTarget(group string) BundleExportInfo {
+	info := BundleExportInfo{Dir: bundleDir(group)}
+	b, err := os.ReadFile(filepath.Join(info.Dir, bundle.ManifestName))
+	if err != nil {
+		return info
+	}
+	info.Exists = true
+	var m bundle.Manifest
+	if json.Unmarshal(b, &m) == nil {
+		info.ExportedAt = m.ExportedAt
+	}
+	return info
+}
+
 // ExportBundle writes one group's devices together with the command sets and
 // OS profiles they use — or, for group "", every device, set and profile —
 // to export\bundles\<group>\ and returns that folder. The folder is the
@@ -2452,16 +2694,30 @@ type ImportPreview struct {
 // path and options. Returns nil when the dialog is cancelled.
 func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportPreview, error) {
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            "一式の目録（palaterm-bundle.json）または機器CSVを読み込む",
+		Title:            a.word("一式の目録（palaterm-bundle.json）または機器CSVを読み込む", "Import a bundle (palaterm-bundle.json) or a device CSV"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "bundles"),
 		Filters: []runtime.FileFilter{
-			{DisplayName: "一式の目録 / 機器CSV", Pattern: "palaterm-bundle.json;*.csv"},
-			{DisplayName: "すべてのファイル", Pattern: "*.*"},
+			{DisplayName: a.word("一式の目録 / 機器CSV", "Bundle manifest / device CSV"), Pattern: "palaterm-bundle.json;*.csv"},
+			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
 		},
 	})
 	if err != nil || path == "" {
 		return nil, err
 	}
+	return a.previewImport(path, targetGroup, overwriteShared)
+}
+
+// PreviewImportFile previews the file PickImportFile chose again with other
+// options (the group to put the devices in, overwriting shared sets and
+// profiles): the import screen shows the options next to what they do.
+func (a *App) PreviewImportFile(path, targetGroup string, overwriteShared bool) (*ImportPreview, error) {
+	if path == "" {
+		return nil, fmt.Errorf("ファイルが選ばれていません")
+	}
+	return a.previewImport(path, targetGroup, overwriteShared)
+}
+
+func (a *App) previewImport(path, targetGroup string, overwriteShared bool) (*ImportPreview, error) {
 	c, kind, err := readImportFile(path)
 	if err != nil {
 		return nil, err

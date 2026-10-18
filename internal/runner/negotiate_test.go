@@ -21,7 +21,7 @@ func TestJumpToRetriesWithTheOfferedAlgorithms(t *testing.T) {
 	var got []string
 	done := make(chan error, 1)
 	go func() {
-		done <- jumpTo(context.Background(), exp, "", model.BastionSSH, "192.0.2.18", "ops", 0, 5*time.Second)
+		done <- jumpTo(context.Background(), exp, "", model.BastionSSH, "192.0.2.18", "ops", 0, true, 5*time.Second)
 	}()
 	got = append(got, dev.next(t))
 	dev.say("Unable to negotiate with 192.0.2.18 port 22: no matching host key type found. Their offer: ssh-dss\r\n[ops@jump1 ~]$ ")
@@ -63,7 +63,7 @@ func TestJumpToGivesUpWhenTheOfferRepeats(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- jumpTo(context.Background(), exp, "", model.BastionSSH, "10.0.0.5", "u", 0, 5*time.Second)
+		done <- jumpTo(context.Background(), exp, "", model.BastionSSH, "10.0.0.5", "u", 0, true, 5*time.Second)
 	}()
 	for i := 0; i < 2; i++ {
 		dev.next(t)
@@ -126,7 +126,7 @@ func TestNegotiateFixRejectsShellSyntax(t *testing.T) {
 // The user name typed on a jump host is checked as actually used (a group's
 // default credentials included), before anything is typed.
 func TestJumpRefusesShellSyntaxInUser(t *testing.T) {
-	err := jumpTo(context.Background(), nil, "", model.BastionSSH, "192.0.2.1", "ops;reboot", 0, time.Second)
+	err := jumpTo(context.Background(), nil, "", model.BastionSSH, "192.0.2.1", "ops;reboot", 0, true, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "使えない文字") {
 		t.Errorf("err = %v", err)
 	}

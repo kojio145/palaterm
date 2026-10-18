@@ -52,9 +52,11 @@ const (
 	wmClose     = 0x0010
 	wmDestroy   = 0x0002
 	wmNull      = 0x0000
+	wmLButtonUp = 0x0202
 	wmLButtonDb = 0x0203
 	wmRButtonUp = 0x0205
 	mfString    = 0x0
+	mfGrayed    = 0x1
 	mfSeparator = 0x800
 	tpmReturnCm = 0x0100
 	tpmRightBtn = 0x0002
@@ -118,6 +120,35 @@ var tray struct {
 	onQuit    func()
 	shown     chan struct{}
 	wndProcCB uintptr
+	// tip is what the icon says on hover and at the top of its menu: the
+	// schedule running now, or the next one and when ("waiting" alone told
+	// nothing about what the tray was waiting for).
+	tip string
+}
+
+// trayTip sets the icon's hover text (no-op without an icon, or unchanged).
+func trayTip(text string) {
+	tray.mu.Lock()
+	hwnd := tray.hwnd
+	same := tray.tip == text
+	tray.tip = text
+	tray.mu.Unlock()
+	if hwnd == 0 || same {
+		return
+	}
+	nid := trayData(hwnd)
+	nid.UFlags = nifTip
+	utf16Fill(nid.SzTip[:], text)
+	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
+}
+
+func trayTipText() string {
+	tray.mu.Lock()
+	defer tray.mu.Unlock()
+	if tray.tip != "" {
+		return tray.tip
+	}
+	return "PalaTerm — " + winWord("予約を待機中", "waiting for schedules")
 }
 
 func utf16Fill(dst []uint16, s string) {
@@ -141,7 +172,7 @@ func trayAdd() {
 	nid.UFlags = nifMessage | nifIcon | nifTip
 	nid.UCallbackMessage = wmTray
 	nid.HIcon = tray.icon
-	utf16Fill(nid.SzTip[:], "PalaTerm — "+winWord("予約を待機中", "waiting for schedules"))
+	utf16Fill(nid.SzTip[:], trayTipText())
 	pShellNotifyIcon.Call(nimAdd, uintptr(unsafe.Pointer(&nid)))
 }
 
@@ -149,7 +180,8 @@ func trayWndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uintptr {
 	switch {
 	case msg == wmTray:
 		switch uint32(lparam & 0xffff) {
-		case wmLButtonDb:
+		case wmLButtonUp, wmLButtonDb:
+			// A single click opens too: a double-click-only icon read as dead.
 			if tray.onOpen != nil {
 				go tray.onOpen()
 			}
@@ -181,6 +213,10 @@ func trayMenu(hwnd uintptr) {
 	defer pDestroyMenu.Call(menu)
 	open, _ := syscall.UTF16PtrFromString(winWord("PalaTerm を開く", "Open PalaTerm"))
 	quit, _ := syscall.UTF16PtrFromString(winWord("終了（予約は実行されなくなります）", "Quit (schedules stop running)"))
+	// The status line first (greyed, not a command): what is running or next.
+	info, _ := syscall.UTF16PtrFromString(trayTipText())
+	pAppendMenu.Call(menu, mfString|mfGrayed, 0, uintptr(unsafe.Pointer(info)))
+	pAppendMenu.Call(menu, mfSeparator, 0, 0)
 	pAppendMenu.Call(menu, mfString, trayCmdOpen, uintptr(unsafe.Pointer(open)))
 	pAppendMenu.Call(menu, mfSeparator, 0, 0)
 	pAppendMenu.Call(menu, mfString, trayCmdQuit, uintptr(unsafe.Pointer(quit)))

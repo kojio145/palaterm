@@ -65,9 +65,63 @@ const (
 	menuReload  = 2
 	menuRelogin = 3
 	menuAllow   = 4
+	menuBack    = 5
+	menuForward = 6
+	menuCopyURL = 7
 
 	wmGUINavigate = 0x8000 + 20
+
+	// ICoreWebView2 history: a same-origin pop-up (FortiGate's CLI console,
+	// a help page) replaces the page in this window, and the menu is the
+	// only way back a user can see (Alt+← works but is written nowhere).
+	slotGetCanGoBack    = 38 // ICoreWebView2::get_CanGoBack
+	slotGetCanGoForward = 39
+	slotGoBack          = 40
+	slotGoForward       = 41
+
+	cfUnicodeText = 13
+	gmemMoveable  = 0x0002
 )
+
+var (
+	procOpenClipboard    = user32.NewProc("OpenClipboard")
+	procEmptyClipboard   = user32.NewProc("EmptyClipboard")
+	procSetClipboardData = user32.NewProc("SetClipboardData")
+	procCloseClipboard   = user32.NewProc("CloseClipboard")
+	procGetDpiForWindow  = user32.NewProc("GetDpiForWindow")
+	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
+	procGlobalLock       = kernel32.NewProc("GlobalLock")
+	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
+)
+
+// setClipboardText puts s on the clipboard (the menu's URL をコピー; the
+// page's navigator.clipboard needs a secure context an http GUI lacks).
+func setClipboardText(hwnd windows.HWND, s string) {
+	u, err := windows.UTF16FromString(s)
+	if err != nil {
+		return
+	}
+	if r, _, _ := procOpenClipboard.Call(uintptr(hwnd)); r == 0 {
+		return
+	}
+	defer procCloseClipboard.Call()
+	procEmptyClipboard.Call()
+	n := uintptr(len(u) * 2)
+	h, _, _ := procGlobalAlloc.Call(gmemMoveable, n)
+	if h == 0 {
+		return
+	}
+	p, _, _ := procGlobalLock.Call(h)
+	if p == 0 {
+		return
+	}
+	// p is memory the system handed out, reinterpreted in place (not a
+	// converted Go pointer), as comCall does.
+	dst := *(*unsafe.Pointer)(unsafe.Pointer(&p))
+	copy(unsafe.Slice((*uint16)(dst), len(u)), u)
+	procGlobalUnlock.Call(h)
+	procSetClipboardData.Call(cfUnicodeText, h) // the system owns h from here
+}
 
 type guiWndClass struct {
 	Size       uint32
@@ -131,6 +185,8 @@ type guiWin struct {
 	c14       uintptr // ICoreWebView2_14 (certificate errors), 0 if the runtime is older
 	ready     bool
 	dataDir   string // this window's own WebView2 profile, removed on exit
+	// activeSent: when the last ACTIVE line went to the main window.
+	activeSent time.Time
 }
 
 func runGUIWindow() {
@@ -194,8 +250,14 @@ func (w *guiWin) removeProfile() {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	// Left behind by windows that were killed: only those whose process is
-	// gone — another open window's files must not be touched.
+	cleanStaleGUIProfiles()
+}
+
+// cleanStaleGUIProfiles deletes the profiles left behind by GUI windows
+// that were killed: only those whose process is gone — another open
+// window's files must not be touched. Run by a closing GUI window and by
+// the main window at startup.
+func cleanStaleGUIProfiles() {
 	if ents, err := os.ReadDir(guiProfileRoot()); err == nil {
 		for _, e := range ents {
 			var pid uint32
@@ -223,6 +285,108 @@ func processAlive(pid uint32) bool {
 		return false
 	}
 	return code == 259 // STILL_ACTIVE
+}
+
+// The GUI window's default size in logical (96-dpi) pixels, and where its
+// last size is kept: %LOCALAPPDATA%\PalaTerm\gui-window.json (no device
+// data in it, only a width and a height).
+const (
+	guiWinDefW = 1280
+	guiWinDefH = 860
+)
+
+func guiWinStateFile() string {
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "gui-window.json")
+}
+
+// loadGUIWinSize is the logical size the last GUI window was closed at.
+func loadGUIWinSize() (int32, int32, bool) {
+	b, err := os.ReadFile(guiWinStateFile())
+	if err != nil {
+		return 0, 0, false
+	}
+	var st struct {
+		W int32 `json:"w"`
+		H int32 `json:"h"`
+	}
+	if json.Unmarshal(b, &st) != nil || st.W < 400 || st.H < 300 || st.W > 10000 || st.H > 10000 {
+		return 0, 0, false
+	}
+	return st.W, st.H, true
+}
+
+func saveGUIWinSize(w, h int32) {
+	if w < 400 || h < 300 {
+		return
+	}
+	b, _ := json.Marshal(struct {
+		W int32 `json:"w"`
+		H int32 `json:"h"`
+	}{w, h})
+	_ = os.MkdirAll(filepath.Dir(guiWinStateFile()), 0o755)
+	_ = os.WriteFile(guiWinStateFile(), b, 0o644)
+}
+
+// dpi is the window's DPI (96 = 100 %).
+func (w *guiWin) dpi() int32 {
+	if procGetDpiForWindow.Find() != nil {
+		return 96
+	}
+	d, _, _ := procGetDpiForWindow.Call(uintptr(w.hwnd))
+	if d == 0 {
+		return 96
+	}
+	return int32(d)
+}
+
+// place sizes the window for its monitor's scaling (the remembered size,
+// else the default) and centres it over the main window, on the main
+// window's monitor, like the terminal windows (see winplace.go).
+func (w *guiWin) place() {
+	lw, lh, ok := loadGUIWinSize()
+	if !ok {
+		lw, lh = guiWinDefW, guiWinDefH
+	}
+	parent, hasParent := parseRect(os.Getenv(parentRectEnv))
+	const monitorDefaultToNearest = 2
+	var mon uintptr
+	if hasParent {
+		mon, _, _ = pMonitorFromRect.Call(uintptr(unsafe.Pointer(&parent)), monitorDefaultToNearest)
+	} else {
+		mon, _, _ = pMonitorFromWindw.Call(uintptr(w.hwnd), monitorDefaultToNearest)
+	}
+	mi := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
+	if ok, _, _ := pGetMonitorInfo.Call(mon, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+		return
+	}
+	// Move onto the parent's monitor first: the DPI read below is that
+	// monitor's once the window is there.
+	const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
+	pSetWindowPos.Call(uintptr(w.hwnd), 0, uintptr(mi.Work.L), uintptr(mi.Work.T), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
+	scale := float64(w.dpi()) / 96
+	pw, ph := int32(float64(lw)*scale), int32(float64(lh)*scale)
+	if pw > mi.Work.R-mi.Work.L {
+		pw = mi.Work.R - mi.Work.L
+	}
+	if ph > mi.Work.B-mi.Work.T {
+		ph = mi.Work.B - mi.Work.T
+	}
+	over := parent
+	if !hasParent {
+		over = mi.Work
+	}
+	x, y := centreIn(over, mi.Work, pw, ph)
+	pSetWindowPos.Call(uintptr(w.hwnd), 0, uintptr(x), uintptr(y), uintptr(pw), uintptr(ph), swpNoZOrder|swpNoActivate)
+}
+
+// rememberSize stores the window's logical size for the next GUI window.
+func (w *guiWin) rememberSize() {
+	var r rect
+	if ok, _, _ := pGetWindowRect.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&r))); ok == 0 {
+		return
+	}
+	scale := float64(w.dpi()) / 96
+	saveGUIWinSize(int32(float64(r.R-r.L)/scale), int32(float64(r.B-r.T)/scale))
 }
 
 func (w *guiWin) alert(msg string) {
@@ -258,16 +422,24 @@ func (w *guiWin) create() error {
 	add := func(id int, ja, en string) {
 		procAppendMenuW.Call(menu, mfString, uintptr(id), uintptr(unsafe.Pointer(u16(winWord(ja, en)))))
 	}
-	add(menuBrowser, "既定のブラウザで開く（自動ログインなし）", "Open in default browser (no auto login)")
+	add(menuBack, "← 戻る", "← Back")
+	add(menuForward, "進む →", "Forward →")
 	add(menuReload, "再読み込み", "Reload")
 	add(menuRelogin, "ログインし直す", "Log in again")
+	add(menuCopyURL, "URL をコピー", "Copy URL")
+	add(menuBrowser, "既定のブラウザで開く（自動ログインなし）", "Open in default browser (no auto login)")
+	// Created hidden, then sized for the monitor's scaling and placed over
+	// the main window (the other child windows do the same; this one used
+	// to open at Windows' default spot on the primary monitor, 1280×860
+	// physical pixels — a 640×430 window on a 4K screen at 200 %).
 	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16("PalaTerm"))),
-		wsOverlappedWindow, cwUseDefault, cwUseDefault, 1280, 860, 0, menu, uintptr(inst), 0)
+		wsOverlappedWindow, cwUseDefault, cwUseDefault, guiWinDefW, guiWinDefH, 0, menu, uintptr(inst), 0)
 	if hwnd == 0 {
 		return fmt.Errorf("CreateWindowEx: %v", err)
 	}
 	w.hwnd = windows.HWND(hwnd)
 	w.title("")
+	w.place()
 	procShowWindow.Call(hwnd, swShow)
 	procUpdateWindow.Call(hwnd)
 
@@ -538,6 +710,19 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case wmCommand:
 		switch int(wp & 0xffff) {
+		case menuBack:
+			if c := w.core(); c != 0 {
+				comCall(c, slotGoBack)
+			}
+		case menuForward:
+			if c := w.core(); c != 0 {
+				comCall(c, slotGoForward)
+			}
+		case menuCopyURL:
+			if s := w.source(); s != "" {
+				setClipboardText(w.hwnd, s)
+				w.title(winWord("URL をコピーしました", "URL copied"))
+			}
 		case menuBrowser:
 			src := w.cfg.URL
 			if s := w.source(); strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
@@ -573,6 +758,7 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmClose:
+		w.rememberSize()
 		procDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
@@ -618,6 +804,20 @@ func (w *guiWin) showAllowMenu() {
 // onMessage answers the page script (guiPageScript). Only pages of the
 // device's own address count.
 func (w *guiWin) onMessage(msg string) {
+	if msg == "pt:active" {
+		// The user is here: told to the main window (its idle lock would
+		// otherwise close this window from under them). At most every 5 s.
+		w.mu.Lock()
+		due := time.Since(w.activeSent) >= 5*time.Second
+		if due {
+			w.activeSent = time.Now()
+		}
+		w.mu.Unlock()
+		if due {
+			fmt.Println(guiEventActive)
+		}
+		return
+	}
 	if !w.onDevicePage() {
 		return
 	}
@@ -652,6 +852,8 @@ func (w *guiWin) onMessage(msg string) {
 		w.mu.Unlock()
 		w.chromium.Eval(guiFillScript(w.cfg.User, w.cfg.Password, submit))
 		switch {
+		case submit:
+			w.title("") // a "no login form" note from an earlier page goes
 		case swapped:
 			w.title(winWord("前回は自己署名の証明書でしたが、今回はこの PC が信頼する証明書です。心当たりがあればメニューの「証明書の変更を許可」を押してください", "the certificate changed from self-signed to a trusted one; allow it in the menu if expected"))
 			w.showAllowMenu()
@@ -667,7 +869,17 @@ func (w *guiWin) onMessage(msg string) {
 		if w.autoSent || w.tofuNow || w.swappedNow {
 			w.loggedIn = true
 		}
+		noForm := !w.autoSent && !w.tofuNow && !w.swappedNow && !w.loggedIn
 		w.mu.Unlock()
+		if noForm {
+			// The first page of the device, and no login form the script
+			// recognises on it: said so, with the username, instead of a
+			// blank login page the user cannot tell from "still looking".
+			w.title(winWord(
+				fmt.Sprintf("ログイン欄を見つけられませんでした。手で入力してください（ユーザー名: %s）", w.cfg.User),
+				fmt.Sprintf("no login form found: log in by hand (username: %s)", w.cfg.User)))
+			return
+		}
 		w.title("")
 		return
 	case "pt:accept":
@@ -714,7 +926,12 @@ f.p.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:
 func guiPageScript(origin string) string {
 	jo, _ := json.Marshal(origin)
 	return `(function(){
-if (window.top !== window || location.origin !== ` + string(jo) + `) return;
+if (window.top !== window) return;
+// Activity (keys, mouse) is reported to PalaTerm, which postpones its idle
+// lock while this window is in use (the lock would close it).
+(function(){ var last=0; function act(){ var n=Date.now(); if(n-last<3000) return; last=n; try{ window.chrome.webview.postMessage("pt:active"); }catch(e){} }
+["keydown","mousedown","mousemove","wheel","touchstart"].forEach(function(ev){ document.addEventListener(ev, act, {passive:true, capture:true}); }); })();
+if (location.origin !== ` + string(jo) + `) return;
 function vis(e){ if(!e) return false; var r=e.getBoundingClientRect(); var s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=="hidden"&&s.display!=="none"; }
 function q(sel){ var l=document.querySelectorAll(sel); for(var i=0;i<l.length;i++) if(vis(l[i])) return l[i]; return null; }
 window.__ptFind = function(){

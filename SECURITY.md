@@ -21,7 +21,10 @@ PalaTerm is designed for use inside closed networks:
 - No telemetry, no auto-update, no external communication of any kind
 - Credentials are stored only in an AES-256-GCM encrypted vault protected by a
   master password (scrypt key derivation)
-- SSH host keys are verified on a trust-on-first-use (TOFU) basis
+- SSH host keys are pinned on a trust-on-first-use (TOFU) basis. This covers the first hop
+  (the device, or the first jump host) and, in the "SSH tunnel" jump-host mode, every hop.
+  In the default "type commands on the jump host" mode the inner hops are verified by the
+  jump host's own ssh client and its known_hosts; an unknown-host prompt there is answered "yes"
 
 The full security review record (currently in Japanese) is in
 [docs/SECURITY.md](docs/SECURITY.md).

@@ -51,6 +51,7 @@ type Term struct {
 	closeFn   func() error
 	logDir    string // Settings.LogDir once the vault is open ("" => logs/)
 	slog      *logstore.Stream
+	lastLog   string // the last session's log file (its folder is what ログフォルダ opens)
 	pasteOpen bool          // a paste-confirmation window is showing
 	pw        string        // master password, kept for a reconnect
 	dev       *model.Device // the device once the vault is open
@@ -191,6 +192,47 @@ type termReady struct {
 	Host   string `json:"host"`
 	Conn   string `json:"conn"`
 	Manual bool   `json:"manual"` // opened without automatic login
+	Hops   int    `json:"hops"`   // jump hosts on the way (0 = direct)
+}
+
+// termWinStateFile keeps the terminal window's last size
+// (%LOCALAPPDATA%\PalaTerm\term-window.json): every session used to open at
+// the same 1080×680, and a 132-column user resized each one by hand.
+func termWinStateFile() string {
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "term-window.json")
+}
+
+type termWinState struct {
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+// loadTermWinSize is the size the last terminal window was closed at
+// (logical pixels), within sane bounds.
+func loadTermWinSize() (int, int, bool) {
+	b, err := os.ReadFile(termWinStateFile())
+	if err != nil {
+		return 0, 0, false
+	}
+	var st termWinState
+	if json.Unmarshal(b, &st) != nil || st.W < termWin.MinW || st.H < termWin.MinH || st.W > 10000 || st.H > 10000 {
+		return 0, 0, false
+	}
+	return st.W, st.H, true
+}
+
+// rememberSize stores the window's current size for the next one.
+func (t *Term) rememberSize() {
+	if t.ctx == nil {
+		return
+	}
+	w, h := runtime.WindowGetSize(t.ctx)
+	if w < termWin.MinW || h < termWin.MinH {
+		return
+	}
+	b, _ := json.Marshal(termWinState{W: w, H: h})
+	_ = os.MkdirAll(filepath.Dir(termWinStateFile()), 0o755)
+	_ = os.WriteFile(termWinStateFile(), b, 0o644)
 }
 
 func (t *Term) connect(pw string) {
@@ -445,6 +487,9 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	t.mu.Unlock()
 	onClose := func() {
 		t.mu.Lock()
+		if p, _ := slog.Flush(); p != "" {
+			t.lastLog = p // ログフォルダ opens this session's folder after the disconnect too
+		}
 		t.slog = nil
 		// Not live any more: closing the window needs no confirmation, and
 		// Reconnect may open the session again.
@@ -485,7 +530,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	if tr := exp.Transport(); tr != "" {
 		host = tr
 	}
-	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Host: host, Conn: string(d.Conn), Manual: t.manual})
+	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
 }
 
 // AllowHostKeyChange is the answer to the host-key-mismatch prompt: the
@@ -678,16 +723,27 @@ func (t *Term) GetClipboard() (string, error) {
 	return runtime.ClipboardGetText(t.ctx)
 }
 
-// OpenLogDir opens the log folder in Explorer — the same folder the main
-// window's ログフォルダを開く uses, so the interactive log saved on close is
-// one click away from this window too.
+// OpenLogDir opens this session's log folder in Explorer (the run folder
+// its log is written to), or — before anything was logged — the log root
+// the main window's ログフォルダを開く uses. The root alone left the user
+// hunting for the right 日時_グループ_work folder.
 func (t *Term) OpenLogDir() error {
 	if t.isLocked() {
 		return errLocked
 	}
 	t.mu.Lock()
-	dir := t.logDir
+	dir, l, last := t.logDir, t.slog, t.lastLog
 	t.mu.Unlock()
+	if l != nil {
+		if p, _ := l.Flush(); p != "" {
+			last = p
+		}
+	}
+	if last != "" {
+		if fi, err := os.Stat(filepath.Dir(last)); err == nil && fi.IsDir() {
+			return startExplorer(filepath.Dir(last))
+		}
+	}
 	if dir == "" {
 		dir = "logs"
 	}
@@ -804,6 +860,7 @@ func (t *Term) SetLang(lang string) {
 // way Tera Term does: a stray click on × used to drop a device in the middle
 // of a configuration change.
 func (t *Term) beforeClose(ctx context.Context) bool {
+	t.rememberSize()
 	t.mu.Lock()
 	live := t.send != nil && !t.quitting
 	t.mu.Unlock()

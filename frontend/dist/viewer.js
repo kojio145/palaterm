@@ -14,6 +14,7 @@ async function bootViewerWindow() {
     <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442">
       <div style="color:#e6ecf3;font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(doc.path)}">${esc(t("ログ"))}: ${esc(doc.name)}</div>
       <span id="lv-note" class="pill ok hidden"></span>
+      <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-wrap" style="width:auto"> ${esc(t("折り返し"))}</label>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-follow" style="width:auto"> ${esc(t("自動更新（追記を追う）"))}</label>
       <button class="btn sm" id="lv-reload">${esc(t("再読込"))}</button>
       <button class="btn sm" id="lv-font-dec" title="Ctrl+-">A−</button>
@@ -56,6 +57,13 @@ async function bootViewerWindow() {
     else if (!auto) flash(t("変更なし"));
   }
   document.getElementById("lv-reload").onclick = () => reload(false);
+  // Long lines (a FortiGate config line, a routing table) wrap on request;
+  // the choice is remembered per PC.
+  const wrapBox = document.getElementById("lv-wrap");
+  try { wrapBox.checked = localStorage.getItem("palaterm_viewer_wrap") === "1"; } catch (e) {}
+  const applyWrap = () => { ta.style.whiteSpace = wrapBox.checked ? "pre-wrap" : "pre"; ta.style.wordBreak = wrapBox.checked ? "break-all" : ""; };
+  wrapBox.onchange = () => { applyWrap(); try { localStorage.setItem("palaterm_viewer_wrap", wrapBox.checked ? "1" : "0"); } catch (e) {} };
+  applyWrap();
   // Follow mode: poll every 2 s. On by default when the file is still being
   // written (it was opened from a live interactive session), off otherwise.
   const follow = document.getElementById("lv-follow");

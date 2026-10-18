@@ -9,7 +9,7 @@ const HIST_PAGE = 200;
 
 // Which run rows are expanded, and the two runs picked for comparison. Kept
 // across re-renders of the tab.
-const histState = { open: {}, a: "", b: "", c: "", runs: [], limit: HIST_PAGE };
+const histState = { open: {}, failedOnly: {}, a: "", b: "", c: "", runs: [], limit: HIST_PAGE };
 // Runs that represent the work itself: a batch tagged 作業中, or an
 // interactive session (stage "work").
 function isWorkRun(r) { return r.stage === "during" || r.stage === "work"; }
@@ -70,7 +70,9 @@ function renderHistoryView() {
   }
   if (!histState.b || !runs.some(r => r.dir === histState.b)) {
     const aRun = runs.find(r => r.dir === histState.a);
-    const after = runs.find(r => r.stage === "after" && (!aRun || !aRun.group || r.group === aRun.group) && r.dir !== histState.a);
+    // The newest 作業後 of the same group that came after A: right after a
+    // 作業前 is taken, last month's 作業後 is not what B means.
+    const after = runs.find(r => r.stage === "after" && (!aRun || !aRun.group || r.group === aRun.group) && r.dir !== histState.a && (!aRun || !r.startedAt || !aRun.startedAt || r.startedAt > aRun.startedAt));
     histState.b = after ? after.dir : "";
   }
   const runOpt = sel => `<option value="">${esc(t("（選択）"))}</option>` + runs.map(r =>
@@ -79,12 +81,13 @@ function renderHistoryView() {
   // group when known: it says what was done, so the compare can conclude
   // whether that work shows up in the after logs.
   const aRun = runs.find(r => r.dir === histState.a), bRun = runs.find(r => r.dir === histState.b);
+  const bOlder = !!(aRun && bRun && aRun.startedAt && bRun.startedAt && bRun.startedAt < aRun.startedAt);
   if (aRun && bRun && (!histState.c || !runs.some(r => r.dir === histState.c))) {
     const mid = runs.find(r => isWorkRun(r) && r.startedAt > aRun.startedAt && r.startedAt < bRun.startedAt && (!aRun.group || !r.group || r.group === aRun.group));
     histState.c = mid ? mid.dir : "";
   }
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
-    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("単独接続") : ""))}</option>`).join("");
+    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("対話接続") : ""))}</option>`).join("");
 
   // Sort / filter of the run rows (display only; see listView in app.js).
   // The comparison selects above the table always list every run.
@@ -92,7 +95,7 @@ function renderHistoryView() {
   const focus = listViewFocus();
   const groupsSeen = [...new Set(runs.map(r => r.group || "").filter(Boolean))].sort();
   const stagesSeen = [...new Set(runs.map(r => r.stage || "").filter(Boolean))];
-  const stageName = r => r.stage ? stageLabel(r.stage) + (r.interactive ? " " + t("単独接続") : "") : "";
+  const stageName = r => r.stage ? stageLabel(r.stage) + (r.interactive ? " " + t("対話接続") : "") : "";
   const visible = listViewApply(LV, runs,
     r => [fmtRunTime(r.startedAt), r.group, stageName(r), ...r.devices.map(d => d.name)],
     (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? r.failed * 100000 + r.ok : -1) : (r.group || ""),
@@ -103,9 +106,15 @@ function renderHistoryView() {
     const counts = r.hasSummary
       ? `<span style="color:var(--ok)">${r.ok}</span> / <span style="color:var(--err)">${r.failed}</span>${r.canceled ? ` / <span style="color:var(--warn)">${r.canceled}</span>` : ""}`
       : `<span class="muted">${esc(t("{n} ファイル", { n: r.devices.length }))}</span>`;
+    const failedOnly = !!histState.failedOnly[r.dir];
+    const ORDER = { error: 0, canceled: 1, unknown: 2, ok: 3 };
+    const devList = r.devices.slice().sort((x, y) => (ORDER[x.status] ?? 2) - (ORDER[y.status] ?? 2));
+    const nFailed = r.devices.filter(d => d.status === "error" || d.status === "canceled").length;
+    const shownDevs = failedOnly ? devList.filter(d => d.status === "error" || d.status === "canceled") : devList;
     const devRows = open ? `<tr class="hist-devs"><td colspan="7" style="padding:0">
       ${r.rounds > 1 ? `<div class="muted" style="font-size:12px;padding:6px 48px">${esc(t("各機器の最新の回の結果です。ほかの回のログは「フォルダ」で開けます"))}</div>` : ""}
-      <table><tbody>${r.devices.map(d => `<tr>
+      ${r.devices.length > 10 && nFailed ? `<div style="font-size:12px;padding:6px 48px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" class="hist-failed-only" data-dir="${esc(r.dir)}" style="width:auto" ${failedOnly ? "checked" : ""}> ${esc(t("失敗・中止の {n} 台だけ表示（失敗が先に並びます）", { n: nFailed }))}</label></div>` : ""}
+      <table><tbody>${shownDevs.map(d => `<tr>
         <td style="width:36px"></td>
         <td style="width:140px"><span class="dot st-${d.status === "ok" ? "done" : d.status === "unknown" ? "queued" : d.status}"></span>${esc(({ ok: t("完了"), error: t("エラー"), canceled: t("中止"), unknown: t("—") })[d.status] || d.status)}</td>
         <td style="width:200px"><b>${esc(d.name)}</b></td>
@@ -116,7 +125,7 @@ function renderHistoryView() {
     return `<tr>
       <td style="width:36px"><span class="link" data-toggle="${esc(r.dir)}" style="text-decoration:none">${open ? "▾" : "▸"}</span></td>
       <td style="width:170px" class="mono">${esc(fmtRunTime(r.startedAt))}</td>
-      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("単独接続"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
+      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("対話接続"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
       <td><div class="clip" data-tip="${esc(r.group || "")}">${esc(r.group || "")}</div></td>
       <td style="width:130px">${counts}</td>
       <td style="width:120px;font-size:12px" class="muted">${r.rounds > 1 ? `<span data-tip="${esc(t("この予約で実行した回数（各機器の結果は最新の回）。失敗のあった回: {f}", { f: r.failedRounds || 0 }))}">${esc(t("{n} 回分", { n: r.rounds }))}${r.failedRounds ? ` <span style="color:var(--err)">${esc(t("(失敗 {f})", { f: r.failedRounds }))}</span>` : ""}</span>` : r.hasSummary ? "" : esc(t("旧形式"))}</td>
@@ -143,6 +152,7 @@ function renderHistoryView() {
         <span class="muted" style="font-size:12px">A</span><select id="cmp-a" class="btn" style="max-width:360px">${runOpt(histState.a)}</select>
         <span class="muted" style="font-size:12px">B</span><select id="cmp-b" class="btn" style="max-width:360px">${runOpt(histState.b)}</select>
         <button class="btn primary" id="cmp-go" ${histState.a && histState.b && histState.a !== histState.b ? "" : "disabled"}>${esc(t("比較する"))}</button>
+        ${bOlder ? `<span style="font-size:12px;color:var(--warn)">${esc(t("⚠ B は A より前の実行です（A=作業前・B=作業後 の順になっていません）"))}</span>` : ""}
       </div>
       <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
         <span class="muted" style="font-size:12px" data-tip="${esc(t("A と B の間に行った作業（作業中の一括実行、または単独接続）。選ぶと、その作業内容と、作業前→作業後の差分から「変更が反映されたか」の結論を出します"))}">${esc(t("作業中（任意） ⓘ"))}</span><select id="cmp-c" class="btn" style="max-width:420px">${workOpt}</select>
@@ -171,6 +181,7 @@ function renderHistoryView() {
   if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
   root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistoryView(); });
+  root.querySelectorAll(".hist-failed-only").forEach(el => el.onchange = () => { histState.failedOnly[el.dataset.dir] = el.checked; renderHistoryView(); });
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   root.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => App().OpenRunFolder(b.dataset.folder).catch(e => toast(terr(e), "err")));
   // Picking A / B / 作業中 only redraws: the runs are already in hand.
@@ -190,12 +201,17 @@ async function compareRuns() {
   const b = histState.runs.find(r => r.dir === histState.b);
   const out = document.getElementById("cmp-result");
   if (!a || !b) return;
+  // Every device of either run is listed. A device that failed in A or B
+  // (no log, or a log cut short by an error) is a row of its own, in red,
+  // first: three login failures used to hide inside "A のみ: sw3, sw7, sw9".
   const byName = {};
-  a.devices.forEach(d => { if (d.logPath) byName[d.name] = { a: d.logPath }; });
-  b.devices.forEach(d => { if (d.logPath) (byName[d.name] = byName[d.name] || {}).b = d.logPath; });
+  a.devices.forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "" }; });
+  b.devices.forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; });
   const names = Object.keys(byName);
-  const pairs = names.filter(n => byName[n].a && byName[n].b);
-  if (!pairs.length) {
+  const failedIn = n => { const e = byName[n]; const f = []; if (e.sa && e.sa !== "ok") f.push("A"); if (e.sb && e.sb !== "ok") f.push("B"); return f; };
+  const failed = names.filter(n => failedIn(n).length);
+  const pairs = names.filter(n => byName[n].a && byName[n].b && !failedIn(n).length);
+  if (!pairs.length && !failed.length) {
     out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）"))}</div>`;
     return;
   }
@@ -207,8 +223,15 @@ async function compareRuns() {
       rows.push({ name: n, added: r.added, removed: r.removed, same: r.same });
     } catch (e) { rows.push({ name: n, err: terr(e) }); }
   }
-  const onlyA = names.filter(n => byName[n].a && !byName[n].b);
-  const onlyB = names.filter(n => !byName[n].a && byName[n].b);
+  // Devices that one run did not include at all (a failure is listed above,
+  // not here).
+  const onlyA = names.filter(n => byName[n].sa && !byName[n].sb && !failedIn(n).length);
+  const onlyB = names.filter(n => !byName[n].sa && byName[n].sb && !failedIn(n).length);
+  const failRows = failed.map(n => {
+    const e = byName[n]; const where = failedIn(n);
+    const msg = where.map(w => `${w}: ${fmtRunMsg((w === "A" ? e.ea : e.eb) || t("ログなし"))}`).join(" ／ ");
+    return { name: n, fail: where.join("/"), msg, a: e.a, b: e.b };
+  });
   // Strict verdict: the setting lines typed during the work (its log) are
   // looked up one by one in the after log; the before log tells a line the
   // work added from one that was already there.
@@ -238,7 +261,7 @@ async function compareRuns() {
     else if (okDev === 0) { cls = "err"; headline = t("⚠ 結論: 作業中に設定した内容のうち {m} / {c} 件が、作業後に反映されていません（{n} 台）", { m: missCmd, c: totalCmd, n: ngDev }); }
     else { cls = "warn"; headline = t("⚠ 結論: 作業中に設定した内容のうち {m} / {c} 件が、{b} 台で作業後に反映されていません（{a} 台はすべて反映）", { m: missCmd, c: totalCmd, a: okDev, b: ngDev }); }
     banner = `<div style="margin-top:12px;padding:10px 14px;border-radius:8px;border:1px solid var(--${cls});font-size:14px;font-weight:600;color:var(--${cls})">${esc(headline)}
-      <div class="muted" style="font-size:12px;font-weight:400;margin-top:4px">${esc(t("作業中の実行: {t}", { t: runTitle(work) + (work.interactive ? "（" + t("単独接続") + "）" : "") }))}${noWork ? "　" + esc(t("判定対象外 {n} 台（作業ログ無し、または設定コマンド無し）", { n: noWork })) : ""}　${esc(t("※ 作業中のログから設定コマンド行を抜き出し、作業後のログ（show running-config 等）にその行があるかを 1 件ずつ照合しています"))}</div></div>`;
+      <div class="muted" style="font-size:12px;font-weight:400;margin-top:4px">${esc(t("作業中の実行: {t}", { t: runTitle(work) + (work.interactive ? "（" + t("対話接続") + "）" : "") }))}${noWork ? "　" + esc(t("判定対象外 {n} 台（作業ログ無し、または設定コマンド無し）", { n: noWork })) : ""}　${esc(t("※ 作業中のログから設定コマンド行を抜き出し、作業後のログ（show running-config 等）にその行があるかを 1 件ずつ照合しています"))}</div></div>`;
   }
   const verdict = r => {
     if (r.err) return `<span style="color:var(--err)">${esc(t("判定不能"))}</span>`;
@@ -261,7 +284,14 @@ async function compareRuns() {
     ? `<div style="margin-top:10px;font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 12px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
     : "";
   out.innerHTML = groupWarn + banner + `
-    <table style="margin-top:12px"><thead><tr><th>${esc(t("ホスト名"))}</th><th style="width:120px">${esc(t("差分"))}</th><th style="width:150px">${esc(t("追加 / 削除（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
+    ${failRows.length ? `<div style="margin-top:10px;font-size:13px;color:var(--err)">${esc(t("⚠ {n} 台は A または B で失敗しているため比較していません（下の表の先頭に赤で示します）", { n: failRows.length }))}</div>` : ""}
+    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:120px">${esc(t("差分"))}</th><th style="width:150px">${esc(t("追加 / 削除（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
+      ${failRows.map(r => `<tr style="background:rgba(239,68,68,.08)">
+        <td><b>${esc(r.name)}</b></td>
+        <td><span style="color:var(--err)">${esc(t("{w} で失敗", { w: r.fail }))}</span></td>
+        <td colspan="${work ? 2 : 1}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
+        <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
+      </tr>`).join("")}
       ${rows.map(r => `<tr>
         <td><b>${esc(r.name)}</b></td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : (r.added + r.removed === 0 ? `<span style="color:var(--ok)">${esc(t("差分なし"))}</span>` : `<span style="color:var(--warn)">${esc(t("差分あり"))}</span>`)}</td>
@@ -270,8 +300,9 @@ async function compareRuns() {
         <td style="text-align:right">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}</td>
       </tr>`).join("")}
     </tbody></table>
-    ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}`;
+    ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("片方の実行にしか含まれていない機器:"))} ${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}`;
   out.querySelectorAll("[data-diff]").forEach(btn => btn.onclick = () => showDiff(btn.dataset.diff, byName[btn.dataset.diff].a, byName[btn.dataset.diff].b));
+  out.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
 }
 
 // The diff opens in its own WinMerge-style window (PalaTerm.exe --diff).

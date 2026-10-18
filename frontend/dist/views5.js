@@ -344,7 +344,7 @@ function renderGrid(force) {
       <button class="btn sm" id="g-ins-below">${esc(t("下に行を挿入"))}</button>
       <button class="btn sm" id="g-copyrows" data-tip="${esc(t("選んだ行をまるごとコピーします（隠している列も含む）。「コピーした行を挿入」や Excel に貼れます"))}">${esc(t("行をコピー"))}</button>
       <button class="btn sm" id="g-pasterows" data-tip="${esc(t("コピーした行（Excel からの行も可）を、選んでいる行の上に挿入します。Shift+クリックで下に挿入"))}">${esc(t("コピーした行を挿入"))}</button>
-      <button class="btn sm" id="g-duprows" data-tip="${esc(t("選んだ行のすぐ下に複製を作ります（ホスト名には _2 などが付きます）"))}">${esc(t("行を複製"))}</button>
+      <button class="btn sm" id="g-duprows" data-tip="${esc(t("選んだ行のすぐ下に複製を作ります（機器名には _2 などが付きます）"))}">${esc(t("行を複製"))}</button>
       <button class="btn sm" id="g-up" data-tip="Alt+↑">${esc(t("↑ 上へ移動"))}</button>
       <button class="btn sm" id="g-down" data-tip="Alt+↓">${esc(t("↓ 下へ移動"))}</button>
       <button class="btn sm danger" id="g-delrows" data-tip="Ctrl+－">${esc(t("行を削除"))}</button>

@@ -244,7 +244,7 @@ func TestUpdateAndDeleteDevicesInBulk(t *testing.T) {
 	}
 	a1, a2, b1 := devByGroup(t, a, "A社", "sw1"), devByGroup(t, a, "A社", "sw2"), devByGroup(t, a, "B社", "sw1")
 	set, site := "backup", "本社"
-	if err := a.UpdateDevices([]string{a1.ID, a2.ID}, DevicePatch{CommandSet: &set, Site: &site}); err != nil {
+	if _, err := a.UpdateDevices([]string{a1.ID, a2.ID}, DevicePatch{CommandSet: &set, Site: &site}); err != nil {
 		t.Fatal(err)
 	}
 	if d := devByGroup(t, a, "A社", "sw2"); d.CommandSet != "backup" || d.Site != "本社" || d.Host != "192.0.2.2" {
@@ -254,7 +254,7 @@ func TestUpdateAndDeleteDevicesInBulk(t *testing.T) {
 		t.Errorf("unselected device changed: %+v", d)
 	}
 	g := "B社"
-	if err := a.UpdateDevices([]string{a1.ID, a2.ID}, DevicePatch{Group: &g}); err == nil {
+	if _, err := a.UpdateDevices([]string{a1.ID, a2.ID}, DevicePatch{Group: &g}); err == nil {
 		t.Error("moving A社/sw1 next to B社/sw1 was accepted")
 	}
 	if d := devByGroup(t, a, "A社", "sw2"); d.Group != "A社" {
@@ -360,7 +360,7 @@ func TestUngroupedMoveAndAnswerVariables(t *testing.T) {
 	}
 	id := devByGroup(t, a, "A社", "sw1").ID
 	none := ""
-	if err := a.UpdateDevices([]string{id}, DevicePatch{Group: &none}); err != nil {
+	if _, err := a.UpdateDevices([]string{id}, DevicePatch{Group: &none}); err != nil {
 		t.Fatal(err)
 	}
 	if got := devByGroup(t, a, "", "sw1"); got.UseGroupCreds {

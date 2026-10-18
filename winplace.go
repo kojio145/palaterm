@@ -20,6 +20,23 @@ import (
 
 const parentRectEnv = "PALATERM_PARENT_RECT"
 
+// cascadeEnv is the terminal window's number among the ones open (0, 1,
+// 2 …): each is offset by cascadeStep from the centre, so several sessions
+// opened in a row do not sit exactly on top of each other.
+const (
+	cascadeEnv  = "PALATERM_CASCADE"
+	cascadeStep = 32
+)
+
+// cascadeOffset is the offset for window number n (wrapping after 8, so a
+// twelfth window still lands on screen).
+func cascadeOffset(n int) int32 {
+	if n < 0 {
+		n = 0
+	}
+	return int32(n%8) * cascadeStep
+}
+
 var (
 	pGetWindowRect    = user32.NewProc("GetWindowRect")
 	pSetWindowPos     = user32.NewProc("SetWindowPos")
@@ -45,6 +62,10 @@ var uiLang atomic.Value // string
 // passed in PALATERM_LANG (the page is not loaded yet when the title is set).
 func winWord(ja, en string) string {
 	if os.Getenv("PALATERM_LANG") == "en" {
+		return en
+	}
+	// The main window itself: the language its page reported.
+	if l, _ := uiLang.Load().(string); l == "en" {
 		return en
 	}
 	return ja
@@ -119,6 +140,10 @@ func placeNearParent(ctx context.Context, ws winSize) {
 	if !ok {
 		return
 	}
+	var cascade int32
+	if n, err := strconv.Atoi(os.Getenv(cascadeEnv)); err == nil {
+		cascade = cascadeOffset(n)
+	}
 	go func() {
 		var hwnd uintptr
 		for i := 0; i < 50 && hwnd == 0; i++ {
@@ -142,6 +167,11 @@ func placeNearParent(ctx context.Context, ws winSize) {
 				return
 			}
 			x, y := centreIn(parent, mi.Work, r.R-r.L, r.B-r.T)
+			// The cascade offset, kept inside the work area the way the
+			// centre is.
+			if cascade > 0 {
+				x, y = centreIn(rect{L: parent.L + cascade, T: parent.T + cascade, R: parent.R + cascade, B: parent.B + cascade}, mi.Work, r.R-r.L, r.B-r.T)
+			}
 			pSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
 		}
 		if cur, _, _ := pMonitorFromWindw.Call(hwnd, monitorDefaultToNearest); cur != mon {

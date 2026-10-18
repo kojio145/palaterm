@@ -1,3 +1,8 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="favicon.png">
 <title>PalaTerm 使い方マニュアル</title>
 <style>
@@ -189,12 +194,14 @@
   .kbd { font-family: var(--mono); font-size: 12px; background: var(--panel-2);
     border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 7px; }
 </style>
+</head>
+<body>
 
 <div class="wrap">
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.7.6</div>
+    <div class="hero-tag">使い方マニュアル / v1.7.7</div>
   </header>
 
   <nav class="toc">
@@ -205,7 +212,7 @@
       <li><a href="#cmdset">コマンドセットを作る</a></li>
       <li><a href="#device">機器を登録する</a></li>
       <li><a href="#run">一括実行する</a></li>
-      <li><a href="#interactive">対話接続（手動ログイン）</a></li>
+      <li><a href="#interactive">対話接続（1台を手動操作）</a></li>
       <li><a href="#history">実行履歴と作業前後の比較</a></li>
       <li><a href="#schedule">予約（決まった日時に一括実行）</a></li>
       <li><a href="#log">ログを確認する</a></li>
@@ -220,7 +227,7 @@
     <h2 class="step"><span class="num">1</span>起動とマスターパスワード</h2>
     <p class="lead">機器の認証情報を暗号化して守るための、最初の1回だけの設定です。</p>
 
-    <p>配布物は <code>PalaTerm-vX.Y-win64.zip</code> です。展開してできた <strong><code>PalaTerm</code> フォルダごと</strong>好きな場所（例: <code>C:\Tools\PalaTerm</code>）に置き、中の <code>PalaTerm.exe</code> をダブルクリックで起動します（インストール不要）。vault・ログ・書き出しはこのフォルダの中に作られるので、デスクトップに exe を直接置くより散らかりません。更新は新しい <code>PalaTerm.exe</code> でフォルダ内の exe を置き換えるだけです。
+    <p>配布物は <code>PalaTerm-vX.Y-win64.zip</code> です。展開してできた <strong><code>PalaTerm</code> フォルダごと</strong>好きな場所（例: <code>C:\Tools\PalaTerm</code>）に置き、中の <code>PalaTerm.exe</code> をダブルクリックで起動します（インストール不要）。暗号化データ（vault）・ログ・書き出しはこのフォルダの中に作られるので、デスクトップに exe を直接置くより散らかりません。更新は新しい <code>PalaTerm.exe</code> でフォルダ内の exe を置き換えるだけです。
     ソース一式のフォルダから使う場合は <code>build\bin\PalaTerm.exe</code> が本体です —
     別の場所にある同名ファイルを起動すると「Wails applications will not build...」というエラーになります。</p>
 
@@ -231,11 +238,12 @@
     <ol class="steps">
       <li><strong>マスターパスワード</strong>を入力します。これは PalaTerm を開くための鍵で、機器のパスワードとは別物です。忘れると保存済みの機器情報は復号できなくなるので、必ず覚えられるものにしてください。</li>
       <li>下の欄に<strong>もう一度同じもの</strong>を入力します。</li>
-      <li><strong>「作成して開始」</strong>を押すと、メイン画面に入ります。</li>
+      <li><strong>「作成して開始」</strong>を押すと、メイン画面に入ります。新しい vault には「サンプル」グループとサンプルのコマンドセットが入っています（英語 UI で作ると「Sample group」「[Sample] Cisco router」のような英語名になります）。</li>
     </ol>
+    <div class="callout warn"><span class="ic">!</span><p><strong>exe を別のフォルダへ移した・置き直したときは、新しい vault を作らないでください。</strong> 初回画面にも案内が出ますが、以前の <code>data\palaterm_vault.enc</code> を新しい exe の隣の <code>data\</code> へコピーすれば、そのまま同じマスターパスワードで開けます。</p></div>
     <figure class="shot" data-shot="00_lock_create"><img src="img/manual/00_lock_create.png" alt="初回起動: マスターパスワードを決めて「作成して開始」" loading="lazy"><figcaption>初回起動: マスターパスワードを決めて「作成して開始」</figcaption></figure>
 
-    <div class="callout tip"><span class="ic">i</span><p>2回目以降の起動では、このマスターパスワードを入力して<strong>ロック解除</strong>するだけになります。暗号化ファイルは <code>data\palaterm_vault.enc</code> に作られます。</p></div>
+    <div class="callout tip"><span class="ic">i</span><p>2回目以降の起動では、このマスターパスワードを入力して<strong>ロック解除</strong>するだけになります（違うと「パスワードが違うか、ファイルが壊れています」と出ます）。vault は <code>data\palaterm_vault.enc</code> に作られます。最後に開いていたタブとグループは再起動後もそのまま戻り、ファイル・フォルダを選ぶ Windows のダイアログは UI の言語で出ます。</p></div>
 
     <h3>ツールフォルダの構成</h3>
     <p><code>PalaTerm.exe</code> の隣に、次のフォルダが自動で作られます。</p>
@@ -243,14 +251,15 @@
       <thead><tr><th>フォルダ</th><th>中身</th></tr></thead>
       <tbody>
         <tr><td><code>logs\</code></td><td>実行ログの保存先（既定。設定タブで変更可）</td></tr>
-        <tr><td><code>export\bundles\</code></td><td>「一式書出」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
-        <tr><td><code>export\command-sets\</code></td><td>コマンドセット単体ファイル読込の既定フォルダ</td></tr>
-        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読込の既定フォルダ（標準17種のJSONを自動配置。アプリが消すことはない）</td></tr>
-        <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）</td></tr>
+        <tr><td><code>export\bundles\</code></td><td>「一式書き出し」の出力先。グループ名ごとのフォルダに 機器CSV（devices.csv）＋コマンドセット＋OSタイププロファイル＋目録（palaterm-bundle.json）</td></tr>
+        <tr><td><code>export\command-sets\</code></td><td>コマンドセット単体ファイル読み込みの既定フォルダ</td></tr>
+        <tr><td><code>export\os-profiles\</code></td><td>OSタイププロファイル単体ファイル読み込みの既定フォルダ（標準17種のJSONを自動配置。アプリが消すことはない）</td></tr>
+        <tr><td><code>export\run-results\</code></td><td>一括実行でエラーになった機器の CSV（実行タブの「エラーの機器をCSV出力」で書き出したとき。パスワードは含まない）</td></tr>
+        <tr><td><code>data\</code></td><td>暗号化された保存データ（<code>palaterm_vault.enc</code>）と、その 1 世代前の <code>palaterm_vault.enc.bak</code>（保存のたびに更新。同じ暗号化）。予約の実行記録 <code>schedule-log.json</code> と予約ログフォルダの記録 <code>schedule-dirs.json</code>（機器名・時刻・パスのみ。認証情報は含まない）</td></tr>
       </tbody>
     </table></div>
     <div class="callout ok"><span class="ic">✓</span><p><strong>持ち運びできます。</strong> <code>PalaTerm.exe</code> と <code>data\</code> フォルダを一緒にUSBや共有フォルダへコピーすれば、別のWindowsでもそのまま同じ設定で使えます。インストールは不要です。</p></div>
-    <div class="callout tip"><span class="ic">i</span><p><strong>exe の外に作られるもの。</strong> PalaTerm 自身のデータ（vault・ログ・書き出し）はすべて上の表のとおり exe の隣に作られます。唯一の例外は画面描画に使う WebView2 ランタイム自身のブラウザキャッシュで、Windows が <code>%APPDATA%\PalaTerm.exe\EBWebView\</code> に作ります（PalaTerm のデータは含まれません）。レジストリやシステムフォルダには何も書きません。アンインストールは exe のフォルダを削除するだけで済みます（必要ならこのキャッシュフォルダも削除してください）。</p></div>
+    <div class="callout tip"><span class="ic">i</span><p><strong>exe の外に作られるもの。</strong> PalaTerm 自身のデータ（vault・ログ・書き出し）はすべて上の表のとおり exe の隣に作られます。例外は 2 つで、どちらにも PalaTerm のデータは含まれません。画面描画に使う WebView2 ランタイム自身のブラウザキャッシュ（Windows が <code>%APPDATA%\PalaTerm.exe\EBWebView\</code> に作ります）と、GUI の窓ごとの一時的な WebView2 プロファイル（<code>%LOCALAPPDATA%\PalaTerm\GUI\w-&lt;pid&gt;-&lt;ns&gt;</code>。窓を閉じると消えます。強制終了で残った分は、次回の PalaTerm 起動時または GUI の窓を閉じたときに片付けられます）です。レジストリやシステムフォルダには何も書きません。アンインストールは exe のフォルダを削除するだけで済みます（必要ならこの 2 つのフォルダも削除してください）。</p></div>
   </section>
 
   <section id="flow">
@@ -263,23 +272,24 @@
       <p style="margin:14px 0 0"><strong>③ 一括実行する</strong> … 実行画面でグループを選び、チェックした機器へ並列で接続してログを自動保存します。</p>
     </div>
 
-    <p>画面左のサイドバーには6つのタブがあります。</p>
+    <p>画面左のサイドバーには7つのタブがあります。</p>
     <div class="scroll"><table>
       <thead><tr><th>タブ</th><th>役割</th></tr></thead>
       <tbody>
-        <tr><td>機器一覧</td><td>グループと機器の登録・編集・一式書出/読込（機器CSV＋コマンドセット＋OSタイププロファイル）</td></tr>
-        <tr><td>コマンドセット</td><td>流すコマンドのまとまりの作成・単体ファイル読込</td></tr>
+        <tr><td>機器一覧</td><td>グループと機器の登録・編集・一式書き出し/読み込み（機器CSV＋コマンドセット＋OSタイププロファイル）</td></tr>
+        <tr><td>コマンドセット</td><td>流すコマンドのまとまりの作成・単体ファイル読み込み</td></tr>
         <tr><td>実行</td><td>対象の選択と一括実行・結果の確認</td></tr>
         <tr><td>実行履歴</td><td>過去の実行の一覧・ログ表示・作業前と作業後の比較</td></tr>
+        <tr><td>予約</td><td>決まった日時・一定間隔での一括実行（show 系の取得専用）と、その実行記録</td></tr>
         <tr><td>設定</td><td>並列数・タイムアウト・ログ保存先・自動ロックなどの共通設定</td></tr>
         <tr><td>OSタイプ設定</td><td>機種別ログイン自動化プロファイルの管理</td></tr>
       </tbody>
     </table></div>
-    <p>サイドバー下部には<strong>言語切替・パスワード変更・初期化・バージョン情報・ロック</strong>があります。</p>
+    <p>サイドバー下部には<strong>言語切替・パスワード変更・バージョン情報・ロック</strong>があります（「初期化」は v1.7.7 から「設定」タブ下部の「危険な操作」に移りました）。</p>
     <div class="scroll"><table>
       <thead><tr><th>メニュー</th><th>説明</th></tr></thead>
       <tbody>
-        <tr><td>言語切替</td><td>UIの言語を切り替えます（<strong>既定は英語</strong>。🌐 日本語 を選ぶと日本語に）。選択は保存され、次回起動時も維持されます。</td></tr>
+        <tr><td>言語切替</td><td>UIの言語を切り替えます。<strong>初回起動時は Windows の表示言語に従い</strong>（日本語 Windows なら日本語、それ以外は英語）、以後はここで選んだ言語が保存されて次回起動時も維持されます。</td></tr>
         <tr><td>パスワード変更</td><td>マスターパスワードを変更します（現在のパスワード → 新しいパスワード → 確認入力）。</td></tr>
         <tr><td>バージョン情報</td><td>ツール名・バージョン・作者・ライセンスの表示。</td></tr>
         <tr><td>ロック</td><td>マスターパスワード入力画面に戻ります。</td></tr>
@@ -313,7 +323,7 @@
     <ol class="steps">
       <li>左サイドバーの<strong>「コマンドセット」</strong>を開きます。</li>
       <li><strong>「＋ セットを追加」</strong>を押します（既存セットの<strong>「複製」</strong>から作るのも便利です。複製すると <code>_copy</code> 付きの名前で編集画面がすぐ開くので、その場で名前を付け直せます）。セット名は後からでも編集画面で変更でき、そのセットを割り当てている機器はそのまま新しい名前を使います。</li>
-      <li><strong>セット名</strong>を付けます（例: <code>config-backup</code>）。</li>
+      <li><strong>セット名</strong>を付けます（例: <code>config-backup</code>）。既にある名前では「「X」は既にあります」と止まり、上書きはしません。</li>
       <li><strong>コマンドの表</strong>に、1行1コマンドで入力します。「＋ 行を追加」で末尾に、各行の<strong>「＋」</strong>でその行の直後に挿入できます。<strong>「＋ まとめて追加…」</strong>を押すと小窓が開き、1 行 1 コマンドで入力して「追加」（<kbd>Ctrl</kbd>+<kbd>Enter</kbd>）すると、行数ぶんのコマンドが待機 1 秒で末尾に一度に追加されます。</li>
       <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。各コマンドは、送ったあと<strong>機器のプロンプトが出るのを待ってから</strong>待機秒だけ待って次へ進みます。</li>
       <li><strong>待つ文字列（任意）</strong>: プロンプトの代わりに待つ文字をコマンドごとに指定できます（例: <code>configure terminal</code> の行に <code>(config)#</code>）。機器の今の行がその文字で終わったら次のコマンドを送ります（文字そのまま・行末で一致。行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプトを待ちます。サンプルのコマンドセットには、各 OS タイプのプロンプトと同じ <code>#</code> が最初から入っています。</li>
@@ -335,24 +345,26 @@
 
     <div class="callout tip"><span class="ic">i</span><p>コマンド欄に<strong>複数行をまとめて貼り付ける</strong>と、その行数ぶん自動で行が分割されます。enable や terminal length などの<strong>ログイン・ページャ処理は自動</strong>（OSタイプ設定のプロファイルが担当）なので書く必要はありません。show 系のコマンドだけ並べればOKです。</p></div>
 
-    <h3>ファイルでの読込・書出</h3>
-    <p><strong>「読込」</strong>で1ファイルを選んで取り込みます（<code>コマンド,リモート秒,シリアル秒</code> 形式。ファイル名がセット名になり、同名セットは置き換え）。
+    <p>セットを<strong>「削除」</strong>するときは、そのセットを使っている機器の台数と機器名が確認に出ます（その機器はコマンドセットなしになり、実行タブでは「X（存在しません）」と警告色で表示されます）。</p>
+
+    <h3>ファイルでの読み込み・書き出し</h3>
+    <p><strong>「読み込み」</strong>で1ファイルを選んで取り込みます（<code>コマンド,リモート秒,シリアル秒</code> 形式。ファイル名がセット名になり、同名セットは置き換え）。
     CSVのほか、同じ形式の <code>.list</code> / <code>.txt</code> ファイル（旧ツールの Show_Command_Pattern）もそのまま読み込めます。
     待機秒を使わないセットはファイル先頭の <code># palaterm: pause=off</code>、待つ文字列はそのコマンドの直前の行の <code># palaterm: wait=(config)#</code> で表します（<code>#</code> で始まる行なので、旧版や旧ツールでは読み飛ばされます）。
-    書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うセットが <code>export\bundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
+    書き出しは<strong>機器一覧タブの「一式書き出し」</strong>にまとまっています（機器が使うセットが <code>export\bundles\グループ名\command-sets\</code> に1セット1ファイルで入り、「全機器」なら全セット）。</p>
   </section>
 
   <section id="device">
     <h2 class="step"><span class="num">4</span>機器を登録する</h2>
-    <p class="lead">接続先の情報を1台ずつ登録します。名前・ホスト・接続方式・OSタイプ・認証情報を設定します。</p>
+    <p class="lead">接続先の情報を1台ずつ登録します。機器名・IPアドレス / ホスト名・接続方式・OSタイプ・認証情報を設定します。</p>
 
-    <div class="callout tip"><span class="ic">i</span><p><strong>グループ（会社）単位で管理します。</strong> 「機器一覧」タブを開くと、まず<strong>グループ選択画面</strong>が表示されます。<strong>「＋ 新規グループ作成」</strong>で会社・拠点などのグループを作るか、既存グループを選ぶと、その範囲の機器一覧に移ります。上部の<strong>「← 対象選択」</strong>でいつでも戻れます。<strong>他のタブへ移動して戻ってきても、選んでいたグループは維持されます。</strong></p></div>
+    <div class="callout tip"><span class="ic">i</span><p><strong>グループ（会社）単位で管理します。</strong> 「機器一覧」タブを開くと、まず<strong>グループ選択画面</strong>が表示されます。<strong>「＋ 新規グループ作成」</strong>で会社・拠点などのグループを作るか、既存グループを選ぶと、その範囲の機器一覧に移ります。上部の<strong>「← 対象選択」</strong>でいつでも戻れます。<strong>他のタブへ移動して戻ってきても、選んでいたグループは維持されます</strong>（再起動後も戻ります）。機器が 1 台も無いうちは、この画面に<strong>「はじめかた」</strong>として 3 ステップの案内が出ます。</p></div>
 
     <ol class="steps">
       <li>「機器一覧」タブで<strong>「＋ 新規グループ作成」</strong>を押し、グループ名（例: A社）を入力して作成します。作成直後にそのグループの（空の）一覧に移ります。</li>
-      <li><strong>「＋ 機器を追加」</strong>を押します（追加する機器は自動でそのグループに所属します）。</li>
-      <li>下の各項目を入力します。<strong>グループ（会社）</strong>欄で所属グループを変更することもできます。</li>
-      <li><strong>「保存」</strong>を押すと一覧に追加されます。</li>
+      <li><strong>「＋ 機器を追加」</strong>を押します（追加する機器は自動でそのグループに所属します。空の一覧の中央にも「＋ 機器を追加」「表で編集」「読み込み」の 3 つのボタンがあります）。</li>
+      <li>下の各項目を入力します。開いた直後は<strong>機器名</strong>の欄にカーソルがあります。<strong>グループ</strong>欄の<strong>「別のグループへ移す…」</strong>（未設定なら「グループを選ぶ…」）で所属グループを変更することもでき、まだ無いグループ名を入れて保存すると「新しいグループとして作成しますか？」と確認します。</li>
+      <li><strong>「保存」</strong>（<kbd>Ctrl</kbd>+<kbd>Enter</kbd>）を押すと一覧に追加されます。</li>
     </ol>
     <figure class="shot" data-shot="01_groups"><img src="img/manual/01_groups.png" alt="機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ" loading="lazy"><figcaption>機器一覧タブのグループ選択画面。会社ごとにカードが並ぶ</figcaption></figure>
     <figure class="shot" data-shot="01b_group_dup"><img src="img/manual/01b_group_dup.png" alt="グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）" loading="lazy"><figcaption>グループの複製。既定の認証情報と機器をまとめてコピー（機器名には接尾辞）</figcaption></figure>
@@ -360,17 +372,17 @@
     <figure class="shot" data-shot="03_device_edit"><img src="img/manual/03_device_edit.png" alt="機器の編集画面（上部: 基本項目・CLI / GUI を使う・GUI の方式とポート・接続方式。赤い「必須」以外は任意）" loading="lazy"><figcaption>機器の編集画面（上部: 基本項目・CLI / GUI を使う・GUI の方式とポート・接続方式。赤い「必須」以外は任意）</figcaption></figure>
     <p>グループ一覧の画面では、各グループの機器台数が表示され、<strong>カードをドラッグして並び順を変更</strong>できます。
     グループ内の一覧では、上部の<strong>「グループ名変更」「グループ削除」</strong>が使えます（削除しても機器自体は残り、グループ未設定になります）。
-    機器名（ホスト名）は<strong>同じグループの中でだけ重複できません</strong>。別のグループなら同じ名前を使えるので、グループの<strong>「複製」</strong>は機器名をそのままコピーします（接尾辞を入力すれば末尾に付きます）。</p>
+    機器名は<strong>同じグループの中でだけ重複できません</strong>。別のグループなら同じ名前を使えるので、グループの<strong>「複製」</strong>は機器名をそのままコピーします（接尾辞を入力すれば末尾に付きます）。</p>
 
     <h3>基本の項目</h3>
     <div class="scroll"><table>
       <thead><tr><th>項目</th><th>説明</th></tr></thead>
       <tbody>
-        <tr><td>ホスト名 <span class="must">必須</span></td><td>機器の識別名。<strong>ログファイル名に使われます</strong>（例: <code>core-sw1</code>）。</td></tr>
-        <tr><td>IPアドレス <span class="must">必須</span></td><td>接続先のIPアドレスまたはホスト名。（シリアル接続時は不要）</td></tr>
+        <tr><td>機器名 <span class="must">必須</span></td><td>機器の識別名（編集画面では「機器名（ログファイル名に使用）」）。<strong>ログファイル名に使われます</strong>（例: <code>core-sw1</code>）。</td></tr>
+        <tr><td>IPアドレス / ホスト名 <span class="must">必須</span></td><td>接続先のIPアドレスまたは DNS のホスト名。（シリアル接続時は不要）</td></tr>
         <tr><td>拠点名（任意）</td><td>本社／東京DC など。ログファイル名（<code>{site}</code>）にも使えます。</td></tr>
         <tr><td>役割（任意）</td><td>コア／エッジ／FW など、機器の役割を表す自由なラベル。ログファイル名（<code>{role}</code>）にも使えます。</td></tr>
-        <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポートをドロップダウンで選択＋ボーレート（既定9600）。「自動検出」のままで動くのは USB シリアル変換が 1 本だけ（または COM ポートが 1 つだけ）のとき。変換ケーブルが 2 本以上あるときは「COMポートを指定してください」と止まるので、機器ごとに別の COM ポートを指定します（指定すれば複数本を同時に使えます）。</td></tr>
+        <tr><td>接続方式</td><td><code>SSH</code> / <code>Telnet</code> / <code>シリアル</code> から選択。ポートは自動入力（SSH=22 / Telnet=23、変更可）。シリアルはCOMポートをドロップダウンで選択＋ボーレート（既定9600）。COM ポートの一覧は編集画面を開くたびに読み直し、隣の <strong>↻</strong> でも更新できます。「自動検出」のままで動くのは USB シリアル変換が 1 本だけ（または COM ポートが 1 つだけ）のとき。変換ケーブルが 2 本以上あるときは「COMポートを指定してください」と止まるので、機器ごとに別の COM ポートを指定します（指定すれば複数本を同時に使えます）。USB シリアル変換ケーブルは、先にメーカーのドライバを入れて COM ポートがデバイスマネージャーに出ている必要があります（PalaTerm は Windows が認識しているポートだけを一覧に出します）。</td></tr>
         <tr><td>OSタイプ</td><td>ログイン自動化のプロファイル（<a href="#ostype">OSタイプ設定</a>参照）。enable昇格やページャ無効化を機種に合わせて自動で行います。</td></tr>
         <tr><td>コマンドセット</td><td>STEP3で作ったセットを割り当てます。</td></tr>
       </tbody>
@@ -390,14 +402,14 @@
 
     <h3>グループ既定の認証情報（同じ ID/PW を機器ごとに繰り返し入れない）</h3>
     <p>会社ごとに共通のログインアカウントを使っている場合、グループの機器一覧の上部にある<strong>「グループ既定の認証情報…」</strong>で、そのグループのユーザー名・パスワード・enable パスワードを一度だけ登録できます（暗号化保存）。
-    機器側は編集画面の「認証情報の扱い」を「グループ既定を使う」にします。一覧では<span class="pill" style="background:#2a3442;color:#c7d0dc">既定</span>のバッジが付きます。ダイアログの「このグループの全機器を切り替える」にチェックすると、グループ内の機器をまとめて既定に切り替えられます。
-    グループ既定を使う機器も、<strong>個別のパスワードが必要な機器だけ「この機器に個別に設定」に戻せば</strong>、その機器は自分の認証情報でログインします。一式書出・読込にもグループ既定は含まれます。</p>
+    機器側は編集画面の「認証情報の扱い」を「グループ既定を使う」にします。一覧では<span class="pill" style="background:#2a3442;color:#c7d0dc">既定</span>のバッジが付きます。ダイアログの「このグループの全機器を切り替える」にチェックすると、グループ内の機器をまとめて既定に切り替えられます（1 回の保存で済むので 300 台でもすぐ終わります）。
+    グループ既定を使う機器も、<strong>個別のパスワードが必要な機器だけ「この機器に個別に設定」に戻せば</strong>、その機器は自分の認証情報でログインします。一式書き出し・読み込みにもグループ既定は含まれます。</p>
 
     <figure class="shot" data-shot="03b_device_edit_bastion"><img src="img/manual/03b_device_edit_bastion.png" alt="機器の編集画面（下部: 「自分の踏み台（設定タブ）を先に通る」と、その先の機器ごとの踏み台）" loading="lazy"><figcaption>機器の編集画面（下部: 「自分の踏み台（設定タブ）を先に通る」と、その先の機器ごとの踏み台）</figcaption></figure>
     <h3>踏み台サーバ（任意・最大5段）</h3>
     <p><strong>「＋ 踏み台を追加」</strong>で、踏み台（ジャンプサーバ）を<strong>最大5段まで</strong>登録できます。
     外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
-    ホスト・ユーザー・パスワードを設定します。<strong>「踏み台の通り方」</strong>は次の 2 つから選びます。</p>
+    ホスト・ユーザー・パスワードを設定します（SSH の踏み台はユーザー名が必須で、空のままでは保存できません。Telnet の踏み台は空でも可）。<strong>「踏み台の通り方」</strong>は次の 2 つから選びます。</p>
     <ul>
       <li><strong>踏み台上でコマンドを打つ（標準）</strong> — 2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進みます。ルーターなどシェルのある踏み台ならどれでも使えます。その認証は手前の踏み台側の ssh クライアントが行うため、PalaTerm に登録した鍵ファイル・レガシー暗号の設定が使われるのは1段目だけです（編集画面でも2段目以降は鍵の欄が出ません）。</li>
       <li><strong>SSH トンネル</strong> — 踏み台の SSH の中を通して、この PC から各段と対象機器へ直接 SSH ログインします（OpenSSH の <code>ProxyJump</code> と同じ）。<strong>全段で</strong>この PC の秘密鍵・パスフレーズ・レガシー暗号の設定・ホストキー確認が効き、踏み台では何も打ちません。踏み台はすべて SSH で、TCP 転送（<code>AllowTcpForwarding</code>。Linux の OpenSSH は標準で許可）を許可している必要があります。対象機器は SSH / Telnet。転送を許可していない踏み台（ルーターなど）では「転送を許可していません」と表示されるので、「踏み台上でコマンドを打つ」を選んでください。</li>
@@ -413,20 +425,21 @@
       <li>自己署名の証明書でも、ブラウザの警告画面（「詳細設定」→「進む」）を出さずに開きます。代わりに<strong>初回の証明書を記録し、次から変わっていたら開かずに止めます</strong>（機器の入れ替え・証明書の更新なら、窓のメニュー「証明書の変更を許可」）。</li>
       <li><strong>初めて開く機器</strong>は、ユーザー名・パスワードを入れるだけで送信しません。内容を確かめて「ログイン」を押してください。2 回目からは自動でログインまで進みます（初めての場所で同じ IP の別の機械にパスワードを送らないため）。</li>
       <li>ログイン前・後の同意画面（Disclaimer の「Accept」など）は自動で押します。ログインの送信は<strong>窓を開いて最初の 1 回だけ</strong>で、ログイン後のページ（パスワード変更など）には何も入れません。セッションが切れたらメニュー「ログインし直す」。</li>
-      <li>Cookie などは窓ごとに持ち、<strong>窓を閉じると消えます</strong>。窓のメニュー「既定のブラウザで開く（自動ログインなし）」で Chrome などにも切り替えられます。ロック・終了で GUI の窓は閉じます。</li>
+      <li>Cookie などは窓ごとに持ち、<strong>窓を閉じると消えます</strong>。窓のメニュー「既定のブラウザで開く（自動ログインなし）」で Chrome などにも切り替えられます（メニューには「← 戻る」「進む →」「URL をコピー」もあります）。ロック・終了で GUI の窓は閉じます。</li>
+      <li>GUI の窓は本体の窓の中央（同じモニタ）に、画面の拡大率に合わせた大きさで開き、変えた大きさは次回も使われます（<code>%LOCALAPPDATA%\PalaTerm\gui-window.json</code>）。ログイン欄が見つからないページでは、タイトルに「ログイン欄を見つけられませんでした。手で入力してください（ユーザー名: …）」と出るので、そのまま手で入力します。GUI の窓での操作は本体の「アイドル時の自動ロック」の操作として数えるので、使っている最中の GUI の窓がロックで閉じられることはありません。</li>
     </ul>
 
     <h3>グループ未設定の機器</h3>
     <p>グループを削除したり、グループ欄を空にした機器は「グループ未設定」になり、グループ選択画面に<strong>「（グループ未設定）n 台」</strong>のカードが出ます。そこから編集・削除・一括変更でのグループ移動ができます。</p>
 
     <h3>一括変更・一括削除</h3>
-    <p>左端のチェックで機器を選ぶと（<kbd>Shift</kbd>+クリックで範囲、見出しのチェックで表示中の全行）、表の上に<strong>「一括変更…」「一括削除」</strong>が出ます。一括変更では、グループ（移動）・コマンドセット・OSタイプ・認証情報の扱い・拠点・役割のうち、「（変更しない）」以外にした項目だけが選んだ全機器に設定されます（移動先のグループに同じ機器名があると移動しません）。編集画面は <kbd>Esc</kbd> でも閉じられ、編集した内容があるときは「破棄して閉じますか？」と確認します。</p>
+    <p>左端のチェックで機器を選ぶと（<kbd>Shift</kbd>+クリックで範囲、見出しのチェックで表示中の全行）、表の上に<strong>「一括変更…」「一括削除」</strong>が出ます。一括変更では、グループ（移動）・コマンドセット・OSタイプ・認証情報の扱い・拠点・役割のうち、「（変更しない）」以外にした項目だけが選んだ全機器に設定されます（移動先のグループに同じ機器名があると移動しません）。同じダイアログの折りたたみ<strong>「認証情報をまとめて変更」</strong>では、機器のユーザー名・パスワード・enable パスワードと、踏み台 n 段目のユーザー名・パスワードを、チェックした項目だけ選んだ全機器に入れられます（パスワードの定期変更に。踏み台の段を選ぶ欄には、選んだ機器のうち何台にその段があるかが出て、その段がある機器にだけ入ります。結果の通知にも何台に入れたかが出ます）。編集画面は <kbd>Esc</kbd> でも閉じられ、編集した内容があるときは「破棄して閉じますか？」と確認します。</p>
 
     <h3>一覧上で直接編集・複製・削除・並び替え</h3>
-    <p>機器一覧の表では、<strong>ホスト名（機器名）・IPアドレス・拠点名・役割・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存）。
-    認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>で機器をコピー、<strong>「削除」</strong>で削除します。
+    <p>機器一覧の表では、<strong>機器名・IPアドレス・拠点名・役割・接続方式・OSタイプ・コマンドセットをセルで直接編集</strong>できます（自動保存。前のセルの保存が終わる前に次のセルへ打ち始めても入力は残り、日本語入力の変換も途切れません）。
+    認証情報や踏み台の変更は各行の<strong>「編集」</strong>から。<strong>「複製」</strong>は、元の機器の内容が入った<strong>未保存の新しい機器</strong>として編集画面（「機器を複製」）を開きます（名前と IP を打ち直して保存。キャンセルすれば何も残りません）。<strong>「削除」</strong>で削除します。接続方式の列は SSH / Telnet / シリアルで表示されます。
     行の順序は左端の <strong>⠿ ドラッグ</strong>で入れ替えられます（複数選択も可・<a href="#flow">共通操作参照</a>。グループ内の並びだけが変わり、他グループの機器は動きません）。</p>
-    <p><strong>並び替え・絞り込み・列幅</strong>（機器一覧・グループ一覧・コマンドセット・OSタイプ設定・実行履歴で共通。実行タブと同じ操作）: <strong>見出しをクリック</strong>すると、その列で並び替え（再クリックで逆順、「並び順を戻す」で登録順に戻る）。表の上の<strong>絞り込み欄</strong>に文字を入れると一致する行だけが残り（コマンドセットはコマンド本文も対象）、拠点やグループのセレクトでも絞れます。どちらも表示だけの操作で保存順は変わりませんが、並び替え・絞り込み中は ⠿ のドラッグができません。<strong>見出しの境目をドラッグすると列幅</strong>を変えられ（ダブルクリックで既定幅・この PC に記憶されます）、切れている文字は<strong>セルにカーソルを合わせる</strong>と全文がチップで出ます。表の行を<strong>右クリック</strong>すると「選択した文字／このセル／この行／表示中の表をすべて」をコピーできます（行・表はタブ区切りで Excel にそのまま貼れます。実行タブ・実行履歴でも同じです）。</p>
+    <p><strong>並び替え・絞り込み・列幅</strong>（機器一覧・グループ一覧・コマンドセット・OSタイプ設定・実行履歴で共通。実行タブと同じ操作）: <strong>見出しをクリック</strong>すると、その列で並び替え（再クリックで逆順、「並び順を戻す」で登録順に戻る。IP アドレスや末尾の番号は数の順＝<code>10.0.0.2</code> が <code>10.0.0.10</code> の前）。表の上の<strong>絞り込み欄</strong>に文字を入れると一致する行だけが残り（機器一覧はグループ名、コマンドセットはコマンド本文も対象）、拠点やグループのセレクトでも絞れます（「全機器」の一覧には<strong>「グループ」列</strong>と<strong>「グループ: すべて」</strong>の絞り込みがあります。拠点の絞り込みは、その拠点が無いグループへ移ると「すべて」に戻ります）。どちらも表示だけの操作で保存順は変わりませんが、並び替え・絞り込み中は ⠿ のドラッグができません。<strong>見出しの境目をドラッグすると列幅</strong>を変えられ（ダブルクリックで既定幅・この PC に記憶されます）、切れている文字は<strong>セルにカーソルを合わせる</strong>と全文がチップで出ます。表の行を<strong>右クリック</strong>すると「選択した文字／このセル／この行／表示中の表をすべて」をコピーできます（行・表はタブ区切りで Excel にそのまま貼れます。実行タブ・実行履歴でも同じです）。</p>
 
     <h3>表で編集（Excel のようにまとめて編集）</h3>
     <figure class="shot" data-shot="02c_grid"><img src="img/manual/02c_grid.png" alt="表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）" loading="lazy"><figcaption>表で編集。Excel と同じ操作でまとめて編集（変更したセルは黄色・新しい行は「新」・エラーは赤枠。保存するまでは下書き）</figcaption></figure>
@@ -459,18 +472,18 @@
 
     <figure class="shot" data-shot="08_export_bundle"><img src="img/manual/08_export_bundle.png" alt="一式書き出しダイアログ。グループまたは全機器を選ぶ" loading="lazy"><figcaption>一式書き出しダイアログ。グループまたは全機器を選ぶ</figcaption></figure>
     <figure class="shot" data-shot="08b_export_done"><img src="img/manual/08b_export_done.png" alt="書き出し完了。出力先フォルダをそのまま開ける" loading="lazy"><figcaption>書き出し完了。出力先フォルダをそのまま開ける</figcaption></figure>
-    <figure class="shot" data-shot="09_import_dialog"><img src="img/manual/09_import_dialog.png" alt="読み込みダイアログ。グループの扱いと共有物の上書き可否を選んでからファイルを選ぶ" loading="lazy"><figcaption>読み込みダイアログ。グループの扱いと共有物の上書き可否を選んでからファイルを選ぶ</figcaption></figure>
+    <figure class="shot" data-shot="09_import_dialog"><img src="img/manual/09_import_dialog.png" alt="読み込みダイアログ。先にファイルを選び、同じ画面でグループの扱いと共有物の上書き可否を決める" loading="lazy"><figcaption>読み込みダイアログ。先にファイルを選び、同じ画面でグループの扱いと共有物の上書き可否を決める</figcaption></figure>
     <figure class="shot" data-shot="09b_import_preview"><img src="img/manual/09b_import_preview.png" alt="読み込み前の確認画面。新規・上書き・既存のまま残す件数が出る" loading="lazy"><figcaption>読み込み前の確認画面。新規・上書き・既存のまま残す件数が出る</figcaption></figure>
-    <h3>一式書出・読込（会社単位の持ち出し／CSVでの一括登録）</h3>
-    <p><strong>「一式書出」</strong>は、対象グループ（または全機器）の機器CSV（<code>devices.csv</code>）と、その機器が使う<strong>コマンドセット・OSタイププロファイル</strong>を
-    <code>export\bundles\グループ名\</code> にまとめて書き出します。「全機器」を選ぶとコマンドセット・プロファイルも全件含む<strong>完全なバックアップ</strong>になります。
-    別の PalaTerm へ持ち込むときは、そのフォルダをコピーして<strong>「読込」</strong>で中の <code>palaterm-bundle.json</code> を選びます。</p>
-    <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読込」で CSV 単体を選べば機器だけを読み込めます（「グループ名＋機器名」で照合し、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
-    読み込む前に<strong>確認画面</strong>で新規・上書き・既存のまま残す件数が表示されます。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。</p>
+    <h3>一式書き出し・読み込み（会社単位の持ち出し／CSVでの一括登録）</h3>
+    <p><strong>「一式書き出し」</strong>は、対象グループ（または全機器）の機器CSV（<code>devices.csv</code>）と、その機器が使う<strong>コマンドセット・OSタイププロファイル</strong>を
+    <code>export\bundles\グループ名\</code> にまとめて書き出します。「全機器」を選ぶとコマンドセット・プロファイルも全件含む<strong>完全なバックアップ</strong>になります（機器が 1 台も無いときはボタンが押せません）。
+    別の PalaTerm へ持ち込むときは、そのフォルダをコピーして<strong>「読み込み」</strong>で中の <code>palaterm-bundle.json</code> を選びます。</p>
+    <p>機器が多いときは、書き出した <code>devices.csv</code> を Excel 等でまとめて編集し、「読み込み」で CSV 単体を選べば機器だけを読み込めます（「グループ名＋機器名」で照合し、既存は上書き・新規は追加。読み込んだ機器をまとめて特定グループへ割り当てることも可能）。
+    読み込みは<strong>先にファイルを選び</strong>、次の 1 画面で所属グループと（一式のときだけ）同名のコマンドセット・プロファイルを上書きするかを、新規・上書き・既存のまま残す件数を見ながら決めます（選択肢を変えると件数も更新されます）。同名のコマンドセット・プロファイルは既定では既存を残し（他のグループが使う設定を壊さないため）、チェックを入れた場合だけ上書きします。読み込みに失敗したときはダイアログが開いたままなので、直してやり直せます。グループへ読み込んだあとは、そのグループの一覧に移ります。</p>
     <p><strong>読み込み時の認証情報</strong>: 既存の機器（グループ名＋機器名が一致）の行で認証情報の欄が<strong>空なら、その機器の今の認証情報を残します</strong>。認証情報の欄を空にした CSV を読み込んでも自分のパスワードは消えません（踏み台は同じ段・同じホストのときだけ引き継ぎます）。欄に値があればその値で上書きします。確認画面に、引き継ぐ機器の台数が表示されます。</p>
     <p>CSV は<strong>1 つの列に 1 つの値</strong>です。画面が日本語なら見出しも日本語（「機器名」「IPアドレス」「ユーザー名」…）で、接続方式は SSH / Telnet / シリアル、認証方式は パスワード / 公開鍵、はい / いいえ のように書かれます（英語の見出し・値でも読めます）。踏み台は段ごとに「踏み台1_ホスト」「踏み台1_ポート」「踏み台1_ユーザー名」「踏み台1_パスワード」「踏み台1_認証方式」「踏み台1_鍵ファイル」「踏み台1_鍵パスフレーズ」「踏み台1_旧暗号を許可」「踏み台1_ジャンプコマンド」（2 段目は「踏み台2_…」）の列で、通り方は「踏み台の通り方」列（コマンド入力 / SSHトンネル）です。踏み台を使っていなくても「踏み台1_…」の列は出るので、Excel で書き足せます。v1.6.4 以前の CSV（<code>bastions</code> 列に <code>ssh:…</code> を詰めた形式）もそのまま読めます。<strong>逆に、この形式の CSV・一式は v1.6.4 以前の PalaTerm では踏み台が読み込まれません</strong>（踏み台なしの機器として入ります）。受け取る側も v1.6.5 以降にしてください。Excel で「CSV（コンマ区切り）」（Shift_JIS）として保存し直したファイルも読めますが、「CSV UTF-8（コンマ区切り）」での保存がおすすめです。</p>
     <div class="callout warn"><span class="ic">!</span><p>CSVには<strong>パスワードが平文で書き出されます</strong>。編集が終わったらCSVファイルは速やかに削除してください（暗号化保存されるのはツール内の <code>data\palaterm_vault.enc</code> だけです）。</p></div>
-    <p><strong>踏み台の認証情報を含めない（人に渡す用）</strong>: 一式書出でこれにチェックを入れると、機器ごとに登録した踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホスト・通り方と、機器自身のユーザー名・パスワードは残ります）。「自分の踏み台を先に通る」機器は、もともと自分の踏み台の IP・認証情報が書き出されません。</p>
+    <p><strong>踏み台の認証情報を含めない（人に渡す用）</strong>: 一式書き出しでこれにチェックを入れると、機器ごとに登録した踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホスト・通り方と、機器自身のユーザー名・パスワードは残ります）。「自分の踏み台を先に通る」機器は、もともと自分の踏み台の IP・認証情報が書き出されません。</p>
   </section>
 
   <section id="run">
@@ -479,25 +492,28 @@
 
     <ol class="steps">
       <li>左サイドバーの<strong>「実行」</strong>を開き、<strong>「グループで対象を選択…」</strong>から実行するグループを選びます（グループを選ぶまで実行できません。うっかり全機器へ流してしまう事故を防ぐためです）。</li>
-      <li>グループ内の機器が一覧表示されます。<strong>左端のチェックボックスが実行対象</strong>です。ヘッダーのチェックで全選択/全解除、<span class="kbd">Shift</span>＋クリックで<strong>範囲をまとめて切替</strong>できます。列見出しのクリックで<strong>並び替え</strong>、表の上の<strong>絞り込み</strong>（文字・拠点・状態）で表示を絞れます。<strong>絞り込み中は表示されている機器だけが実行対象</strong>で、非表示の行にチェックが残っていれば台数つきで警告が出ます（含めるには絞り込みを解除）。</li>
+      <li>グループ内の機器が一覧表示されます。<strong>左端のチェックボックスが実行対象</strong>です。ヘッダーのチェックで全選択/全解除、<span class="kbd">Shift</span>＋クリックで<strong>範囲をまとめて切替</strong>できます。列見出しのクリックで<strong>並び替え</strong>、表の上の<strong>絞り込み</strong>（文字・拠点・状態）で表示を絞れます（文字は機器名・IP のほか OS タイプ名にも一致し、状態「実行中」は接続中・ログイン中・保存中も含みます）。<strong>絞り込み中は表示されている機器だけが実行対象</strong>で、非表示の行にチェックが残っていれば台数つきで警告が出ます（含めるには絞り込みを解除）。割り当てたコマンドセットが削除されて無い機器は、コマンドセット列に「X（存在しません）」と警告色で出ます。</li>
       <li>必要なら<strong>「作業タイミング」</strong>（指定なし / 作業前 / 作業中 / 作業後）を選びます。選ぶとログのフォルダ名とファイル名に <code>_before</code> / <code>_work</code> / <code>_after</code> が付き（この 3 語は<a href="#settings">設定</a>で変更できます）、<a href="#history">実行履歴</a>で作業前と作業後を比較できます。</li>
       <li>必要なら<strong>「コマンド: 機器ごとの設定どおり」</strong>を切り替えます。コマンドセットを選ぶと<strong>この実行だけ</strong>全機器でそのセットを使い（機器の割り当ては変わりません）、<strong>「今回だけ入力…」</strong>ではその場で 1 行 1 コマンドで打ったコマンドを流せます（待機は各 1 秒・保存されません）。</li>
-      <li><strong>「▶ 一括実行」</strong>を押します。確認画面には選んだ作業タイミングが大きく色分けで出ます（作業前=青・作業中=橙・作業後=緑、ボタンは「▶ 作業前として実行」など）。「指定なし」のときは、作業前後の比較で自動では選ばれない旨が警告色で出るので、取り違えに気づけます。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません）。</li>
-      <li>各機器の状態がリアルタイムで更新されます。繋がらなかった機器は、エラーの末尾に<strong>機器（または踏み台）の最後の表示</strong>が付くので、どこで止まったか（踏み台のプロンプト・<code>Password:</code> など）が手動接続に切り替えなくても分かります。</li>
+      <li><strong>「▶ 一括実行」</strong>を押します。確認画面には選んだ作業タイミングが大きく色分けで出ます（作業前=青・作業中=橙・作業後=緑、ボタンは「▶ 作業前として実行」など）。「指定なし」のときは、作業前後の比較で自動では選ばれない旨が警告色で出るので、取り違えに気づけます。接続とログインだけ確かめたいときは<strong>「⚡ 接続確認のみ」</strong>（コマンドは送らず、ログも残しません。確認ダイアログなしですぐ始まり、絞り込み中か「踏み台: 使わない」のときだけ確認が出ます）。</li>
+      <li>各機器の状態がリアルタイムで更新されます。繋がらなかった機器は、エラーの末尾に<strong>機器（または踏み台）の最後の表示</strong>が付くので、どこで止まったか（踏み台のプロンプト・<code>Password:</code> など）が手動接続に切り替えなくても分かります。接続確認のみで失敗した行の<strong>「出力」</strong>リンクを押すと、機器が表示していた内容そのもの（パスワードは伏せ字）がその場で開きます（ファイルには保存しません）。</li>
+      <li><strong>メッセージ列</strong>は、完了した行にはログファイル名だけを表示します。エラーは 2 行までで折り返し、クリックすると全文が開きます。繋がらない機器のエラーは「接続できません（応答がありません）…」「接続を拒否されました…」「ホスト名を解決できません…」「ネットワーク経路がありません…」のような日本語の文で、元のエラーは括弧内に付きます。enable パスワードが通らなかったときは「enable（昇格）パスワードが受け付けられませんでした…」、ページャ解除コマンドが機器に拒否されたときは失敗ではなくその行の「警告」になります。</li>
+      <li>失敗した行の<strong>「編集」</strong>で、その機器の編集画面を実行タブから直接開けます。認証情報や踏み台を直して<strong>「↻ 失敗のみ再実行」</strong>すれば、機器一覧タブと往復せずに済みます。実行が終わると見出しの右に<strong>「📂 この実行のフォルダ」</strong>が出て、その実行のログが入った日時フォルダを開きます。</li>
     </ol>
     <p><strong>踏み台を使わずに接続</strong>: 踏み台のある機器がいるグループでは、ツールバーの「踏み台: 機器の設定どおり／<strong>使わない（直接接続）</strong>」で、<strong>この実行と、この表の「接続」だけ</strong>踏み台を通らずにこの PC から直接接続できます（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません。</p>
     <figure class="shot" data-shot="10_run_ready"><img src="img/manual/10_run_ready.png" alt="実行タブ。グループを選ぶと対象機器が並ぶ。作業タイミング・絞り込み・並び替え" loading="lazy"><figcaption>実行タブ。グループを選ぶと対象機器が並ぶ。作業タイミング・絞り込み・並び替え</figcaption></figure>
     <figure class="shot" data-shot="10b_run_filter"><img src="img/manual/10b_run_filter.png" alt="絞り込み中。表示されている機器だけが実行対象になり、非表示でチェック済みの台数を警告" loading="lazy"><figcaption>絞り込み中。表示されている機器だけが実行対象になり、非表示でチェック済みの台数を警告</figcaption></figure>
-    <figure class="shot" data-shot="11c_run_dry_confirm"><img src="img/manual/11c_run_dry_confirm.png" alt="「⚡ 接続確認のみ」の確認。コマンドは送らずログも残さない" loading="lazy"><figcaption>「⚡ 接続確認のみ」の確認。コマンドは送らずログも残さない</figcaption></figure>
+    <figure class="shot" data-shot="11c_run_dry_confirm"><img src="img/manual/11c_run_dry_confirm.png" alt="「⚡ 接続確認のみ」。コマンドは送らずログも残さない（v1.7.7 からは確認なしで始まり、絞り込み中や直接接続のときだけこの確認が出る）" loading="lazy"><figcaption>「⚡ 接続確認のみ」。コマンドは送らずログも残さない（v1.7.7 からは確認なしで始まり、絞り込み中や直接接続のときだけこの確認が出る）</figcaption></figure>
     <figure class="shot" data-shot="11_run_confirm"><img src="img/manual/11_run_confirm.png" alt="一括実行の確認（作業タイミング付き）" loading="lazy"><figcaption>一括実行の確認（作業タイミング付き）</figcaption></figure>
     <figure class="shot" data-shot="12_run_progress_2"><img src="img/manual/12_run_progress_2.png" alt="実行中。機器ごとの進捗バーと全体の予想残り時間" loading="lazy"><figcaption>実行中。機器ごとの進捗バーと全体の予想残り時間</figcaption></figure>
-    <figure class="shot" data-shot="13_run_done"><img src="img/manual/13_run_done.png" alt="完了。各行に「ログ表示」が出る（別ウィンドウで開く）" loading="lazy"><figcaption>完了。各行に「ログ表示」が出る（別ウィンドウで開く）</figcaption></figure>
+    <figure class="shot" data-shot="13_run_done"><img src="img/manual/13_run_done.png" alt="完了。各行に「ログ表示」が出る（別ウィンドウで開く）。見出し右の「📂 この実行のフォルダ」でログのフォルダを開く" loading="lazy"><figcaption>完了。各行に「ログ表示」が出る（別ウィンドウで開く）。見出し右の「📂 この実行のフォルダ」でログのフォルダを開く</figcaption></figure>
     <div class="callout tip"><span class="ic">i</span><p><strong>機器に拒否されたコマンド</strong>（<code>% Invalid input</code>、<code>Invalid command</code>、<code>command not found</code> など）があると、その機器は「完了」のまま状態列に<strong>「警告 n」</strong>が付き、メッセージ列に「コマンド → 機器の応答」が出ます（実行履歴にも残ります）。<br>
     <strong>確認を求めるコマンド</strong>（<code>copy run start</code> の <code>Destination filename [startup-config]?</code>、<code>clear counters</code> の <code>[confirm]</code> など）は、OS タイプの<strong>「確認への自動応答」</strong>で答えます（Cisco IOS / ASA は既定で Enter）。グループを削除して<strong>グループ未設定</strong>になった機器は、グループ選択の「（グループ未設定）」で実行できます。</p></div>
-    <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンドの事前警告:</strong> コマンドセットに <code>conf t</code> / <code>write</code> / <code>reload</code> / <code>no …</code> / <code>erase</code> など機器の設定や状態を変えるコマンドが含まれていると、実行前にそのコマンドを列挙した警告が出ます。「変更を伴うことを理解したうえで実行します」にチェックしないと実行ボタンは押せません。show 系だけのセットでは出ません。</p></div>
+    <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンドの事前警告:</strong> コマンドセットに <code>conf t</code> / <code>write</code> / <code>reload</code> / <code>no …</code> / <code>erase</code> など機器の設定や状態を変えるコマンドが含まれていると、実行前にそのコマンドを列挙した警告が出ます。「変更を伴うことを理解したうえで実行します」にチェックしないと実行ボタンは押せません（対象の機器名は 10 台まで列挙し、残りは台数で示します）。show 系だけのセットでは出ません。</p></div>
 
     <p>状態は次のように表示されます。</p>
     <p style="line-height:2.4">
+      <span class="pill" style="background:var(--panel-2);color:var(--ink-soft)">順番待ち</span>
       <span class="pill run">接続中</span>
       <span class="pill run">ログイン中</span>
       <span class="pill run">実行中</span>
@@ -507,7 +523,7 @@
     <p>実行中は、各機器の状態の下に<strong>プログレスバー</strong>が表示され、コマンドの進み具合（完了数/全体数）と、<strong>その機器の残りコマンドがすべて終わるまでの残り時間</strong>（設定した待機秒＋これまでのコマンド所要時間からの概算。最初の1コマンドが終わるまでは「計測中…」）が機器ごとに見えます。
     右上には<strong>成功 / 失敗 / 実行中</strong>の件数に加えて<strong>予想残り時間</strong>が表示されます
     （完了済みコマンド数と経過時間からの概算で、実行が進むほど精度が上がります）。
-    途中で止めたいときは<strong>「■ 中止」</strong>を押します（確認のうえ、接続待ちの最中でも即座に止まります）。1 台だけ止めたいときは、その行の<strong>「止める」</strong>を押します（ほかの機器は続けます。実行中なら打ち切り・順番待ちなら開始しません。止めた機器は「中断分のみ再実行」で取り直せます）。</p>
+    途中で止めたいときは<strong>「■ 中止」</strong>を押します（確認のうえ、接続待ちの最中でも即座に止まります）。1 台だけ止めたいときは、その行の<strong>「止める」</strong>を押します（ほかの機器は続けます。実行中なら打ち切り・順番待ちなら開始しません。止めた機器は「↻ 失敗・中止のみ再実行」で取り直せます）。</p>
     <div class="callout tip"><span class="ic">i</span><p><strong>一括実行中は Windows の自動スリープを止めます。</strong> しばらく操作がないときのスリープは、実行が終わる（完了・中止・エラー）まで起きません（画面の消灯は止めません）。ただし、ノート PC の蓋を閉じる・手動でスリープにする操作は止められないので、長い実行中は蓋を閉じないでください（電源設定で「蓋を閉じたときの動作」を「何もしない」にする方法もあります）。蓋を閉じるとスリープする設定のノート PC では、実行中の実行タブにその旨が表示されます（PalaTerm は Windows の設定を読むだけで変更しません）。画面ロックでは止まりません。スリープした場合、起きたあとに途中から再開・取り直しはしないので、止まった機器は「失敗のみ再実行」で取り直してください。一括実行中に × で閉じようとすると、実行が止まることを確認してから終了します（キャンセルなら実行は続きます）。終了・スリープ・電源断で止まっても、実行中だった機器のログはそこまでの分が残ります。</p></div>
 
     <figure class="shot" data-shot="11b_run_danger"><img src="img/manual/11b_run_danger.png" alt="設定を変更するコマンドが含まれるときの事前警告。同意するまで実行できない" loading="lazy"><figcaption>設定を変更するコマンドが含まれるときの事前警告。同意するまで実行できない</figcaption></figure>
@@ -518,20 +534,20 @@
     <strong>完了済みの機器のログはそのまま残ります</strong>。そのあとは次の3つから選べます。</p>
     <ul>
       <li><strong>「▶ 一括実行」</strong> — 最初から全対象をやり直す</li>
-      <li><strong>「↻ 失敗・中断のみ再実行（n台）」</strong> — 失敗した機器と中止で止まった機器だけをやり直す（完了済みはそのまま表示が残ります）</li>
-      <li><strong>「✕ 結果をクリア」</strong> — 表を「待機」に戻す（ログファイルは消えません）</li>
+      <li><strong>「↻ 失敗・中止のみ再実行（n台）」</strong> — 失敗した機器と中止で止まった機器だけをやり直す（完了済みはそのまま表示が残ります）</li>
+      <li><strong>「✕ 結果をクリア」</strong> — 表を実行前の状態に戻す（ログファイルは消えません）</li>
     </ul>
 
     <h3>失敗した機器だけやり直す</h3>
-    <p>実行後にエラーの機器があると、<strong>「↻ 失敗のみ再実行（n台）」</strong>ボタンが現れます（中止で止まった機器もあれば「失敗・中断のみ再実行」）。
-    認証情報や設定を直してからこれを押せば、その機器だけをもう一度実行できます。
+    <p>実行後にエラーの機器があると、<strong>「↻ 失敗のみ再実行（n台）」</strong>ボタンが現れます（中止で止まった機器もあれば「↻ 失敗・中止のみ再実行」）。
+    失敗した行の<strong>「編集」</strong>で認証情報や設定をその場で直してからこれを押せば、その機器だけをもう一度実行できます。
     隣の<strong>「⇩ エラーの機器をCSV出力（n台）」</strong>を押すと、エラーになった機器の一覧（機器名・IP・拠点・接続方式・踏み台・エラー内容。パスワードは含みません）を <code>export\run-results\</code> に CSV で書き出せます。台数が多いときに Excel で見ながら切り分けるのに使えます。</p>
 
     <div class="callout tip"><span class="ic">i</span><p>同時に接続する台数は「設定」タブの<strong>最大並列数</strong>で調整できます（既定10台）。台数が多くても並列実行されるので、全体の待ち時間は「一番遅い1台」の時間で済みます。実行中は二重実行できません。また実行中に設定を変えても、動いているバッチには反映されず次回から有効です。</p></div>
   </section>
 
   <section id="interactive">
-    <h2 class="step"><span class="num">★</span>対話接続（1台に手動ログイン）</h2>
+    <h2 class="step"><span class="num">★</span>対話接続（1台にログインして手動操作）</h2>
     <p class="lead">1台の機器にログイン処理まで自動で済ませ、そのまま手動操作に引き継ぐモードです。</p>
 
     <p>一括実行とは別に、<strong>その場で1台を操作したいとき</strong>に使います。機器一覧または実行タブの各行の
@@ -541,19 +557,19 @@
 
     <ol class="steps">
       <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
-      <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
+      <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示。タイトルは「機器名 - アドレス」で、切断後は「切断」、失敗時は「接続失敗」が付きます。踏み台経由なら画面上部に「踏み台 n 段経由」）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
       <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>（<a href="#settings">設定</a>で無効にしたり、メニューで確認してから貼り付けるようにもできます）、またはツールバーの<strong>「貼り付け…」</strong>。<strong>1 行だけなら確認なしでそのまま貼り付け</strong>、Enter は送りません（プロンプト上の内容を見てから自分で Enter。<kbd>Alt</kbd>+<kbd>V</kbd> のときだけ Enter も送ります）。<strong>2 行以上</strong>は Tera Term と同じく<strong>貼り付ける内容の確認が別ウィンドウ</strong>で開きます（端末の手前に出て、自由に動かしたり広げたりできます）。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。「最後に Enter を送る」は<strong>既定でオン</strong>で、切り替えた状態は次回以降も引き継がれます（<kbd>Alt</kbd>+<kbd>V</kbd> のときは常にオン）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
       <li>対話接続・貼り付けの確認・ログ表示・差分の各ウィンドウは、<strong>開いた元のウィンドウの上（同じモニタ）</strong>に開きます。デュアルモニタで本体をサブモニタに置いていても、メインモニタ側に飛ばずにそのまま使えます。</li>
       <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入り、上部バーに「コピーしました」と短く表示されます（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
-      <li>上部バーの<strong>「ログフォルダ」</strong>でログの保存先フォルダを開けます。対話接続のログは Tera Term と同様に<strong>画面に出た内容がそのままリアルタイムでファイルへ書かれます</strong>（既定ではそのまま記録。ウィンドウが落ちても直前までの内容が残ります）。ツールバーの<strong>「ログ停止」</strong>で記録を止め、<strong>「ログ開始」</strong>で同じファイルに続きを記録します（停止・再開の時刻がファイルに記されます。保存先は切断時に画面末尾にも表示）。</li>
+      <li>上部バーの<strong>「ログフォルダ」</strong>でこの接続のログが入っているフォルダを開けます。対話接続のログは Tera Term と同様に<strong>画面に出た内容がそのままリアルタイムでファイルへ書かれます</strong>（既定ではそのまま記録。ウィンドウが落ちても直前までの内容が残ります）。ツールバーの<strong>「ログ停止」</strong>で記録を止め、<strong>「ログ開始」</strong>で同じファイルに続きを記録します（停止・再開の時刻がファイルに記されます。保存先は切断時に画面末尾にも表示）。</li>
       <li><strong>文字サイズ</strong>は上部バーの「A−」「A＋」、<kbd>Ctrl</kbd>+ホイール、<kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> で変更できます（<kbd>Ctrl</kbd>+<kbd>0</kbd> で既定に戻す。次回のウィンドウにも引き継がれます）。</li>
       <li><strong>再接続</strong>: 切断後は上部の「再接続」ボタン（または <kbd>Enter</kbd>）で同じ機器にもう一度接続します。接続中に × で閉じると「切断して閉じますか？」と確認します。</li>
       <li><strong>スクロールバック</strong>は 10,000 行（Tera Term の既定と同じ）。SSH は 30 秒ごとに keepalive を送るので、ファイアウォール越しに放置しても切れにくくなっています。</li>
       <li><strong>ブレーク信号</strong>（シリアル接続のみ）: 「ブレーク」ボタンまたは <kbd>Alt</kbd>+<kbd>B</kbd>。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）。</li>
-      <li><strong>ロック</strong>: 本体の「ロック」で対話窓もロック画面になります（接続は保たれ、マスターパスワードで戻ります）。対話窓は自分の操作が自動ロックの時間なければ自分でロックします。<strong>本体を終了すると対話窓も閉じます</strong>（開いていれば終了前に確認）。</li>
-      <li><strong>検索</strong>は <kbd>Ctrl</kbd>+<kbd>F</kbd> または「検索」ボタン。画面に流れた内容（スクロールバック含む）から大文字小文字を区別せずに探し、<kbd>Enter</kbd> で次、<kbd>Shift</kbd>+<kbd>Enter</kbd> で前、<kbd>Esc</kbd> で閉じます。</li>
-      <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。</li>
+      <li><strong>ロック</strong>: 本体の「ロック」で対話窓もロック画面になります（接続は保たれ、マスターパスワードで戻ります）。対話窓は自分の操作が自動ロックの時間なければ自分でロックします（1 分前に画面にその旨が出ます）。<strong>本体を終了すると対話窓も閉じます</strong>（開いていれば終了前に確認）。</li>
+      <li><strong>検索</strong>は <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> または「検索」ボタン（<kbd>Ctrl</kbd>+<kbd>F</kbd> は機器に送られます）。画面に流れた内容（スクロールバック含む）から大文字小文字を区別せずに探し、<kbd>Enter</kbd> で次、<kbd>Shift</kbd>+<kbd>Enter</kbd> で前、<kbd>Esc</kbd> で閉じます。</li>
+      <li>ウィンドウは<strong>四辺・四隅のどこからでも自由にリサイズ</strong>でき、画面幅に合わせて表示列数も追従します。変えた大きさは次に開く窓にも使われ（<code>%LOCALAPPDATA%\PalaTerm\term-window.json</code>）、2 枚目以降は少しずらして重なるように開きます。</li>
       <li><code>exit</code> で機器から抜けるか、ウィンドウを閉じて終了します。</li>
     </ol>
     <figure class="shot" data-shot="18_terminal"><img src="img/manual/18_terminal.png" alt="対話接続ウィンドウ（ログイン済みの状態で開く。文字サイズ・検索・ログ停止・ログ表示）" loading="lazy"><figcaption>対話接続ウィンドウ（ログイン済みの状態で開く。文字サイズ・検索・ログ停止・ログ表示）</figcaption></figure>
@@ -584,11 +600,11 @@
     <p class="lead">過去の一括実行を一覧し、作業前と作業後のログの違いを機器ごとに確認します。</p>
     <p>一括実行のたびに、ログフォルダ内の <code>日時[_グループ][_作業タイミング]/</code>（既定）に <code>palaterm-run.json</code>（グループ・作業タイミング・機器ごとの成否とログファイル名）が残り、左サイドバーの<strong>「実行履歴」</strong>に新しい順で並びます。</p>
     <ol class="steps">
-      <li>行頭の <strong>▸</strong> で機器ごとの結果が開き、<strong>「ログ表示」</strong>でその場でログを見られます。<strong>「フォルダ」</strong>はその実行のフォルダをエクスプローラーで開きます。</li>
-      <li>比較したい 2 回を<strong>「比較元(A)」「比較先(B)」</strong>（または上部の A / B の選択。選択肢はログフォルダ内の実行フォルダ名）で選び、<strong>「比較する」</strong>を押します。作業後の実行が終わった直後は、最新の作業前・作業後が自動で A / B に入っています。</li>
-      <li>同じ機器名のログ同士が突き合わされ、機器ごとに<strong>差分なし／差分あり（追加・削除の行数）</strong>が表示されます。</li>
-      <li><strong>「差分を開く」</strong>で、WinMerge 風の<strong>別ウィンドウ</strong>が開きます。左が A（作業前）、右が B（作業後）。変更された行は黄、A にだけある行は赤、B にだけある行は緑で、左端の位置バーが差分の場所を示します（クリックで移動）。「前の差分 / 次の差分」（<kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd>、F7/F8）で順に見られ、<strong>「時刻・カウンタの違いを無視」</strong>（既定オン）は <code>show clock</code> の時刻や uptime、トラフィック量のように取るたびに変わる値を差分扱いにしません。<strong>「差分の周辺だけ表示」</strong>で変わった行とその前後 3 行だけに絞れます。<kbd>Esc</kbd> で閉じます。</li>
-      <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または単独接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗（＝は作業前からあった行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。</li>
+      <li>行頭の <strong>▸</strong> で機器ごとの結果が開き、<strong>「ログ表示」</strong>でその場でログを見られます。失敗・中止の機器が先に並び、11 台以上の実行では<strong>「失敗・中止の n 台だけ表示」</strong>のチェックで絞れます。<strong>「フォルダ」</strong>はその実行のフォルダをエクスプローラーで開きます。対話接続のログは「対話接続」として並びます。</li>
+      <li>比較したい 2 回を<strong>「比較元(A)」「比較先(B)」</strong>（または上部の A / B の選択。選択肢はログフォルダ内の実行フォルダ名）で選び、<strong>「比較する」</strong>を押します。作業後の実行が終わった直後は、最新の作業前・作業後が自動で A / B に入っています（A を選ぶと、B にはそれより後の最新の「作業後」が入ります。B が A より古いときは警告が出ます）。</li>
+      <li>同じ機器名のログ同士が突き合わされ、機器ごとに<strong>差分なし／差分あり（追加・削除の行数）</strong>が表示されます。A または B で失敗した機器は「A のみ」に隠れず、<strong>先頭に赤で「A で失敗」のように</strong>エラーの内容と A / B のログへのリンク付きで並びます。</li>
+      <li><strong>「差分を開く」</strong>で、WinMerge 風の<strong>別ウィンドウ</strong>が開きます。左が A（作業前）、右が B（作業後）。変更された行は黄、A にだけある行は赤、B にだけある行は緑で、左端の位置バーが差分の場所を示します（クリックで移動）。「前の差分 / 次の差分」（<kbd>Alt</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd>、F7/F8）で順に見られ、<strong>「検索」</strong>（<kbd>Ctrl</kbd>+<kbd>F</kbd>）で文字を探せ、<strong>「時刻・カウンタの違いを無視」</strong>（既定オン）は <code>show clock</code> の時刻や uptime、トラフィック量のように取るたびに変わる値を差分扱いにしません。<strong>「差分の周辺だけ表示」</strong>で変わった行とその前後 3 行だけに絞れます。<kbd>Esc</kbd> で閉じます。</li>
+      <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または対話接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗（＝は作業前からあった行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。</li>
     </ol>
     <div class="callout tip"><span class="ic">i</span><p>作業前に「作業タイミング: 作業前」で取得 → 作業 → 「作業後」で取得、という流れにしておくと、A / B を選ぶ手間なく比較できます。「指定なし」で取ったログ同士も比較できます（<code>palaterm-run.json</code> が無い古いフォルダはファイル名から機器名を推定します）。</p></div>
   </section>
@@ -603,12 +619,12 @@
       <li><strong>② どの機器で実行しますか</strong>：グループを選び、機器をチェックします。台数が多いときは<strong>絞り込み</strong>（機器名・IP・拠点・役割）で探し、「表示中をすべて選択／解除」「選択中だけ表示」、<strong>Shift＋クリックでの範囲選択</strong>が使えます。選んだ台数は「選択中 ◯ / ◯ 台」と出ます。</li>
       <li><strong>③ 何を実行しますか</strong>：<strong>コマンドセットから選ぶ</strong>か、<strong>コマンドを直接入力する</strong>（1 行に 1 コマンド。実行タブの「今回だけ入力」と同じ）。</li>
       <li>ふだんは<strong>詳細設定</strong>は触りません（作業タイミングは、夜間作業の前と後に 1 回ずつ取って実行履歴タブで比べたいときだけ「作業前」「作業後」を選びます）。<strong>「保存」</strong>で一覧に並びます。</li>
-      <li><strong>予約の一覧</strong>には、状態（有効・実行中・順番待ち・停止中・終了）、どの機器に・どのコマンドを・いつ、次の実行と「あと ◯ 回」が出ます。<strong>「⏸ 止める」</strong>で止まり（実行中ならその回も中止）、<strong>「▶ 再開」</strong>でまた動きます。<strong>「今すぐ実行」</strong>で 1 回だけ試せます。もう実行されない予約は「終了」と出るので、<strong>「終了した予約をまとめて削除」</strong>で片付けられます（実行記録とログは残ります）。</li>
+      <li><strong>予約の一覧</strong>には、状態（有効・実行中・順番待ち・停止中・終了）、どの機器に・どのコマンドを・いつ、次の実行と「あと ◯ 回」が出ます（タブ上部の「次の実行」には予約の名前も出ます）。一覧の<strong>「複製」</strong>で同じ日時・機器・コマンドの新しい予約を作れます（動いている一定間隔の予約を複製すると、複製も保存した時点から動き始め、「止めるまで続ける」の選択も引き継ぎます）。<strong>「⏸ 止める」</strong>で止まり（実行中ならその回も中止）、<strong>「▶ 再開」</strong>でまた動きます。<strong>「今すぐ実行」</strong>で 1 回だけ試せます。もう実行されない予約は「終了」と出るので、<strong>「終了した予約をまとめて削除」</strong>で片付けられます（実行記録とログは残ります）。</li>
     </ol>
     <div class="callout warn"><span class="ic">!</span><p><strong>設定を変更するコマンド</strong>（<code>conf t</code>・<code>write</code>・<code>reload</code> など、実行前の警告に出るもの）を含むセットは<strong>予約できません</strong>。無人で動くため取得専用にしています。保存時に加えて実行のたびにも確認し、含まれていれば実行せず「拒否」と記録します。</p></div>
     <h3>いつ動くか</h3>
     <ul>
-      <li>予約は <strong>PalaTerm が起動している間</strong>だけ動きます。予約があるときに <strong>× で閉じるとタスクトレイに残って</strong>動き続けます（トレイのアイコンをダブルクリックで再表示、右クリック →「終了」で本当に終了。Windows 11 ではアイコンが通知領域の「^」の中に入ります。常に表示するには、タスクバーの設定 →「その他のシステム トレイ アイコン」で PalaTerm をオン）。予約がなければ × は今までどおり終了です。</li>
+      <li>予約は <strong>PalaTerm が起動している間</strong>だけ動きます。予約があるときに <strong>× で閉じるとタスクトレイに残って</strong>動き続けます（トレイのアイコンをクリックで再表示、右クリック →「終了」で本当に終了。アイコンにマウスを乗せると、実行中の予約（進み具合付き）か次の実行時刻と予約名が出ます。右クリックメニューの先頭にも同じ内容。Windows 11 ではアイコンが通知領域の「^」の中に入ります。常に表示するには、タスクバーの設定 →「その他のシステム トレイ アイコン」で PalaTerm をオン）。予約がなければ × は今までどおり終了です。</li>
       <li><strong>ロック中も実行します</strong>。そのため、予約の対象機器の認証情報はロック中もメモリに残します（ファイルには書きません。対象外の機器やグループ既定の認証情報は残しません）。</li>
       <li><strong>スリープ中</strong>は、予約の 90 秒前に PC をスリープから起こして実行します（スリープ解除タイマー）。Windows の電源オプション →「スリープ解除タイマーの許可」が<strong>有効</strong>である必要があります（バッテリー駆動時も。会社の PC では管理者の設定で無効のことがあります）。ノート PC の蓋閉じがスリープになる設定なら同じく動きます。<strong>休止状態・シャットダウン・PalaTerm の終了中は動きません</strong>。PalaTerm を起動して一度ロック解除すると再開します。</li>
       <li>予約タブの上に、この PC で予約がどう動くかが 1 行で出ます。「ⓘ この PC は、スリープすると予約が止まります」と出る PC（スリープ解除タイマーが無効、またはモダンスタンバイ）では、その下の<strong>「放置してもスリープさせない」</strong>をオンにすると、有効な予約が残っている間は放置による自動スリープを止めます（画面ロック・画面オフはそのまま）。<strong>Windows の電源設定は書き換えません</strong>。オフにする・予約がなくなる・PalaTerm を終了すると元どおりです。蓋閉じ・手動スリープは止められないので、蓋を閉じて使うときは電源オプションの「カバーを閉じたときの動作」を「何もしない」にしてください。</li>
@@ -616,7 +632,7 @@
       <li>スリープ中などで実行できなかった回は<strong>「見逃し」</strong>として記録し、<strong>さかのぼっては実行しません</strong>。ほかの一括実行と重なったときは順番待ちし、<strong>30 分を過ぎたらスキップ</strong>して記録します。</li>
       <li>PalaTerm は 1 つのフォルダにつき 1 つだけ起動します。トレイにいる間にもう一度 PalaTerm.exe を開くと、トレイの窓が表示されます。</li>
     </ul>
-    <p>予約のログは、<strong>予約ごとに 1 つのフォルダ</strong>（既定: <code>日時_グループ_reserve</code>。reserve は設定の「作業タイミングの付与文字列」で変えられます。日時は初回の実行時刻）にまとめて入ります。繰り返しても毎回新しいフォルダは作りません。<a href="#history">実行履歴</a>には予約 1 つが 1 行で「予約」の印と「◯ 回分」付きで並び、▸ で各機器の最新の回の結果が見られます（ほかの回のログは「フォルダ」から）。予約タブの<strong>「予約の実行記録」</strong>には、実行・見逃し・スキップ・拒否・エラーが予定日時ごとに残ります。</p>
+    <p>予約のログは、<strong>予約ごとに 1 つのフォルダ</strong>（既定: <code>日時_グループ_reserve</code>。reserve は設定の「ログ名に付く作業タイミングの語」で変えられます。日時は初回の実行時刻）にまとめて入ります。繰り返しても毎回新しいフォルダは作りません。<a href="#history">実行履歴</a>には予約 1 つが 1 行で「予約」の印と「◯ 回分」付きで並び、▸ で各機器の最新の回の結果が見られます（ほかの回のログは「フォルダ」から）。予約タブの<strong>「予約の実行記録」</strong>には、実行・見逃し・スキップ・拒否・エラーが予定日時ごとに残ります。</p>
   </section>
 
   <section id="log">
@@ -626,7 +642,7 @@
     <h2 class="step"><span class="num">6</span>ログを確認する</h2>
     <p class="lead">取得したログは自動でファイル保存され、その場でも確認できます。</p>
 
-    <p>ログは機器ごとに<strong>届いた順に書きながら保存</strong>します。各機器の行の<strong>「ログ表示」</strong>は接続を始めた時点から出て、クリックするとその機器のログが<strong>別ウィンドウ</strong>で開きます（実行中の機器なら自動更新で追記を追います。その左の<strong>「画面」</strong>は機器の画面を表示のみのターミナルで開き、Tera Term マクロの実行中の窓のように出力をそのまま追います（「最後の出力から ◯ 秒」で止まっていないか分かります。キー入力は機器に送りません）。検索・文字サイズ・全文コピー・再読込。選択した文字は<strong>右クリック</strong>（または <kbd>Ctrl</kbd>+<kbd>C</kbd>）でコピーでき、自動更新中も選択は外れません。対話接続のツールバーの「ログ表示」なら書き込み中のログを自動で追います）。
+    <p>ログは機器ごとに<strong>届いた順に書きながら保存</strong>します。各機器の行の<strong>「ログ表示」</strong>は接続を始めた時点から出て、クリックするとその機器のログが<strong>別ウィンドウ</strong>で開きます（実行中の機器なら自動更新で追記を追います。その左の<strong>「画面」</strong>は機器の画面を表示のみのターミナルで開き、Tera Term マクロの実行中の窓のように出力をそのまま追います（「最後の出力から ◯ 秒」で止まっていないか分かります。キー入力は機器に送りません）。検索・文字サイズ・全文コピー・再読込・「折り返し」。選択した文字は<strong>右クリック</strong>（または <kbd>Ctrl</kbd>+<kbd>C</kbd>）でコピーでき、自動更新中も選択は外れません。対話接続のツールバーの「ログ表示」なら書き込み中のログを自動で追います）。
     実際のファイルは、<strong>「ログフォルダを開く」</strong>ボタンでエクスプローラーから確認できます。</p>
 
     <figure class="shot" data-shot="25_log_window"><img src="img/manual/25_log_window.png" alt="ログ表示ウィンドウ。検索・文字サイズ・全文コピー" loading="lazy"><figcaption>ログ表示ウィンドウ。検索・文字サイズ・全文コピー</figcaption></figure>
@@ -636,19 +652,19 @@
 <span class="c"># 例: core-sw1_本社_コア_Current_20260827_183000.txt（作業タイミング指定なし）</span><br>
 <span class="c"># 例: core-sw1_本社_コア_before_20260827_183000.txt（作業前）</span><br>
 <span class="c"># 例: core-sw1_本社_before_20260827_183000.txt（役割が空の機器）</span></div>
-    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Current</code>（v1.7.1 までは <code>Config</code>）、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。これらの語（予約の <code>reserve</code> も）は「設定」の<strong>作業タイミングの付与文字列</strong>で変えられます（空欄なら既定。指定なしの語はファイル名にだけ付き、フォルダ名には付きません。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点・役割が空の機器では <code>{site}</code> / <code>{role}</code> の分は詰められます。以前の既定（<code>{host}_Config_{date}_{time}.txt</code>・<code>{host}_{site}_{stage}_{date}_{time}.txt</code>）のままの設定は、ロック解除時に自動で新しい既定へ移行します（変更済みのテンプレートは触りません）。
-    対話接続（1台に手動ログイン）のログも同じ名前で <code>日付_時刻_グループ_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「単独接続」として並びます。</p>
+    <p>作業タイミングを指定しないと <code>{stage}</code> は <code>Current</code>（v1.7.1 までは <code>Config</code>）、作業中と対話接続は <code>work</code>、作業前／作業後は <code>before</code> / <code>after</code> になります。これらの語（予約の <code>reserve</code> も）は「設定」の<strong>ログ名に付く作業タイミングの語</strong>で変えられます（空欄なら既定。指定なしの語はファイル名にだけ付き、フォルダ名には付きません。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます）。拠点・役割が空の機器では <code>{site}</code> / <code>{role}</code> の分は詰められます。以前の既定（<code>{host}_Config_{date}_{time}.txt</code>・<code>{host}_{site}_{stage}_{date}_{time}.txt</code>）のままの設定は、ロック解除時に自動で新しい既定へ移行します（変更済みのテンプレートは触りません）。
+    対話接続のログも同じ名前で <code>日付_時刻_グループ_work/</code> フォルダに入り、<a href="#history">実行履歴</a>に「対話接続」として並びます。</p>
     <p>ファイル名テンプレートは「設定」タブで変更でき、次の部品が使えます（クリックでコピーできます）。</p>
     <div class="scroll"><table>
       <thead><tr><th>部品</th><th>意味</th></tr></thead>
       <tbody>
-        <tr><td><code>{host}</code></td><td>ホスト名（機器の名前）</td></tr>
+        <tr><td><code>{host}</code></td><td>機器名</td></tr>
         <tr><td><code>{ip}</code></td><td>IPアドレス</td></tr>
         <tr><td><code>{os}</code></td><td>OSタイプ</td></tr>
         <tr><td><code>{group}</code></td><td>グループ（会社）</td></tr>
         <tr><td><code>{site}</code></td><td>拠点名</td></tr>
         <tr><td><code>{role}</code></td><td>役割（機器編集の「役割（任意）」）</td></tr>
-        <tr><td><code>{stage}</code></td><td>作業タイミングの付与文字列（既定 before / work / after。「設定」で変更可）。テンプレートに無いときはファイル名の末尾に <code>_before</code> 等が自動で付きます</td></tr>
+        <tr><td><code>{stage}</code></td><td>ログ名に付く作業タイミングの語（既定 before / work / after。「設定」で変更可）。テンプレートに無いときはファイル名の末尾に <code>_before</code> 等が自動で付きます</td></tr>
         <tr><td><code>{date}</code></td><td>日付（yyyymmdd）</td></tr>
         <tr><td><code>{time}</code></td><td>時刻（hhmmss）</td></tr>
         <tr><td><code>{hhmm}</code></td><td>時刻（hhmm）</td></tr>
@@ -667,22 +683,22 @@
         <tr><td>コマンドタイムアウト</td><td>1コマンドの応答（プロンプト復帰）を待つ秒数。既定30秒。</td></tr>
         <tr><td>ログ保存フォルダ</td><td>ログの出力先。既定 <code>logs</code>。<strong>「参照…」</strong>でフォルダ選択もできます。相対パスは <code>PalaTerm.exe</code> と同じフォルダが基準です。</td></tr>
         <tr><td>ログフォルダ名テンプレート</td><td>実行ごとのフォルダ名。<code>{date} {time} {hhmm} {group} {stage}</code> が使えます（既定 <code>{date}_{time}_{group}_{stage}</code>。旧既定 <code>log_{date}_{time}_{stage}</code> のままの場合はロック解除時に自動で新既定へ。自分で変えたテンプレートはそのまま）。実行履歴はフォルダ内の記録ファイルで実行を判別するので、フォルダ名を自由に変えても一覧に出ます。</td></tr>
-        <tr><td>作業タイミングの付与文字列</td><td><code>{stage}</code> に入る語を作業前／作業中／作業後ごとに指定します（既定 <code>before</code> / <code>work</code> / <code>after</code>。空欄なら既定）。空白や <code>\ / : * ? " &lt; &gt; |</code> は使えず、3 語は互いに異なる必要があります。</td></tr>
+        <tr><td>ログ名に付く作業タイミングの語</td><td><code>{stage}</code> に入る語を作業前／作業中／作業後ごとに指定します（既定 <code>before</code> / <code>work</code> / <code>after</code>。空欄なら既定）。空白や <code>\ / : * ? " &lt; &gt; |</code> は使えず、3 語は互いに異なる必要があります。</td></tr>
         <tr><td>ログファイル名テンプレート</td><td>上記の部品でファイル名を組み立て。</td></tr>
-        <tr><td>アイドル時の自動ロック</td><td>マウス・キーボード操作がこの分数なければ自動でロック画面に戻ります。既定 30 分、<code>0</code> で無効。一括実行中はロックしません。対話接続のウィンドウも、それぞれ自分の操作がこの分数なければロックします（接続は保たれます）。</td></tr>
+        <tr><td>アイドル時の自動ロック</td><td>マウス・キーボード操作がこの分数なければ自動でロック画面に戻ります。既定 30 分、<code>0</code> で無効。一括実行中もロックします（実行は裏で続き、解除すると進捗表に戻ります）。対話接続のウィンドウも、それぞれ自分の操作がこの分数なければロックします（接続は保たれます）。GUI の窓での操作は本体の操作として数えるので、使っている最中の GUI の窓がロックで閉じられることはありません。</td></tr>
         <tr><td>ログ内のパスワードをマスクする</td><td>オンにすると、ログに現れた機器・踏み台のパスワードを <code>****</code> に置き換えて保存します。既定はオフ（show running-config 内の同じ文字列まで置き換わり、設定と一致しなくなるため）。拒否されたコマンドの警告文では、設定に関係なく常に伏せます。</td></tr>
-        <tr><td>自分の踏み台</td><td>人ごとに秘密鍵が違う踏み台を<strong>最大5段</strong>まで登録します（段ごとにホスト・接続方式・ポート・ユーザー・認証方式・パスワードまたは秘密鍵と鍵のパスフレーズ。専用の「保存」ボタン）。機器で<strong>「自分の踏み台（設定タブ）を先に通る」</strong>にチェックすると、ここの踏み台を順に通ります。この PC の vault にだけ暗号化して保存され、一式書出には入りません。</td></tr>
+        <tr><td>自分の踏み台</td><td>人ごとに秘密鍵が違う踏み台を<strong>最大5段</strong>まで登録します（段ごとにホスト・接続方式・ポート・ユーザー・認証方式・パスワードまたは秘密鍵と鍵のパスフレーズ。専用の「保存」ボタン）。機器で<strong>「自分の踏み台（設定タブ）を先に通る」</strong>にチェックすると、ここの踏み台を順に通ります。この PC の vault にだけ暗号化して保存され、一式書き出しには入りません。</td></tr>
         <tr><td>対話窓の右クリック</td><td>Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目です。<strong>マウス右ボタンでの貼り付けを無効にする</strong>: 右クリックしても何もしません。<strong>マウス右ボタンでの貼り付けを確認する</strong>: 右クリックで小さなメニューが出て、「貼り付け」を選んだときだけ貼り付けます（<kbd>Esc</kbd> で取消）。どちらもオフ（既定）なら右クリックですぐ貼り付け、「無効にする」がオンならもう一方は無視されます。変更は、このあと開く対話窓から反映されます。</td></tr>
       </tbody>
     </table></div>
-    <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>ログ設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
+    <figure class="shot" data-shot="16_settings"><img src="img/manual/16_settings.png" alt="設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）" loading="lazy"><figcaption>設定タブ（フォルダ名・ファイル名のテンプレート、アイドル時の自動ロック）</figcaption></figure>
     <figure class="shot" data-shot="16b_my_bastion"><img src="img/manual/16b_my_bastion.png" alt="設定タブの「自分の踏み台」。人ごとの踏み台を最大5段まで登録（この PC の vault にだけ保存）" loading="lazy"><figcaption>設定タブの「自分の踏み台」。人ごとの踏み台を最大5段まで登録（この PC の vault にだけ保存）</figcaption></figure>
     <div class="callout tip"><span class="ic">i</span><p>変更したら<strong>「保存」</strong>を忘れずに。未保存のまま他のタブへ移ろうとすると確認が出ます。</p></div>
 
     <h3>初期化（全データ削除）</h3>
-    <figure class="shot" data-shot="26_reset_confirm"><img src="img/manual/26_reset_confirm.png" alt="左メニュー「初期化」の確認（この後さらに再確認とマスターパスワード入力）" loading="lazy"><figcaption>左メニュー「初期化」の確認（この後さらに再確認とマスターパスワード入力）</figcaption></figure>
-    <p>左メニュー下部の<strong>「初期化」</strong>を押し、2 回の確認に答えると、登録済みの<strong>すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワード</strong>を削除して初期状態に戻します（<strong>元に戻せません</strong>）。</p>
-    <p>実行には、警告ダイアログでの確認に加えて<strong>マスターパスワードの入力が必須</strong>です。ログファイルと export フォルダの書き出しファイル（一式書出のフォルダ・標準プロファイルのJSON）は削除されずに残るため、必要ならそこから読み込みで復元できます（事前に「全機器」で一式書出しておけば、そのフォルダひとつで元に戻せます）。</p>
+    <figure class="shot" data-shot="26_reset_confirm"><img src="img/manual/26_reset_confirm.png" alt="「すべてのデータをリセット（初期化）」の確認（この後さらに再確認とマスターパスワード入力）" loading="lazy"><figcaption>「すべてのデータをリセット（初期化）」の確認（この後さらに再確認とマスターパスワード入力）</figcaption></figure>
+    <p>「設定」タブ下部の<strong>「危険な操作」</strong>にある<strong>「すべてのデータをリセット（初期化）」</strong>を押し、2 回の確認に答えると、登録済みの<strong>すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワード</strong>を削除して初期状態に戻します（<strong>元に戻せません</strong>）。</p>
+    <p>実行には、警告ダイアログでの確認に加えて<strong>マスターパスワードの入力が必須</strong>です。ログファイルと export フォルダの書き出しファイル（一式書き出しのフォルダ・標準プロファイルのJSON）は削除されずに残るため、必要ならそこから読み込みで復元できます（事前に「全機器」で一式書き出ししておけば、そのフォルダひとつで元に戻せます）。</p>
   </section>
 
   <section id="ostype">
@@ -705,10 +721,13 @@
     </div>
     <p>Linux サーバは、プロンプトの末尾が <code>$</code> の一般ユーザー用と <code>#</code> の root 用の 2 つです（プロンプトは 1 つの文字で待つため）。SSH ではログイン手順は不要で、Telnet・シリアル・踏み台経由のときだけ <code>login:</code> / <code>Password:</code> に応答します。ログイン後に <code>export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat</code> を送り、systemctl・journalctl などが less の画面で止まらないようにします。</p>
 
+    <div class="callout warn"><span class="ic">!</span><p><strong>NEC IX は <code>svintr-config</code> で設定モードに入ります。</strong> IX では <code>terminal length 0</code> と <code>show running-config</code> が設定モードでしか使えないため、標準プロファイルのページャ解除は <code>svintr-config</code> → <code>terminal length 0</code> です（<code>write memory</code> を打たない限り何も保存されません）。<code>svintr-config</code> は、ほかの管理者が設定モードに入っていても奪い取り、その人を運用モードに戻します（<code>configure</code> だと <code>% CONFIG process is occupied.</code> で失敗し、ページャ解除と show running-config が取れないため、あえてこうしています）。同僚を追い出したくない場合は、NEC IX のプロファイルを編集して <code>svintr-config</code> を <code>configure</code> に書き換えてください。</p></div>
+    <div class="callout warn"><span class="ic">!</span><p><strong>FortiGate / FortiAnalyzer のページャ解除は機器の設定を変えます。</strong> 標準プロファイルは <code>config system console</code> → <code>set output standard</code> → <code>end</code> を送ります。これは一時的な端末設定ではなく、機器に保存される設定変更です（元に戻すには <code>set output more</code>）。VDOM を有効にした FortiGate では <code>config global</code> の中でしか打てないので、OS タイプを編集してページャ解除コマンドの先頭に <code>config global</code> を足してください（末尾の <code>end</code> も 1 つ増やします）。足していなくても、標準プロファイルは <code>--More--</code> をページャ表示の目印として持つため、長い show はスペースを送って最後まで取得します。</p></div>
+
     <p>一覧では標準・自作の区別なく、どのプロファイルも<strong>「編集」「複製」「削除」</strong>できます
     （機器が使用中のプロファイルは削除できません）。標準を機種の実情に合わせて直したいときは、そのまま編集するか、複製してから直します。</p>
 
-    <p>プロファイル名は編集画面でいつでも変更できます（複製した「…_copy」もその場で付け直せます）。</p>
+    <p>プロファイル名は編集画面でいつでも変更できます（複製した「…_copy」もその場で付け直せます）。編集画面の<strong>「保存して接続確認へ」</strong>を押すと、保存したうえで<a href="#run">実行タブ</a>がその OS タイプの機器に絞り込まれた状態で開くので、直したプロファイルをそのまま<strong>「⚡ 接続確認のみ」</strong>で試せます。</p>
 
     <h3>確認への自動応答</h3>
     <p>一括実行でコマンドが確認を求めてきたときに返す答えを、プロファイルごとに登録できます（編集画面の下部）。出力の末尾が「待つ表示」になったら「送る文字」を送ります（空欄なら <kbd>Enter</kbd>＝機器の既定値で進む）。Cisco IOS / ASA には <code>[confirm]</code> と <code>]?</code>（<code>Destination filename [startup-config]?</code> など）が最初から入っています。登録の無い質問で止まったコマンドは、タイムアウトまで待って失敗します。</p>
@@ -718,25 +737,25 @@
     文字の一部が画面に現れた時点で一致します（部分一致・大文字小文字は区別）。
     たとえば <code>assword:</code> と書けば <code>Password:</code> にも <code>password:</code> にも一致します。</p>
 
-    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準15種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準15種＋自作）</figcaption></figure>
+    <figure class="shot" data-shot="06_ostypes"><img src="img/manual/06_ostypes.png" alt="OSタイプ設定の一覧（標準17種＋自作）" loading="lazy"><figcaption>OSタイプ設定の一覧（標準17種＋自作）</figcaption></figure>
     <figure class="shot" data-shot="07_profile_edit"><img src="img/manual/07_profile_edit.png" alt="OSタイププロファイルの編集（expect / send の手順）" loading="lazy"><figcaption>OSタイププロファイルの編集（expect / send の手順）</figcaption></figure>
     <h3>プロファイルの項目</h3>
     <div class="scroll"><table>
       <thead><tr><th>項目</th><th>説明</th></tr></thead>
       <tbody>
-        <tr><td>showコマンド完了の目印 <span class="must">必須</span></td><td>コマンドが打てる状態のときに機器が出す表示（例: <code>Router#</code>）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。<code>#</code> のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: <code>FG(console)#</code>）にも一致します。</td></tr>
-        <tr><td>ログイン手順</td><td>上から順に実行。<strong>expect</strong>（待つ表示）が出るのを待ち、<strong>send</strong>（入力コマンド）を入力します。sendには変数 <code>{user}</code> <code>{password}</code> <code>{enable}</code> が使え、機器に登録した認証情報に置き換わります。<strong>最後の行の入力が終わると自動で「showコマンド完了の目印」を待つ</strong>ため、目印を待つだけの行は不要です。</td></tr>
+        <tr><td>プロンプト（コマンド完了の目印） <span class="must">必須</span></td><td>コマンドが打てる状態のときに機器が出す表示（例: <code>Router#</code>。一覧では「プロンプト（完了の目印）」列）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。<code>#</code> のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: <code>FG(console)#</code>）にも一致します。</td></tr>
+        <tr><td>ログイン手順</td><td>上から順に実行。<strong>expect</strong>（待つ表示）が出るのを待ち、<strong>send</strong>（入力コマンド）を入力します。sendには変数 <code>{user}</code> <code>{password}</code> <code>{enable}</code> が使え、機器に登録した認証情報に置き換わります。<strong>最後の行の入力が終わると自動で「プロンプト（コマンド完了の目印）」を待つ</strong>ため、目印を待つだけの行は不要です。send を空にした行は <kbd>Enter</kbd> だけを送ります（欄に「（Enter だけ送る）」と表示）。</td></tr>
         <tr><td>認証行の自動スキップ</td><td><code>{user}</code> / <code>{password}</code> / <code>{enable}</code> を送る行は、その表示を出さない機器・接続方式では<strong>自動でスキップ</strong>されます（SSH直接続では認証済みのため <code>{user}</code> / <code>{password}</code> の行は即スキップ）。手順に書いておけば、聞かれる機器では入力され、聞かれない機器では飛ばされる——<strong>同じプロファイルがSSH / Telnet / シリアルで共通に使えます</strong>。</td></tr>
         <tr><td>ページャ解除コマンド（任意）</td><td>ログイン直後に流す、出力の一時停止（--More--）をなくすコマンド。複数行OK（設定モードに入る手順ごと書けます）。機器側で設定済みなら空欄で。</td></tr>
         <tr><td>ページャ表示の目印（任意）</td><td>出力の途中一時停止の表示（例: <code>--- more ---</code>）。これが出たらスペースを送って続きを表示します。解除コマンドで止まらないOSだけ設定します。</td></tr>
-        <tr><td>切断コマンド</td><td>実行終了時にログアウトのため送るコマンド。1行1コマンドで複数行可（exitを2回打つ機器は2行書く）。</td></tr>
+        <tr><td>切断コマンド</td><td>実行終了時にログアウトのため送るコマンド。1行1コマンドで複数行可（exitを2回打つ機器は2行書く）。各行の待つ表示（expect）は編集しても残ります。</td></tr>
       </tbody>
     </table></div>
 
-    <h3>ファイルでの読込・書出</h3>
-    <p><strong>「読込」</strong>でJSONを選んで取り込みます。標準17種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
+    <h3>ファイルでの読み込み・書き出し</h3>
+    <p><strong>「読み込み」</strong>でJSONを選んで取り込みます。標準17種のJSONは起動時に <code>export\os-profiles\</code> に自動で置かれ、
     <strong>アプリがこれらのファイルを消すことはありません</strong>。標準プロファイルを削除しても、対応するJSONを読み込めばいつでも元どおり復元できます（機器からの参照も戻ります）。
-    自作プロファイルの書き出しは<strong>機器一覧タブの「一式書出」</strong>にまとまっています（機器が使うプロファイルが <code>export\bundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
+    自作プロファイルの書き出しは<strong>機器一覧タブの「一式書き出し」</strong>にまとまっています（機器が使うプロファイルが <code>export\bundles\グループ名\os-profiles\</code> に入り、「全機器」なら全件）。</p>
 
     <div class="callout warn"><span class="ic">!</span><p>特定の機種でログインが途中で止まる場合は、その機種の実際のプロンプト表示を確認し、プロファイルの「目印」やログイン手順を実機に合わせて直してください。<strong>迷ったら対話接続で実機の表示を見るのが確実です。</strong></p></div>
   </section>
@@ -778,7 +797,7 @@
       <li>ユーザー名・パスワード・enableパスワードが正しいか確認します。</li>
       <li>接続方式（SSH/Telnet/シリアル）とポートが合っているか確認します。</li>
       <li>それでも止まる場合、どこで止まったかは次の2箇所で確認できます:
-        実行画面の<strong>メッセージ列</strong>に <code>waiting for "〜"</code> と「待っていたのに現れなかった文字」が表示されます。
+        実行画面の<strong>メッセージ列</strong>に「〜が出ませんでした」「機器の最後の表示: …」のように、待っていたのに現れなかった文字と機器が最後に表示していた行が日本語の文で出ます（クリックで全文）。
         また<strong>エラーでも途中までの実機出力はログに保存される</strong>ので、その行の「ログ表示」で機器が実際に何を表示していたかを確認できます。
         あとは<a href="#ostype">OSタイプ設定</a>でプロファイルの目印・手順を実機の表示に合わせて直すだけです。</li>
     </ul>
@@ -788,15 +807,17 @@
 
     <h3>マスターパスワードを忘れた</h3>
     <p>暗号化の仕様上、<strong>忘れると保存済みの機器情報は復号できません</strong>。その場合は
-    <code>data\palaterm_vault.enc</code> を削除して作り直し（機器の再登録）になります。パスワードは確実に管理してください。
+    <code>data\palaterm_vault.enc</code> を削除して作り直し（機器の再登録）になります。隣の <code>data\palaterm_vault.enc.bak</code>（1 世代前の vault。以前のマスターパスワードで開けます）も一緒に削除してください。パスワードは確実に管理してください。
     覚えている状態でパスワードを変えたいだけなら、サイドバーの<strong>「パスワード変更」</strong>で変更できます。
-    データごとやり直したい場合は、左メニュー下部の<strong>「初期化」</strong>が同じ初期化を行えます（ロック解除中のみ・マスターパスワード入力必須）。</p>
+    データごとやり直したい場合は、「設定」タブ下部「危険な操作」の<strong>「すべてのデータをリセット（初期化）」</strong>が同じ初期化を行えます（ロック解除中のみ・マスターパスワード入力必須）。</p>
 
     <div class="callout warn"><span class="ic">!</span><p><strong>本番機器での利用について。</strong> PalaTerm は設定変更コマンドも実行できます。本番機器で使う前に、必ず検証環境で動作を確認し、所属組織のルール（会社PCでの利用申請など）に従ってください。</p></div>
   </section>
 
   <footer>
-    PalaTerm v1.7.6 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.7.7 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>
+</body>
+</html>

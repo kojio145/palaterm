@@ -4,8 +4,8 @@ PalaTerm は Go + Wails(v2) 製の単一 Windows 実行ファイルです。
 
 ## 必要なもの
 
-- Go 1.23 以降（開発時は 1.26 で動作確認）
-- Windows 10/11（実行時は WebView2 ランタイムが必要。Win10/11 には標準搭載）
+- Go 1.26 以降（`go.mod` の `go 1.26.0`）
+- Windows 10/11（実行時は WebView2 ランタイムが必要。現行の Win10/11 には入っていますが、Windows 10 LTSC・Windows Server・オフラインイメージには入っていないことがあります。その PC では先に Microsoft の「WebView2 Evergreen Standalone Installer」（オフライン版）を入れてください）
 
 ## ビルド（推奨・wails CLI 不要）
 
@@ -14,9 +14,12 @@ Wails アプリはビルドタグを付けた `go build` で直接 exe 化でき
 npm も wails CLI も不要です。
 
 ```bash
-go build -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+go build -trimpath -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
 ```
 
+（リポジトリ直下の `build.bat` も同じコマンドです。）
+
+- `-trimpath`        : exe にビルド環境のパスを埋め込まない
 - `-tags production` : 埋め込み済みフロントエンド資産を使う（開発サーバに接続しない）
 - `-H windowsgui`    : コンソールウィンドウを出さない GUI アプリにする
 - `-s -w`            : デバッグ情報を除去してサイズ削減
@@ -30,7 +33,7 @@ go test ./...
 ```
 
 - `internal/vault`  : 暗号化・復号の往復、誤パスワード検知、平文非混入
-- `internal/profile`: 14 プロファイルの正規表現が全て有効
+- `internal/profile`: 標準 17 プロファイル（件数も検査）の待ち文字列が全て正規表現として有効
 - `internal/runner` : インプロセス疑似 Cisco 機に対する接続→ログイン→enable→コマンド→ログ保存の E2E
 - ルート           : App 層の vault 作成・機器 CRUD・永続化・暗号化往復
 

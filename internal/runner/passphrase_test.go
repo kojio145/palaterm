@@ -24,7 +24,7 @@ func TestJumpAnswersHopKeyPassphrase(t *testing.T) {
 	}
 	done := make(chan res, 1)
 	go func() {
-		k, err := jumpToKey(context.Background(), exp, "", model.BastionSSH, "192.0.2.209", "admin", 0, "kp-secret", 5*time.Second)
+		k, err := jumpToKey(context.Background(), exp, "", model.BastionSSH, "192.0.2.209", "admin", 0, model.AuthPublicKey, "kp-secret", false, 5*time.Second)
 		done <- res{k, err}
 	}()
 	if got := strings.TrimSpace(dev.next(t)); got != "ssh admin@192.0.2.209" {
@@ -62,7 +62,7 @@ func TestJumpPassphraseWrongOrMissing(t *testing.T) {
 		exp := newExpecter(sess)
 		done := make(chan error, 1)
 		go func() {
-			_, err := jumpToKey(context.Background(), exp, "", model.BastionSSH, "192.0.2.209", "admin", 0, c.pass, 5*time.Second)
+			_, err := jumpToKey(context.Background(), exp, "", model.BastionSSH, "192.0.2.209", "admin", 0, model.AuthPublicKey, c.pass, false, 5*time.Second)
 			done <- err
 		}()
 		dev.next(t)

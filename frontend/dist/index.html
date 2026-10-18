@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Defence in depth: device output and file contents reach the page only
+       through esc() / textContent, and this keeps a slip from loading a
+       script or sending anything out (the page talks to the backend over
+       the WebView2 bridge, not the network). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>PalaTerm</title>
   <link rel="stylesheet" href="/vendor/xterm.css" />
   <link rel="stylesheet" href="/style.css" />
@@ -34,7 +39,6 @@
         <option value="ja">🌐 日本語</option>
       </select>
       <button class="nav-btn subtle" id="btn-chpw">パスワード変更</button>
-      <button class="nav-btn subtle" id="btn-reset">初期化</button>
       <button class="nav-btn subtle" id="btn-about">バージョン情報</button>
       <button class="nav-btn subtle" id="btn-lock">ロック</button>
     </nav>

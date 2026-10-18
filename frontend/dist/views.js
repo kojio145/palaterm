@@ -2,9 +2,13 @@
 // User-visible strings are Japanese source text wrapped in t() (see i18n.js).
 
 // ---- Devices tab ----
+// The connection methods as the editor names them (SSH / Telnet / シリアル),
+// not the stored keys: the list's cell read "ssh" beside a header in words.
+const CONN_LABELS = { ssh: "SSH", telnet: "Telnet", serial: "シリアル" };
+function connLabel(c) { return c === "serial" ? t(CONN_LABELS.serial) : (CONN_LABELS[c] || c); }
 function connOptions(sel) {
   return ["ssh", "telnet", "serial"].map(c =>
-    `<option value="${c}" ${sel === c ? "selected" : ""}>${c}</option>`).join("");
+    `<option value="${c}" ${sel === c ? "selected" : ""}>${esc(connLabel(c))}</option>`).join("");
 }
 function osOptions(sel) {
   return PROFILES.map(p => `<option value="${esc(p.key)}" ${sel === p.key ? "selected" : ""}>${esc(p.name)}</option>`).join("");
@@ -19,6 +23,7 @@ function cmdSetOptions(sel) {
 let deviceView = { mode: "select", group: null };
 
 function renderDevices() {
+  if (typeof savePlace === "function") savePlace();
   if (deviceView.mode === "select") return renderGroupChooser();
   if (deviceView.mode === "grid") return renderGrid();
   return renderDeviceList();
@@ -53,8 +58,8 @@ function renderGroupChooser() {
       <div><div class="page-title">${esc(t("機器グループを選択"))}</div>
         <div class="page-sub">${esc(t("グループを選ぶか、新規に作成してください。グループ作成後にそのグループへ機器を追加します"))}</div></div>
       <div class="row-inline">
-        <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
-        <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
+        <button class="btn" id="imp-csv">${esc(t("読み込み"))}</button>
+        <button class="btn" id="exp-csv" ${devs.length ? "" : `disabled data-tip="${esc(t("書き出す機器がありません"))}"`}>${esc(t("一式書き出し"))}</button>
       </div>
     </div>
     ${groups.length ? `<div class="row-inline lv-bar" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -73,6 +78,10 @@ function renderGroupChooser() {
         <div class="choice-t">${esc(t("＋ 新規グループ作成"))}</div>
         <div class="choice-n">${esc(t("会社・拠点などの単位で作成"))}</div>
       </button>
+      ${groups.length > 1 && devs.length ? `<div class="choice" role="button" tabindex="0" data-open="__ALL__" style="border-style:dashed" data-tip="${esc(t("すべてのグループの機器を 1 つの一覧で表示します（どのグループにある機器か探すときに）"))}">
+        <div class="choice-t">${esc(t("全機器"))}</div>
+        <div class="choice-n">${esc(t("{n} 台", { n: devs.length }))}</div>
+      </div>` : ""}
       ${visible.map(g => `<div class="choice" role="button" tabindex="0" ${active ? "" : 'draggable="true"'} data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
         <div class="row-inline" style="justify-content:space-between;align-items:flex-start">
           <div class="choice-t clip" data-tip="${esc(g.name)}">${esc(g.name)}</div>
@@ -85,7 +94,11 @@ function renderGroupChooser() {
         <div class="choice-n">${esc(t("{n} 台", { n: ungroupedN }))} ${gridDraftBadge(GRID_UNGROUPED, true)}</div>
       </div>` : ""}
       ${groups.length && !visible.length ? `<div class="empty" style="grid-column:1/-1">${esc(t("絞り込みに一致するグループがありません"))}</div>` : ""}
-    </div>`;
+    </div>
+    ${!devs.length ? `<div class="muted" style="font-size:13px;line-height:1.9;margin-top:14px;max-width:720px">
+      <b>${esc(t("はじめかた"))}</b><br>
+      ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンドセットタブにあります"))}
+    </div>` : ""}`;
   listViewWire(LV, root, renderGroupChooser, focus);
   const gs = document.getElementById("grp-sort");
   if (gs) gs.onchange = () => {
@@ -94,7 +107,7 @@ function renderGroupChooser() {
     renderGroupChooser();
   };
 
-  document.getElementById("exp-csv").onclick = () => exportBundleDialog("");
+  document.getElementById("exp-csv").onclick = () => { if (devs.length) exportBundleDialog(""); };
   document.getElementById("imp-csv").onclick = () => importDialog("");
   document.getElementById("choice-new").onclick = newGroupPrompt;
   wireGridBadges(root);
@@ -251,12 +264,24 @@ const DEV_UNGROUPED = "__ungrouped__";
 // out on the next render.
 const devSel = new Set();
 
+// A cell of the list being typed into under an IME: redrawing the table
+// would cut the composition off (the save of the previous cell lands while
+// the next is being typed), so the redraw waits for the commit.
+let cellComposing = false, cellRenderPending = false;
+
 function renderDeviceList() {
+  if (cellComposing) { cellRenderPending = true; return; }
   const root = document.getElementById("tab-devices");
   let devs = INV.devices || [];
   // Scope to the chosen group (by the device's Group field), if any.
   const scopeGroup = deviceView.group
     ? (INV.deviceGroups || []).find(g => g.name === deviceView.group) : null;
+  // A remembered group that is gone (deleted, or another vault): back to
+  // the chooser rather than an unlabelled list.
+  if (deviceView.group && deviceView.group !== DEV_UNGROUPED && !scopeGroup) {
+    deviceView = { mode: "select", group: null };
+    return renderGroupChooser();
+  }
   if (scopeGroup) {
     devs = devs.filter(d => (d.group || "") === scopeGroup.name);
   }
@@ -265,11 +290,32 @@ function renderDeviceList() {
   // Sort / filter (display only; see listView in app.js).
   const LV = "devices";
   const focus = listViewFocus();
+  // A cell being edited in place: saving one redraws the table, which
+  // would drop the focus — Tab to the next cell, type, Tab… has to keep
+  // flowing, so the cell that has the focus (the next one, by the time the
+  // save's redraw comes) gets it back below.
+  const ae = document.activeElement;
+  const cellCls = ae && ae.dataset && ae.dataset.id ? [...ae.classList].find(c => c.startsWith("inl-")) : "";
+  // What was typed into that next cell so far goes back too: the save of
+  // the previous cell takes a moment (the vault's key derivation), and the
+  // redraw at its end used to replace the half-typed value with the saved one.
+  const cellFocus = cellCls ? { id: ae.dataset.id, cls: cellCls, pos: ae.selectionStart,
+    typed: ae.tagName === "INPUT" && ae.value !== ae.defaultValue ? ae.value : null } : null;
+  // The site filter belongs to the scope it was chosen in: a site of group A
+  // kept filtering group B (which has no such site) to an empty table while
+  // the select said 拠点: すべて.
+  const lv = listView(LV);
+  const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  if (lv.sel.site && !sites.includes(lv.sel.site)) lv.sel.site = "";
+  if (lv.sel.group && !(INV.deviceGroups || []).some(g => g.name === lv.sel.group)) lv.sel.group = "";
+  // 全機器: the group is a column and a filter here (that view exists to
+  // find which group a device is in).
+  const allView = !scopeGroup && !ungroupedView;
   const visible = listViewApply(LV, devs,
-    d => d.cliOff ? [d.name, d.host, d.site, d.role, t("GUI のみ")] : [d.name, d.host, d.site, d.role, d.conn, profileName(d.osType), d.commandSet],
-    (d, k) => d.cliOff && (k === "conn" || k === "os" || k === "commandSet") ? "" : k === "os" ? profileName(d.osType) : d[k],
-    { site: d => d.site || "" });
-  const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
+    d => (d.cliOff ? [d.name, d.host, d.site, d.role, t("GUI のみ")] : [d.name, d.host, d.site, d.role, connLabel(d.conn), profileName(d.osType), d.commandSet]).concat(allView ? [d.group || ""] : []),
+    (d, k) => d.cliOff && (k === "conn" || k === "os" || k === "commandSet") ? "" : k === "os" ? profileName(d.osType) : k === "group" ? (d.group || "") : d[k],
+    { site: d => d.site || "", group: d => d.group || "" });
+  const groupNames = (INV.deviceGroups || []).map(g => g.name);
   const rows = visible.map(d => {
     const nb = ((d.bastions || []).length || (d.bastion && d.bastion.host ? 1 : 0)) + (d.useMyBastion ? Math.max((INV.myBastions || []).filter(b => b.host).length, 1) : 0);
     return `
@@ -277,6 +323,7 @@ function renderDeviceList() {
       <td><input type="checkbox" class="dev-sel" data-enable="${esc(d.id)}" ${devSel.has(d.id) ? "checked" : ""}></td>
       ${listViewDragCell(LV)}
       <td><input class="cell inl-name" data-id="${esc(d.id)}" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600" data-tip="${esc(scopeGroup || !d.group ? d.name : d.name + "  /  " + t("グループ「{g}」", { g: d.group }))}"></td>
+      ${allView ? `<td><div class="clip" data-tip="${esc(d.group || t("（グループ未設定）"))}">${esc(d.group || t("（未設定）"))}</div></td>` : ""}
       <td><input class="cell inl-host mono" data-id="${esc(d.id)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
       <td><input class="cell inl-site" data-id="${esc(d.id)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
       <td><input class="cell inl-role" data-id="${esc(d.id)}" value="${esc(d.role || "")}" placeholder="${esc(t("役割"))}" data-tip="${esc(d.role || "")}"></td>
@@ -284,7 +331,7 @@ function renderDeviceList() {
         <span class="muted mono" style="font-size:12px;margin-left:6px">${esc((d.guiScheme === "http" ? "http" : "https") + ":" + (d.guiPort || (d.guiScheme === "http" ? 80 : 443)))}</span>
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}</td>` : `
       <td>
-        <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(d.conn + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) + (d.bastionMode === "tunnel" ? " " + t("（SSH トンネル）") : "") : ""))}">${connOptions(d.conn)}</select>
+        <select class="cell inl-conn" data-id="${esc(d.id)}" data-tip="${esc(connLabel(d.conn) + (nb ? "  " + t("踏み台 {n} 段", { n: nb }) + (d.bastionMode === "tunnel" ? " " + t("（SSH トンネル）") : "") : ""))}">${connOptions(d.conn)}</select>
         ${nb ? `<span class="muted" style="font-size:11px">${esc(t("踏{n}", { n: nb }))}</span>` : ""}
         ${d.useGroupCreds ? `<span class="badge" data-tip="${esc(t("グループ既定の認証情報でログインします"))}">${esc(t("既定"))}</span>` : ""}
       </td>
@@ -319,30 +366,47 @@ function renderDeviceList() {
         <button class="btn danger" id="grp-delete">${esc(t("グループ削除"))}</button>` : ""}
         ${gridDraftBadge(gridScopeOf(deviceView.group))}
         <button class="btn" id="grid-open" data-tip="${esc(t("Excel のように表の上で複数の機器をまとめて編集します（コピー・貼り付け・Ctrl+D・連番など）。保存するまでは下書きです"))}">${esc(t("表で編集"))}</button>
-        <button class="btn" id="imp-csv">${esc(t("読込"))}</button>
-        <button class="btn" id="exp-csv">${esc(t("一式書出"))}</button>
+        <button class="btn" id="imp-csv">${esc(t("読み込み"))}</button>
+        <button class="btn" id="exp-csv" ${devs.length ? "" : `disabled data-tip="${esc(t("書き出す機器がありません"))}"`}>${esc(t("一式書き出し"))}</button>
         <button class="btn primary" id="add-dev">${esc(t("＋ 機器を追加"))}</button>
       </div>
     </div>
-    ${devs.length ? listViewBar(LV, t("絞り込み（ホスト名・IP・拠点・役割・接続・OS・コマンドセット）"), [{ id: "site", label: t("拠点: すべて"), values: sites }]) : ""}
-    ${selCount ? `<div class="row-inline" style="gap:8px;margin:-4px 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:10px;font-size:13px">
-      <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
-      <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
-      <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
-      <button class="btn sm" id="bulk-clear">${esc(t("選択解除"))}</button>
-      <span class="muted" style="font-size:12px">${esc(t("Shift+クリックで範囲を選択できます"))}</span>
-    </div>` : ""}
+    ${devs.length ? listViewBar(LV, allView ? t("絞り込み（機器名・IP・グループ・拠点・役割・接続・OS・コマンドセット）") : t("絞り込み（機器名・IP・拠点・役割・接続・OS・コマンドセット）"),
+      (allView && groupNames.length ? [{ id: "group", label: t("グループ: すべて"), values: groupNames }] : []).concat([{ id: "site", label: t("拠点: すべて"), values: sites }])) : ""}
+    <div id="dev-selbar">${devSelBar(selCount)}</div>
     <div class="panel scrollx">
       ${devs.length === 0
-        ? `<div class="empty">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。「＋ 機器を追加」から登録してください。"))}</div>`
+        ? `<div class="empty" style="line-height:2">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。"))}<br>
+            <span style="font-size:13px">${esc(t("「＋ 機器を追加」で 1 台ずつ登録、「表で編集」で Excel から貼り付け、「読み込み」で CSV や一式を取り込めます"))}</span><br>
+            <span class="row-inline" style="gap:8px;justify-content:center;margin-top:10px"><button class="btn primary sm" id="empty-add">${esc(t("＋ 機器を追加"))}</button><button class="btn sm" id="empty-grid">${esc(t("表で編集"))}</button><button class="btn sm" id="empty-imp">${esc(t("読み込み"))}</button></span></div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
-        : `<table class="fixed" data-colw="devices2"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
-            ${listViewTh(LV, "name", t("ホスト名"), "width:130px")}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
+        : `<table class="fixed" data-colw="${allView ? "devices-all" : "devices2"}"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
+            ${listViewTh(LV, "name", t("機器名"), "width:130px")}${allView ? listViewTh(LV, "group", t("グループ"), "width:110px") : ""}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
             ${listViewTh(LV, "os", "OS", "width:112px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:112px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
     </div>`;
   listViewWire(LV, root, renderDeviceList, focus);
+  if (cellFocus) {
+    const el = root.querySelector(`.${cellFocus.cls}[data-id="${CSS.escape(cellFocus.id)}"]`);
+    if (el) {
+      if (cellFocus.typed !== null && el.tagName === "INPUT") el.value = cellFocus.typed;
+      el.focus(); try { el.setSelectionRange(cellFocus.pos, cellFocus.pos); } catch (e) { }
+    }
+  }
+  root.querySelectorAll(".cell").forEach(el => {
+    el.addEventListener("compositionstart", () => { cellComposing = true; });
+    el.addEventListener("compositionend", () => {
+      cellComposing = false;
+      if (cellRenderPending) { cellRenderPending = false; setTimeout(renderDeviceList, 0); }
+    });
+  });
   wireColResize(root);
+  const emptyAdd = document.getElementById("empty-add");
+  if (emptyAdd) emptyAdd.onclick = () => editDevice(null, scopeGroup ? scopeGroup.name : "");
+  const emptyGrid = document.getElementById("empty-grid");
+  if (emptyGrid) emptyGrid.onclick = () => openGrid(gridScopeOf(deviceView.group)).catch(e => toast(terr(e), "err"));
+  const emptyImp = document.getElementById("empty-imp");
+  if (emptyImp) emptyImp.onclick = () => importDialog(scopeGroup ? scopeGroup.name : "");
 
   document.getElementById("back-choose").onclick = () => { deviceView = { mode: "select", group: null }; renderDevices(); };
   // Adding inside a group scope pre-assigns that group to the new device.
@@ -369,7 +433,7 @@ function renderDeviceList() {
       </div>`);
       openModal(node, "mid");
       node.querySelector("#rn-cancel").onclick = closeModal;
-      node.querySelector("#rn-ok").onclick = async () => {
+      const rename = async () => {
         const nn = node.querySelector("#rn-name").value.trim();
         if (!nn) { toast(t("名前を入力してください"), "err"); return; }
         try {
@@ -379,9 +443,11 @@ function renderDeviceList() {
           toast(t("変更しました"), "ok");
         } catch (e) { toast(t("変更失敗") + ": " + terr(e), "err"); }
       };
+      node.querySelector("#rn-ok").onclick = rename;
+      node.querySelector("#rn-name").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) rename(); });
     };
   }
-  document.getElementById("exp-csv").onclick = () => exportBundleDialog(scopeGroup ? scopeGroup.name : "");
+  document.getElementById("exp-csv").onclick = () => { if (devs.length) exportBundleDialog(scopeGroup ? scopeGroup.name : ""); };
   document.getElementById("imp-csv").onclick = () => importDialog(scopeGroup ? scopeGroup.name : "");
   document.getElementById("grid-open").onclick = () => openGrid(gridScopeOf(deviceView.group)).catch(e => toast(terr(e), "err"));
   wireGridBadges(root);
@@ -391,9 +457,19 @@ function renderDeviceList() {
   wireConnectButtons(root);
   wireGUIButtons(root);
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = () => delDevice(b.dataset.del));
-  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
-    try { const nm = await App().CopyDevice(b.dataset.copy); await refreshInventory(); toast(t("複製しました: {n}", { n: nm }), "ok"); }
-    catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+    // The copy opens as a new, unsaved device filled from the source (its
+    // name with _copy): nothing exists until 保存, so キャンセル leaves no
+    // "sw01_copy" behind in the list.
+    const src = devById(b.dataset.copy);
+    if (!src) return;
+    const taken = new Set((INV.devices || []).filter(d => (d.group || "") === (src.group || "")).map(d => d.name));
+    let nm = src.name + "_copy";
+    for (let i = 2; taken.has(nm); i++) nm = `${src.name}_copy${i}`;
+    const tpl = JSON.parse(JSON.stringify(src));
+    tpl.id = ""; tpl.name = nm;
+    editDevice(null, src.group || "", tpl);
+    const inp = document.getElementById("f-name"); if (inp) { inp.focus(); inp.select(); }
   });
   // Inline edits (name / host / conn / os / command set) save on change, with validation.
   root.querySelectorAll(".inl-name").forEach(el => el.onchange = async () => {
@@ -403,7 +479,7 @@ function renderDeviceList() {
     try {
       await App().RenameDevice(el.dataset.id, nn);
       await refreshInventory();
-      toast(t("ホスト名を変更しました"), "ok");
+      toast(t("機器名を変更しました"), "ok");
     } catch (e) {
       toast(t("変更できません") + ": " + terr(e), "err");
       await refreshInventory(); // revert the cell to the stored value
@@ -433,26 +509,50 @@ function renderDeviceList() {
     inlineSave(el.dataset.id, patch);
   });
   // Bulk selection: tick boxes (Shift+クリック = range), header = visible rows.
-  const applySel = (ids, on) => { ids.forEach(id => on ? devSel.add(id) : devSel.delete(id)); renderDeviceList(); };
+  // A tick redraws only the boxes and the selection bar, not the 300-row
+  // table (each row carries two selects of a dozen options or more).
+  const selIds = () => devs.filter(d => devSel.has(d.id)).map(d => d.id);
+  const syncSel = () => {
+    root.querySelectorAll(".dev-sel").forEach(cb => { cb.checked = devSel.has(cb.dataset.enable); });
+    const all = document.getElementById("dev-chk-all");
+    if (all) all.checked = visible.length > 0 && visible.every(d => devSel.has(d.id));
+    const bar = document.getElementById("dev-selbar");
+    if (bar) { bar.innerHTML = devSelBar(selIds().length); wireSelBar(); }
+  };
+  const applySel = (ids, on) => { ids.forEach(id => on ? devSel.add(id) : devSel.delete(id)); syncSel(); };
   wireShiftRange("devsel", [...root.querySelectorAll(".dev-sel")], applySel);
   const chkAll = document.getElementById("dev-chk-all");
   if (chkAll) chkAll.onclick = () => applySel(visible.map(d => d.id), chkAll.checked);
-  const selIds = () => devs.filter(d => devSel.has(d.id)).map(d => d.id);
-  const bClear = document.getElementById("bulk-clear");
-  if (bClear) bClear.onclick = () => { devs.forEach(d => devSel.delete(d.id)); renderDeviceList(); };
-  const bEdit = document.getElementById("bulk-edit");
-  if (bEdit) bEdit.onclick = () => bulkEditDialog(selIds());
-  const bDel = document.getElementById("bulk-del");
-  if (bDel) bDel.onclick = async () => {
-    const ids = selIds();
-    const names = devs.filter(d => devSel.has(d.id)).map(d => d.name);
-    const list = names.slice(0, 20).join(", ") + (names.length > 20 ? " …" : "");
-    if (!(await uiConfirm({ title: t("機器を一括削除"), message: t("選択した <b>{n} 台</b>を削除しますか？", { n: ids.length }) + `<br><span class="muted" style="font-size:12px">${esc(list)}</span>`, okLabel: t("削除"), danger: true }))) return;
-    try { const n = await App().DeleteDevices(ids); ids.forEach(id => devSel.delete(id)); await refreshInventory(); toast(t("{n} 台を削除しました", { n }), "ok"); }
-    catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
-  };
+  function wireSelBar() {
+    const bClear = document.getElementById("bulk-clear");
+    if (bClear) bClear.onclick = () => { devs.forEach(d => devSel.delete(d.id)); syncSel(); };
+    const bEdit = document.getElementById("bulk-edit");
+    if (bEdit) bEdit.onclick = () => bulkEditDialog(selIds());
+    const bDel = document.getElementById("bulk-del");
+    if (bDel) bDel.onclick = async () => {
+      const ids = selIds();
+      const names = devs.filter(d => devSel.has(d.id)).map(d => d.name);
+      const list = names.slice(0, 20).join(", ") + (names.length > 20 ? " …" : "");
+      if (!(await uiConfirm({ title: t("機器を一括削除"), message: t("選択した <b>{n} 台</b>を削除しますか？", { n: ids.length }) + `<br><span class="muted" style="font-size:12px">${esc(list)}</span>`, okLabel: t("削除"), danger: true }))) return;
+      try { const n = await App().DeleteDevices(ids); ids.forEach(id => devSel.delete(id)); await refreshInventory(); toast(t("{n} 台を削除しました", { n }), "ok"); }
+      catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
+    };
+  }
+  wireSelBar();
   root.querySelectorAll(".inl-os").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { osType: el.value }));
   root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { commandSet: el.value }));
+}
+
+// The bar above the list while devices are ticked ("" when none).
+function devSelBar(selCount) {
+  if (!selCount) return "";
+  return `<div class="row-inline" style="gap:8px;margin:-4px 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:10px;font-size:13px">
+      <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
+      <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
+      <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
+      <button class="btn sm" id="bulk-clear">${esc(t("選択解除"))}</button>
+      <span class="muted" style="font-size:12px">${esc(t("Shift+クリックで範囲を選択できます"))}</span>
+    </div>`;
 }
 
 // グループ既定の認証情報: one username / password / enable password shared by
@@ -466,7 +566,7 @@ function groupCredsDialog(groupName) {
     <h3>${esc(t("グループ既定の認証情報"))} <span class="muted" style="font-size:14px;font-weight:400">/ ${esc(groupName)}</span></h3>
     <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("このグループの機器のうち「グループ既定を使う」にした機器が、ここのユーザー名・パスワードでログインします（暗号化保存）。現在 {a} / {b} 台が使用中。", { a: using, b: members.length }))}</p>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("ユーザー名"))}</label><input id="gc-user" value="${esc(g.username || "")}"></div>
+      <div class="field"><label>${esc(t("ユーザー名"))}</label><input id="gc-user" value="${esc(g.username || "")}" autofocus></div>
       <div class="field"><label>${esc(t("パスワード"))}</label><input id="gc-pw" type="password" value="${esc(g.password || "")}"></div>
     </div>
     <div class="field"><label>${esc(t("enable / 昇格パスワード（任意・ない機種は空欄）"))}</label><input id="gc-en" type="password" value="${esc(g.enablePassword || "")}"></div>
@@ -474,24 +574,30 @@ function groupCredsDialog(groupName) {
     <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("オフのままなら各機器の設定は変わりません。個別のパスワードが要る機器は、機器の編集画面で「この機器に個別に設定」を選んでください。"))}</div>
     <div class="modal-actions">
       <button class="btn" id="gc-cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="gc-save">${esc(t("保存"))}</button>
+      <button class="btn primary" id="gc-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
     </div>
   </div>`);
   openModal(node, "mid");
   wirePasswordToggles(node);
   node.querySelector("#gc-cancel").onclick = closeModal;
-  node.querySelector("#gc-save").onclick = async () => {
+  const saveBtn = node.querySelector("#gc-save");
+  saveBtn.onclick = async () => {
     const out = { ...g, name: groupName,
       username: node.querySelector("#gc-user").value,
       password: node.querySelector("#gc-pw").value,
       enablePassword: node.querySelector("#gc-en").value };
+    saveBtn.disabled = true; // one save at a time (the switch below takes a moment)
     try {
       await App().SaveDeviceGroup(out);
       if (node.querySelector("#gc-all").checked) {
-        for (const d of members) if (!d.useGroupCreds) await App().SaveDevice({ ...d, useGroupCreds: true });
+        // One write for the whole group: saving the devices one by one took
+        // the vault's key derivation per device (minutes for 300).
+        const ids = members.filter(d => !d.useGroupCreds).map(d => d.id);
+        if (ids.length) await App().UpdateDevices(ids, { useGroupCreds: true });
       }
       closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+    finally { saveBtn.disabled = false; }
   };
 }
 
@@ -507,7 +613,7 @@ function bulkEditDialog(ids) {
     <h3>${esc(t("選択した {n} 台を一括変更", { n: ids.length }))}</h3>
     <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("「（変更しない）」以外にした項目だけが、選択した全機器に設定されます。"))}</p>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("グループ（移動）"))}</label><select id="bk-group">${keep}<option value="">${esc(t("（グループ未設定）"))}</option>${groups}</select>
+      <div class="field"><label>${esc(t("グループ（移動）"))}</label><select id="bk-group" autofocus>${keep}<option value="">${esc(t("（グループ未設定）"))}</option>${groups}</select>
         <div id="bk-group-note" class="muted" style="font-size:12px;margin-top:4px;color:var(--warn)"></div></div>
       <div class="field"><label>${esc(t("コマンドセット"))}</label><select id="bk-set">${keep}<option value="">${esc(t("（なし）"))}</option>${sets}</select></div>
       <div class="field"><label>${esc(t("OSタイプ"))}</label><select id="bk-os">${keep}${oses}</select></div>
@@ -519,15 +625,40 @@ function bulkEditDialog(ids) {
       <div class="field"><label><input type="checkbox" id="bk-site-on" style="width:auto"> ${esc(t("拠点を変更"))}</label><input id="bk-site" placeholder="${esc(t("空欄にすると拠点を消します"))}"></div>
       <div class="field"><label><input type="checkbox" id="bk-role-on" style="width:auto"> ${esc(t("役割を変更"))}</label><input id="bk-role" placeholder="${esc(t("空欄にすると役割を消します"))}"></div>
     </div>
+    <details style="margin-top:4px"><summary class="link" style="text-decoration:none;font-size:13px">${esc(t("認証情報をまとめて変更（パスワードの定期変更など）"))}</summary>
+      <div class="muted" style="font-size:12px;margin:6px 0 8px">${esc(t("チェックした項目だけが、選択した全機器に設定されます。「グループ既定を使う」機器は、個別の欄が書き換わるだけでログインには既定が使われます。踏み台はその段がある機器にだけ入ります。"))}</div>
+      <div class="grid-2">
+        <div class="field"><label><input type="checkbox" id="bk-user-on" style="width:auto"> ${esc(t("機器のユーザー名"))}</label><input id="bk-user" autocomplete="off"></div>
+        <div class="field"><label><input type="checkbox" id="bk-pass-on" style="width:auto"> ${esc(t("機器のパスワード"))}</label><input id="bk-pass" type="password" autocomplete="new-password"></div>
+        <div class="field"><label><input type="checkbox" id="bk-enable-on" style="width:auto"> ${esc(t("enable パスワード"))}</label><input id="bk-enable" type="password" autocomplete="new-password"></div>
+        <div class="field"><label>${esc(t("踏み台の段"))}</label><select id="bk-hop">${[1, 2, 3, 4, 5].map(n => `<option value="${n}">${esc(t("{n}段目", { n }))}</option>`).join("")}</select>
+          <div id="bk-hop-note" class="muted" style="font-size:12px;margin-top:4px"></div></div>
+        <div class="field"><label><input type="checkbox" id="bk-buser-on" style="width:auto"> ${esc(t("踏み台のユーザー名"))}</label><input id="bk-buser" autocomplete="off"></div>
+        <div class="field"><label><input type="checkbox" id="bk-bpass-on" style="width:auto"> ${esc(t("踏み台のパスワード"))}</label><input id="bk-bpass" type="password" autocomplete="new-password"></div>
+      </div>
+    </details>
     <div class="modal-actions">
       <button class="btn" id="bk-cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="bk-ok">${esc(t("変更する"))}</button>
+      <button class="btn primary" id="bk-ok" data-tip="Ctrl+Enter">${esc(t("変更する"))}</button>
     </div>
   </div>`);
   openModal(node, "mid");
+  wirePasswordToggles(node);
   const $n = id => node.querySelector(id);
+  // How many of the selected devices have the chosen hop: a jump-host
+  // password set on 12 of 50 is a rotation that missed 38, said here first.
+  const hopNote = () => {
+    const n = parseInt($n("#bk-hop").value, 10) || 1;
+    const has = (INV.devices || []).filter(d => ids.includes(d.id) && (d.bastions || []).length >= n && d.bastions[n - 1].host).length;
+    $n("#bk-hop-note").textContent = t("選択中 {m} / {n} 台にこの段の踏み台があります（ない機器は変わりません）", { m: has, n: ids.length });
+    $n("#bk-hop-note").style.color = has < ids.length ? "var(--warn)" : "";
+  };
+  $n("#bk-hop").onchange = hopNote;
+  hopNote();
   $n("#bk-site").oninput = () => { $n("#bk-site-on").checked = true; };
   $n("#bk-role").oninput = () => { $n("#bk-role-on").checked = true; };
+  [["#bk-user", "#bk-user-on"], ["#bk-pass", "#bk-pass-on"], ["#bk-enable", "#bk-enable-on"], ["#bk-buser", "#bk-buser-on"], ["#bk-bpass", "#bk-bpass-on"]]
+    .forEach(([inp, on]) => { $n(inp).oninput = () => { $n(on).checked = true; }; });
   // Moving devices that log in with their group's default credentials
   // switches them to the new group's (or, ungrouped, to their own): say so.
   const usingGroup = (INV.devices || []).filter(d => ids.includes(d.id) && d.useGroupCreds).length;
@@ -550,11 +681,23 @@ function bulkEditDialog(ids) {
     onOff("#bk-mine", "useMyBastion"); onOff("#bk-cli", "cli"); onOff("#bk-gui", "gui");
     if ($n("#bk-site-on").checked) patch.site = $n("#bk-site").value;
     if ($n("#bk-role-on").checked) patch.role = $n("#bk-role").value;
+    if ($n("#bk-user-on").checked) patch.username = $n("#bk-user").value;
+    if ($n("#bk-pass-on").checked) patch.password = $n("#bk-pass").value;
+    if ($n("#bk-enable-on").checked) patch.enablePassword = $n("#bk-enable").value;
+    if ($n("#bk-buser-on").checked || $n("#bk-bpass-on").checked) {
+      patch.bastionHop = parseInt($n("#bk-hop").value, 10) || 1;
+      if ($n("#bk-buser-on").checked) patch.bastionUsername = $n("#bk-buser").value;
+      if ($n("#bk-bpass-on").checked) patch.bastionPassword = $n("#bk-bpass").value;
+    }
     if (!Object.keys(patch).length) { toast(t("変更する項目を選んでください"), "err"); return; }
     try {
-      await App().UpdateDevices(ids, patch);
+      const rep = await App().UpdateDevices(ids, patch) || {};
       closeModal(); await refreshInventory();
-      toast(t("{n} 台を変更しました", { n: ids.length }), "ok");
+      if (patch.bastionHop && (rep.hopApplied || rep.hopMissing)) {
+        const msg = t("{n} 台を変更しました。踏み台の認証情報は {m} 台に設定しました", { n: ids.length, m: rep.hopApplied || 0 })
+          + (rep.hopMissing ? t("（{k} 台にはその段の踏み台がなく、変わっていません）", { k: rep.hopMissing }) : "");
+        toast(msg, rep.hopMissing ? "warn" : "ok");
+      } else toast(t("{n} 台を変更しました", { n: ids.length }), "ok");
     } catch (e) { toast(t("変更できません") + ": " + terr(e), "err"); }
   };
 }
@@ -617,9 +760,23 @@ function exportBundleDialog(defaultGroup) {
     try { localStorage.setItem("palaterm.exportNoBastionCreds", noBC ? "1" : "0"); } catch (_) {}
     closeModal();
     try {
-      const dir = await App().ExportBundle(v === "__ALL__" ? "" : v, noBC);
+      const grp = v === "__ALL__" ? "" : v;
+      // The folder is fixed per group: an earlier export there (devices.csv
+      // perhaps open in Excel, half-edited) is asked about before it goes.
+      const tgt = await App().BundleExportTarget(grp).catch(() => null);
+      if (tgt && tgt.exists) {
+        const when = tgt.exportedAt ? tgt.exportedAt.replace("T", " ").slice(0, 19) : "";
+        const ok = await uiConfirm({
+          title: t("前回の書き出しを上書き"),
+          message: t("このフォルダには前回の書き出し（{d}）があります。devices.csv などを上書きしますか？<br><span class=\"muted\" style=\"font-size:12px\">{p}</span>", { d: esc(when || t("日時不明")), p: esc(tgt.dir) }),
+          okLabel: t("上書きする"),
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      const dir = await App().ExportBundle(grp, noBC);
       if (!dir) return;
-      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く") })) {
+      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
         try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
       }
     } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
@@ -627,97 +784,156 @@ function exportBundleDialog(defaultGroup) {
 }
 
 // 読込: a bundle's palaterm-bundle.json (devices + command sets + OS
-// profiles) or a bare devices CSV. Options first, then the file picker, then a
-// preview of what will change before anything is written.
+// profiles) or a bare devices CSV. The file comes first; one screen then
+// shows what it holds, the options that apply to that kind of file (a CSV
+// has no sets or profiles to overwrite), and what applying it would
+// change — previewed again as an option changes — before anything is written.
 function importDialog(defaultGroup) {
+  (async () => {
+    let pv;
+    try { pv = await App().PickImportFile(defaultGroup || "", false); }
+    catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); return; }
+    if (!pv) return;
+    importPreviewDialog(pv, defaultGroup || "");
+  })();
+}
+
+function importPreviewDialog(pv, defaultGroup) {
   const groups = INV.deviceGroups || [];
-  const opts = groups.map(g => `<option value="${esc(g.name)}" ${g.name === defaultGroup ? "selected" : ""}>${esc(g.name)}</option>`).join("");
+  const opts = groups.map(g => `<option value="${esc(g.name)}">${esc(g.name)}</option>`).join("");
+  const isBundle = pv.kind === "bundle";
   const node = h(`<div>
-    <h3>${esc(t("読み込み"))}</h3>
-    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t("一式の目録（palaterm-bundle.json）を選ぶと機器・コマンドセット・OSタイププロファイルをまとめて、機器CSV（*.csv）を選ぶと機器だけを読み込みます。機器は「グループ名＋機器名」で照合し、既存は上書き・新規は追加です。"))} ${esc(t("既存の機器で認証情報（ユーザー名・パスワード等）の欄が空の行は、その機器の今の認証情報を残します。"))}</div>
+    <h3>${esc(t("読み込み内容の確認"))}</h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(pv.path)}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:8px">${esc(isBundle ? t("一式（機器・コマンドセット・OSタイププロファイル）を読み込みます。") : t("機器CSV（機器だけ）を読み込みます。"))} ${esc(t("機器は「グループ名＋機器名」で照合し、既存は上書き・新規は追加です。"))} ${esc(t("既存の機器で認証情報（ユーザー名・パスワード等）の欄が空の行は、その機器の今の認証情報を残します。"))}</div>
     <div class="field"><label>${esc(t("読み込んだ機器の所属グループ"))}</label>
-      <select id="ci-mode">
+      <select id="ci-mode" autofocus>
         <option value="keep">${esc(t("ファイルのグループをそのまま使う"))}</option>
         <option value="assign" ${defaultGroup ? "selected" : ""}>${esc(t("指定グループに追加する"))}</option>
       </select></div>
     <div class="field" id="ci-grp-wrap"><label>${esc(t("追加先グループ"))} <span class="req">${esc(t("必須"))}</span></label>
-      <input id="ci-grp" list="ci-grp-list" value="${esc(defaultGroup || "")}" placeholder="${esc(t("グループ名"))}">
+      <input id="ci-grp" list="ci-grp-list" value="${esc(defaultGroup)}" placeholder="${esc(t("グループ名"))}">
       <datalist id="ci-grp-list">${opts}</datalist></div>
-    <div class="field"><label style="font-weight:normal"><input type="checkbox" id="ci-ow" style="width:auto"> ${esc(t("同名の既存コマンドセット・OSタイププロファイルも一式の内容で上書きする"))}</label></div>
-    <div class="muted" style="font-size:12px">${esc(t("オフのときは、既にあるコマンドセット・プロファイルはそのまま残し、無いものだけ追加します（他のグループが使っている設定を壊さないため）。"))}</div>
+    ${isBundle ? `<div class="field"><label style="font-weight:normal"><input type="checkbox" id="ci-ow" style="width:auto"> ${esc(t("同名の既存コマンドセット・OSタイププロファイルも一式の内容で上書きする"))}</label></div>
+    <div class="muted" style="font-size:12px">${esc(t("オフのときは、既にあるコマンドセット・プロファイルはそのまま残し、無いものだけ追加します（他のグループが使っている設定を壊さないため）。"))}</div>` : ""}
+    <div id="ci-summary" style="font-size:14px;line-height:1.8;margin:10px 0"></div>
     <div class="modal-actions"><button class="btn" id="ci-cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="ci-ok">${esc(t("ファイルを選択"))}</button></div>
+      <button class="btn primary" id="ci-ok">${esc(t("読み込む"))}</button></div>
   </div>`);
   openModal(node, "mid");
-  const modeSel = node.querySelector("#ci-mode");
-  const grpWrap = node.querySelector("#ci-grp-wrap");
-  const syncMode = () => { grpWrap.style.display = modeSel.value === "assign" ? "" : "none"; };
-  modeSel.onchange = syncMode; syncMode();
-  node.querySelector("#ci-cancel").onclick = closeModal;
-  node.querySelector("#ci-ok").onclick = async () => {
-    const target = modeSel.value === "assign" ? node.querySelector("#ci-grp").value.trim() : "";
-    if (modeSel.value === "assign" && !target) { toast(t("グループ名を入力してください"), "err"); return; }
-    const ow = node.querySelector("#ci-ow").checked;
-    closeModal();
-    let pv;
-    try { pv = await App().PickImportFile(target, ow); }
-    catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); return; }
-    if (!pv) return;
-    const s = pv.summary;
-    const lines = [t("機器: {n} 台（新規 {a}・上書き {b}）", { n: s.devices, a: s.devicesNew, b: s.devicesUpdated })];
-    if (pv.kind === "bundle") {
-      lines.push(t("コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.sets, a: s.setsNew, b: s.setsUpdated, c: s.setsSkipped }));
-      lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
+  const modeSel = node.querySelector("#ci-mode"), grpInp = node.querySelector("#ci-grp");
+  const grpWrap = node.querySelector("#ci-grp-wrap"), owBox = node.querySelector("#ci-ow");
+  const target = () => modeSel.value === "assign" ? grpInp.value.trim() : "";
+  const ow = () => !!(owBox && owBox.checked);
+  let cur = pv, gen = 0;
+  const render = () => { node.querySelector("#ci-summary").innerHTML = importSummaryLines(cur).map(esc).join("<br>"); };
+  // An option changed: what the import would do changes with it (a target
+  // group turns updates into new devices, overwriting changes the set
+  // counts). A stale answer arriving after a newer request is dropped.
+  const refresh = async () => {
+    grpWrap.style.display = modeSel.value === "assign" ? "" : "none";
+    if (modeSel.value === "assign" && !target()) {
+      // Nothing to preview into yet: say so instead of leaving the counts
+      // of the previous choice standing.
+      node.querySelector("#ci-summary").innerHTML = `<span class="muted">${esc(t("追加先グループを入力すると、読み込み内容がここに出ます"))}</span>`;
+      return;
     }
-    if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
-    if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
-    if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
-    if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join("・"), n: s.missingColumnsReset }));
-    if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));
-    if ((s.duplicate || []).length) lines.push(t("⚠ 同じグループに同じ機器名の行が重複しているため、2 行目以降は読み込みません: {g}", { g: s.duplicate.join(", ") }));
-    if ((s.jumpCommands || []).length) lines.push(t("⚠ 踏み台のジャンプコマンドが設定された行があります。この文字列は踏み台でそのまま実行されるので、内容を確認してください: {g}", { g: s.jumpCommands.join(" ／ ") }));
-    if ((s.invalid || []).length) lines.push(t("⚠ 内容に問題があるため読み込まない行（{n} 件）: {g}", { n: s.invalid.length, g: s.invalid.map(x => { const i = x.indexOf(": "); return i < 0 ? terr(x) : x.slice(0, i + 2) + terr(x.slice(i + 2)); }).join(" ／ ") }));
-    const msg = `<span class="muted" style="font-size:12px">${esc(pv.path)}</span><br>` + lines.map(esc).join("<br>");
-    if (!(await uiConfirm({ title: t("読み込み内容の確認"), message: msg, okLabel: t("読み込む") }))) return;
+    const my = ++gen;
     try {
-      const r = await App().ApplyImport(pv.path, target, ow);
+      const next = await App().PreviewImportFile(pv.path, target(), ow());
+      if (my === gen && next) { cur = next; render(); }
+    } catch (e) { if (my === gen) toast(t("読み込み失敗") + ": " + terr(e), "err"); }
+  };
+  modeSel.onchange = refresh;
+  wireFilterInput(grpInp, refresh);
+  if (owBox) owBox.onchange = refresh;
+  // The file was previewed with the options the dialog opens on.
+  grpWrap.style.display = modeSel.value === "assign" ? "" : "none";
+  render();
+  node.querySelector("#ci-cancel").onclick = closeModal;
+  const okBtn = node.querySelector("#ci-ok");
+  okBtn.onclick = async () => {
+    if (modeSel.value === "assign" && !target()) { toast(t("グループ名を入力してください"), "err"); return; }
+    // The dialog stays until the import went through: a failure used to
+    // close it and leave the options to be chosen again.
+    okBtn.disabled = true;
+    try {
+      const r = await App().ApplyImport(pv.path, target(), ow());
       PROFILES = await App().ListProfiles();
+      closeModal();
       await refreshInventory();
+      // Show where the devices went: the target group, or the one group the
+      // file named (an import into another group was otherwise invisible).
+      const g = target() || (cur && cur.summary && cur.summary.groupsCreated && cur.summary.groupsCreated.length === 1 ? cur.summary.groupsCreated[0] : "");
+      if (g && (INV.deviceGroups || []).some(x => x.name === g) && document.querySelector("#tab-devices.active")) {
+        deviceView = { mode: "list", group: g }; renderDevices();
+      }
       toast(t("{n} 台を読み込みました", { n: r.devices }), "ok");
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
+    finally { okBtn.disabled = false; }
   };
 }
 
-function editDevice(dev, preGroup) {
+// What an import would do, one line per fact, warnings marked ⚠.
+function importSummaryLines(pv) {
+  const s = pv.summary;
+  const lines = [t("機器: {n} 台（新規 {a}・上書き {b}）", { n: s.devices, a: s.devicesNew, b: s.devicesUpdated })];
+  if (pv.kind === "bundle") {
+    lines.push(t("コマンドセット: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.sets, a: s.setsNew, b: s.setsUpdated, c: s.setsSkipped }));
+    lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
+  }
+  if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
+  if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
+  if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
+  if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join("・"), n: s.missingColumnsReset }));
+  if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));
+  if ((s.duplicate || []).length) lines.push(t("⚠ 同じグループに同じ機器名の行が重複しているため、2 行目以降は読み込みません: {g}", { g: s.duplicate.join(", ") }));
+  if ((s.jumpCommands || []).length) lines.push(t("⚠ 踏み台のジャンプコマンドが設定された行があります。この文字列は踏み台でそのまま実行されるので、内容を確認してください: {g}", { g: s.jumpCommands.join(" ／ ") }));
+  if ((s.secretCommands || []).length) lines.push(t("⚠ パスワードを送るコマンド（{password} / {enable}）を含むコマンドセットがあります。どこへ送る行か確認してください（このセットの実行ログは常にパスワードを伏せて保存します）: {g}", { g: s.secretCommands.join(" ／ ") }));
+  if ((s.invalid || []).length) lines.push(t("⚠ 内容に問題があるため読み込まない行（{n} 件）: {g}", { n: s.invalid.length, g: s.invalid.map(x => { const i = x.indexOf(": "); return i < 0 ? terr(x) : x.slice(0, i + 2) + terr(x.slice(i + 2)); }).join(" ／ ") }));
+  return lines;
+}
+
+// editDevice opens the editor on dev; null adds a device (in preGroup), and
+// template, when given, is what a new device starts from (a copy of another
+// device: nothing is saved until 保存).
+function editDevice(dev, preGroup, template) {
   const preG = preGroup ? (INV.deviceGroups || []).find(g => g.name === preGroup) : null;
   const preHasCreds = !!(preG && (preG.username || preG.password || preG.enablePassword));
   // A device added inside a group that has default credentials starts on
   // them; everything else starts on its own fields.
-  const d = dev || { conn: "ssh", osType: "cisco-ios", authMethod: "password", enabled: true, group: preGroup || "", useGroupCreds: preHasCreds };
+  const d = dev || template || { conn: "ssh", osType: "cisco-ios", authMethod: "password", enabled: true, group: preGroup || "", useGroupCreds: preHasCreds };
+  // The COM ports are read again each time the editor opens: an adapter
+  // plugged in after the unlock used to stay out of the list until the
+  // next lock. The select is refilled when the answer comes.
+  App().ListSerialPorts().then(list => {
+    SERIAL = list || [];
+    const sel = document.getElementById("f-serial");
+    if (sel) { const cur = sel.value; sel.innerHTML = serialOptionsFor(cur); }
+  }).catch(() => {});
+  const serialOptionsFor = cur => `<option value="">${esc(t("自動検出"))}</option>` + SERIAL.map(p =>
+    `<option value="${esc(p)}" ${cur === p ? "selected" : ""}>${esc(p)}</option>`).join("") + (cur && !SERIAL.includes(cur) ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : "");
   // Working copy of the bastion chain (fold legacy single bastion in).
   let bastions = (d.bastions && d.bastions.length) ? d.bastions.map(x => ({ ...x }))
     : (d.bastion && d.bastion.host ? [{ ...d.bastion }] : []);
   const profOpts = PROFILES.map(p => `<option value="${esc(p.key)}" ${d.osType === p.key ? "selected" : ""}>${esc(p.name)}</option>`).join("");
   const setOpts = `<option value="">${esc(t("（なし）"))}</option>` + (INV.commandSets || []).map(s =>
     `<option value="${esc(s.name)}" ${d.commandSet === s.name ? "selected" : ""}>${esc(s.name)}</option>`).join("");
-  const serialOpts = `<option value="">${esc(t("自動検出"))}</option>` + SERIAL.map(p =>
-    `<option value="${esc(p)}" ${d.serialPort === p ? "selected" : ""}>${esc(p)}</option>`).join("");
-
   const groupListId = "grouplist-dev";
   const groupOpts = (INV.deviceGroups || []).map(g => `<option value="${esc(g.name)}">`).join("");
   const node = h(`<div>
-    <h3>${esc(dev ? t("機器を編集") : t("機器を追加"))}</h3>
-    <p class="muted" style="font-size:12px;margin:-10px 0 12px"><span class="req">${esc(t("必須"))}</span> ${esc(t("の付いた項目以外は任意です（空欄のままで保存できます）"))}</p>
+    <h3>${esc(dev ? t("機器を編集") : template ? t("機器を複製") : t("機器を追加"))}</h3>
+    <p class="muted" style="font-size:12px;margin:-10px 0 12px"><span class="req">${esc(t("必須"))}</span> ${esc(t("の付いた項目以外は任意です（空欄のままで保存できます）"))}${template ? " " + esc(t("複製元の内容が入っています。保存するまで機器は作られません。")) : ""}</p>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("ホスト名（ログファイル名に使用）"))} <span class="req">${esc(t("必須"))}</span></label><input id="f-name" value="${esc(d.name || "")}"></div>
+      <div class="field"><label>${esc(t("機器名（ログファイル名に使用）"))} <span class="req">${esc(t("必須"))}</span></label><input id="f-name" value="${esc(d.name || "")}" autofocus></div>
       <div class="field"><label>${esc(t("グループ"))}</label>
         <div class="row-inline" id="f-group-ro" style="gap:12px;min-height:38px;align-items:center"><b>${esc(d.group || t("（未設定）"))}</b>
-          <span class="link" id="f-group-change" style="font-size:12px">${esc(t("別のグループへ移す…"))}</span></div>
+          <span class="link" id="f-group-change" style="font-size:12px">${esc(d.group ? t("別のグループへ移す…") : t("グループを選ぶ…"))}</span></div>
         <input id="f-group" list="${groupListId}" value="${esc(d.group || "")}" placeholder="${esc(t("例: A社（空欄=未設定）"))}" style="display:none">
         <datalist id="${groupListId}">${groupOpts}</datalist></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>${esc(t("IPアドレス"))} <span class="req" id="f-host-req">${esc(t("必須"))}</span></label><input id="f-host" value="${esc(d.host || "")}"></div>
+      <div class="field"><label><span data-tip="${esc(t("IP アドレスまたは DNS で解決できるホスト名（例: 192.0.2.1 / sw01.example.net）"))}">${esc(t("IPアドレス / ホスト名 ⓘ"))}</span> <span class="req" id="f-host-req">${esc(t("必須"))}</span></label><input id="f-host" value="${esc(d.host || "")}"></div>
       <div class="field"><label>${esc(t("拠点（任意）"))}</label><input id="f-site" value="${esc(d.site || "")}" placeholder="${esc(t("例: 本社 / 東京DC"))}"></div>
     </div>
     <div class="grid-2">
@@ -787,7 +1003,7 @@ function editDevice(dev, preGroup) {
       <div class="muted" id="f-mybastion-note" style="font-size:12px;margin-top:4px"></div></div>
     <div class="field" id="fw-bmode" style="margin-bottom:4px"><label><span data-tip="${esc(t("踏み台上でコマンドを打つ: 手前の踏み台の画面で ssh / telnet を打って次へ進みます。ルーターなどシェルのある踏み台ならどれでも使えますが、2段目以降と機器へのログインは踏み台側の ssh が行います。SSH トンネル: 踏み台の SSH の中を通して、この PC から各段と機器へ直接 SSH ログインします（OpenSSH の ProxyJump と同じ）。全段で秘密鍵・レガシー暗号・ホストキー確認が効きます。踏み台はすべて SSH で、TCP 転送を許可している必要があります（Linux の OpenSSH は標準で許可）"))}">${esc(t("踏み台の通り方 ⓘ"))}</span></label>
       <select id="f-bmode">
-        <option value="" ${d.bastionMode === "tunnel" ? "" : "selected"}>${esc(t("踏み台上でコマンドを打つ（標準・ルーターの踏み台も可）"))}</option>
+        <option value="" ${d.bastionMode === "tunnel" ? "" : "selected"}>${esc(t("踏み台上でコマンドを打つ（標準・ルーターの踏み台も可。表・CSV では「コマンド入力」）"))}</option>
         <option value="tunnel" ${d.bastionMode === "tunnel" ? "selected" : ""}>${esc(t("SSH トンネル（この PC から全段にログイン・鍵が使える）"))}</option>
       </select></div>
     <div id="bastions-host"></div>
@@ -796,7 +1012,7 @@ function editDevice(dev, preGroup) {
 
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="save">${esc(t("保存"))}</button>
+      <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
     </div>
   </div>`);
 
@@ -807,9 +1023,19 @@ function editDevice(dev, preGroup) {
   function syncConn() {
     const c = node.querySelector("#f-conn").value;
     if (c === "serial") {
+      const cur = node.querySelector("#f-serial") ? node.querySelector("#f-serial").value : (d.serialPort || "");
       connExtra.innerHTML = `<div class="grid-2">
-        <div class="field"><label>${esc(t("COMポート"))}</label><select id="f-serial">${serialOpts}</select></div>
+        <div class="field"><label>${esc(t("COMポート"))}</label><div class="row-inline" style="gap:6px"><select id="f-serial" style="flex:1">${serialOptionsFor(cur)}</select>
+          <button class="btn sm" id="f-serial-refresh" type="button" data-tip="${esc(t("COM ポートの一覧を読み直します（今挿した USB シリアルを出す）"))}">↻</button></div></div>
         <div class="field"><label>${esc(t("ボーレート"))}</label><input id="f-baud" type="number" value="${d.baud || 9600}"></div></div>`;
+      node.querySelector("#f-serial-refresh").onclick = async () => {
+        try {
+          SERIAL = await App().ListSerialPorts() || [];
+          const sel = node.querySelector("#f-serial"); const v = sel.value;
+          sel.innerHTML = serialOptionsFor(v);
+          toast(SERIAL.length ? t("COM ポート: {n} 件", { n: SERIAL.length }) : t("COM ポートが見つかりません（USB シリアルの接続とドライバーを確認）"), SERIAL.length ? "ok" : "warn");
+        } catch (e) { toast(terr(e), "err"); }
+      };
     } else {
       // Auto-fill the standard port for the chosen method; a custom port
       // (anything other than 22/23) typed by the user survives the switch.
@@ -955,7 +1181,7 @@ function editDevice(dev, preGroup) {
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req b-user-req" ${b.method === "telnet" ? 'style="display:none"' : ""}>${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
           <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
@@ -1002,6 +1228,8 @@ function editDevice(dev, preGroup) {
       if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
       const first = row === bhost.querySelector("[data-bastion-row]") && !mineBox.checked;
       row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || (!first && bmode.value !== "tunnel") ? "none" : "";
+      // A Telnet hop may ask for no username at all; an SSH login needs one.
+      row.querySelector(".b-user-req").style.display = sel.value === "telnet" ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
     bhost.querySelectorAll(".b-auth").forEach(sel => sel.onchange = () => {
@@ -1062,15 +1290,26 @@ function editDevice(dev, preGroup) {
     const chain = collectBastions().filter(b => b.host && b.method);
     if (chain.length) out.bastions = chain.slice(0, 5);
     if (chain.length || out.useMyBastion) out.bastionMode = bmode.value;
-    if (!out.name) { toast(t("ホスト名は必須です"), "err"); return; }
+    if (!out.name) { toast(t("機器名は必須です"), "err"); return; }
     if ((out.guiOn || (!out.cliOff && conn !== "serial")) && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
+    // The 必須 on a hop's user was only a mark: an SSH hop without one fails
+    // at the login, so it is checked here (a Telnet hop may ask for none).
+    const noUser = chain.findIndex(b => b.method === "ssh" && !b.username.trim());
+    if (!out.cliOff && noUser >= 0) { toast(t("{n}段目の踏み台（SSH）のユーザー名は必須です", { n: noUser + 1 }), "err"); return; }
     // A name only has to be unique within its group (it names the log
     // files; a run is one group). The backend checks again on save.
     const nameChanged = !dev || out.name !== dev.name || out.group !== (dev.group || "");
     if (nameChanged && await App().DeviceNameExists(out.name, out.group, out.id)) {
-      toast(out.group ? t("グループ「{g}」に「{n}」は既に登録されています。別のホスト名にしてください", { g: out.group, n: out.name })
-        : t("グループ未設定の機器に「{n}」は既に登録されています。別のホスト名にしてください", { n: out.name }), "err");
+      toast(out.group ? t("グループ「{g}」に「{n}」は既に登録されています。別の機器名にしてください", { g: out.group, n: out.name })
+        : t("グループ未設定の機器に「{n}」は既に登録されています。別の機器名にしてください", { n: out.name }), "err");
       return;
+    }
+    // A group typed into 別のグループへ移す that does not exist yet is
+    // created by the save: asked first, so a typo ("A杜") does not quietly
+    // become a new group.
+    if (out.group && !(INV.deviceGroups || []).some(g => g.name === out.group)) {
+      const mk = await subConfirm(esc(t("グループ「{g}」はまだありません。新しいグループとして作成しますか？", { g: out.group })), t("作成して保存"), t("編集に戻る"), "primary");
+      if (!mk) return;
     }
     try { await App().SaveDevice(out); closeModal(); await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(terr(e), "err"); }
