@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -133,9 +134,9 @@ type Run struct {
 	Interactive bool   `json:"interactive,omitempty"`
 	Schedule    string `json:"schedule,omitempty"`
 	// Rounds / FailedRounds: see Summary (a 予約's folder).
-	Rounds       int      `json:"rounds,omitempty"`
-	FailedRounds int      `json:"failedRounds,omitempty"`
-	HasSummary   bool     `json:"hasSummary"`
+	Rounds       int  `json:"rounds,omitempty"`
+	FailedRounds int  `json:"failedRounds,omitempty"`
+	HasSummary   bool `json:"hasSummary"`
 	// External: a folder under the log root that PalaTerm did not write
 	// (logs brought in from another job or another tool, dropped into
 	// logs\ by hand). Listed so it can be compared like a run: its devices
@@ -397,29 +398,115 @@ func stageFromName(name string, tok logstore.StageTokens) string {
 }
 
 // externalDeviceKey is the device a log file belongs to: the name without
-// its extension, less the fields that are stage words or dates / times.
+// its extension, less the fields that are stage words or dates / times. The
+// separators of what is left stay as they were (lab-sw01(HQ)_before_0901 →
+// lab-sw01(HQ)), so the name reads as in the file. An IPv4 address stays
+// whole (192.0.2.1_20260713_1150 → 192.0.2.1), and a Japanese stage word
+// joined to the rest of a field is taken out of it (sw01_作業後ログ_… and
+// sw01作業前 → sw01), so the before and after files of one device pair up.
 func externalDeviceKey(file string, tok logstore.StageTokens) string {
 	base := strings.TrimSuffix(file, filepath.Ext(file))
 	words := stageWords(tok)
-	var keep []string
-	for _, f := range nameFields(base) {
-		lf := strings.ToLower(f)
-		if _, ok := words[lf]; ok || isDateOrTime(f) {
+	var cjk []string
+	for w := range words {
+		if isCJK(w) && len([]rune(w)) >= 2 {
+			cjk = append(cjk, w)
+		}
+	}
+	sort.Slice(cjk, func(i, j int) bool {
+		return len(cjk[i]) > len(cjk[j]) || (len(cjk[i]) == len(cjk[j]) && cjk[i] < cjk[j])
+	})
+	protected := ipv4RE.ReplaceAllStringFunc(base, func(ip string) string { return strings.ReplaceAll(ip, ".", string(ipDot)) })
+	var out strings.Builder
+	kept := 0
+	// closers keeps the ) and ] of a dropped separator run while one is open.
+	closers := func(sep string) {
+		for _, r := range sep {
+			if (r == ')' || r == ']') && strings.Count(out.String(), string(map[rune]rune{')': '(', ']': '['}[r])) > strings.Count(out.String(), string(r)) {
+				out.WriteRune(r)
+			}
+		}
+	}
+	for _, seg := range nameSegments(protected) {
+		f := strings.ReplaceAll(seg.field, string(ipDot), ".")
+		drop := false
+		if _, ok := words[strings.ToLower(f)]; ok || isDateOrTime(f) {
+			drop = true
+		} else if isCJK(f) {
+			cut := f
+			for _, w := range cjk {
+				cut = strings.ReplaceAll(cut, w, "")
+			}
+			if cut != f {
+				if cut == "" || logSuffix[strings.ToLower(cut)] {
+					drop = true
+				} else {
+					f = cut
+				}
+			}
+		}
+		if drop || f == "" {
+			closers(seg.sep)
 			continue
 		}
-		keep = append(keep, f)
+		if kept > 0 || strings.ContainsAny(seg.sep, "([") {
+			out.WriteString(seg.sep)
+		}
+		out.WriteString(f)
+		kept++
 	}
-	if len(keep) == 0 {
+	key := strings.Trim(out.String(), "_-. 　")
+	if kept == 0 || key == "" {
 		return base
 	}
-	return strings.Join(keep, "_")
+	return key
 }
+
+// nameSegment is one field of a name with the separator run before it (a
+// trailing run is a segment with no field).
+type nameSegment struct{ sep, field string }
+
+func nameSegments(s string) []nameSegment {
+	var segs []nameSegment
+	var sep, field strings.Builder
+	flush := func() {
+		segs = append(segs, nameSegment{sep.String(), field.String()})
+		sep.Reset()
+		field.Reset()
+	}
+	for _, r := range s {
+		if isNameSep(r) {
+			if field.Len() > 0 {
+				flush()
+			}
+			sep.WriteRune(r)
+		} else {
+			field.WriteRune(r)
+		}
+	}
+	if sep.Len() > 0 || field.Len() > 0 {
+		flush()
+	}
+	return segs
+}
+
+// ipv4RE finds an IPv4 address in a file name; ipDot stands in for its dots
+// while the name is split on separators (a dot is one).
+var ipv4RE = regexp.MustCompile(`(^|[^0-9.])((?:\d{1,3}\.){3}\d{1,3})($|[^0-9.])`)
+
+const ipDot = ''
+
+// logSuffix: what is left of a field once its stage word is out that only
+// says "log" (作業後ログ → ログ).
+var logSuffix = map[string]bool{"ログ": true, "のログ": true, "log": true, "logs": true, "結果": true, "取得": true, "取得ログ": true}
 
 // nameFields splits a file or folder name on the separators tools use.
 func nameFields(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		return r == '_' || r == '-' || r == ' ' || r == '.' || r == '\\' || r == '/' || r == '(' || r == ')' || r == '[' || r == ']' || r == '　'
-	})
+	return strings.FieldsFunc(s, isNameSep)
+}
+
+func isNameSep(r rune) bool {
+	return r == '_' || r == '-' || r == ' ' || r == '.' || r == '\\' || r == '/' || r == '(' || r == ')' || r == '[' || r == ']' || r == '　'
 }
 
 // isDateOrTime: a field that is only digits (with h / m / s / colons at
@@ -431,11 +518,11 @@ func isDateOrTime(f string) bool {
 	for _, r := range f {
 		if r >= '0' && r <= '9' {
 			digits++
-		} else if r != 'h' && r != 'm' && r != 's' && r != ':' && r != 'T' {
+		} else if r != 'h' && r != 'm' && r != 's' && r != ':' && r != 'T' && !strings.ContainsRune("年月日時分秒", r) {
 			return false
 		}
 	}
-	return digits >= 1 && digits <= 14 && digits >= len(f)-3
+	return digits >= 1 && digits <= 14 && digits >= len([]rune(f))-6 && (digits >= len([]rune(f))-3 || strings.ContainsAny(f, "年月日時分秒"))
 }
 
 func isCJK(s string) bool {

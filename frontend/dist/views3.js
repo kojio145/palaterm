@@ -239,7 +239,12 @@ async function compareRuns() {
   const failed = names.filter(n => failedIn(n).length);
   const pairs = names.filter(n => byName[n].a && byName[n].b && !failedIn(n).length);
   if (!pairs.length && !failed.length) {
-    out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）"))}</div>`;
+    // Say which names each side was read as: a file naming habit that keeps
+    // the names apart (a stage word or a date left in) shows at once.
+    const sample = run => { const ns = [...new Set(run.devices.map(d => d.name))]; return ns.slice(0, 3).join(", ") + (ns.length > 3 ? t(" ほか {n} 台", { n: ns.length - 3 }) : ""); };
+    out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）"))}
+      <div class="mono" style="font-size:12px;margin-top:6px">A: ${esc(sample(a) || t("（ログなし）"))}<br>B: ${esc(sample(b) || t("（ログなし）"))}</div>
+      <div style="font-size:12px;margin-top:4px">${esc(t("外部フォルダの機器名はファイル名から日付・時刻と作業の語（前／後・作業前ログ など）を除いて読み取っています。A と B で名前が違うときは、ファイル名をそろえてください"))}</div></div>`;
     return;
   }
   out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("比較中… ({n} 台)", { n: pairs.length }))}</div>`;

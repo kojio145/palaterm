@@ -1236,6 +1236,8 @@ const I18N_EN = {
   "作業": "Stage",
   "成功 / 失敗": "OK / failed",
   "両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）": "No device has a log in both runs (logs are paired by device name)",
+  "外部フォルダの機器名はファイル名から日付・時刻と作業の語（前／後・作業前ログ など）を除いて読み取っています。A と B で名前が違うときは、ファイル名をそろえてください": "An external folder's device names are read from the file names, less dates, times and stage words (before / after, 作業前ログ and the like). If A and B name a device differently, make the file names match",
+  "（ログなし）": "(no logs)",
   "比較中… ({n} 台)": "Comparing… ({n} device(s))",
   "差分": "Diff",
   "追加 / 削除（行）": "Added / removed (lines)",

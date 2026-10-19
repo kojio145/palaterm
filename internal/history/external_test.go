@@ -99,14 +99,27 @@ func TestExternalDeviceKeyAndStage(t *testing.T) {
 	tok := logstore.StageTokens{Before: "mae", After: "ato"}
 	for in, want := range map[string]string{
 		"sw01_before_20260901_143000.txt": "sw01",
-		"core-sw1 (after).log":            "core_sw1",
+		"core-sw1 (after).log":            "core-sw1",
 		"fw1_mae.txt":                     "fw1",
 		"fw1.txt":                         "fw1",
 		"before.txt":                      "before", // nothing else to name it by
 		"R1_HQ_core_after_20261001.txt":   "R1_HQ_core",
 		"sw2_2026-09-01_14h30.log":        "sw2",
-		"SW01_前_20261019_095312.txt":     "SW01",
-		"中継SW_後.txt":                     "中継SW", // 中 inside a device name is not a stage word
+		"SW01_前_20261019_095312.txt":      "SW01",
+		"中継SW_後.txt":                      "中継SW", // 中 inside a device name is not a stage word
+		// v1.7.10: a stage word joined to ログ, a stage word joined to the
+		// name, an IP address as the name, a date in 年月日.
+		"lab-sw01【本社(有線SW#1)】_作業前ログ_20261019_1810.txt": "lab-sw01【本社(有線SW#1)】",
+		"lab-sw01【本社(有線SW#1)】_作業後ログ_20261019_1830.txt": "lab-sw01【本社(有線SW#1)】",
+		"lab-sw01【本社(有線SW#1)】_作業中ログ_20261019_1820.txt": "lab-sw01【本社(有線SW#1)】",
+		"sw01作業前.txt":                   "sw01",
+		"sw01_変更後のログ.log":               "sw01",
+		"192.0.2.1_20261019_115015.log": "192.0.2.1",
+		"host_192.0.2.10.log":           "host_192.0.2.10",
+		"sw01_2026年10月19日_11時50分.txt":   "sw01",
+		"作業前.txt":                       "作業前", // nothing else to name it by
+		"x (HQ)_before.txt":             "x (HQ)",
+		"(HQ)sw01_after.txt":            "(HQ)sw01",
 	} {
 		if got := externalDeviceKey(in, tok); got != want {
 			t.Errorf("externalDeviceKey(%q) = %q, want %q", in, got, want)
