@@ -72,22 +72,29 @@ function renderHistoryView() {
     const aRun = runs.find(r => r.dir === histState.a);
     // The newest 作業後 of the same group that came after A: right after a
     // 作業前 is taken, last month's 作業後 is not what B means.
-    const after = runs.find(r => r.stage === "after" && (!aRun || !aRun.group || r.group === aRun.group) && r.dir !== histState.a && (!aRun || !r.startedAt || !aRun.startedAt || r.startedAt > aRun.startedAt));
+    const sameGroup = r => r.stage === "after" && (!aRun || !aRun.group || r.group === aRun.group) && r.dir !== histState.a;
+    const after = runs.find(r => sameGroup(r) && (!aRun || !r.startedAt || !aRun.startedAt || r.startedAt >= aRun.startedAt))
+      || runs.find(sameGroup); // none after A: the newest, with the warning below
     histState.b = after ? after.dir : "";
   }
   const runOpt = sel => `<option value="">${esc(t("（選択）"))}</option>` + runs.map(r =>
-    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === sel ? "selected" : ""}>${esc(runDirName(r))}</option>`).join("");
+    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === sel ? "selected" : ""}>${esc(runDirName(r) + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
   // The work run (作業中 batch or interactive session) between A and B, same
   // group when known: it says what was done, so the compare can conclude
   // whether that work shows up in the after logs.
   const aRun = runs.find(r => r.dir === histState.a), bRun = runs.find(r => r.dir === histState.b);
   const bOlder = !!(aRun && bRun && aRun.startedAt && bRun.startedAt && bRun.startedAt < aRun.startedAt);
   if (aRun && bRun && (!histState.c || !runs.some(r => r.dir === histState.c))) {
-    const mid = runs.find(r => isWorkRun(r) && r.startedAt > aRun.startedAt && r.startedAt < bRun.startedAt && (!aRun.group || !r.group || r.group === aRun.group));
+    // A and B inside one job folder (external, jobefore and jobfter):
+    // that folder's during / work folder, whatever the file times say.
+    const parentOf = d => d.slice(0, Math.max(d.lastIndexOf("\\"), d.lastIndexOf("/")));
+    const sibling = aRun.external && bRun.external && parentOf(aRun.dir) === parentOf(bRun.dir)
+      ? runs.find(r => isWorkRun(r) && r.external && parentOf(r.dir) === parentOf(aRun.dir)) : null;
+    const mid = sibling || runs.find(r => isWorkRun(r) && r.startedAt > aRun.startedAt && r.startedAt < bRun.startedAt && (!aRun.group || !r.group || r.group === aRun.group));
     histState.c = mid ? mid.dir : "";
   }
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
-    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("対話接続") : ""))}</option>`).join("");
+    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("対話接続") : "") + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
 
   // Sort / filter of the run rows (display only; see listView in app.js).
   // The comparison selects above the table always list every run.
@@ -95,7 +102,7 @@ function renderHistoryView() {
   const focus = listViewFocus();
   const groupsSeen = [...new Set(runs.map(r => r.group || "").filter(Boolean))].sort();
   const stagesSeen = [...new Set(runs.map(r => r.stage || "").filter(Boolean))];
-  const stageName = r => r.stage ? stageLabel(r.stage) + (r.interactive ? " " + t("対話接続") : "") : "";
+  const stageName = r => (r.stage ? stageLabel(r.stage) : "") + (r.interactive ? " " + t("対話接続") : "") + (r.external ? " " + t("外部") : "");
   const visible = listViewApply(LV, runs,
     r => [fmtRunTime(r.startedAt), r.group, stageName(r), ...r.devices.map(d => d.name)],
     (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? r.failed * 100000 + r.ok : -1) : (r.group || ""),
@@ -125,10 +132,10 @@ function renderHistoryView() {
     return `<tr>
       <td style="width:36px"><span class="link" data-toggle="${esc(r.dir)}" style="text-decoration:none">${open ? "▾" : "▸"}</span></td>
       <td style="width:170px" class="mono">${esc(fmtRunTime(r.startedAt))}</td>
-      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("対話接続"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
+      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("対話接続"))}</span>` : ""}${r.external ? `<span class="badge" data-tip="${esc(t("PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています"))}">${esc(t("外部"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
       <td><div class="clip" data-tip="${esc(r.group || "")}">${esc(r.group || "")}</div></td>
       <td style="width:130px">${counts}</td>
-      <td style="width:120px;font-size:12px" class="muted">${r.rounds > 1 ? `<span data-tip="${esc(t("この予約で実行した回数（各機器の結果は最新の回）。失敗のあった回: {f}", { f: r.failedRounds || 0 }))}">${esc(t("{n} 回分", { n: r.rounds }))}${r.failedRounds ? ` <span style="color:var(--err)">${esc(t("(失敗 {f})", { f: r.failedRounds }))}</span>` : ""}</span>` : r.hasSummary ? "" : esc(t("旧形式"))}</td>
+      <td style="width:120px;font-size:12px" class="muted">${r.rounds > 1 ? `<span data-tip="${esc(t("この予約で実行した回数（各機器の結果は最新の回）。失敗のあった回: {f}", { f: r.failedRounds || 0 }))}">${esc(t("{n} 回分", { n: r.rounds }))}${r.failedRounds ? ` <span style="color:var(--err)">${esc(t("(失敗 {f})", { f: r.failedRounds }))}</span>` : ""}</span>` : r.hasSummary ? "" : r.external ? esc(t("外部フォルダ")) : esc(t("旧形式"))}</td>
       <td style="text-align:right;white-space:nowrap;width:260px">
         <button class="btn sm" data-cmp-a="${esc(r.dir)}" ${histState.a === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較元(A)"))}</button>
         <button class="btn sm" data-cmp-b="${esc(r.dir)}" ${histState.b === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較先(B)"))}</button>
@@ -140,7 +147,7 @@ function renderHistoryView() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行履歴"))}</div>
-        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}</div></div>
+        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダに置けば（直下、または案件フォルダの中の 作業前／作業中／作業後 フォルダ）「外部」として並び、同じように比較できます"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読込"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
@@ -208,7 +215,10 @@ async function compareRuns() {
   a.devices.forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "" }; });
   b.devices.forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; });
   const names = Object.keys(byName);
-  const failedIn = n => { const e = byName[n]; const f = []; if (e.sa && e.sa !== "ok") f.push("A"); if (e.sb && e.sb !== "ok") f.push("B"); return f; };
+  // "unknown" (a folder without a summary: an old run, an external folder)
+  // is not a failure — only error / canceled are.
+  const bad = st => st === "error" || st === "canceled";
+  const failedIn = n => { const e = byName[n]; const f = []; if (bad(e.sa)) f.push("A"); if (bad(e.sb)) f.push("B"); return f; };
   const failed = names.filter(n => failedIn(n).length);
   const pairs = names.filter(n => byName[n].a && byName[n].b && !failedIn(n).length);
   if (!pairs.length && !failed.length) {

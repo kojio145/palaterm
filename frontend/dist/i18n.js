@@ -1584,4 +1584,9 @@ const I18N_EN = {
   "{w} で失敗": "Failed in {w}",
   "片方の実行にしか含まれていない機器:": "Devices in only one of the runs:",
   "選んだ行のすぐ下に複製を作ります（機器名には _2 などが付きます）": "Makes copies right under the selected rows (device names get _2 and so on)",
+  "外部": "External",
+  "［外部］": "[external]",
+  "外部フォルダ": "External folder",
+  "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (before, after, 作業前 …)",
+  "他で取ったログも、フォルダごと logs フォルダに置けば（直下、または案件フォルダの中の 作業前／作業中／作業後 フォルダ）「外部」として並び、同じように比較できます": "Logs taken elsewhere can be compared the same way: drop the folder into the logs folder (directly, or as a job folder holding before / during / after folders) and it is listed as \"External\"",
 };

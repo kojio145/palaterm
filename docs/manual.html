@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.7.7</div>
+    <div class="hero-tag">使い方マニュアル / v1.7.8</div>
   </header>
 
   <nav class="toc">
@@ -607,6 +607,7 @@
       <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または対話接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗（＝は作業前からあった行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。</li>
     </ol>
     <div class="callout tip"><span class="ic">i</span><p>作業前に「作業タイミング: 作業前」で取得 → 作業 → 「作業後」で取得、という流れにしておくと、A / B を選ぶ手間なく比較できます。「指定なし」で取ったログ同士も比較できます（<code>palaterm-run.json</code> が無い古いフォルダはファイル名から機器名を推定します）。</p></div>
+    <div class="callout tip"><span class="ic">i</span><p><strong>他で取ったログも比較できます（外部フォルダ）。</strong>PalaTerm 以外で取った過去の案件のログを、フォルダごと <code>logs\</code> に置くと、一覧に<strong>「外部」</strong>バッジ付きで並び、同じように A / B / 作業中に選べます。<code>logs\</code> 直下に <code>作業前</code>・<code>作業後</code> のフォルダを置いても、<code>logs\案件X\作業前</code>・<code>作業中</code>・<code>作業後</code> のように案件フォルダの 1 段下に置いても構いません。作業前・作業中・作業後はフォルダ名の語（before / after / during / 作業前 / 作業中 / 作業後、設定した作業タイミングの語）から、機器名はファイル名から日付・時刻・作業語を除いたもの（<code>sw01_before_20260901.txt</code> → sw01）として判定し、A と B で同じ機器名のログ同士を突き合わせます（対象は .txt / .log / .out / .cfg などのテキストファイル）。</p></div>
   </section>
 
   <section id="schedule">
@@ -815,7 +816,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.7.7 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.7.8 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>
