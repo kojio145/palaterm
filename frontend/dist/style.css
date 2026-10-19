@@ -351,7 +351,7 @@ tr.dragging { opacity: .45; }
 
 /* Column resizing: the grip sits on the right edge of each header cell */
 table[data-colw] th { position: relative; }
-.col-resizer { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 2; }
+.col-resizer { position: absolute; top: 0; right: 0; width: 10px; height: 100%; cursor: col-resize; z-index: 2; } /* inside its own header: the next header (sticky, z-index 3) covered a grip that stuck out */
 .col-resizer:hover, table.resizing .col-resizer { border-right: 2px solid var(--accent); }
 table.resizing { user-select: none; cursor: col-resize; }
 th.sortable { cursor: pointer; user-select: none; }

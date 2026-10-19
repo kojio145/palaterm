@@ -1587,6 +1587,7 @@ const I18N_EN = {
   "外部": "External",
   "［外部］": "[external]",
   "外部フォルダ": "External folder",
-  "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (before, after, 作業前 …)",
-  "他で取ったログも、フォルダごと logs フォルダに置けば（直下、または案件フォルダの中の 作業前／作業中／作業後 フォルダ）「外部」として並び、同じように比較できます": "Logs taken elsewhere can be compared the same way: drop the folder into the logs folder (directly, or as a job folder holding before / during / after folders) and it is listed as \"External\"",
+  "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put directly into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (前 / 中 / 後, before / after …)",
+  "他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）": "Logs taken elsewhere can be compared the same way: drop the folder directly into the logs folder and it is listed as \"External\", selectable as A, B or the work run (前 / 中 / 後, before / after … in the folder name set the default choice)",
+  "名前が完全には一致しないため、先頭が同じログ同士を比べています": "The names do not match exactly: logs whose names start the same way are compared",
 };

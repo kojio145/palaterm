@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.7.8";
+const APP_VERSION = "1.7.9";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -301,6 +301,13 @@ function wireColResize(root) {
       });
       grip.addEventListener("pointerdown", e => {
         e.preventDefault(); e.stopPropagation();
+        // With table-layout: fixed the table's spare width is shared out
+        // over the columns, so each is drawn wider than its style says.
+        // Setting the grabbed column alone to its drawn width re-shared the
+        // spare width and the column jumped under the pointer. Every column
+        // is pinned at its drawn width first; the last one is left free to
+        // take up whatever the drag gives or takes.
+        ths.forEach((t, j) => { t.style.width = j === ths.length - 1 ? "" : Math.round(t.getBoundingClientRect().width) + "px"; });
         const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
         grip.setPointerCapture(e.pointerId);
         table.classList.add("resizing");

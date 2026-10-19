@@ -3,6 +3,7 @@ package history
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,11 +27,15 @@ func TestListExternalFolders(t *testing.T) {
 	mk("maint_before", "notes.xlsx") // not a device
 	mk("maint_after", "sw01_after_20260902.txt")
 	mk("maint_after", "sw02-after.log")
-	// A job folder holding the stage folders one level down.
-	mk("案件X", "作業前", "core1.txt")
-	mk("案件X", "作業中", "core1.txt")
-	mk("案件X", "作業後", "core1.txt")
-	// A folder with neither log files nor log sub-folders: not listed.
+	// Folders named by one character, files carrying it too (the field's habit).
+	mk("前", "core1_前_20261019.log")
+	mk("中", "core1_中.log")
+	mk("後", "core1_後_20261019.log")
+	// An archive of old runs inside logs\: its sub-folders are NOT listed
+	// (only the root's own children are), and it has no log files itself.
+	mk("99_old", "20261001_030000_lab_work", "sw9_lab__work_20261001_030000.txt")
+	mk("99_old", "log_20260901_120000_before", "sw9.txt")
+	// A folder with no log files: not listed.
 	os.MkdirAll(filepath.Join(root, "pictures"), 0o755)
 	os.WriteFile(filepath.Join(root, "pictures", "a.png"), []byte("x"), 0o644)
 	// An app run still lists the old way.
@@ -57,14 +62,19 @@ func TestListExternalFolders(t *testing.T) {
 	if a.Stage != "after" || len(a.Devices) != 2 || a.Devices[0].Name != "sw01" || a.Devices[1].Name != "sw02" {
 		t.Errorf("maint_after: %+v", a)
 	}
-	for sub, st := range map[string]string{"作業前": "before", "作業中": "during", "作業後": "after"} {
-		r, ok := byName[filepath.Join("案件X", sub)]
+	for sub, st := range map[string]string{"前": "before", "中": "during", "後": "after"} {
+		r, ok := byName[sub]
 		if !ok || !r.External || r.Stage != st || len(r.Devices) != 1 || r.Devices[0].Name != "core1" || r.Devices[0].Status != "unknown" {
-			t.Errorf("案件X\\%s: ok=%v %+v", sub, ok, r)
+			t.Errorf("%s: ok=%v %+v", sub, ok, r)
 		}
 	}
-	if _, ok := byName["案件X"]; ok {
-		t.Error("the job folder itself (no log files) is listed")
+	if _, ok := byName["99_old"]; ok {
+		t.Error("the archive folder itself (no log files) is listed")
+	}
+	for _, r := range runs {
+		if strings.Contains(r.Dir, "99_old") {
+			t.Errorf("a sub-folder of the archive is listed: %s", r.Dir)
+		}
 	}
 	if _, ok := byName["pictures"]; ok {
 		t.Error("a folder without logs is listed")
@@ -95,14 +105,16 @@ func TestExternalDeviceKeyAndStage(t *testing.T) {
 		"before.txt":                      "before", // nothing else to name it by
 		"R1_HQ_core_after_20261001.txt":   "R1_HQ_core",
 		"sw2_2026-09-01_14h30.log":        "sw2",
+		"SW01_前_20261019_095312.txt":     "SW01",
+		"中継SW_後.txt":                     "中継SW", // 中 inside a device name is not a stage word
 	} {
 		if got := externalDeviceKey(in, tok); got != want {
 			t.Errorf("externalDeviceKey(%q) = %q, want %q", in, got, want)
 		}
 	}
 	for in, want := range map[string]string{
-		"maint_before": "before", "post-change": "after", "案件X\\作業中ログ": "during", "ato_logs": "after",
-		"before_after": "", "plain": "", "pre": "before",
+		"maint_before": "before", "post-change": "after", "作業中ログ": "during", "ato_logs": "after",
+		"before_after": "", "plain": "", "pre": "before", "前": "before", "中": "during", "後": "after", "変更後": "after", "中継": "",
 	} {
 		if got := stageFromName(in, tok); got != want {
 			t.Errorf("stageFromName(%q) = %q, want %q", in, got, want)

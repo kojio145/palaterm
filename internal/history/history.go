@@ -229,20 +229,13 @@ func List(root string, tok logstore.StageTokens) ([]Run, error) {
 			one(dir, e.Name(), e, false)
 			continue
 		}
-		// Anything else under the log root is a folder the user put there:
-		// the logs of an earlier job, taken by hand or by another tool. With
-		// log files in it, it is listed as is; a job folder holding the
-		// before / during / after folders is listed one level down
-		// ("job\before"), so a whole job can be dropped in and compared.
+		// Anything else directly under the log root is a folder the user put
+		// there: the logs of an earlier job, taken by hand or by another
+		// tool. With log files in it, it is listed as is. Only the root's own
+		// children count: an archive folder of old runs inside logs\ must
+		// not spill its hundreds of sub-folders into the list.
 		if hasLogFiles(dir) {
 			one(dir, e.Name(), e, true)
-			continue
-		}
-		subs, _ := os.ReadDir(dir)
-		for _, s := range subs {
-			if s.IsDir() && hasLogFiles(filepath.Join(dir, s.Name())) {
-				one(filepath.Join(dir, s.Name()), e.Name()+string(filepath.Separator)+s.Name(), s, true)
-			}
 		}
 	}
 	forget(root, seen)
@@ -299,7 +292,7 @@ func copyRun(r Run) Run {
 }
 
 // forget drops the cached rows of root's folders that are gone (seen holds
-// the folders this listing found, one or two levels under root).
+// the folders this listing found).
 func forget(root string, seen map[string]bool) {
 	root = filepath.Clean(root)
 	cacheMu.Lock()
@@ -365,9 +358,9 @@ func readExternal(dir, label string, tok logstore.StageTokens) Run {
 func stageWords(tok logstore.StageTokens) map[string]string {
 	tok = tok.Filled()
 	w := map[string]string{
-		"before": "before", "pre": "before", "作業前": "before", "事前": "before",
-		"after": "after", "post": "after", "作業後": "after", "事後": "after",
-		"during": "during", "work": "during", "作業中": "during",
+		"before": "before", "pre": "before", "作業前": "before", "事前": "before", "変更前": "before", "実施前": "before", "前": "before",
+		"after": "after", "post": "after", "作業後": "after", "事後": "after", "変更後": "after", "実施後": "after", "後": "after",
+		"during": "during", "work": "during", "作業中": "during", "実施中": "during", "変更中": "during", "中": "during",
 	}
 	w[strings.ToLower(tok.Before)] = "before"
 	w[strings.ToLower(tok.After)] = "after"
@@ -375,7 +368,7 @@ func stageWords(tok logstore.StageTokens) map[string]string {
 	return w
 }
 
-// stageFromName reads the stage out of a folder name ("案件X\作業前",
+// stageFromName reads the stage out of a folder name ("作業前", "前",
 // "sw_before_2026", "post-change"): "" when none or more than one is named.
 func stageFromName(name string, tok logstore.StageTokens) string {
 	words := stageWords(tok)
@@ -384,8 +377,9 @@ func stageFromName(name string, tok logstore.StageTokens) string {
 		st, ok := words[strings.ToLower(f)]
 		if !ok {
 			// Japanese stage words are not separated from the rest: "作業前ログ".
+			// Two characters or more only: a lone 中 sits inside many words.
 			for w, s := range words {
-				if isCJK(w) && strings.Contains(f, w) {
+				if isCJK(w) && len([]rune(w)) >= 2 && strings.Contains(f, w) {
 					st, ok = s, true
 					break
 				}

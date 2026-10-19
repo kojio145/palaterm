@@ -11,8 +11,11 @@ const HIST_PAGE = 200;
 // across re-renders of the tab.
 const histState = { open: {}, failedOnly: {}, a: "", b: "", c: "", runs: [], limit: HIST_PAGE };
 // Runs that represent the work itself: a batch tagged 作業中, or an
-// interactive session (stage "work").
-function isWorkRun(r) { return r.stage === "during" || r.stage === "work"; }
+// interactive session (stage "work"). An external folder may be the work
+// log whatever it is called, so every one of them is offered.
+function isWorkRun(r) { return r.stage === "during" || r.stage === "work" || !!r.external; }
+// Whether an external folder is named as the work (中 / during …).
+function isNamedWork(r) { return r.stage === "during" || r.stage === "work"; }
 
 function fmtRunTime(iso) {
   if (!iso) return "";
@@ -85,12 +88,11 @@ function renderHistoryView() {
   const aRun = runs.find(r => r.dir === histState.a), bRun = runs.find(r => r.dir === histState.b);
   const bOlder = !!(aRun && bRun && aRun.startedAt && bRun.startedAt && bRun.startedAt < aRun.startedAt);
   if (aRun && bRun && (!histState.c || !runs.some(r => r.dir === histState.c))) {
-    // A and B inside one job folder (external, jobefore and jobfter):
-    // that folder's during / work folder, whatever the file times say.
-    const parentOf = d => d.slice(0, Math.max(d.lastIndexOf("\\"), d.lastIndexOf("/")));
-    const sibling = aRun.external && bRun.external && parentOf(aRun.dir) === parentOf(bRun.dir)
-      ? runs.find(r => isWorkRun(r) && r.external && parentOf(r.dir) === parentOf(aRun.dir)) : null;
-    const mid = sibling || runs.find(r => isWorkRun(r) && r.startedAt > aRun.startedAt && r.startedAt < bRun.startedAt && (!aRun.group || !r.group || r.group === aRun.group));
+    // External folders dropped in together carry the same times, so for an
+    // external A / B the external folder named as the work (中, during …)
+    // is the default, whatever the clock says.
+    const ext = aRun.external && bRun.external ? runs.find(r => r.external && isNamedWork(r)) : null;
+    const mid = ext || runs.find(r => isNamedWork(r) && r.startedAt > aRun.startedAt && r.startedAt < bRun.startedAt && (!aRun.group || !r.group || r.group === aRun.group));
     histState.c = mid ? mid.dir : "";
   }
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
@@ -147,7 +149,7 @@ function renderHistoryView() {
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行履歴"))}</div>
-        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダに置けば（直下、または案件フォルダの中の 作業前／作業中／作業後 フォルダ）「外部」として並び、同じように比較できます"))}</div></div>
+        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読込"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
@@ -214,6 +216,21 @@ async function compareRuns() {
   const byName = {};
   a.devices.forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "" }; });
   b.devices.forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; });
+  // Names that pair nowhere by exact match: an external folder's file may
+  // carry more than the device name (sw01 vs sw01_HQ): a name that is the
+  // start of exactly one name on the other side pairs with it, and the row
+  // says so.
+  const aOnly = Object.keys(byName).filter(n => byName[n].sa && !byName[n].sb);
+  const bOnly = Object.keys(byName).filter(n => !byName[n].sa && byName[n].sb);
+  const loose = {};
+  for (const an of aOnly) {
+    const hits = bOnly.filter(bn => !loose[bn] && (bn.toLowerCase().startsWith(an.toLowerCase()) || an.toLowerCase().startsWith(bn.toLowerCase())));
+    if (hits.length === 1) {
+      const bn = hits[0], eb = byName[bn];
+      byName[an].b = eb.b; byName[an].sb = eb.sb; byName[an].eb = eb.eb; byName[an].pairedWith = bn;
+      loose[bn] = true; delete byName[bn];
+    }
+  }
   const names = Object.keys(byName);
   // "unknown" (a folder without a summary: an old run, an external folder)
   // is not a failure — only error / canceled are.
@@ -303,7 +320,7 @@ async function compareRuns() {
         <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
       ${rows.map(r => `<tr>
-        <td><b>${esc(r.name)}</b></td>
+        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}</td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : (r.added + r.removed === 0 ? `<span style="color:var(--ok)">${esc(t("差分なし"))}</span>` : `<span style="color:var(--warn)">${esc(t("差分あり"))}</span>`)}</td>
         <td class="mono">${r.err ? "" : `<span style="color:var(--ok)">+${r.added}</span> / <span style="color:var(--err)">-${r.removed}</span>`}</td>
         ${work ? `<td>${verdict(r)}</td>` : ""}
