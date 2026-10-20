@@ -64,7 +64,11 @@ type ChangedLine struct {
 // promptLine matches a transcript line that is a prompt followed by what was
 // typed: "R1#show run", "IX-A(config)# hostname x", "FG (port1) # set ip …",
 // "user@host> show". Output lines ("% Invalid input") do not start that way.
-var promptLine = regexp.MustCompile(`^([A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?:\s\([^)]*\))?\s?[#>])\s*(\S.*)$`)
+// AlaxalA marks a configuration not saved yet with "!" before the prompt
+// ("!sw(config)# interface vlan 10"): every line typed after the first
+// change has it, and missing it left those lines out (user report
+// 2026-10-20).
+var promptLine = regexp.MustCompile(`^(!?[A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?:\s\([^)]*\))?\s?[#>])\s*(\S.*)$`)
 
 // notSetting lists command words that read, navigate, save or run things
 // rather than configure them. Vendor-mixed on purpose.
@@ -335,7 +339,8 @@ func extractTyped(workLog string) ([]typedCmd, int) {
 	for i, e := range entries {
 		typed++
 		cmd := e.cmd
-		if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") {
+		if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") || strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#") {
+			// "!" / "#" typed at a prompt is a comment (pasted configuration)
 			continue
 		}
 		if modal && promptMode(e.prompt) == "" {

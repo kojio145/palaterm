@@ -289,6 +289,8 @@ FortiGate の引用符、Juniper の `{ }` 形式（`set` 行に直して照合�
 `Current configuration : n bytes`・`! Last configuration change at …`・`ntp clock-period`・FortiGate の `#conf_file_ver`・Junos の `## Last commit` は
 取るたびに変わるため差分に数えません。結果は未反映・作業外の変更・要確認のある機器から順に並び、それらだけに絞り込めます。
 「結果をコピー」で Excel や作業報告に貼れる形（タブ区切り）、「CSV に書き出す」で `export\compare` に CSV を出せます（v1.7.11）。
+AlaxalA の未保存を示す `!` 付きプロンプト（`!sw(config)#`）も打った行として読み取り、画面端の折り返しで行の途中に空白が入った行（`ac tion`）も、
+空白を除いて同じなら反映として照合します。AlaxalA の `#Last modified by …` の行は差分に数えません（v1.7.12）。
 
 ### 5. 予約（「予約」タブ）
 

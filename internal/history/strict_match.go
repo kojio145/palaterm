@@ -496,7 +496,31 @@ func positive(typed []string, key string, after, before *scope) (CommandCheck, b
 		}
 		return CommandCheck{Status: "reflected", Match: m, Note: "secret"}, true
 	}
+	if m := after.findSpaced(key); m != "" {
+		return CommandCheck{Status: by(m), Match: m, Note: "spacing"}, true
+	}
 	return CommandCheck{}, false
+}
+
+// findSpaced finds the line that is the typed one but for spaces. A long
+// line typed into a terminal is echoed with a space where it wrapped at the
+// screen edge ("… any ac tion replace-dscp ef" for "… any action …"; user
+// report 2026-10-20, AlaxalA via another terminal's log). Only the exact
+// characters in the same order count, so no other line passes for it.
+func (s *scope) findSpaced(key string) string {
+	if s == nil {
+		return ""
+	}
+	want := strings.ReplaceAll(key, " ", "")
+	if len(want) < 8 {
+		return ""
+	}
+	for _, l := range s.lines {
+		if strings.ReplaceAll(l, " ", "") == want {
+			return l
+		}
+	}
+	return ""
 }
 
 // StrictVerify checks every setting line of workLog against afterLog, using

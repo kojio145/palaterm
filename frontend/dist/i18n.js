@@ -287,6 +287,7 @@ const I18N_EN = {
   "作業後のログに設定の表示がありません": "the after log shows no configuration",
   "設定に残らないコマンドです": "not kept in the configuration",
   "既定値のため表示されない可能性があります": "a default value the device may not show",
+  "画面端での折り返しによる空白の違いを無視して確認": "matched ignoring a space left where the line wrapped at the screen edge",
   "入力したブロック: {p}": "Entered in: {p}",
   "作業ログなし（対象外）": "no work log (not judged)",
   "設定コマンドなし（参照のみ {n} 件）": "no setting commands ({n} read-only command(s))",

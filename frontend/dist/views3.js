@@ -372,6 +372,7 @@ function cmpNoteText(c) {
     noConfig: t("作業後のログに設定の表示がありません"),
     notStored: t("設定に残らないコマンドです"),
     default: t("既定値のため表示されない可能性があります"),
+    spacing: t("画面端での折り返しによる空白の違いを無視して確認"),
   })[c.note] || (c.status === "superseded" ? t("後の行で取り消し・上書き") : "");
 }
 

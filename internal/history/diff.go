@@ -45,10 +45,15 @@ var noise = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*ntp clock-period\s+\d+\s*$`),
 	regexp.MustCompile(`(?i)^\s*#(conf_file_ver|config-version)=.*$`),
 	regexp.MustCompile(`(?i)^\s*## last (commit|changed):.*$`),
+	regexp.MustCompile(`(?i)^\s*#\s*last modified by\b.*$`), // AlaxalA
 }
 
 func normalize(line string) string {
 	line = strings.TrimRight(line, " \t\r")
+	// AlaxalA's "!" before the prompt only says a change is not saved yet.
+	if strings.HasPrefix(line, "!") && promptLine.MatchString(line) {
+		line = line[1:]
+	}
 	for _, re := range noise {
 		line = re.ReplaceAllString(line, "")
 	}
@@ -57,8 +62,9 @@ func normalize(line string) string {
 
 // barePrompt matches a line that is nothing but a prompt ("R1#", "IX-A(config)# ",
 // "user@host:~$"): the device reprints it for every Enter and for timing
-// reasons, so two captures differ in how many of these they hold.
-var barePrompt = regexp.MustCompile(`^[\w.@~:/()\-]*[#>$%]\s*$`)
+// reasons, so two captures differ in how many of these they hold. AlaxalA
+// puts "!" before the prompt while a change is not saved.
+var barePrompt = regexp.MustCompile(`^!?[\w.@~:/()\-]*[#>$%]\s*$`)
 
 // Diff compares two transcripts line by line. With ignoreNoise, lines that
 // differ only in timestamps, uptimes and counters count as equal, and blank

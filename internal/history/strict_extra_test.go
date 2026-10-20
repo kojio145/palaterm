@@ -121,3 +121,74 @@ func TestStrictVerifyUnexpected(t *testing.T) {
 		t.Errorf("no before listing: %+v", r.Unexpected)
 	}
 }
+
+// User report 2026-10-20 (AlaxalA, values replaced with lab ones): after the
+// first change every prompt starts with "!" (configuration not saved), and
+// a long line came back with a space where the terminal wrapped it
+// ("ac tion"). All five settings had been applied; two were shown as
+// changes outside the work and one as missing.
+func TestStrictVerifyAlaxalaUnsavedPromptAndWrap(t *testing.T) {
+	work := strings.Join([]string{
+		"lab-sw01# ",
+		"lab-sw01# configure terminal",
+		"lab-sw01(config)# ",
+		"lab-sw01(config)# flow detection mode layer2-2",
+		"lab-sw01(config)# ",
+		"lab-sw01(config)# ip qos-flow-list VOICE_ONLY",
+		"lab-sw01(config-ip-qos)# ",
+		"lab-sw01(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef",
+		"!lab-sw01(config-ip-qos)# ",
+		"!lab-sw01(config-ip-qos)# !",
+		"!lab-sw01(config)# ",
+		"!lab-sw01(config)# interface vlan 121",
+		"!lab-sw01(config-if)# ",
+		"!lab-sw01(config-if)#   ip qos-flow-group VOICE_ONLY in",
+		"!lab-sw01(config-if)# ",
+		"!lab-sw01(config-if)# !",
+		"!lab-sw01(config)# ",
+		"!lab-sw01(config)# save",
+		"lab-sw01(config)# ",
+		"lab-sw01(config)# exit",
+		"lab-sw01# ",
+	}, "\r\n")
+	cfg := func(stamp string, extra bool) string {
+		l := []string{
+			"lab-sw01# show running-config",
+			"#Last modified by ops at " + stamp + " 2026 with version 2.8",
+			"!",
+			`hostname "lab-sw01"`,
+			"!",
+			"flow detection mode layer2-2",
+			"!",
+			"interface vlan 41",
+			"  ip address 192.0.2.32 255.255.255.0",
+			"  ip qos-flow-group MGMT_ONLY in",
+			"!",
+		}
+		if extra {
+			l = append(l, "interface vlan 121", "  ip qos-flow-group VOICE_ONLY in", "!")
+		}
+		l = append(l, "ip qos-flow-list MGMT_ONLY", "  1 qos ip any host 192.0.2.32 action replace-dscp cs6", "!")
+		if extra {
+			l = append(l, "ip qos-flow-list VOICE_ONLY", "  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp ef", "!")
+		}
+		return strings.Join(append(l, "!lab-sw01# "), "\r\n")
+	}
+	before, after := cfg("Mon Jul 13 11:40:00", false), cfg("Mon Jul 13 18:07:29", true)
+	got, r := statuses(t, work, before, after)
+	expect(t, got, map[string]string{
+		" > flow detection mode layer2-2": "already",
+		" > ip qos-flow-list VOICE_ONLY":  "reflected",
+		"ip qos-flow-list VOICE_ONLY > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef": "reflected/spacing",
+		" > interface vlan 121":                                "reflected",
+		"interface vlan 121 > ip qos-flow-group VOICE_ONLY in": "reflected",
+	})
+	if r.Missing != 0 || r.UnexpectedCount != 0 {
+		t.Errorf("missing %d, unexpected %+v", r.Missing, r.Unexpected)
+	}
+	// Only the five added lines differ: the last-modified stamp and the
+	// "!" prompts do not count.
+	if d := Diff(before, after, true); d.Added != 6 || d.Removed != 0 {
+		t.Errorf("diff: +%d -%d", d.Added, d.Removed)
+	}
+}
