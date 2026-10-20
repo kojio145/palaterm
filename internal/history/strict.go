@@ -11,25 +11,54 @@ import (
 // The work log (a batch tagged 作業中, or an interactive session) is a device
 // transcript: every command appears echoed after a prompt. The lines that
 // configure something are picked out — navigation, show commands and saves
-// are not settings — and each is looked for, as a whole line, in the after
-// log (which normally holds a show running-config). A "no …" line is
-// reflected when the thing it removes is gone from the after log (or at
-// least rarer than in the before log).
+// are not settings — and each is looked for in the after log (which
+// normally holds a show running-config), inside the block it was typed in
+// when that is known. Devices store a setting the way they print it, not
+// the way it was typed, so the lookup accepts abbreviations, encrypted
+// secrets, merged VLAN lists, quotes and Junos's brace format (see
+// strict_match.go). A "no …" line is reflected when the thing it removes
+// is gone from the after log (or at least rarer than in the before log).
 
 // CommandCheck is one configuration line from the work log and its fate.
 type CommandCheck struct {
-	Line   string `json:"line"`
-	Status string `json:"status"` // reflected | already | missing
+	Line string `json:"line"`
+	// reflected | already | superseded | missing | unverified
 	// Already: the line was in the before log too (it was reflected, but
 	// not by this work — or the work re-applied an existing setting).
+	// Superseded: a later line of the same work undid or replaced it
+	// ("shutdown" then "no shutdown", an address typed again corrected).
+	// Unverified: the logs cannot tell (see Note); not counted as missing.
+	Status string `json:"status"`
+	Parent string `json:"parent,omitempty"` // the block it was typed in
+	Match  string `json:"match,omitempty"`  // the after-log line it matched, when not the typed text
+	// Note says how it was matched or why it could not be: abbrev, similar,
+	// secret, vlan, otherBlock, noConfig, notStored, default.
+	Note string `json:"note,omitempty"`
 }
 
 // StrictResult is the outcome for one device.
 type StrictResult struct {
-	Commands  []CommandCheck `json:"commands"`
-	Reflected int            `json:"reflected"` // reflected + already
-	Missing   int            `json:"missing"`
-	Typed     int            `json:"typed"` // command lines seen in the work log, settings or not
+	Commands   []CommandCheck `json:"commands"`
+	Reflected  int            `json:"reflected"` // reflected + already + superseded
+	Missing    int            `json:"missing"`
+	Unverified int            `json:"unverified"`
+	// NoConfig: the after log shows no configuration (no show
+	// running-config or the like), so nothing could be looked up.
+	NoConfig bool `json:"noConfig,omitempty"`
+	Typed    int  `json:"typed"` // command lines seen in the work log, settings or not
+	// Unexpected: configuration lines that changed between the before and
+	// after logs although no typed setting accounts for them (the first
+	// maxUnexpected of UnexpectedCount).
+	Unexpected      []ChangedLine `json:"unexpected"`
+	UnexpectedCount int           `json:"unexpectedCount"`
+}
+
+// ChangedLine is one configuration line added (+) or removed (-) between the
+// before and after logs, with the block it is in.
+type ChangedLine struct {
+	Kind  string `json:"kind"`
+	Line  string `json:"line"`
+	Block string `json:"block,omitempty"`
 }
 
 // promptLine matches a transcript line that is a prompt followed by what was
@@ -39,7 +68,7 @@ var promptLine = regexp.MustCompile(`^([A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?:\
 
 // notSetting lists command words that read, navigate, save or run things
 // rather than configure them. Vendor-mixed on purpose.
-var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|traceroute|tracert|telnet|ssh|exit|end|quit|logout|configure|conf|config|svintr-config|terminal|term|write|wr|copy|commit|save|rollback|execute|exec|diagnose|clear|debug|undebug|reload|reboot|enable|disable|do|run|cls|help|\?|history|where|top|up|edit|next|abort|discard|load|compare|monitor|test|verify|y|yes|n|no\s*$)(\s|$)`)
+var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|traceroute|tracert|telnet|ssh|exit|end|quit|logout|configure|conf|config|svintr-config|terminal|term|write|wr|copy|commit|save|rollback|execute|exec|diagnose|clear|debug|undebug|reload|reboot|enable\s*$|disable\s*$|do|run|cls|help|\?|history|where|top|up|edit|next|abort|discard|load|compare|monitor|test|verify|y|yes|n|no\s*$)(\s|$)`)
 
 var ws = regexp.MustCompile(`\s+`)
 
@@ -201,28 +230,115 @@ const refusedWithin = 3
 //     row show no output between them, so a setting that extends the one
 //     before it is still counted.)
 func ExtractConfigCommands(workLog string) ([]string, int) {
+	cmds, typed := extractTyped(workLog)
+	out := make([]string, len(cmds))
+	for i, c := range cmds {
+		out[i] = c.line
+	}
+	return out, typed
+}
+
+// typedCmd is one setting line of the work log: as typed, the key it is
+// looked up by (a Juniper "set" under "edit x" gets the x prefix), and the
+// block it was typed in ("interface Gi0/1" for a line at a (config-if)
+// prompt; "" for a global line or when that is not known).
+type typedCmd struct {
+	line, key, parent string
+	last              int // position of its last occurrence in the work log
+}
+
+// junosEdit matches Junos's "[edit interfaces ge-0/0/0]" context banner.
+var junosEdit = regexp.MustCompile(`^\[edit(?:\s+(.+?))?\]$`)
+
+// promptMode is the mode in a prompt's last parentheses: "config",
+// "config-if", "" for none.
+func promptMode(prompt string) string {
+	i := strings.LastIndex(prompt, "(")
+	j := strings.LastIndex(prompt, ")")
+	if i < 0 || j < i {
+		return ""
+	}
+	return strings.ToLower(prompt[i+1 : j])
+}
+
+func isSubMode(m string) bool { return strings.HasPrefix(m, "config-") }
+
+func extractTyped(workLog string) ([]typedCmd, int) {
 	type entry struct {
-		prompt, cmd string
-		after       []string // output lines up to the next prompt line
+		prompt, cmd, junos string
+		after              []string // output lines up to the next prompt line
 	}
 	var entries []entry
+	junos := ""
 	for _, raw := range splitLines(workLog) {
 		line := strings.TrimRight(raw, " \t")
 		if m := promptLine.FindStringSubmatch(line); m != nil {
-			entries = append(entries, entry{prompt: m[1], cmd: strings.TrimSpace(m[2])})
+			entries = append(entries, entry{prompt: m[1], cmd: strings.TrimSpace(m[2]), junos: junos})
 			continue
+		}
+		if m := junosEdit.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			junos = m[1]
 		}
 		if n := len(entries); n > 0 && strings.TrimSpace(line) != "" {
 			entries[n-1].after = append(entries[n-1].after, line)
 		}
 	}
-	var out []string
-	seen := map[string]bool{}
+	// The block each line was typed in, from the prompts: a command at the
+	// top (config) prompt followed by a sub-mode prompt opens a block; the
+	// same kind of command at the sub-mode prompt ("interface Gi0/2" while
+	// in config-if) opens the next one; a nested sub-mode (address-family)
+	// (config-router → config-router-af) stays in the outer block, another
+	// sub-mode reached from a sub-mode is a new block; a sub-mode line followed by the top prompt
+	// was a global command (the device left the mode for it), and the top
+	// prompt ends the block.
+	parents := make([]string, len(entries))
+	parent := ""
+	for i, e := range entries {
+		mode := promptMode(e.prompt)
+		if !isSubMode(mode) {
+			parent = ""
+		}
+		parents[i] = parent
+		if i+1 >= len(entries) {
+			break
+		}
+		next := promptMode(entries[i+1].prompt)
+		switch {
+		case !isSubMode(next):
+			if isSubMode(mode) && !notSetting.MatchString(e.cmd) {
+				parents[i] = ""
+			}
+			parent = ""
+		case !isSubMode(mode):
+			parent = e.cmd
+		case next == mode:
+			if sameKind(e.cmd, parent) {
+				parents[i], parent = "", e.cmd
+			}
+		case !strings.HasPrefix(next, mode+"-"):
+			parents[i], parent = "", e.cmd // another kind of block straight from a sub-mode
+		}
+	}
+	// On gear with (config) prompts, a line at a prompt without a mode
+	// ("R1#delete flash:x", "R1#clock set …") is an exec command, not a
+	// setting.
+	modal := false
+	for _, e := range entries {
+		if strings.HasPrefix(promptMode(e.prompt), "config") {
+			modal = true
+			break
+		}
+	}
+	var out []typedCmd
+	seen := map[string]int{}
 	typed := 0
 	for i, e := range entries {
 		typed++
 		cmd := e.cmd
 		if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") {
+			continue
+		}
+		if modal && promptMode(e.prompt) == "" {
 			continue
 		}
 		if refused(e.after) {
@@ -234,14 +350,45 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 				continue // redrawn after help / completion candidates
 			}
 		}
-		k := normCmd(cmd)
-		if seen[k] {
+		key := normKey(cmd)
+		if e.junos != "" {
+			for _, verb := range []string{"set ", "delete "} {
+				if strings.HasPrefix(key, verb) {
+					key = verb + normKey(e.junos) + " " + key[len(verb):]
+				}
+			}
+		}
+		par := parents[i]
+		if k, ok := seen[par+"\x00"+key]; ok {
+			out[k].last = i // typed again: "shutdown, no shutdown, shutdown"
 			continue
 		}
-		seen[k] = true
-		out = append(out, cmd)
+		seen[par+"\x00"+key] = len(out)
+		out = append(out, typedCmd{line: cmd, key: key, parent: par, last: i})
 	}
 	return out, typed
+}
+
+// sameKind: a line typed at a sub-mode prompt that opens another block of
+// the kind the current one is ("interface Gi0/2" after "int gi0/1").
+func sameKind(cmd, parent string) bool {
+	a, b := strings.Fields(normKey(cmd)), strings.Fields(normKey(parent))
+	if len(a) < 2 || len(b) < 2 || a[0] == "no" {
+		return false
+	}
+	return family(a[0], b[0]) && family(a[1], b[1])
+}
+
+// family: one word is an abbreviation of the other, comparing the letters
+// of an interface name ("gi" and "gigabitethernet0/2").
+func family(x, y string) bool {
+	if l, _ := splitIf(x); l != "" {
+		x = l
+	}
+	if l, _ := splitIf(y); l != "" {
+		y = l
+	}
+	return strings.HasPrefix(x, y) || strings.HasPrefix(y, x)
 }
 
 // refused reports a device error among the first lines after a command.
@@ -255,63 +402,4 @@ func refused(after []string) bool {
 		}
 	}
 	return false
-}
-
-// lineCounts indexes a log by normalised line.
-func lineCounts(log string) map[string]int {
-	m := map[string]int{}
-	for _, l := range splitLines(log) {
-		if k := normCmd(l); k != "" {
-			m[k]++
-		}
-	}
-	return m
-}
-
-// StrictVerify checks every setting line of workLog against afterLog, using
-// beforeLog to tell a line the work added from one that was already there.
-func StrictVerify(workLog, beforeLog, afterLog string) StrictResult {
-	cmds, typed := ExtractConfigCommands(workLog)
-	res := StrictResult{Commands: []CommandCheck{}, Typed: typed}
-	before := lineCounts(beforeLog)
-	after := lineCounts(afterLog)
-	for _, c := range cmds {
-		k := normCmd(c)
-		cc := CommandCheck{Line: c}
-		if strings.HasPrefix(k, "no ") {
-			// Two conventions: Cisco-style gear drops the thing ("no shutdown"
-			// makes the "shutdown" line disappear); NEC IX / Juniper-style gear
-			// keeps the negation itself in the configuration as a line. Take
-			// the literal line first, the removal rule otherwise.
-			target := strings.TrimSpace(k[3:])
-			switch {
-			case after[k] > 0 && after[k] > before[k]:
-				cc.Status = "reflected" // "no shutdown" is itself in the config now
-			case after[k] > 0:
-				cc.Status = "already" // and was already there before
-			case after[target] == 0 && before[target] == 0:
-				cc.Status = "already" // nothing to remove either time
-			case after[target] < before[target] || after[target] == 0:
-				cc.Status = "reflected" // the thing it negates is gone
-			default:
-				cc.Status = "missing"
-			}
-		} else {
-			switch {
-			case after[k] == 0:
-				cc.Status = "missing"
-			case before[k] >= after[k]:
-				cc.Status = "already"
-			default:
-				cc.Status = "reflected"
-			}
-		}
-		if cc.Status == "missing" {
-			res.Missing++
-		} else {
-			res.Reflected++
-		}
-		res.Commands = append(res.Commands, cc)
-	}
-	return res
 }

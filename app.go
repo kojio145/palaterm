@@ -2226,10 +2226,12 @@ func (a *App) OpenLogDir() error {
 	return startExplorer(abs)
 }
 
-// StrictVerify picks the setting lines typed in the work log and reports
-// whether each is present in the after log (see history.StrictVerify). All
-// three files must lie under the log folder.
-func (a *App) StrictVerify(workPath, beforePath, afterPath string) (*history.StrictResult, error) {
+// StrictVerify picks the setting lines typed in the work logs and reports
+// whether each is present in the after log (see history.StrictVerify). A
+// work done over several sessions (a reconnect) has one log per session:
+// they are read as one, in the order given (oldest first). All files must
+// lie under the log folder.
+func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*history.StrictResult, error) {
 	if a.locked() {
 		return nil, errVaultLocked
 	}
@@ -2240,9 +2242,13 @@ func (a *App) StrictVerify(workPath, beforePath, afterPath string) (*history.Str
 		b, err := os.ReadFile(p)
 		return string(b), err
 	}
-	w, err := read(workPath)
-	if err != nil {
-		return nil, err
+	var work []string
+	for _, p := range workPaths {
+		w, err := read(p)
+		if err != nil {
+			return nil, err
+		}
+		work = append(work, strings.TrimRight(w, "\r\n"))
 	}
 	bf, err := read(beforePath)
 	if err != nil {
@@ -2252,8 +2258,33 @@ func (a *App) StrictVerify(workPath, beforePath, afterPath string) (*history.Str
 	if err != nil {
 		return nil, err
 	}
-	r := history.StrictVerify(w, bf, af)
+	r := history.StrictVerify(strings.Join(work, "\n"), bf, af)
 	return &r, nil
+}
+
+// ExportCompareResult writes the run history comparison, as the UI shows
+// it (rows, the first one the header), to export\compare\compare_<date>_<time>.csv
+// and returns the file.
+func (a *App) ExportCompareResult(rows [][]string) (string, error) {
+	if a.locked() {
+		return "", errVaultLocked
+	}
+	if len(rows) < 2 {
+		return "", fmt.Errorf("書き出す行がありません")
+	}
+	text, err := csvio.ExportTable(rows)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(exeDir(), "export", "compare")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "compare_"+time.Now().Format("20060102_150405")+".csv")
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // OpenDiffWindow compares two saved logs in their own window (PalaTerm.exe
@@ -2505,7 +2536,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.10"
+const appVersion = "1.7.11"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

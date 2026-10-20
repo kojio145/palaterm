@@ -68,3 +68,23 @@ func ExportRunResults(rows []RunResult, lang string) (string, error) {
 	w.Flush()
 	return buf.String(), w.Error()
 }
+
+// ExportTable renders rows (the first one the header) as CSV with the BOM
+// and the Excel formula guard: for tables the UI builds as shown, such as
+// the run history comparison.
+func ExportTable(rows [][]string) (string, error) {
+	var buf bytes.Buffer
+	buf.WriteString(BOM)
+	w := csv.NewWriter(&buf)
+	for _, r := range rows {
+		rec := make([]string, len(r))
+		for i, v := range r {
+			rec[i] = cellOut(v)
+		}
+		if err := w.Write(rec); err != nil {
+			return "", err
+		}
+	}
+	w.Flush()
+	return buf.String(), w.Error()
+}

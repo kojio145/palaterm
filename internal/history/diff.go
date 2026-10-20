@@ -36,6 +36,15 @@ var noise = []*regexp.Regexp{
 	// Compact ages such as a route's "37d20h54m31s" or "2w3d", and
 	// "00:12:34"-less uptimes like "5h32m".
 	regexp.MustCompile(`\b(?:\d+[wdhms]){2,}\b`),
+	// Stamps every configuration listing carries and that change with each
+	// save or by themselves: Cisco's size and last-change comments and the
+	// clock-period it tunes, FortiGate's file version, Junos's last commit.
+	// Without these, two listings of the same configuration differed.
+	regexp.MustCompile(`(?i)^\s*current configuration\s*:.*$`),
+	regexp.MustCompile(`(?i)^\s*!\s*(last configuration change|nvram config last updated|no configuration change since).*$`),
+	regexp.MustCompile(`(?i)^\s*ntp clock-period\s+\d+\s*$`),
+	regexp.MustCompile(`(?i)^\s*#(conf_file_ver|config-version)=.*$`),
+	regexp.MustCompile(`(?i)^\s*## last (commit|changed):.*$`),
 }
 
 func normalize(line string) string {
