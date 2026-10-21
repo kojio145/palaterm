@@ -167,9 +167,28 @@ function liStepLabel(s) {
 
 // The first value row the rule does not leave out: the sample the results
 // column and the step editor show.
-function liSampleRow() {
-  const rows = (LI.test && LI.test.rows) || [];
+function liSampleRow(unit = 1) {
+  const rows = ((LI.test && LI.test.rows) || []).filter(r => (r.unit || 1) === unit);
   return rows.find(r => !r.excluded) || rows[0] || null;
+}
+
+// liUnitName names the device a rule's unit u (0-based) gives: 「2台目
+// （バックアップ）」.
+function liUnitName(u) {
+  const un = (LI.rule && LI.rule.units || [])[u] || {};
+  return t("{n}台目", { n: u + 2 }) + (un.label ? t("（{l}）", { l: un.label }) : "");
+}
+function liUnitField(u, key) {
+  const un = LI.rule.units[u];
+  return (un.fields || []).find(f => f.key === key);
+}
+function liEnsureUnitField(u, key) {
+  const un = LI.rule.units[u];
+  un.fields = un.fields || [];
+  let f = un.fields.find(x => x.key === key);
+  if (!f) { f = { key, source: "", steps: [] }; un.fields.push(f); }
+  f.steps = f.steps || [];
+  return f;
 }
 
 function liValueInput(key, val, id) {
@@ -197,7 +216,7 @@ function liRenderEdit(root) {
   const r = LI.rule;
   const test = LI.test;
   const headers = (test && test.headers) || [];
-  const hdrNames = headers.map(h => h.name);
+  const hdrNames = headers.map(h => h.name).filter(n => n);
   const sample = liSampleRow();
   const fields = LI_FIELDS.filter(f => LI.more || LI_MAIN.includes(f.key) || (liFieldRule(f.key) && (liFieldRule(f.key).source || liFieldRule(f.key).default)));
   const colOpts = (cur) => {
@@ -205,19 +224,37 @@ function liRenderEdit(root) {
     if (cur && !list.includes(cur)) list.push(cur);
     return list;
   };
+  // A header with its Excel column letter (「機器名称（AG）」): a wide
+  // sheet's columns are known by their letters.
+  const colOf = new Map(headers.map(h => [h.name, h.col]));
+  const colName = n => colOf.has(n) ? t("{c}（{l}）", { c: n, l: colLetter(colOf.get(n)) }) : n;
+  const units = r.units || (r.units = []);
+  const unitCell = (u, f) => {
+    const uf = liUnitField(u, f.key) || { steps: [] };
+    const cur = uf.source === "column" ? "col:" + (uf.column || "") : uf.source === "template" ? "tpl" : "";
+    const smp = liSampleRow(u + 2);
+    return `<select data-usrc="${u}:${esc(f.key)}" data-guard-skip>
+      <option value="">${esc(t("（1台目と同じ）"))}</option>
+      ${colOpts(uf.source === "column" ? uf.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(t("列: {c}", { c: colName(n) }))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
+      <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
+      ${uf.source === "template" ? `<input type="text" class="li-tpl" data-utpl="${u}:${esc(f.key)}" value="${esc(uf.template || "")}" placeholder="{機器名(副)}" data-guard-skip>` : ""}
+      ${uf.source ? `<div class="li-steps" style="margin-top:4px">${(uf.steps || []).map(s => `<button class="li-step" data-ustep="${u}:${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
+        <button class="li-step add" data-ustep="${u}:${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(uf.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>` : ""}
+      ${smp && smp.values && f.key in smp.values && (uf.source || f.key === "name") ? `<div class="li-ures">→ ${liShowValue(f.key, smp.values[f.key])}</div>` : ""}`;
+  };
   const srcSelect = (f) => {
     const fr = liFieldRule(f.key) || {};
     const cur = fr.source === "column" ? "col:" + (fr.column || "") : fr.source === "template" ? "tpl" : "";
     return `<select data-src="${esc(f.key)}" data-guard-skip>
       <option value="">${esc(t("（使わない）"))}</option>
-      ${colOpts(fr.source === "column" ? fr.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(t("列: {c}", { c: n }))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
+      ${colOpts(fr.source === "column" ? fr.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(t("列: {c}", { c: colName(n) }))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
       <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
       ${fr.source === "template" ? `<input type="text" class="li-tpl" data-tpl="${esc(f.key)}" value="${esc(fr.template || "")}" placeholder="{拠点コード}-{機器名称}" data-guard-skip>` : ""}`;
   };
   const condTargets = () => {
     const mapped = r.fields.filter(f => f.source || f.default).map(f => f.key);
     return mapped.map(k => ({ v: "field:" + k, l: t("変換後: {f}", { f: liFieldLabel(k) }) }))
-      .concat(hdrNames.map(n => ({ v: "column:" + n, l: t("元の列: {c}", { c: n }) })));
+      .concat(hdrNames.map(n => ({ v: "column:" + n, l: t("元の列: {c}", { c: colName(n) }) })));
   };
   const OPS = [["empty", t("が空")], ["notempty", t("が空でない")], ["contains", t("が次を含む")], ["notcontains", t("が次を含まない")], ["equals", t("が次と一致")], ["notequals", t("が次と一致しない")]];
 
@@ -263,10 +300,20 @@ function liRenderEdit(root) {
 
     <div class="panel li-sec">
       <div class="li-h"><b>${esc(t("項目の紐付け"))}</b><span class="muted">${esc(t("加工手順は上から順に行います。加工したあとも空のときは既定値で埋めます"))}</span></div>
+      <div class="li-units">
+        <span class="muted">${esc(t("1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目で値が違う項目だけ元の値を選びます。選ばない項目は 1 台目と同じ値です。2 台目の機器名が空の行では 2 台目を作りません。"))}</span>
+        <div class="row-inline" style="flex-wrap:wrap;gap:6px 12px;margin-top:6px">
+          ${units.map((un, u) => `<span class="li-unitchip"><b>${esc(t("{n}台目", { n: u + 2 }))}</b>
+            <input type="text" data-ulabel="${u}" value="${esc(un.label || "")}" placeholder="${esc(t("名前（例: バックアップ）"))}" maxlength="40" data-guard-skip>
+            <button class="btn sm act-del" data-udel="${u}" title="${esc(t("この台を外す"))}">×</button></span>`).join("")}
+          ${units.length < 3 ? `<button class="btn sm" id="li-uadd">${esc(units.length ? t("＋ {n}台目を追加", { n: units.length + 2 }) : t("＋ 2台目を追加（冗長構成など）"))}</button>` : ""}
+        </div>
+      </div>
       <div class="scrollx"><table class="li-map"><thead><tr>
-        <th style="width:190px">${esc(t("PalaTerm の項目"))}</th><th style="width:250px">${esc(t("元の値"))}</th>
+        <th style="width:190px">${esc(t("PalaTerm の項目"))}</th><th style="width:250px">${esc(units.length ? t("元の値（1台目）") : t("元の値"))}</th>
         <th>${esc(t("加工手順"))}</th><th style="width:180px">${esc(t("空のときの既定値"))}</th>
-        <th style="width:190px">${esc(sample ? t("見本 {n} 行目の結果", { n: sample.line }) : t("見本の結果"))}</th></tr></thead><tbody>
+        <th style="width:190px">${esc(sample ? t("見本 {n} 行目の結果", { n: sample.line }) : t("見本の結果"))}</th>
+        ${units.map((un, u) => `<th style="width:240px">${esc(liUnitName(u))}</th>`).join("")}</tr></thead><tbody>
         ${fields.map(f => {
           const fr = liFieldRule(f.key) || { steps: [] };
           const used = fr.source || fr.default;
@@ -277,9 +324,10 @@ function liRenderEdit(root) {
               ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
             <td>${liValueInput(f.key, fr.default || "", "li-def-" + f.key)}</td>
             <td class="li-res" data-res="${esc(f.key)}">${sample && used ? liShowValue(f.key, sample.values[f.key]) + ((sample.filled || []).includes(f.key) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") : ""}</td>
+            ${units.map((un, u) => `<td class="li-ucell">${unitCell(u, f)}</td>`).join("")}
           </tr>`;
         }).join("")}
-        <tr><td colspan="5"><button class="btn sm" id="li-more">${esc(LI.more ? t("主な項目だけ表示") : t("ほかの項目を表示（踏み台・GUI・端末の色など）"))}</button></td></tr>
+        <tr><td colspan="${5 + units.length}"><button class="btn sm" id="li-more">${esc(LI.more ? t("主な項目だけ表示") : t("ほかの項目を表示（踏み台・GUI・端末の色など）"))}</button></td></tr>
       </tbody></table></div>
     </div>
 
@@ -296,7 +344,7 @@ function liRenderEdit(root) {
       </div>
       <div class="field" style="max-width:340px;margin-top:10px"><label>${esc(t("照合に使う列（任意・名前より優先）"))}</label>
         <select id="li-keycol" data-guard-skip><option value="">${esc(t("（使わない）"))}</option>
-        ${colOpts(r.match.keyColumn).map(n => `<option value="${esc(n)}" ${r.match.keyColumn === n ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+        ${colOpts(r.match.keyColumn).map(n => `<option value="${esc(n)}" ${r.match.keyColumn === n ? "selected" : ""}>${esc(colName(n))}</option>`).join("")}</select></div>
     </div>
 
     <div class="panel li-sec">
@@ -321,8 +369,8 @@ function liResultsHTML() {
   const mappedKeys = r.fields.filter(f => f.source || f.default).map(f => f.key).slice(0, 9);
   return `<div class="panel li-sec">
       <div class="li-h"><b>${esc(t("見本の結果（先頭 {n} 行）", { n: shown.length }))}</b><span class="muted">${esc(t("取り込むときは、このあと既存の機器と照合して追加・更新を決めます"))}</span></div>
-      <div class="scrollx"><table class="li-res-t"><thead><tr><th>${esc(t("行"))}</th>${mappedKeys.map(k => `<th>${esc(liFieldLabel(k))}</th>`).join("")}<th></th></tr></thead><tbody>
-        ${shown.map(row => `<tr class="${row.excluded ? "li-skip" : ""}"><td class="muted">${row.line}</td>${mappedKeys.map(k => `<td>${liShowValue(k, row.values[k])}${(row.filled || []).includes(k) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : ""}</td>`).join("")}<td class="muted" style="font-size:12px">${esc(liExclText(row))}</td></tr>`).join("")}
+      <div class="scrollx"><table class="li-res-t"><thead><tr><th>${esc(t("行"))}</th>${(r.units || []).length ? `<th>${esc(t("台"))}</th>` : ""}${mappedKeys.map(k => `<th>${esc(liFieldLabel(k))}</th>`).join("")}<th></th></tr></thead><tbody>
+        ${shown.map(row => `<tr class="${row.excluded ? "li-skip" : ""}"><td class="muted">${row.line}</td>${(r.units || []).length ? `<td class="muted">${(row.unit || 1) > 1 ? esc(liUnitName(row.unit - 2)) : esc(t("1台目"))}</td>` : ""}${mappedKeys.map(k => `<td>${liShowValue(k, row.values[k])}${(row.filled || []).includes(k) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : ""}</td>`).join("")}<td class="muted" style="font-size:12px">${esc(liExclText(row))}</td></tr>`).join("")}
       </tbody></table></div>
       ${(test.missing || []).length ? `<div class="li-warn">${esc(t("見本に無い列: {c}", { c: test.missing.join("、") }))}</div>` : ""}
     </div>`;
@@ -394,6 +442,7 @@ function liRuleOut() {
   const r = JSON.parse(JSON.stringify(LI.rule));
   r.fields = r.fields.filter(f => f.source || f.default || (f.steps || []).length);
   r.fields.forEach(f => { if (!f.source) f.steps = []; });
+  r.units = (r.units || []).map(u => ({ label: (u.label || "").trim(), fields: (u.fields || []).filter(f => f.source) }));
   r.headerRow = Math.max(1, parseInt(r.headerRow, 10) || 1);
   r.dataRow = Math.max(0, parseInt(r.dataRow, 10) || 0);
   if (LI.sample) r.sampleName = LI.sample.split(/[\\/]/).pop();
@@ -466,6 +515,29 @@ function liWireEdit(root) {
   });
   root.querySelectorAll("[data-step]").forEach(b => b.onclick = () => liStepEditor(b.dataset.step));
   q("#li-more").onclick = () => { LI.more = !LI.more; renderListImport(); };
+  const rerun = () => { if (LI.sample) liRunTest(true); else renderListImport(); };
+  const uk = el => { const s = el.dataset.usrc || el.dataset.utpl || el.dataset.ustep; const i = s.indexOf(":"); return [+s.slice(0, i), s.slice(i + 1)]; };
+  root.querySelectorAll("[data-usrc]").forEach(sel => sel.onchange = () => {
+    const [u, key] = uk(sel), v = sel.value;
+    if (!v) { // as the first device: the unit's own setting goes
+      r.units[u].fields = (r.units[u].fields || []).filter(f => f.key !== key);
+    } else {
+      const f = liEnsureUnitField(u, key);
+      if (v.startsWith("col:")) {
+        f.source = "column"; f.column = v.slice(4);
+        const hd = ((LI.test && LI.test.headers) || []).find(h => h.name === f.column);
+        f.colIndex = hd ? hd.col : 0;
+      } else { f.source = "template"; f.template = f.template || ""; }
+    }
+    rerun();
+  });
+  root.querySelectorAll("[data-utpl]").forEach(inp => inp.oninput = () => { const [u, key] = uk(inp); liEnsureUnitField(u, key).template = inp.value; liTestSoon(false); });
+  root.querySelectorAll("[data-ustep]").forEach(b => b.onclick = () => { const [u, key] = uk(b); liStepEditor(key, u + 1); });
+  root.querySelectorAll("[data-ulabel]").forEach(inp => inp.oninput = () => { r.units[+inp.dataset.ulabel].label = inp.value; });
+  root.querySelectorAll("[data-ulabel]").forEach(inp => inp.onchange = () => rerun());
+  root.querySelectorAll("[data-udel]").forEach(b => b.onclick = () => { r.units.splice(+b.dataset.udel, 1); rerun(); });
+  const ua = q("#li-uadd");
+  if (ua) ua.onclick = () => { r.units.push({ label: r.units.length ? "" : t("バックアップ"), fields: [] }); rerun(); };
   root.querySelectorAll("[data-match]").forEach(cb => cb.onchange = () => { r.match[cb.dataset.match] = cb.checked; });
   q("#li-keycol").onchange = e => { r.match.keyColumn = e.target.value; };
   root.querySelectorAll("[data-ctgt]").forEach(sel => sel.onchange = () => {
@@ -507,14 +579,15 @@ async function liSave(thenExport) {
 
 const LI_STEP_TYPES = [["split", "区切って残す"], ["map", "置き換え表"], ["replace", "文字を置き換える・削る"], ["regex", "正規表現"], ["trim", "前後の空白を除く"], ["width", "全角を半角にする"], ["lower", "小文字にする"], ["upper", "大文字にする"]];
 
-function liStepEditor(key) {
-  const f = liEnsureField(key);
+function liStepEditor(key, unit = 0) {
+  // unit: 0 = the first device's field, u = the u-th further device's.
+  const f = unit ? liEnsureUnitField(unit - 1, key) : liEnsureField(key);
   const steps = JSON.parse(JSON.stringify(f.steps || []));
   const secret = liField(key).kind === "secret";
-  const sample = liSampleRow();
+  const sample = liSampleRow(unit + 1);
   let input = sample ? (sample.raw[key] || "") : "";
   const node = h(`<div>
-    <h3>${esc(t("加工手順: {f}", { f: liFieldLabel(key) }))}</h3>
+    <h3>${esc(t("加工手順: {f}", { f: liFieldLabel(key) }))}${unit ? esc("（" + liUnitName(unit - 1) + "）") : ""}</h3>
     <div class="field"><label>${esc(t("元の値（見本・書き換えて試せます）"))}</label>
       <div class="row-inline" style="gap:6px"><input type="${secret ? "password" : "text"}" id="se-in" class="mono" style="flex:1" value="${esc(input)}" autocomplete="off" data-guard-skip>
       ${secret ? `<button class="btn sm" id="se-show" type="button">${esc(t("表示"))}</button>` : ""}</div></div>
@@ -717,7 +790,7 @@ function liRenderImport(root) {
     return `<div class="li-cell"><span class="li-ck">${esc(liFieldLabel(c.key))}</span>
       <span class="li-cv">${c.secret ? esc(t("変更あり")) : `<span class="${ch ? "li-old" : "li-new"}"><span class="li-src">PalaTerm</span> ${esc(cur)}</span> <span class="li-src">/</span> <span class="${ch ? "li-new" : "li-old"}"><span class="li-src">${esc(t("ファイル"))}</span> ${esc(fil)}</span>`}</span>
       ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : ""}
-      <select data-choice="${row.line}:${esc(c.key)}" data-guard-skip>
+      <select data-choice="${row.id}:${esc(c.key)}" data-guard-skip>
         <option value="keep" ${ch ? "" : "selected"}>${esc(t("PalaTerm の値を残す"))}</option>
         <option value="file" ${ch ? "selected" : ""}>${esc(t("ファイルの値にする"))}</option></select></div>`;
   };
@@ -762,14 +835,14 @@ function liRenderImport(root) {
           const diff = (row.cells || []).filter(c => c.state !== "same" && c.state !== "new");
           const excluded = row.status === "skip" && !(row.candidates || []).length && (String(row.note || "").startsWith("除外条件") || row.note === "機器名が空です");
           return `<tr class="li-r-${row.status}">
-            <td class="muted">${row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
-            <td class="mono"><div class="clip">${esc(row.name || t("（空）"))}</div></td><td class="mono">${esc(row.host || "")}</td>
+            <td class="muted">${row.unit > 1 ? `${row.line}-${row.unit}` : row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
+            <td class="mono"><div class="clip">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td>
             <td>${row.status === "add" ? `<div class="muted" style="font-size:12px">${summary(row)}</div>` : ""}
               ${diff.map(c => cellLine(row, c)).join("")}
               ${liMatchNote(row) ? `<div class="li-note">${esc(liMatchNote(row))}</div>` : ""}
               ${row.note ? `<div class="li-note">${esc(row.exclusion ? liExclText(row) : terr(row.note))}</div>` : ""}
               ${(row.errors || []).map(e => `<div class="li-rerr">${esc(terr(e))}</div>`).join("")}</td>
-            <td>${excluded ? "" : `<select data-link="${row.line}" data-guard-skip>
+            <td>${excluded ? "" : `<select data-link="${row.id}" data-guard-skip>
               <option value="new" ${row.link === "new" ? "selected" : ""}>${esc(t("新しい機器として追加"))}</option>
               <option value="skip" ${row.link === "skip" ? "selected" : ""}>${esc(t("取り込まない"))}</option>
               ${linkOpts(row)}

@@ -29,6 +29,13 @@ func ValidateRule(r *model.ImportRule) error {
 			return fmt.Errorf("項目「%s」は PalaTerm の機器にありません", f.Key)
 		}
 	}
+	for _, u := range r.Units {
+		for _, f := range u.Fields {
+			if !IsField(f.Key) {
+				return fmt.Errorf("項目「%s」は PalaTerm の機器にありません", f.Key)
+			}
+		}
+	}
 	for _, c := range r.Exclude {
 		if c.Target == "field" && !IsField(c.Key) {
 			return fmt.Errorf("除外条件の項目「%s」は PalaTerm の機器にありません", c.Key)
@@ -47,32 +54,26 @@ func ValidateRule(r *model.ImportRule) error {
 func ExportRule(r model.ImportRule, app string) ([]byte, error) {
 	out := r
 	out.ID, out.LastUsed, out.SampleName = "", "", ""
-	out.Fields = nil
-	for _, f := range r.Fields {
-		if isSecret(f.Key) {
-			f.Default = ""
-			if f.Source == "template" {
-				f.Source, f.Template = "", ""
-			}
-			var keep []model.ImportStep
-			for _, s := range f.Steps {
-				switch s.Type {
-				case "split", "trim", "lower", "upper", "width":
-					keep = append(keep, s)
-				}
-			}
-			f.Steps = keep
-			if f.Source == "" && len(f.Steps) == 0 {
-				continue // nothing left of it
+	out.Fields = stripSecrets(r.Fields)
+	out.Units = nil
+	for _, u := range r.Units {
+		var fs []model.ImportField
+		for _, f := range stripSecrets(u.Fields) {
+			if f.Source != "" { // a unit's field without a source reads as the first device's
+				fs = append(fs, f)
 			}
 		}
-		out.Fields = append(out.Fields, f)
+		out.Units = append(out.Units, model.ImportUnit{Label: u.Label, Fields: fs})
 	}
 	// The columns a password is read from: an exclusion comparing one of
 	// them with a value ("元の列: パスワード が Init#1234") names a
 	// password too.
 	secretCols := map[string]bool{}
-	for _, f := range r.Fields {
+	all := append([]model.ImportField(nil), r.Fields...)
+	for _, u := range r.Units {
+		all = append(all, u.Fields...)
+	}
+	for _, f := range all {
 		if !isSecret(f.Key) {
 			continue
 		}
@@ -93,6 +94,33 @@ func ExportRule(r model.ImportRule, app string) ([]byte, error) {
 		out.Exclude = append(out.Exclude, c)
 	}
 	return json.MarshalIndent(RuleFile{Format: RuleFormat, App: app, ExportedAt: time.Now().Format("2006-01-02 15:04"), Rule: out}, "", "  ")
+}
+
+// stripSecrets is a field list without the texts a password could be
+// written in (see ExportRule).
+func stripSecrets(fields []model.ImportField) []model.ImportField {
+	var out []model.ImportField
+	for _, f := range fields {
+		if isSecret(f.Key) {
+			f.Default = ""
+			if f.Source == "template" {
+				f.Source, f.Template = "", ""
+			}
+			var keep []model.ImportStep
+			for _, s := range f.Steps {
+				switch s.Type {
+				case "split", "trim", "lower", "upper", "width":
+					keep = append(keep, s)
+				}
+			}
+			f.Steps = keep
+			if f.Source == "" && len(f.Steps) == 0 {
+				continue // nothing left of it
+			}
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // ParseRule reads a rule file.

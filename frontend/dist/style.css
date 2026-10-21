@@ -631,3 +631,9 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
 .li-picklist { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .li-pickrow { text-align: left; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .li-pickrow:hover, .li-pickrow:focus-visible { border-color: var(--accent); }
+.li-units { background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 12px; line-height: 1.7; }
+.li-unitchip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px; padding: 4px 6px 4px 10px; }
+.li-unitchip input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px; font: inherit; font-size: 12px; width: 150px; }
+.li-ucell { background: rgba(167,139,250,.04); }
+.li-ures { font-family: "Consolas", monospace; font-size: 12px; color: var(--text-dim); margin-top: 4px; word-break: break-all; }
+.li-unit { display: inline-block; font-size: 10px; color: #a78bfa; border: 1px solid rgba(167,139,250,.5); border-radius: 4px; padding: 0 5px; margin-top: 2px; font-family: "Segoe UI", "Meiryo", sans-serif; }

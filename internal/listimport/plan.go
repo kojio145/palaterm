@@ -82,7 +82,12 @@ type Cand struct {
 // imported under), name, norm (the name ignoring the rule's differences),
 // ip (only the address matched: confirm), pick (chosen by hand).
 type PlanRow struct {
-	Line       int      `json:"line"`
+	Line int `json:"line"`
+	// ID names the device of the line (Row.ID): choices go by it. Unit and
+	// Label tell a further device of a line (a redundant pair's backup).
+	ID         int      `json:"id"`
+	Unit       int      `json:"unit"`
+	Label      string   `json:"label,omitempty"`
 	Status     string   `json:"status"`
 	Name       string   `json:"name"`
 	Host       string   `json:"host"`
@@ -115,7 +120,7 @@ type Plan struct {
 	Devices []Cand `json:"devices"`
 }
 
-// Decision is the user's choice for one row in the preview: Link "new",
+// Decision is the user's choice for one device of a row (by Row.ID) in the preview: Link "new",
 // "skip" or a device ID ("" = as proposed), and per field "file" / "keep".
 type Decision struct {
 	Link    string            `json:"link"`
@@ -125,7 +130,7 @@ type Decision struct {
 // Options steer the plan.
 type Options struct {
 	Group     string
-	Decisions map[int]Decision // by row number
+	Decisions map[int]Decision // by Row.ID (the line number for a line's first device)
 }
 
 // normName makes two names comparable per the rule's match settings.
@@ -172,11 +177,6 @@ type fileRow struct {
 // inv is not changed.
 func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt Options) *Plan {
 	p := &Plan{Counts: map[string]int{}, Missing: []Cand{}, Devices: []Cand{}}
-	mapped := Mapped(r)
-	keys := make([]string, 0, len(mapped))
-	for _, f := range mapped {
-		keys = append(keys, f.Key)
-	}
 	var group []int // indexes of the group's devices
 	for i := range inv.Devices {
 		if inv.Devices[i].Group == opt.Group {
@@ -189,7 +189,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 	var rows []*fileRow
 	for i := range conv.Rows {
 		row := &conv.Rows[i]
-		pr := PlanRow{Line: row.Line, Name: strings.TrimSpace(row.Values["name"]), Candidates: []Cand{}, Cells: []Cell{}, Errors: []string{}}
+		pr := PlanRow{Line: row.Line, ID: row.ID, Unit: row.Unit, Label: row.Label, Name: strings.TrimSpace(row.Values["name"]), Candidates: []Cand{}, Cells: []Cell{}, Errors: []string{}}
 		if row.Excluded != "" {
 			pr.Status, pr.Link, pr.Note, pr.Exclusion = "skip", "skip", row.Excluded, row.Exclusion
 			pr.Host = strings.TrimSpace(row.Values["host"])
@@ -197,14 +197,14 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 			continue
 		}
 		fc := map[string]string{"group": opt.Group}
-		for _, k := range keys {
+		for _, k := range row.Keys {
 			fc[k] = row.Values[k]
 		}
 		dev, errs := csvio.CellsDevice(fc)
 		dev.Group = opt.Group
 		canon := csvio.DeviceCells(dev)
 		fr := &fileRow{row: row, cells: map[string]string{}, errs: map[string]string{}, dev: dev, linked: -1}
-		for _, k := range keys {
+		for _, k := range row.Keys {
 			fr.cells[k] = canon[k]
 		}
 		for _, e := range errs {
@@ -216,13 +216,14 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		rows = append(rows, fr)
 	}
 	// p.Rows no longer grows: the pointers into it stay valid.
-	lineIdx := make(map[int]*PlanRow, len(p.Rows))
+	idIdx := make(map[int]*PlanRow, len(p.Rows))
 	for i := range p.Rows {
-		lineIdx[p.Rows[i].Line] = &p.Rows[i]
+		idIdx[p.Rows[i].ID] = &p.Rows[i]
 	}
 	for _, fr := range rows {
-		fr.pr = lineIdx[fr.row.Line]
+		fr.pr = idIdx[fr.row.ID]
 	}
+	label := func(row *Row) string { return RowLabel(row.Line, row.Unit, row.Label) }
 
 	// The group's devices looked up by key, name and address, each
 	// normalised once: comparing every row with every device would
@@ -269,9 +270,9 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 	// The user's own choices first: a device picked by hand is taken before
 	// any guess can claim it. Picked twice: the later row says so instead
 	// of quietly matching something else.
-	pickedBy := map[int]int{} // device index → row
+	pickedBy := map[int]*Row{} // device index → the row that picked it
 	for _, fr := range rows {
-		d, ok := opt.Decisions[fr.row.Line]
+		d, ok := opt.Decisions[fr.row.ID]
 		if !ok || d.Link == "" {
 			continue
 		}
@@ -284,13 +285,13 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 			if !ok {
 				break // a device gone meanwhile: matched as usual
 			}
-			if line, taken := pickedBy[i]; taken {
+			if by, taken := pickedBy[i]; taken {
 				fr.pr.Link = d.Link
-				fr.pickErr = fmt.Sprintf("機器「%s」は %d 行目で選ばれています。どちらかを別の機器にしてください", inv.Devices[i].Name, line)
+				fr.pickErr = fmt.Sprintf("機器「%s」は %s 行目で選ばれています。どちらかを別の機器にしてください", inv.Devices[i].Name, label(by))
 				resolved[fr] = true
 				break
 			}
-			pickedBy[i] = fr.row.Line
+			pickedBy[i] = fr.row
 			link(fr, i, "pick")
 			resolved[fr] = true
 		}
@@ -348,7 +349,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 
 	// The cells, the device written and the row's status.
 	for _, fr := range rows {
-		planCells(inv, fr, keys, opt.Decisions[fr.row.Line])
+		planCells(inv, fr, fr.row.Keys, opt.Decisions[fr.row.ID])
 	}
 	// Names stay unique in the group: a row may not write a name that a
 	// device keeps — one no row writes to, or one whose row fails — or that
@@ -358,15 +359,15 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 	writes := func(fr *fileRow) bool { return fr.pr.dev != nil && len(fr.pr.Errors) == 0 }
 	for again := true; again; {
 		again = false
-		taken := map[string]int{} // name → the row writing it (0: a device kept as it is)
+		taken := map[string]*Row{} // name → the row writing it (nil: a device kept as it is)
 		for _, i := range group {
 			if !claimed[i] {
-				taken[inv.Devices[i].Name] = 0
+				taken[inv.Devices[i].Name] = nil
 			}
 		}
 		for _, fr := range rows {
 			if fr.linked >= 0 && !writes(fr) {
-				taken[inv.Devices[fr.linked].Name] = 0
+				taken[inv.Devices[fr.linked].Name] = nil
 			}
 		}
 		for _, fr := range rows {
@@ -374,15 +375,15 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 				continue
 			}
 			n := fr.pr.dev.Name
-			line, clash := taken[n]
+			by, clash := taken[n]
 			switch {
 			case !clash:
-				taken[n] = fr.row.Line
+				taken[n] = fr.row
 				continue
-			case line == 0:
+			case by == nil:
 				fr.pr.Errors = append(fr.pr.Errors, fmt.Sprintf("同じ名前の機器「%s」がグループにあります（結びつける機器を選ぶか、名前を変えてください）", n))
 			default:
-				fr.pr.Errors = append(fr.pr.Errors, fmt.Sprintf("機器名「%s」が %d 行目と重なっています", n, line))
+				fr.pr.Errors = append(fr.pr.Errors, fmt.Sprintf("機器名「%s」が %s 行目と重なっています", n, label(by)))
 			}
 			again = true
 		}
@@ -576,7 +577,7 @@ func Apply(inv *model.Inventory, p *Plan, group string, deleteIDs []string) Resu
 		pr := &p.Rows[i]
 		switch {
 		case pr.Status == "err":
-			res.Failed = append(res.Failed, fmt.Sprintf("%d: %s", pr.Line, strings.Join(pr.Errors, " / ")))
+			res.Failed = append(res.Failed, fmt.Sprintf("%s: %s", RowLabel(pr.Line, pr.Unit, pr.Label), strings.Join(pr.Errors, " / ")))
 			continue
 		case pr.dev == nil:
 			res.Skipped++

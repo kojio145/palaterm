@@ -1998,3 +1998,30 @@ Object.assign(I18N_EN, {
   "除外条件: {x}": "Excluded: {x}",
   "ファイルまたは変換ルールがプレビューのあとで変わりました。新しいプレビューを確かめてから取り込んでください": "The file or the import rule changed after the preview. Check the new preview, then import",
 });
+Object.assign(I18N_EN, {
+  "{n}台目": "Device {n}",
+  "（{l}）": " ({l})",
+  "{c}（{l}）": "{c} ({l})",
+  "（1台目と同じ）": "(as device 1)",
+  "1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目で値が違う項目だけ元の値を選びます。選ばない項目は 1 台目と同じ値です。2 台目の機器名が空の行では 2 台目を作りません。": "For a list with two devices on a row (a redundant pair's primary and backup), add device 2 and choose a source only for the fields where it differs; the others take device 1's value. Rows whose device 2 has no name give no device 2.",
+  "名前（例: バックアップ）": "Name (e.g. Backup)",
+  "この台を外す": "Remove this device",
+  "＋ {n}台目を追加": "+ Add device {n}",
+  "＋ 2台目を追加（冗長構成など）": "+ Add device 2 (redundant pairs)",
+  "元の値（1台目）": "Source (device 1)",
+  "台": "Device",
+  "1台目": "Device 1",
+  "バックアップ": "Backup",
+});
+I18N_EN_PATTERNS.push(
+  [/^1 行から作れる機器は (\d+) 台までです$/, "A row gives $1 devices at most"],
+  [/^(\d+) 台目の名前は 40 文字までです$/, "The name of device $1 is 40 characters at most"],
+  [/^(\d+) 台目の項目「(.+?)」が 2 回設定されています$/, 'Device $1: field "$2" is set twice'],
+  [/^(\d+) 台目の項目「(.+?)」の元の列を選んでください$/, 'Device $1: choose the source column of field "$2"'],
+  [/^(\d+) 台目の項目「(.+?)」の組み立てを入力してください$/, 'Device $1: enter how to combine columns for field "$2"'],
+  [/^(\d+) 台目の項目「(.+?)」の元の値を選んでください$/, 'Device $1: choose the source of field "$2"'],
+  [/^(\d+) 台目の項目「(.+?)」の加工手順 (\d+): /, 'Device $1, field "$2", step $3: '],
+  [/^(\d+) 台目の機器名の元の値を設定してください（1 台目と同じ名前にはできません）$/, "Set a source for device $1's name (it cannot share device 1's)"],
+  [/^機器「(.+?)」は (.+?) 行目で選ばれています。どちらかを別の機器にしてください$/, 'Device "$1" is already chosen on row $2. Choose another device for one of them'],
+  [/^機器名「(.+?)」が (.+?) 行目と重なっています$/, 'Device name "$1" is also on row $2'],
+);

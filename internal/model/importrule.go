@@ -32,10 +32,27 @@ type ImportRule struct {
 	Exclude []ImportCond  `json:"exclude,omitempty"`
 	Match   ImportMatch   `json:"match"`
 
+	// Units are more devices taken from the same row — a redundant pair
+	// listed as one line (primary and backup) gives a second device. Each
+	// sets where its fields differ from the first device's (the name at
+	// least); every other field is read as the first device's is.
+	Units []ImportUnit `json:"units,omitempty"`
+
 	// SampleName is the file the rule was last tried on (a hint shown in
 	// the list, not a path). LastUsed is the date of the last import.
 	SampleName string `json:"sampleName,omitempty"`
 	LastUsed   string `json:"lastUsed,omitempty"`
+}
+
+// MaxImportUnits is how many devices one row may give (the first and up
+// to three more).
+const MaxImportUnits = 4
+
+// ImportUnit is a further device of a row: its label (バックアップ, shown
+// in the preview) and the fields read differently from the first device.
+type ImportUnit struct {
+	Label  string        `json:"label,omitempty"`
+	Fields []ImportField `json:"fields"`
 }
 
 // ImportField fills one device field (a csvio grid column key: name, host,
@@ -197,6 +214,48 @@ func (r *ImportRule) Validate() error {
 	}
 	if !hasName {
 		return fmt.Errorf("機器名の元の値を設定してください")
+	}
+	if len(r.Units)+1 > MaxImportUnits {
+		return fmt.Errorf("1 行から作れる機器は %d 台までです", MaxImportUnits)
+	}
+	for u := range r.Units {
+		unit := &r.Units[u]
+		unit.Label = strings.TrimSpace(unit.Label)
+		if len([]rune(unit.Label)) > 40 {
+			return fmt.Errorf("%d 台目の名前は 40 文字までです", u+2)
+		}
+		seen := map[string]bool{}
+		named := false
+		for i := range unit.Fields {
+			f := &unit.Fields[i]
+			if seen[f.Key] {
+				return fmt.Errorf("%d 台目の項目「%s」が 2 回設定されています", u+2, f.Key)
+			}
+			seen[f.Key] = true
+			switch f.Source {
+			case "column":
+				if strings.TrimSpace(f.Column) == "" && f.ColIndex < 1 {
+					return fmt.Errorf("%d 台目の項目「%s」の元の列を選んでください", u+2, f.Key)
+				}
+			case "template":
+				if strings.TrimSpace(f.Template) == "" {
+					return fmt.Errorf("%d 台目の項目「%s」の組み立てを入力してください", u+2, f.Key)
+				}
+			default:
+				return fmt.Errorf("%d 台目の項目「%s」の元の値を選んでください", u+2, f.Key)
+			}
+			if f.Key == "name" {
+				named = true
+			}
+			for j := range f.Steps {
+				if err := f.Steps[j].Validate(); err != nil {
+					return fmt.Errorf("%d 台目の項目「%s」の加工手順 %d: %v", u+2, f.Key, j+1, err)
+				}
+			}
+		}
+		if !named {
+			return fmt.Errorf("%d 台目の機器名の元の値を設定してください（1 台目と同じ名前にはできません）", u+2)
+		}
 	}
 	for i, c := range r.Exclude {
 		if c.Target != "field" && c.Target != "column" {

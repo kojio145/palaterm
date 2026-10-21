@@ -3,15 +3,24 @@ package listimport
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/kojio145/palaterm/internal/model"
 )
 
-// Row is one value row after the rule: each field's value (steps run,
-// default filled in), and why it is left out when it is.
+// Row is one device of a value row after the rule: each field's value
+// (steps run, default filled in), and why it is left out when it is. A row
+// giving two devices (a redundant pair) is two Rows of one Line.
 type Row struct {
-	Line   int               `json:"line"`
+	Line int `json:"line"`
+	// Unit is which device of the line (1 = the first; 2… = the rule's
+	// Units), Label that unit's name (バックアップ). ID names the device
+	// of the line uniquely: the line itself for the first, so choices and
+	// messages keep their row numbers.
+	Unit   int               `json:"unit"`
+	ID     int               `json:"id"`
+	Label  string            `json:"label,omitempty"`
 	Values map[string]string `json:"values"`
 	// Raw is each field's value before its steps (the rule editor shows it
 	// as the sample the steps start from).
@@ -27,6 +36,49 @@ type Row struct {
 	// Exclusion is the condition that left the row out (nil: none, or no
 	// name): the page words it in its own language.
 	Exclusion *model.ImportCond `json:"exclusion,omitempty"`
+	// Keys are the fields this device's values give (the cells an import
+	// writes to it).
+	Keys []string `json:"-"`
+}
+
+// UnitID names the unit-th device of a line (see Row.ID).
+func UnitID(line, unit int) int { return line + (unit-1)*1000000 }
+
+// RowLabel is how messages name a row: "12", or "12（バックアップ）" /
+// "12-2" for a further device of it.
+func RowLabel(line, unit int, label string) string {
+	switch {
+	case unit <= 1:
+		return strconv.Itoa(line)
+	case label != "":
+		return fmt.Sprintf("%d（%s）", line, label)
+	}
+	return fmt.Sprintf("%d-%d", line, unit)
+}
+
+// unitFields is the first device's fields with a unit's own in their place
+// (a unit's field keeps the first one's default when it has none).
+func unitFields(base []model.ImportField, u model.ImportUnit) []model.ImportField {
+	out := append([]model.ImportField(nil), base...)
+	for _, o := range u.Fields {
+		if o.Source == "" {
+			continue
+		}
+		found := false
+		for i := range out {
+			if out[i].Key == o.Key {
+				if o.Default == "" {
+					o.Default = out[i].Default
+				}
+				out[i], found = o, true
+				break
+			}
+		}
+		if !found {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // Converted is the rule run over a table.
@@ -60,35 +112,54 @@ func Convert(t *Table, r *model.ImportRule) *Converted {
 			missing[kc] = true
 		}
 	}
+	units := [][]model.ImportField{fields}
+	labels := []string{""}
+	for _, u := range r.Units {
+		units = append(units, unitFields(fields, u))
+		labels = append(labels, u.Label)
+	}
 	for _, src := range t.Rows {
-		row := Row{Line: src.Line, Values: map[string]string{}, Raw: map[string]string{}, Filled: []string{}}
-		for i := range fields {
-			f := &fields[i]
-			v, miss := t.sourceValue(f, src)
-			for _, m := range miss {
-				missing[m] = true
+		for ui, fs := range units {
+			unit := ui + 1
+			row := Row{Line: src.Line, Unit: unit, ID: UnitID(src.Line, unit), Label: labels[ui],
+				Values: map[string]string{}, Raw: map[string]string{}, Filled: []string{}}
+			for i := range fs {
+				f := &fs[i]
+				row.Keys = append(row.Keys, f.Key)
+				v, miss := t.sourceValue(f, src)
+				for _, m := range miss {
+					missing[m] = true
+				}
+				row.Raw[f.Key] = v
+				v = ApplySteps(v, f.Steps)
+				if strings.TrimSpace(v) == "" && f.Default != "" {
+					v = f.Default
+					row.Filled = append(row.Filled, f.Key)
+				}
+				row.Values[f.Key] = normalizeChoice(f.Key, v)
 			}
-			row.Raw[f.Key] = v
-			v = ApplySteps(v, f.Steps)
-			if strings.TrimSpace(v) == "" && f.Default != "" {
-				v = f.Default
-				row.Filled = append(row.Filled, f.Key)
+			name := strings.TrimSpace(row.Values["name"])
+			if unit > 1 && name == "" {
+				continue // a row without a second device (not every line is a pair)
 			}
-			row.Values[f.Key] = v
-		}
-		name := strings.TrimSpace(row.Values["name"])
-		row.Key = name
-		if keyCol != 0 {
-			if k := strings.TrimSpace(src.Cells[keyCol]); k != "" {
-				row.Key, row.KeyBy = k, strings.TrimSpace(r.Match.KeyColumn)
+			row.Key = name
+			if keyCol != 0 {
+				if k := strings.TrimSpace(src.Cells[keyCol]); k != "" {
+					// One asset number for the pair: the further devices
+					// are told apart by their unit.
+					if unit > 1 {
+						k += "#" + strconv.Itoa(unit)
+					}
+					row.Key, row.KeyBy = k, strings.TrimSpace(r.Match.KeyColumn)
+				}
 			}
+			if name == "" {
+				row.Excluded = "機器名が空です"
+			} else if c := excluded(t, r, src, row.Values, missing); c != nil {
+				row.Excluded, row.Exclusion = fmt.Sprintf("除外条件: %s%s", condWhat(*c), condWords(*c)), c
+			}
+			out.Rows = append(out.Rows, row)
 		}
-		if name == "" {
-			row.Excluded = "機器名が空です"
-		} else if c := excluded(t, r, src, row.Values, missing); c != nil {
-			row.Excluded, row.Exclusion = fmt.Sprintf("除外条件: %s%s", condWhat(*c), condWords(*c)), c
-		}
-		out.Rows = append(out.Rows, row)
 	}
 	for m := range missing {
 		out.Missing = append(out.Missing, m)

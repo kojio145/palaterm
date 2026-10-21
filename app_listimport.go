@@ -314,6 +314,8 @@ func ruleSig(r *model.ImportRule) string {
 // RuleTestRow is one value row as the rule turns it, for the editor.
 type RuleTestRow struct {
 	Line     int               `json:"line"`
+	Unit     int               `json:"unit"`
+	Label    string            `json:"label,omitempty"`
 	Values   map[string]string `json:"values"`
 	Raw      map[string]string `json:"raw"`
 	Filled   []string          `json:"filled"`
@@ -373,7 +375,7 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 			out.Excluded++
 		}
 		if len(out.Rows) < 8 {
-			out.Rows = append(out.Rows, RuleTestRow{Line: row.Line, Values: row.Values, Raw: row.Raw, Filled: row.Filled, Excluded: row.Excluded, Exclusion: row.Exclusion})
+			out.Rows = append(out.Rows, RuleTestRow{Line: row.Line, Unit: row.Unit, Label: row.Label, Values: row.Values, Raw: row.Raw, Filled: row.Filled, Excluded: row.Excluded, Exclusion: row.Exclusion})
 		}
 	}
 	return out, nil
