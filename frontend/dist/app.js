@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.8.0";
+const APP_VERSION = "1.9.0";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -956,6 +956,7 @@ async function switchTab(name) {
   document.querySelectorAll(".tab").forEach(el =>
     el.classList.toggle("active", el.id === "tab-" + name));
   savePlace();
+  if (name !== "import" && typeof liLeftTab === "function") liLeftTab();
   // Coming from a group's device list with no group chosen in the run tab
   // yet: start on that group instead of an empty table.
   if (name === "run" && !runGroupSel && !running && typeof deviceView !== "undefined" &&
@@ -971,6 +972,7 @@ function renderTab(name) {
   else if (name === "schedule") renderSchedules();
   else if (name === "settings") renderSettings();
   else if (name === "ostypes") renderOSTypes();
+  else if (name === "import") renderListImport();
 }
 
 // ---- idle auto-lock ----

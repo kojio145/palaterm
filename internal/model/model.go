@@ -790,6 +790,16 @@ type Inventory struct {
 	// opens without the browser's warning page, and a different certificate
 	// later stops it. Keyed "gui <device ID> <host:port>".
 	KnownGUICerts map[string]string `json:"knownGUICerts,omitempty"`
+
+	// ImportRules are the 変換ルール of 一覧の取り込み (in the vault: a
+	// default value may be a password).
+	ImportRules []ImportRule `json:"importRules,omitempty"`
+
+	// ImportRecords are 一覧の取り込み's records, by device ID: kept beside
+	// the devices rather than on them, so the editors that save a whole
+	// device (the device editor, the table, a CSV or bundle import) need
+	// not know of them, and a copy (a new ID) starts without one.
+	ImportRecords map[string]ImportRecord `json:"importRecords,omitempty"`
 }
 
 // GridUngrouped is the table editor's scope for the devices in no group.

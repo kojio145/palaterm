@@ -685,6 +685,11 @@ func (a *App) Lock() {
 	}
 	a.password, a.inv = "", nil
 	a.mu.Unlock()
+	// So does the device list last read for 一覧の取り込み (passwords in
+	// it) — after the vault is closed: a read in progress keeps its file
+	// only while the vault is open (readList), so it is either refused or
+	// forgotten here.
+	forgetBook()
 }
 
 // locked reports that no vault is open. The bindings the page can reach
@@ -767,6 +772,8 @@ func (a *App) persist() error {
 	}
 	// Safety net: whatever path added a device, it is saved with an ID.
 	a.inv.EnsureDeviceIDs()
+	// Whatever path deleted a device, its import record goes with it.
+	a.inv.PruneImportRecords()
 	return vault.Save(a.vaultPath, a.password, a.inv)
 }
 
@@ -2578,7 +2585,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.8.0"
+const appVersion = "1.9.0"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

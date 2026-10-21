@@ -86,6 +86,8 @@ launch ("More info" → "Run anyway"). Code signing is planned.
 
 Many devices at once: import a CSV in the Devices tab ("Import"; the file is chosen first, then the target group), or export everything with "Export bundle". [examples/devices.sample.csv](examples/devices.sample.csv) has the current column set with lab values.
 
+A device list another system exports (xls, xlsx, CSV — including the HTML ".xls" files that open in Excel's Protected View) goes in with **Import lists** at the bottom of the side bar: an import rule maps its columns to PalaTerm's fields (split `user/password` cells, replacement tables, defaults, exclusions), a preview shows every row before anything changes, and importing a newer export updates only what changed at the source, keeping values edited in PalaTerm. Rules can be exported and handed over.
+
 ## Documentation
 
 - [User manual](https://kojio145.github.io/palaterm/manual.html) (Japanese)
