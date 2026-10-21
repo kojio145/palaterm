@@ -644,3 +644,5 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
 .li-pos .field { max-width: 230px; }
 .li-pos input[type=number], .li-pos input[type=text] { width: 175px; }
 .li-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
+.li-tentb { display: inline-block; font-size: 10px; color: var(--warn); border: 1px solid rgba(245,158,11,.5); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; font-weight: 600; }
+.li-tentbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.35); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text); }

@@ -569,3 +569,19 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 	}
 	return &res, nil
 }
+
+// SuggestImportRule guesses a new rule from a sample file: the header row
+// and the usual fields' columns by their header names (the editor fills
+// them in marked 仮 for the user to check).
+func (a *App) SuggestImportRule(path string, r model.ImportRule) (*listimport.Suggestion, error) {
+	b, _, _, _, err := a.readList(path, nil)
+	if err != nil {
+		return nil, err
+	}
+	sh, err := listimport.PickSheet(b, &r)
+	if err != nil {
+		return nil, err
+	}
+	sg := listimport.Suggest(sh, r)
+	return &sg, nil
+}

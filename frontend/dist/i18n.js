@@ -2050,3 +2050,10 @@ Object.assign(I18N_EN, {
   "空欄＝自動": "Empty = automatic",
   "普通は空欄。表の左にメモなど関係ない列があるときだけ": "Usually empty. Only when unrelated columns (notes) sit left of the table",
 });
+Object.assign(I18N_EN, {
+  "見出しの名前から仮に選びました": "Guessed from the header name",
+  "仮": "guess",
+  "見出しの名前から仮の紐付けを入れました（{n} 項目）。「仮」の札の欄を確かめて、違っていれば選び直してください": "Guessed {n} fields from the header names. Check the ones marked \"guess\" and choose again where they are wrong",
+  "元に戻す": "Undo",
+  "確認した（札を消す）": "Checked (remove the marks)",
+});

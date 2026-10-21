@@ -136,6 +136,7 @@ function liOpenEditor(id) {
   LI.rule.match = LI.rule.match || {};
   LI.ruleStart = JSON.stringify(LI.rule);
   LI.test = null; LI.more = false;
+  LI.tent = new Set(); LI.tentUndo = null; LI.tentN = 0;
   LI.view = "edit";
   renderListImport();
   if (LI.sample) liRunTest();
@@ -259,6 +260,7 @@ function liRenderEdit(root) {
       ${uf.source ? `<div class="li-steps" style="margin-top:4px">${(uf.steps || []).map(s => `<button class="li-step" data-ustep="${u}:${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
         <button class="li-step add" data-ustep="${u}:${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(uf.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>` : ""}
       ${isName && !cur ? `<div class="li-ures li-needtxt">${esc(t("必須: 2台目の機器名の列を選びます。この列が空の行には 2台目を作りません"))}</div>` : ""}
+      ${LI.tent.has(`u${u}:${f.key}`) ? `<span class="li-tentb" title="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}
       ${shows ? `<div class="li-ures">→ ${liShowValue(f.key, smp.values[f.key])}${isName ? " " + esc(t("（見本 {n} 行目）", { n: smp.line })) : ""}</div>`
         : isName && cur && LI.test ? `<div class="li-ures">${esc(t("見本の先頭の行には 2台目がありません"))}</div>` : ""}`;
   };
@@ -306,7 +308,7 @@ function liRenderEdit(root) {
           ${((test && test.sheets) || (r.sheet ? [r.sheet] : [])).map((s, i) => `<option value="${esc("name:" + s)}" ${r.sheet === s ? "selected" : ""}>${esc(t("名前で「{s}」", { s }))}</option>`).join("")}
           ${((test && test.sheets) || []).slice(1).map((s, i) => `<option value="idx:${i + 2}" ${!r.sheet && r.sheetIndex === i + 2 ? "selected" : ""}>${esc(t("{n} 枚目", { n: i + 2 }))}</option>`).join("")}
         </select></div>
-        <div class="field"><label for="li-hrow">${esc(t("見出しの行（何行目）"))}</label><input type="number" min="1" id="li-hrow" value="${r.headerRow}" data-guard-skip>
+        <div class="field"><label for="li-hrow">${esc(t("見出しの行（何行目）"))}${LI.tent.has("headerRow") ? ` <span class="li-tentb">${esc(t("仮"))}</span>` : ""}</label><input type="number" min="1" id="li-hrow" value="${r.headerRow}" data-guard-skip>
           <div class="li-hint">${esc(t("項目名（ホスト名・IP など）が書いてある行"))}</div></div>
         <div class="field"><label for="li-drow">${esc(t("データの開始行（何行目）"))}</label><input type="number" min="0" id="li-drow" value="${r.dataRow || ""}" placeholder="${esc(t("空欄＝見出しのすぐ下"))}" data-guard-skip>
           <div class="li-hint">${esc(t("普通は空欄。見出しとデータの間に説明の行があるときだけ"))}</div></div>
@@ -323,6 +325,8 @@ function liRenderEdit(root) {
 
     <div class="panel li-sec">
       <div class="li-h"><b>${esc(t("項目の紐付け"))}</b><span class="muted">${esc(t("加工手順は上から順に行います。加工したあとも空のときは既定値で埋めます"))}</span></div>
+      ${LI.tentUndo ? `<div class="li-tentbar"><span>${esc(t("見出しの名前から仮の紐付けを入れました（{n} 項目）。「仮」の札の欄を確かめて、違っていれば選び直してください", { n: LI.tentN }))}</span>
+        <span class="row-inline" style="gap:6px"><button class="btn sm" id="li-tundo">${esc(t("元に戻す"))}</button><button class="btn sm" id="li-tok">${esc(t("確認した（札を消す）"))}</button></span></div>` : ""}
       <div class="li-units">
         <span class="muted">${esc(t("1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目で値が違う項目だけ元の値を選びます。選ばない項目は 1 台目と同じ値です。2 台目の機器名が空の行では 2 台目を作りません。"))}</span>
         <div class="row-inline" style="flex-wrap:wrap;gap:6px 12px;margin-top:6px">
@@ -342,7 +346,7 @@ function liRenderEdit(root) {
           const used = fr.source || fr.default;
           return `<tr class="${used ? "" : "li-unused"}">
             <td><b>${esc(liFieldLabel(f.key))}</b>${f.key === "name" ? ` <span class="li-req">${esc(t("必須"))}</span>` : ""}</td>
-            <td>${srcSelect(f)}</td>
+            <td>${srcSelect(f)}${LI.tent.has(f.key) ? `<span class="li-tentb" title="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}</td>
             <td><div class="li-steps">${(fr.steps || []).map((s, i) => `<button class="li-step" data-step="${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
               ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
             <td>${liValueInput(f.key, fr.default || "", "li-def-" + f.key)}</td>
@@ -487,6 +491,7 @@ function liRuleOut() {
 
 function liWireGrid(root) {
   root.querySelectorAll(".li-sheet [data-row]").forEach(td => td.onclick = () => {
+    LI.tent && LI.tent.delete("headerRow");
     LI.rule.headerRow = parseInt(td.dataset.row, 10);
     if (LI.rule.dataRow && LI.rule.dataRow <= LI.rule.headerRow) LI.rule.dataRow = 0;
     liRunTest(true);
@@ -506,6 +511,7 @@ function liWireEdit(root) {
       const p = await App().PickListFile();
       if (!p) return;
       LI.sample = p;
+      if (liCanSuggest()) await liSuggest();
       await liRunTest(true);
     } catch (e) { toast(terr(e), "err"); }
   };
@@ -514,7 +520,16 @@ function liWireEdit(root) {
     if (v.startsWith("name:")) { r.sheet = v.slice(5); r.sheetIndex = 0; } else { r.sheet = ""; r.sheetIndex = parseInt(v.slice(4), 10) || 0; }
     liRunTest(true);
   };
+  const tu = q("#li-tundo");
+  if (tu) tu.onclick = () => {
+    LI.rule = JSON.parse(LI.tentUndo);
+    LI.tent = new Set(); LI.tentUndo = null;
+    if (LI.sample) liRunTest(true); else renderListImport();
+  };
+  const tk = q("#li-tok");
+  if (tk) tk.onclick = () => { LI.tent = new Set(); LI.tentUndo = null; renderListImport(); };
   q("#li-hrow").onchange = e => {
+    LI.tent.delete("headerRow");
     r.headerRow = Math.max(1, parseInt(e.target.value, 10) || 1);
     // As a click on the row number does: values start after the header.
     if (r.dataRow && r.dataRow <= r.headerRow) r.dataRow = 0;
@@ -525,6 +540,7 @@ function liWireEdit(root) {
   q("#li-merge").onchange = e => { r.mergeOnlyFirst = e.target.value === "first"; liRunTest(true); };
   liWireGrid(root);
   root.querySelectorAll("[data-src]").forEach(sel => sel.onchange = () => {
+    LI.tent.delete(sel.dataset.src);
     const f = liEnsureField(sel.dataset.src), v = sel.value;
     if (v.startsWith("col:")) {
       f.source = "column"; f.column = v.slice(4);
@@ -555,6 +571,7 @@ function liWireEdit(root) {
   const uk = el => { const s = el.dataset.usrc || el.dataset.utpl || el.dataset.ustep; const i = s.indexOf(":"); return [+s.slice(0, i), s.slice(i + 1)]; };
   root.querySelectorAll("[data-usrc]").forEach(sel => sel.onchange = () => {
     const [u, key] = uk(sel), v = sel.value;
+    LI.tent.delete(`u${u}:${key}`);
     if (!v) { // as the first device: the unit's own setting goes
       r.units[u].fields = (r.units[u].fields || []).filter(f => f.key !== key);
     } else {
@@ -1013,4 +1030,38 @@ function liExclText(row) {
     equals: t("{w}が「{v}」", { w, v }), notequals: t("{w}が「{v}」でない", { w, v }),
   }[c.op] || w;
   return t("除外条件: {x}", { x: text });
+}
+
+// liCanSuggest: a new rule nothing has been chosen in yet (a guess never
+// overwrites the user's own choices).
+function liCanSuggest() {
+  const r = LI.rule;
+  return r && !r.id && !(r.fields || []).some(f => f.source) && !(r.units || []).length;
+}
+
+// liSuggest fills a new rule with a first guess from the sample: the header
+// row and the usual fields' columns by their names (and a second device
+// when the header repeats them), each marked 仮 until the user chooses.
+async function liSuggest() {
+  let sg;
+  try { sg = await App().SuggestImportRule(LI.sample, liRuleOut()); } catch (e) { return; }
+  if (!sg || (!(sg.fields || []).length && sg.headerRow === LI.rule.headerRow)) return;
+  const snap = JSON.stringify(LI.rule);
+  LI.tent = new Set();
+  if (sg.headerRow && sg.headerRow !== LI.rule.headerRow) {
+    LI.rule.headerRow = sg.headerRow;
+    LI.rule.dataRow = 0;
+    LI.tent.add("headerRow");
+  }
+  for (const f of sg.fields || []) {
+    const fr = liEnsureField(f.key);
+    fr.source = "column"; fr.column = f.column; fr.colIndex = f.colIndex;
+    LI.tent.add(f.key);
+  }
+  if ((sg.unit || []).length) {
+    LI.rule.units = [{ label: t("バックアップ"), fields: sg.unit.map(f => ({ key: f.key, source: "column", column: f.column, colIndex: f.colIndex, steps: [] })) }];
+    for (const f of sg.unit) LI.tent.add("u0:" + f.key);
+  }
+  LI.tentN = (sg.fields || []).length + (sg.unit || []).length;
+  LI.tentUndo = snap;
 }
