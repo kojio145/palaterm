@@ -57,6 +57,7 @@ func (s *scope) add(k string) {
 // line's block (the indented lines under it).
 type cfgIndex struct {
 	all    *scope
+	top    *scope // the unindented lines
 	heads  []string
 	blocks map[string]*scope
 	config bool
@@ -64,10 +65,20 @@ type cfgIndex struct {
 }
 
 func indexConfig(log string) *cfgIndex {
-	x := &cfgIndex{all: newScope(), blocks: map[string]*scope{}, orig: map[string]string{}}
-	lines := splitLines(log)
+	x := &cfgIndex{all: newScope(), top: newScope(), blocks: map[string]*scope{}, orig: map[string]string{}}
+	// The listing picked for the changes outside the work too, so the
+	// verdict and that list read the same configuration; a log with no
+	// listing at all is indexed whole.
+	lines, kind := configSection(log)
+	if kind == oneListing {
+		x.config = true
+	}
 	head := ""
 	for _, l := range lines {
+		if l == partBreak {
+			head = ""
+			continue
+		}
 		k := normKey(l)
 		if k == "" {
 			continue
@@ -81,6 +92,7 @@ func indexConfig(log string) *cfgIndex {
 		}
 		if l[0] != ' ' && l[0] != '\t' {
 			head = k
+			x.top.add(k)
 			if _, ok := x.blocks[k]; !ok {
 				x.blocks[k] = newScope()
 				x.heads = append(x.heads, k)
@@ -405,10 +417,11 @@ func vlanRule(typed []string, after, before *scope) (status, match string, ok bo
 		return true
 	}
 	ha, m := after.vlans(base)
-	if !holds(ha) || (verb != "remove" && m == "") {
+	hb, mb := before.vlans(base)
+	if !holds(ha) || (verb != "remove" && m == "") || (verb == "remove" && m == "" && mb == "") {
 		return "", "", false
 	}
-	if hb, _ := before.vlans(base); holds(hb) {
+	if holds(hb) {
 		return "already", m, true
 	}
 	return "reflected", m, true
@@ -470,8 +483,11 @@ func negation(typed []string) ([]string, bool) {
 	return nil, false
 }
 
-// positive looks a typed setting up in one scope.
-func positive(typed []string, key string, after, before *scope) (CommandCheck, bool) {
+// positive looks a typed setting up in one scope. ax / bx are the whole
+// logs when the scope is the whole after log (the block the line was typed
+// in is not known): a VLAN list is then judged block by block, not as the
+// union of every interface's VLANs.
+func positive(typed []string, key string, after, before *scope, ax, bx *cfgIndex) (CommandCheck, bool) {
 	by := func(m string) string {
 		if before.n(m) >= after.n(m) {
 			return "already"
@@ -485,8 +501,19 @@ func positive(typed []string, key string, after, before *scope) (CommandCheck, b
 		}
 		return cc, true
 	}
-	if st, m, ok := vlanRule(typed, after, before); ok {
-		return CommandCheck{Status: st, Match: m, Note: "vlan"}, true
+	if ax == nil {
+		if st, m, ok := vlanRule(typed, after, before); ok {
+			return CommandCheck{Status: st, Match: m, Note: "vlan"}, true
+		}
+	} else {
+		if st, m, ok := vlanRule(typed, ax.top, bx.top); ok {
+			return CommandCheck{Status: st, Match: m, Note: "vlan"}, true
+		}
+		for _, h := range ax.heads {
+			if st, m, ok := vlanRule(typed, ax.blocks[h], bx.blocks[h]); ok {
+				return CommandCheck{Status: st, Match: m, Note: "vlan"}, true
+			}
+		}
 	}
 	if m := after.findSecret(typed); m != "" {
 		if before.n(m) > 0 {
@@ -528,10 +555,38 @@ func (s *scope) findSpaced(key string) string {
 // It also lists the configuration lines that changed between beforeLog and
 // afterLog without being typed in the work (see unexpectedChanges).
 func StrictVerify(workLog, beforeLog, afterLog string) StrictResult {
-	cmds, typed := extractTyped(workLog)
-	res := StrictResult{Commands: []CommandCheck{}, Unexpected: []ChangedLine{}, Typed: typed}
+	return StrictVerifyLogs([]string{workLog}, beforeLog, afterLog)
+}
+
+// StrictVerifyLogs is StrictVerify for a work done over several sessions
+// (one log per session, oldest first).
+func StrictVerifyLogs(workLogs []string, beforeLog, afterLog string) StrictResult {
 	before := indexConfig(beforeLog)
 	after := indexConfig(afterLog)
+	// A line naming a block of either log opens that block when typed in a
+	// sub-mode ("interface vlan10" in config-if).
+	// Only a head with lines under it counts, or an interface (an unused
+	// port is listed bare): a one-line global setting ("feature lacp") or an
+	// output line at column 0 is not a block.
+	isHead := func(cmd string) bool {
+		t := strings.Fields(normKey(cmd))
+		if len(t) < 2 {
+			return false
+		}
+		for _, x := range []*cfgIndex{after, before} {
+			if _, b := x.block(cmd); b != nil && (len(b.lines) > 0 || startsWith(t, "interface")) {
+				return true
+			}
+		}
+		return false
+	}
+	cmds, typed := extractTypedLogs(workLogs, isHead)
+	for i := range cmds {
+		if cmds[i].parent != "" {
+			cmds[i].blocks = parentHeads(cmds[i], before, after)
+		}
+	}
+	res := StrictResult{Commands: []CommandCheck{}, Unexpected: []ChangedLine{}, Typed: typed}
 	hasConfig := after.config
 	for _, c := range cmds {
 		if !hasConfig && after.all.find(strings.Fields(c.key), whole) != "" {
@@ -539,21 +594,65 @@ func StrictVerify(workLog, beforeLog, afterLog string) StrictResult {
 		}
 	}
 	res.NoConfig = !hasConfig && len(cmds) > 0
-	touched := map[string]bool{} // after-log lines a typed setting was found as
-	for _, c := range cmds {
-		cc := judge(c, before, after, hasConfig)
-		cc.Line, cc.Parent = c.line, c.parent
-		if cc.Match != "" && cc.Note != "otherBlock" {
-			touched[cc.Match] = true
-		} else if cc.Status == "reflected" || cc.Status == "already" {
-			touched[c.key] = true
+	touched := touchSet{}                    // after-log lines a typed setting was found as, by block
+	missingIn := make([][]string, len(cmds)) // where each missing line is missing
+	found := func(cc CommandCheck) bool {
+		return (cc.Match != "" && cc.Note != "otherBlock") || cc.Status == "reflected" || cc.Status == "already"
+	}
+	for i, c := range cmds {
+		var cc CommandCheck
+		if _, inRange := rangeMembers(c.parent); inRange {
+			// A line typed under "interface range" is in every member
+			// interface: each one is judged, and the line is reflected only
+			// if it is in all.
+			var all []CommandCheck
+			for _, h := range c.blocks {
+				if after.blocks[h] == nil {
+					continue
+				}
+				sub := judge(typedCmd{line: c.line, key: c.key, parent: h, blocks: []string{h}, last: c.last}, before, after, hasConfig)
+				all = append(all, sub)
+				if sub.Status == "missing" || sub.Note == "otherBlock" {
+					missingIn[i] = append(missingIn[i], h)
+				} else if found(sub) {
+					touched.add(firstNonEmpty(sub.Match, c.key), h)
+				}
+			}
+			if len(all) > 0 {
+				cc = combineMembers(all)
+			} else {
+				// No member in the after log: judged as one line, missing in
+				// every member — undone only by a later line in each of them
+				// (or under the same range).
+				cc = judge(c, before, after, hasConfig)
+				if found(cc) {
+					touched.add(firstNonEmpty(cc.Match, c.key), "")
+				}
+				missingIn[i] = c.blocks
+			}
+		} else {
+			cc = judge(c, before, after, hasConfig)
+			// The block it was found in; when the after log lacks the block
+			// the match is not tied to one ("").
+			block := ""
+			if len(c.blocks) > 0 && after.blocks[c.blocks[0]] != nil {
+				block = c.blocks[0]
+			}
+			if found(cc) {
+				touched.add(firstNonEmpty(cc.Match, c.key), block)
+			}
+			// Where it is missing is the block it was typed in, known to the
+			// logs or not, so a later undo there supersedes it (a global
+			// line: markSuperseded takes it as "").
+			missingIn[i] = c.blocks
 		}
+		cc.Line, cc.Parent = c.line, c.parent
 		if o := after.orig[cc.Match]; o != "" {
 			cc.Match = o
 		}
 		res.Commands = append(res.Commands, cc)
 	}
-	markSuperseded(cmds, res.Commands, after)
+	markSuperseded(cmds, res.Commands, missingIn)
 	for _, cc := range res.Commands {
 		switch cc.Status {
 		case "missing":
@@ -565,18 +664,32 @@ func StrictVerify(workLog, beforeLog, afterLog string) StrictResult {
 		}
 	}
 	if hasConfig {
-		res.Unexpected, res.UnexpectedCount = unexpectedChanges(cmds, touched, beforeLog, afterLog, after)
+		res.Unexpected, res.UnexpectedCount = unexpectedChanges(cmds, touched, beforeLog, afterLog)
 	}
 	return res
 }
 
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 func judge(c typedCmd, before, after *cfgIndex, hasConfig bool) CommandCheck {
 	typed := strings.Fields(c.key)
+	// "default interface X" resets an interface: it is not kept as a line,
+	// and the interface stays — it is not a removal.
+	if notStored(typed) && len(typed[0]) >= 3 && strings.HasPrefix("default", typed[0]) {
+		return CommandCheck{Status: "unverified", Note: "notStored"}
+	}
 	sa, sb := after.all, before.all
+	ax, bx := after, before // the whole logs, for a VLAN list judged per block
 	scoped := false
 	if c.parent != "" {
 		if h, b := after.block(c.parent); b != nil {
 			sa, sb, scoped = b, before.blocks[h], true
+			ax, bx = nil, nil
 		}
 	}
 	if target, ok := negation(typed); ok {
@@ -602,7 +715,7 @@ func judge(c typedCmd, before, after *cfgIndex, hasConfig bool) CommandCheck {
 		}
 		return CommandCheck{Status: "missing"}
 	}
-	if cc, ok := positive(typed, c.key, sa, sb); ok {
+	if cc, ok := positive(typed, c.key, sa, sb, ax, bx); ok {
 		return cc
 	}
 	if notStored(typed) {
@@ -616,8 +729,11 @@ func judge(c typedCmd, before, after *cfgIndex, hasConfig bool) CommandCheck {
 			}
 		}
 	}
+	// Found as it is in another block: the logs cannot tell. A VLAN list
+	// does not count here — another interface's list says nothing about
+	// this one ("remove 30" holds wherever 30 was never allowed).
 	if scoped {
-		if cc, ok := positive(typed, c.key, after.all, before.all); ok && cc.Status != "unverified" {
+		if cc, ok := positive(typed, c.key, after.all, before.all, after, before); ok && cc.Status != "unverified" && cc.Note != "vlan" {
 			m := cc.Match
 			if m == "" {
 				m = c.key
@@ -632,4 +748,28 @@ func judge(c typedCmd, before, after *cfgIndex, hasConfig bool) CommandCheck {
 		return CommandCheck{Status: "unverified", Note: "default"}
 	}
 	return CommandCheck{Status: "missing"}
+}
+
+// combineMembers is one verdict for a line typed under "interface range":
+// missing if any member lacks it, else to check if any cannot be told,
+// else already if every member had it before, else reflected.
+func combineMembers(all []CommandCheck) CommandCheck {
+	// Found only in another block, when the blocks are the range's own
+	// members, means this member lacks it.
+	for _, cc := range all {
+		if cc.Status == "missing" || cc.Note == "otherBlock" {
+			return CommandCheck{Status: "missing"}
+		}
+	}
+	for _, cc := range all {
+		if cc.Status == "unverified" {
+			return cc
+		}
+	}
+	for _, cc := range all {
+		if cc.Status != "already" {
+			return cc
+		}
+	}
+	return all[0]
 }

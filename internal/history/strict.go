@@ -72,7 +72,7 @@ var promptLine = regexp.MustCompile(`^(!?[A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?
 
 // notSetting lists command words that read, navigate, save or run things
 // rather than configure them. Vendor-mixed on purpose.
-var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|traceroute|tracert|telnet|ssh|exit|end|quit|logout|configure|conf|config|svintr-config|terminal|term|write|wr|copy|commit|save|rollback|execute|exec|diagnose|clear|debug|undebug|reload|reboot|enable\s*$|disable\s*$|do|run|cls|help|\?|history|where|top|up|edit|next|abort|discard|load|compare|monitor|test|verify|y|yes|n|no\s*$)(\s|$)`)
+var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|traceroute|tracert|telnet|ssh|exit|end|quit|logout|configure|conf|config|svintr-config|terminal|term|write|wr|copy|commit|save|rollback|execute|exec|diagnose|clear|debug|undebug|reload|reboot|enable(\s+\d+)?\s*$|disable(\s+\d+)?\s*$|do|run|cls|help|\?|history|where|top|up|edit|next|abort|discard|load|compare|monitor|test|verify|y|yes|n|no\s*$)(\s|$)`)
 
 var ws = regexp.MustCompile(`\s+`)
 
@@ -249,6 +249,10 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 type typedCmd struct {
 	line, key, parent string
 	last              int // position of its last occurrence in the work log
+	// blocks: the head lines of the blocks it was typed into, as the logs
+	// name them (one, or each member of an "interface range"; none for a
+	// global line), worked out once per verification (see parentHeads).
+	blocks []string
 }
 
 // junosEdit matches Junos's "[edit interfaces ge-0/0/0]" context banner.
@@ -268,16 +272,27 @@ func promptMode(prompt string) string {
 func isSubMode(m string) bool { return strings.HasPrefix(m, "config-") }
 
 func extractTyped(workLog string) ([]typedCmd, int) {
-	type entry struct {
-		prompt, cmd, junos string
-		after              []string // output lines up to the next prompt line
-	}
-	var entries []entry
+	return extractTypedLogs([]string{workLog}, nil)
+}
+
+// sessionEntry is one prompt line of a work log: the prompt, what was typed
+// after it, the Junos edit context and the output up to the next prompt.
+type sessionEntry struct {
+	prompt, cmd, junos string
+	after              []string
+}
+
+// sessionEntries reads one session's log into its prompt lines, the block
+// each was typed in, and whether the gear has (config) prompts. isHead, when
+// given, tells a line that names a block of the before / after logs
+// ("interface vlan10" typed in config-if opens that block).
+func sessionEntries(log string, isHead func(string) bool) ([]sessionEntry, []string, bool) {
+	var entries []sessionEntry
 	junos := ""
-	for _, raw := range splitLines(workLog) {
+	for _, raw := range splitLines(log) {
 		line := strings.TrimRight(raw, " \t")
 		if m := promptLine.FindStringSubmatch(line); m != nil {
-			entries = append(entries, entry{prompt: m[1], cmd: strings.TrimSpace(m[2]), junos: junos})
+			entries = append(entries, sessionEntry{prompt: m[1], cmd: strings.TrimSpace(m[2]), junos: junos})
 			continue
 		}
 		if m := junosEdit.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
@@ -287,40 +302,55 @@ func extractTyped(workLog string) ([]typedCmd, int) {
 			entries[n-1].after = append(entries[n-1].after, line)
 		}
 	}
-	// The block each line was typed in, from the prompts: a command at the
-	// top (config) prompt followed by a sub-mode prompt opens a block; the
-	// same kind of command at the sub-mode prompt ("interface Gi0/2" while
-	// in config-if) opens the next one; a nested sub-mode (address-family)
-	// (config-router → config-router-af) stays in the outer block, another
-	// sub-mode reached from a sub-mode is a new block; a sub-mode line followed by the top prompt
-	// was a global command (the device left the mode for it), and the top
-	// prompt ends the block.
+	// The block each line was typed in, from the prompts. The modes entered
+	// since the top (config) prompt are kept as a stack under the line that
+	// opened the block:
+	//   - a command at the top prompt followed by a sub-mode opens a block;
+	//   - a header at a sub-mode prompt — a line naming a block of the logs
+	//     ("interface vlan10" in config-if), an "interface range …", or one
+	//     of the same kind as the current block ("interface gi0/5" in
+	//     config-if-range) — opens the next block;
+	//   - a sub-mode already on the stack is a way back out (exit,
+	//     exit-address-family): the block stays;
+	//   - a deeper sub-mode of the current one (config-router →
+	//     config-router-af, config-pmap → config-pmap-c) is nested: the block
+	//     stays;
+	//   - any other sub-mode is another kind of block;
+	//   - a sub-mode line followed by the top prompt was a global command
+	//     (the device left the mode for it), and the top prompt ends the
+	//     block.
 	parents := make([]string, len(entries))
 	parent := ""
+	var stack []string // modes entered since the block opened
 	for i, e := range entries {
 		mode := promptMode(e.prompt)
 		if !isSubMode(mode) {
-			parent = ""
+			parent, stack = "", nil
 		}
 		parents[i] = parent
 		if i+1 >= len(entries) {
 			break
 		}
 		next := promptMode(entries[i+1].prompt)
+		out := modeIndex(stack, next)
 		switch {
 		case !isSubMode(next):
 			if isSubMode(mode) && !notSetting.MatchString(e.cmd) {
 				parents[i] = ""
 			}
-			parent = ""
+			parent, stack = "", nil
 		case !isSubMode(mode):
-			parent = e.cmd
+			parent, stack = e.cmd, []string{next}
+		case sameKind(e.cmd, parent) || isRange(e.cmd) || (isHead != nil && isHead(e.cmd)):
+			parents[i], parent, stack = "", e.cmd, []string{next}
 		case next == mode:
-			if sameKind(e.cmd, parent) {
-				parents[i], parent = "", e.cmd
-			}
-		case !strings.HasPrefix(next, mode+"-"):
-			parents[i], parent = "", e.cmd // another kind of block straight from a sub-mode
+			// another line of the same block
+		case out >= 0:
+			stack = stack[:out+1] // back out to an outer mode
+		case strings.HasPrefix(next, mode+"-"):
+			stack = append(stack, next) // into a nested mode
+		default:
+			parents[i], parent, stack = "", e.cmd, []string{next} // another kind of block straight from a sub-mode
 		}
 	}
 	// On gear with (config) prompts, a line at a prompt without a mode
@@ -333,43 +363,84 @@ func extractTyped(workLog string) ([]typedCmd, int) {
 			break
 		}
 	}
+	return entries, parents, modal
+}
+
+// modeIndex is where mode m is on the stack of modes entered, or -1.
+func modeIndex(stack []string, m string) int {
+	for k := len(stack) - 1; k >= 0; k-- {
+		if stack[k] == m {
+			return k
+		}
+	}
+	return -1
+}
+
+// isRange: an "interface range …" header, abbreviations allowed ("int ra
+// gi0/2-3").
+func isRange(cmd string) bool {
+	t := strings.Fields(normKey(cmd))
+	return len(t) >= 3 && startsWith(t[:2], "interface", "range")
+}
+
+// extractTypedLogs reads the work logs of one work (one per session when a
+// reconnect split it), oldest first. Each session is read on its own, so
+// the block of the last line before a reconnect is not lost to the next
+// session's first prompt. isHead: see sessionEntries.
+func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int) {
 	var out []typedCmd
 	seen := map[string]int{}
-	typed := 0
-	for i, e := range entries {
-		typed++
-		cmd := e.cmd
-		if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") || strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#") {
-			// "!" / "#" typed at a prompt is a comment (pasted configuration)
-			continue
-		}
-		if modal && promptMode(e.prompt) == "" {
-			continue
-		}
-		if refused(e.after) {
-			continue
-		}
-		if i+1 < len(entries) && len(e.after) > 0 {
-			next := entries[i+1]
-			if next.prompt == e.prompt && len(next.cmd) > len(cmd) && strings.HasPrefix(strings.ToLower(next.cmd), strings.ToLower(cmd)) {
-				continue // redrawn after help / completion candidates
+	typed := 0 // also the position across all sessions, for "typed later"
+	type session struct {
+		entries []sessionEntry
+		parents []string
+	}
+	// Whether the gear has (config) prompts is known from all sessions
+	// together: a short reconnect may not show one.
+	var sessions []session
+	modal := false
+	for _, log := range logs {
+		e, p, m := sessionEntries(log, isHead)
+		sessions = append(sessions, session{e, p})
+		modal = modal || m
+	}
+	for _, ss := range sessions {
+		entries, parents := ss.entries, ss.parents
+		for i, e := range entries {
+			typed++
+			cmd := e.cmd
+			if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") || strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#") {
+				// "!" / "#" typed at a prompt is a comment (pasted configuration)
+				continue
 			}
-		}
-		key := normKey(cmd)
-		if e.junos != "" {
-			for _, verb := range []string{"set ", "delete "} {
-				if strings.HasPrefix(key, verb) {
-					key = verb + normKey(e.junos) + " " + key[len(verb):]
+			if modal && promptMode(e.prompt) == "" {
+				continue
+			}
+			if refused(e.after) {
+				continue
+			}
+			if i+1 < len(entries) && len(e.after) > 0 {
+				next := entries[i+1]
+				if next.prompt == e.prompt && len(next.cmd) > len(cmd) && strings.HasPrefix(strings.ToLower(next.cmd), strings.ToLower(cmd)) {
+					continue // redrawn after help / completion candidates
 				}
 			}
+			key := normKey(cmd)
+			if e.junos != "" {
+				for _, verb := range []string{"set ", "delete "} {
+					if strings.HasPrefix(key, verb) {
+						key = verb + normKey(e.junos) + " " + key[len(verb):]
+					}
+				}
+			}
+			par := parents[i]
+			if k, ok := seen[par+"\x00"+key]; ok {
+				out[k].last = typed // typed again: "shutdown, no shutdown, shutdown"
+				continue
+			}
+			seen[par+"\x00"+key] = len(out)
+			out = append(out, typedCmd{line: cmd, key: key, parent: par, last: typed})
 		}
-		par := parents[i]
-		if k, ok := seen[par+"\x00"+key]; ok {
-			out[k].last = i // typed again: "shutdown, no shutdown, shutdown"
-			continue
-		}
-		seen[par+"\x00"+key] = len(out)
-		out = append(out, typedCmd{line: cmd, key: key, parent: par, last: i})
 	}
 	return out, typed
 }
@@ -380,6 +451,9 @@ func sameKind(cmd, parent string) bool {
 	a, b := strings.Fields(normKey(cmd)), strings.Fields(normKey(parent))
 	if len(a) < 2 || len(b) < 2 || a[0] == "no" {
 		return false
+	}
+	if family(a[0], b[0]) && (isRange(cmd) || isRange(parent)) {
+		return true // "interface range …" and "interface gi0/5" are both interface blocks
 	}
 	return family(a[0], b[0]) && family(a[1], b[1])
 }

@@ -36,16 +36,31 @@ var noise = []*regexp.Regexp{
 	// Compact ages such as a route's "37d20h54m31s" or "2w3d", and
 	// "00:12:34"-less uptimes like "5h32m".
 	regexp.MustCompile(`\b(?:\d+[wdhms]){2,}\b`),
-	// Stamps every configuration listing carries and that change with each
-	// save or by themselves: Cisco's size and last-change comments and the
-	// clock-period it tunes, FortiGate's file version, Junos's last commit.
-	// Without these, two listings of the same configuration differed.
+}
+
+// configStamps match the whole lines every configuration listing carries
+// and that change with each save or by themselves: Cisco's size and
+// last-change comments and the clock-period it tunes, FortiGate's file
+// version, Junos's last commit, AlaxalA's last modification. Without these,
+// two listings of the same configuration differed. Unlike noise they never
+// cut into a configuration line, so the work verdict uses them alone.
+var configStamps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*current configuration\s*:.*$`),
 	regexp.MustCompile(`(?i)^\s*!\s*(last configuration change|nvram config last updated|no configuration change since).*$`),
 	regexp.MustCompile(`(?i)^\s*ntp clock-period\s+\d+\s*$`),
 	regexp.MustCompile(`(?i)^\s*#(conf_file_ver|config-version)=.*$`),
 	regexp.MustCompile(`(?i)^\s*## last (commit|changed):.*$`),
-	regexp.MustCompile(`(?i)^\s*#\s*last modified by\b.*$`), // AlaxalA
+	regexp.MustCompile(`(?i)^\s*#\s*last modified by\b.*$`),
+}
+
+// stripStamps blanks a line that is one of the configStamps.
+func stripStamps(line string) string {
+	for _, re := range configStamps {
+		if re.MatchString(line) {
+			return ""
+		}
+	}
+	return line
 }
 
 func normalize(line string) string {
@@ -54,6 +69,7 @@ func normalize(line string) string {
 	if strings.HasPrefix(line, "!") && promptLine.MatchString(line) {
 		line = line[1:]
 	}
+	line = stripStamps(line)
 	for _, re := range noise {
 		line = re.ReplaceAllString(line, "")
 	}

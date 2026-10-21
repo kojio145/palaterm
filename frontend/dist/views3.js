@@ -87,7 +87,10 @@ function renderHistoryView() {
   // whether that work shows up in the after logs.
   const aRun = runs.find(r => r.dir === histState.a), bRun = runs.find(r => r.dir === histState.b);
   const bOlder = !!(aRun && bRun && aRun.startedAt && bRun.startedAt && bRun.startedAt < aRun.startedAt);
-  if (aRun && bRun && (!histState.c || !runs.some(r => r.dir === histState.c))) {
+  // "-" is （なし） picked by the user: it stays, so A and B can be compared
+  // without a work run (it used to be replaced by the default at once).
+  // Picking another A or B clears it, and the default is chosen again.
+  if (aRun && bRun && histState.c !== "-" && (!histState.c || !runs.some(r => r.dir === histState.c))) {
     // External folders dropped in together carry the same times, so for an
     // external A / B the external folder named as the work (中, during …)
     // is the default, whatever the clock says.
@@ -194,9 +197,11 @@ function renderHistoryView() {
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   root.querySelectorAll("[data-folder]").forEach(b => b.onclick = () => App().OpenRunFolder(b.dataset.folder).catch(e => toast(terr(e), "err")));
   // Picking A / B / 作業中 only redraws: the runs are already in hand.
-  root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { histState.a = b.dataset.cmpA; renderHistoryView(); });
-  root.querySelectorAll("[data-cmp-b]").forEach(b => b.onclick = () => { histState.b = b.dataset.cmpB; renderHistoryView(); });
-  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value; renderHistoryView(); };
+  // Another A or B (the row button or the select): the work run between
+  // them is chosen again.
+  root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { if (histState.a !== b.dataset.cmpA) histState.c = ""; histState.a = b.dataset.cmpA; renderHistoryView(); });
+  root.querySelectorAll("[data-cmp-b]").forEach(b => b.onclick = () => { if (histState.b !== b.dataset.cmpB) histState.c = ""; histState.b = b.dataset.cmpB; renderHistoryView(); });
+  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value; histState.c = ""; renderHistoryView(); };
   document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value; histState.c = ""; renderHistoryView(); };
   document.getElementById("cmp-c").onchange = e => { histState.c = e.target.value || "-"; renderHistoryView(); };
   document.getElementById("cmp-go").onclick = compareRuns;
@@ -258,6 +263,9 @@ async function compareRuns() {
   const out = document.getElementById("cmp-result");
   if (!a || !b) return;
   const seq = ++cmpSeq;
+  // The selection this comparison is for: picking another A / B / 作業中
+  // while it runs must not put this result under the new selection.
+  const key = cmpKey();
   histState.cmp = null;
   // Every device of either run is listed. A device that failed in A or B
   // (no log, or a log cut short by an error) is a row of its own, in red,
@@ -330,8 +338,13 @@ async function compareRuns() {
     const msg = where.map(w => `${w}: ${fmtRunMsg((w === "A" ? e.ea : e.eb) || t("ログなし"))}`).join(" ／ ");
     return { name: n, fail: where.join("/"), msg, a: e.a, b: e.b };
   });
-  histState.cmp = { key: cmpKey(), a, b, work, works, byName, rows, failRows, onlyA, onlyB };
+  histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB };
   drawCompare();
+}
+
+// The compared devices, the ones that need attention first.
+function cmpSorted(C) {
+  return C.rows.map((r, i) => ({ r, i, k: cmpRank(r) })).sort((x, y) => x.k - y.k || x.i - y.i);
 }
 
 function cmpKey() { return [histState.a, histState.b, histState.c].join("|"); }
@@ -378,14 +391,14 @@ function cmpNoteText(c) {
 
 function cmpChangedText(u) { return `${u.kind} ${u.line}${u.block ? "  ［" + u.block + "］" : ""}`; }
 
-// Draws the comparison kept in histState.cmp.
+// Draws the comparison kept in histState.cmp, when it is the comparison of
+// the runs selected now.
 function drawCompare() {
   const out = document.getElementById("cmp-result");
   const C = histState.cmp;
-  if (!out || !C) return;
+  if (!out || !C || C.key !== cmpKey()) return;
   const { a, b, work, works, byName, failRows, onlyA, onlyB } = C;
-  const sev = C.rows.map((r, i) => ({ r, i, k: cmpRank(r) }));
-  sev.sort((x, y) => x.k - y.k || x.i - y.i);
+  const sev = cmpSorted(C);
   const needs = sev.filter(x => x.k < 4).length;
   const onlyNg = !!histState.cmpOnlyNg && needs > 0;
   const rows = sev.filter(x => !onlyNg || x.k < 4).map(x => x.r);
@@ -451,7 +464,7 @@ function drawCompare() {
     ? `<div style="margin-top:10px;font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 12px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
     : "";
   const tools = `<div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:12px;font-size:13px">
-      ${work && needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(t("未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}
+      ${needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(work ? t("未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }) : t("判定不能の機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}
       <span style="flex:1"></span>
       <button class="btn sm" id="cmp-copy" data-tip="${esc(t("結論と機器ごとの結果を、Excel や作業報告に貼れる形（タブ区切り）でコピーします"))}">${esc(t("結果をコピー"))}</button>
       <button class="btn sm" id="cmp-csv" data-tip="${esc(t("機器ごとの結果を export\\compare に CSV で書き出します"))}">${esc(t("CSV に書き出す"))}</button>
@@ -508,9 +521,9 @@ function cmpTable(withTitle) {
     out.push([]);
   }
   out.push(head);
-  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }), "", ""].concat(work ? [r.msg] : [])));
-  const sev = C.rows.map((r, i) => ({ r, i, k: cmpRank(r) })).sort((x, y) => x.k - y.k || x.i - y.i);
-  for (const { r } of sev) {
+  // A failed device: why, in the 差分 column (there with or without a work).
+  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", ""]));
+  for (const { r } of cmpSorted(C)) {
     const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : (r.added + r.removed ? t("差分あり") : t("差分なし")), r.err ? "" : r.added, r.err ? "" : r.removed];
     if (work) {
       const s = r.strict || {};

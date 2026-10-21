@@ -2229,8 +2229,9 @@ func (a *App) OpenLogDir() error {
 // StrictVerify picks the setting lines typed in the work logs and reports
 // whether each is present in the after log (see history.StrictVerify). A
 // work done over several sessions (a reconnect) has one log per session:
-// they are read as one, in the order given (oldest first). All files must
-// lie under the log folder.
+// each is read on its own, in the order given (oldest first), and the
+// settings of all of them are checked together. All files must lie under
+// the log folder.
 func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*history.StrictResult, error) {
 	if a.locked() {
 		return nil, errVaultLocked
@@ -2248,7 +2249,7 @@ func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*h
 		if err != nil {
 			return nil, err
 		}
-		work = append(work, strings.TrimRight(w, "\r\n"))
+		work = append(work, w)
 	}
 	bf, err := read(beforePath)
 	if err != nil {
@@ -2258,7 +2259,7 @@ func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*h
 	if err != nil {
 		return nil, err
 	}
-	r := history.StrictVerify(strings.Join(work, "\n"), bf, af)
+	r := history.StrictVerifyLogs(work, bf, af)
 	return &r, nil
 }
 
@@ -2280,11 +2281,28 @@ func (a *App) ExportCompareResult(rows [][]string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "compare_"+time.Now().Format("20060102_150405")+".csv")
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		return "", err
+	// Two exports within the same second get _2, _3 … rather than one
+	// overwriting the other.
+	base := "compare_" + time.Now().Format("20060102_150405")
+	path := filepath.Join(dir, base+".csv")
+	for n := 2; ; n++ {
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			_, err = f.WriteString(text)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				os.Remove(path) // no half-written CSV left to be taken for a whole one
+				return "", err
+			}
+			return path, nil
+		}
+		if !os.IsExist(err) || n > 100 {
+			return "", err
+		}
+		path = filepath.Join(dir, fmt.Sprintf("%s_%d.csv", base, n))
 	}
-	return path, nil
 }
 
 // OpenDiffWindow compares two saved logs in their own window (PalaTerm.exe
@@ -2536,7 +2554,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.12"
+const appVersion = "1.7.13"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

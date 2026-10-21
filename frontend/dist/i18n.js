@@ -1264,6 +1264,7 @@ const I18N_EN = {
   "作業前と作業後で変わった設定のうち、作業中に打った行では説明できないもの（別の場所を変えてしまった、ほかの人の変更、機器が自動で加えた行など）": "Configuration lines that changed between before and after but are not explained by what was entered during the work (a change in the wrong place, someone else's change, lines the device added by itself, …)",
   "⚠ 作業外の変更 {n} 行": "⚠ {n} change(s) outside the work",
   "作業ログ {n} 件を合わせて照合": "{n} work logs checked together",
+  "判定不能の機器だけ表示（{n} 台）": "Show only devices that could not be compared ({n})",
   "未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）": "Show only devices with missing lines, changes outside the work or lines to check ({n})",
   "結論と機器ごとの結果を、Excel や作業報告に貼れる形（タブ区切り）でコピーします": "Copies the verdict and each device's result, tab-separated, to paste into Excel or a work report",
   "結果をコピー": "Copy result",

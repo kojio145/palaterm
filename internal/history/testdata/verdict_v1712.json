@@ -1,0 +1,169 @@
+{
+ "abbrev": {
+  "after": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1\n description uplink\n switchport mode access",
+  "before": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1",
+  "expect": {
+   " > int gi0/1": "already",
+   "#unexpected": "0",
+   "int gi0/1 > desc uplink": "reflected",
+   "int gi0/1 > sw mo acc": "reflected"
+  },
+  "work": "sw1(config)#int gi0/1\nsw1(config-if)#desc uplink\nsw1(config-if)#sw mo acc\nsw1(config-if)#end"
+ },
+ "alaxala": {
+  "after": "lab-sw09# show running-config\n#Last modified by ops at Mon Jul 13 18:07:29 2026 with version 2.8\ninterface vlan 41\n  ip qos-flow-group MGMT_ONLY in\ninterface vlan 121\n  ip qos-flow-group VOICE_ONLY in\nip qos-flow-list VOICE_ONLY\n  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp ef",
+  "before": "lab-sw09# show running-config\n#Last modified by ops at Mon Jul 13 11:40:00 2026 with version 2.8\ninterface vlan 41\n  ip qos-flow-group MGMT_ONLY in",
+  "expect": {
+   " > interface vlan 121": "reflected",
+   " > ip qos-flow-group VOICE_ONLY in": "reflected",
+   " > ip qos-flow-list VOICE_ONLY": "reflected",
+   "#unexpected": "0",
+   "ip qos-flow-list VOICE_ONLY > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef": "reflected"
+  },
+  "work": "lab-sw09# configure terminal\nlab-sw09(config)# ip qos-flow-list VOICE_ONLY\nlab-sw09(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef\n!lab-sw09(config-ip-qos)# !\n!lab-sw09(config)# interface vlan 121\n!lab-sw09(config-if)#   ip qos-flow-group VOICE_ONLY in\n!lab-sw09(config)# save"
+ },
+ "bgp_nested": {
+  "after": "r1#show running-config\nrouter bgp 65000\n neighbor 192.0.2.9 remote-as 65001\n address-family ipv4\n  network 192.0.2.0 mask 255.255.255.0\n exit-address-family",
+  "before": "r1#show running-config\nrouter bgp 65000",
+  "expect": {
+   " > router bgp 65000": "already",
+   "#unexpected": "0",
+   "router bgp 65000 > address-family ipv4": "reflected",
+   "router bgp 65000 > exit-address-family": "reflected",
+   "router bgp 65000 > neighbor 192.0.2.9 remote-as 65001": "reflected",
+   "router bgp 65000 > network 192.0.2.0 mask 255.255.255.0": "reflected"
+  },
+  "work": "r1(config)#router bgp 65000\nr1(config-router)#address-family ipv4\nr1(config-router-af)#network 192.0.2.0 mask 255.255.255.0\nr1(config-router-af)#exit-address-family\nr1(config-router)#neighbor 192.0.2.9 remote-as 65001\nr1(config-router)#end"
+ },
+ "desc_overwrite": {
+  "after": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1\n description new",
+  "before": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1",
+  "expect": {
+   " > interface gi0/1": "already",
+   "#unexpected": "0",
+   "interface gi0/1 > description new": "reflected",
+   "interface gi0/1 > description old": "superseded"
+  },
+  "work": "sw1(config)#interface gi0/1\nsw1(config-if)#description old\nsw1(config-if)#description new\nsw1(config-if)#end"
+ },
+ "forti": {
+  "after": "FG # show\nconfig system interface\n    edit \"port1\"\n        set alias \"lab-wan\"\n    next\nend",
+  "before": "FG # show\nconfig system interface\n    edit \"port1\"\n    next\nend",
+  "expect": {
+   " > set alias lab-wan": "reflected",
+   "#unexpected": "0"
+  },
+  "work": "FG # config system interface\nFG (interface) # edit port1\nFG (port1) # set alias lab-wan\nFG (port1) # next\nFG (interface) # end"
+ },
+ "global_in_submode": {
+  "after": "sw1#show running-config\nhostname sw1\nntp server 192.0.2.10\ninterface GigabitEthernet0/1\n description x",
+  "before": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1",
+  "expect": {
+   " > interface gi0/1": "already",
+   " > ntp server 192.0.2.10": "reflected",
+   "#unexpected": "0",
+   "interface gi0/1 > description x": "reflected"
+  },
+  "work": "sw1(config)#interface gi0/1\nsw1(config-if)#description x\nsw1(config-if)#ntp server 192.0.2.10\nsw1(config)#end"
+ },
+ "ix": {
+  "after": "IX-A# show config\ninterface GigaEthernet0.0\n  ip address 192.0.2.1/24\n  no shutdown",
+  "before": "IX-A# show config\ninterface GigaEthernet0.0\n  no ip address\n  shutdown",
+  "expect": {
+   " > interface GigaEthernet0.0": "already",
+   "#unexpected": "1",
+   "interface GigaEthernet0.0 > ip address 192.0.2.1/24": "reflected",
+   "interface GigaEthernet0.0 > no shutdown": "reflected"
+  },
+  "work": "IX-A(config)# interface GigaEthernet0.0\nIX-A(config-GigaEthernet0.0)# ip address 192.0.2.1/24\nIX-A(config-GigaEthernet0.0)# no shutdown\nIX-A(config-GigaEthernet0.0)# exit"
+ },
+ "junos": {
+  "after": "ops@srv1> show configuration\nsystem {\n    host-name srv1;\n    ntp {\n        server 192.0.2.10;\n    }\n}",
+  "before": "ops@srv1> show configuration\nsystem {\n    host-name srv1;\n}",
+  "expect": {
+   " > set system ntp server 192.0.2.10": "reflected",
+   "#unexpected": "0"
+  },
+  "work": "ops@srv1# set system ntp server 192.0.2.10\nops@srv1# commit"
+ },
+ "missing_real": {
+  "after": "sw1#show running-config\nhostname sw1",
+  "before": "sw1#show running-config\nhostname sw1",
+  "expect": {
+   " > snmp-server community labro RO": "missing",
+   "#unexpected": "0"
+  },
+  "work": "sw1(config)#snmp-server community labro RO\nsw1(config)#end"
+ },
+ "no_config_after": {
+  "after": "sw1#show ip int brief\nInterface IP-Address\n",
+  "before": "sw1#show ip int brief\n",
+  "expect": {
+   " > ntp server 192.0.2.10": "unverified",
+   "#unexpected": "0"
+  },
+  "work": "sw1(config)#ntp server 192.0.2.10\nsw1(config)#end"
+ },
+ "no_ntp": {
+  "after": "sw1#show running-config\nhostname sw1",
+  "before": "sw1#show running-config\nhostname sw1\nntp server 192.0.2.9",
+  "expect": {
+   " > no ntp server 192.0.2.9": "reflected",
+   "#unexpected": "0"
+  },
+  "work": "sw1(config)#no ntp server 192.0.2.9\nsw1(config)#end"
+ },
+ "partial_listings": {
+  "after": "sw1#show running-config interface Gi0/1\ninterface GigabitEthernet0/1\n description new1\nsw1#show running-config interface Gi0/2\ninterface GigabitEthernet0/2\n description new2",
+  "before": "sw1#show running-config interface Gi0/1\ninterface GigabitEthernet0/1\n description a\nsw1#show running-config interface Gi0/2\ninterface GigabitEthernet0/2\n description b",
+  "expect": {
+   " > interface Gi0/1": "already",
+   " > interface Gi0/2": "already",
+   "#unexpected": "0",
+   "interface Gi0/1 > description new1": "reflected",
+   "interface Gi0/2 > description new2": "reflected"
+  },
+  "work": "sw1(config)#interface Gi0/1\nsw1(config-if)#description new1\nsw1(config-if)#interface Gi0/2\nsw1(config-if)#description new2\nsw1(config-if)#end"
+ },
+ "port_bounce": {
+  "after": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1",
+  "before": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/1\n shutdown",
+  "expect": {
+   " > interface gi0/1": "already",
+   "#unexpected": "0",
+   "interface gi0/1 > no shutdown": "reflected",
+   "interface gi0/1 > shutdown": "superseded"
+  },
+  "work": "sw1(config)#interface gi0/1\nsw1(config-if)#shutdown\nsw1(config-if)#no shutdown\nsw1(config-if)#end"
+ },
+ "secret": {
+  "after": "sw1#show running-config\nhostname sw1\nusername ops privilege 15 secret 9 $9$abcdefgh",
+  "before": "sw1#show running-config\nhostname sw1",
+  "expect": {
+   " > username ops privilege 15 password LabPass1": "reflected",
+   "#unexpected": "0"
+  },
+  "work": "sw1(config)#username ops privilege 15 password LabPass1\nsw1(config)#end"
+ },
+ "unlisted_undo": {
+  "after": "sw1#show running-config\nhostname sw1",
+  "before": "sw1#show running-config\nhostname sw1",
+  "expect": {
+   " > interface Loopback9": "missing",
+   "#unexpected": "0",
+   "interface Loopback9 > no shutdown": "already",
+   "interface Loopback9 > shutdown": "superseded"
+  },
+  "work": "sw1(config)#interface Loopback9\nsw1(config-if)#shutdown\nsw1(config-if)#no shutdown\nsw1(config-if)#end"
+ },
+ "vlan_add": {
+  "after": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/2\n switchport trunk allowed vlan 10,20,30",
+  "before": "sw1#show running-config\nhostname sw1\ninterface GigabitEthernet0/2\n switchport trunk allowed vlan 10,20",
+  "expect": {
+   " > interface gi0/2": "already",
+   "#unexpected": "0",
+   "interface gi0/2 > sw tr al vl add 30": "reflected"
+  },
+  "work": "sw1(config)#interface gi0/2\nsw1(config-if)#sw tr al vl add 30\nsw1(config-if)#end"
+ }
+}
