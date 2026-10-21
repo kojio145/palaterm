@@ -139,8 +139,20 @@ func ReadTable(s *sheet.Sheet, r *model.ImportRule) (*Table, error) {
 	if last == 0 {
 		return nil, fmt.Errorf("見出しの行（%d 行目）の %s 列から右が空です", hr, model.ColumnLetter(start))
 	}
+	// The same header twice (a pair's primary and backup blocks, or a
+	// repeated group, both with "Router") is two columns: the second and
+	// later ones are named "Router (2)"…, so each is chosen — and read —
+	// as itself rather than all as the first.
+	seen := map[string]int{}
 	for c := start; c <= last; c++ {
-		t.Headers = append(t.Headers, Header{Name: foldHeader(head[c-1]), Col: c})
+		name := foldHeader(head[c-1])
+		if name != "" {
+			seen[name]++
+			if n := seen[name]; n > 1 {
+				name = fmt.Sprintf("%s (%d)", name, n)
+			}
+		}
+		t.Headers = append(t.Headers, Header{Name: name, Col: c})
 	}
 	dr := r.DataRow
 	if dr == 0 {
