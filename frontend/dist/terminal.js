@@ -30,6 +30,7 @@ async function bootPasteWindow() {
       <button class="btn sm" id="pw-font-inc" title="Ctrl++">A＋</button>
     </div>
     <div id="pw-info" class="muted" style="font-size:12px;margin-bottom:8px"></div>
+    ${req.bcast > 0 ? `<div id="pw-bcast" style="font-size:13px;font-weight:600;margin-bottom:8px;padding:6px 10px;border:1px solid #f97316;border-radius:8px;background:#431407;color:#fed7aa">${esc(t("同時入力中: この内容はほかの {n} 台の窓にも送られます", { n: req.bcast }))}</div>` : ""}
     <textarea id="pw-text" spellcheck="false" style="flex:1;min-height:120px;width:100%;resize:none;background:#0b0e13;color:#d6dee8;border:1px solid #2a3442;border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre;overflow:auto"></textarea>
     <label style="display:flex;align-items:center;gap:6px;color:#c7d0dc;font-size:12px;margin:8px 0 12px"><input type="checkbox" id="pw-cr" style="width:auto"> ${esc(t("最後に Enter を送る"))}</label>
     <div style="display:flex;justify-content:flex-end;gap:8px">
@@ -43,7 +44,9 @@ async function bootPasteWindow() {
   ta.value = req.text || "";
   // 最後に Enter を送る: on by default, then whatever was last chosen here
   // (Alt+V always asks for the Enter, without changing what is remembered).
-  cr.checked = !!req.cr || pasteCrPref();
+  // A one-line paste (confirmed only because 同時入力 is on) sends no Enter
+  // unless Alt+V asked for it, as without 同時入力.
+  cr.checked = req.single ? !!req.cr : (!!req.cr || pasteCrPref());
   cr.addEventListener("change", () => setPasteCrPref(cr.checked));
   // Font size: same controls as the terminal window, remembered separately.
   const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
@@ -100,9 +103,13 @@ async function bootTerminalWindow() {
 
   const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#000">
     <div id="tw-bar" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442;font-family:'Segoe UI',sans-serif">
-      <div id="tw-title" style="color:#e6ecf3;font-size:13px">${esc(t("対話接続"))}</div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div id="tw-title" style="color:#e6ecf3;font-size:13px;flex:1 1 120px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t("対話接続"))}</div>
+      <div class="tw-tools" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <span id="tw-bc-pill" class="pill hidden" style="background:#7c2d12;color:#fed7aa;border:1px solid #f97316"></span>
+        <button class="btn sm" id="tw-bcast" data-tip="${esc(t("オンにした窓どうしで、この窓で打ったキーをすべての窓へ同時に送ります（Tera Term のブロードキャストコマンドのリアルタイムモードと同じ）。ログイン中・切断中・ロック中の窓には送りません"))}">${esc(t("同時入力"))}</button>
+        <button class="btn sm" id="tw-tile" data-tip="${esc(t("開いている単独接続窓をすべて、この窓のある画面いっぱいに並べます（開いた順）"))}">${esc(t("並べ直す"))}</button>
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
+        <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての単独接続窓に反映）"))}">${esc(t("色"))}</button>
         <button class="btn sm" id="tw-font-dec" title="Ctrl+-">A−</button>
         <button class="btn sm" id="tw-font-inc" title="Ctrl++">A＋</button>
         <button class="btn sm" id="tw-find" title="Ctrl+Shift+F">${esc(t("検索"))}</button>
@@ -196,12 +203,40 @@ async function bootTerminalWindow() {
   const term = new Terminal({
     convertEol: false, cursorBlink: true, scrollback: 10000,
     fontFamily: '"Consolas", monospace', fontSize,
-    theme: { background: "#000000", foreground: "#d6dee8", cursor: "#5b9bff" },
+    theme: xtermTheme(screenColors("term")),
   });
   const fit = new (window.FitAddon.FitAddon)();
   term.loadAddon(fit);
   term.open(document.getElementById("tw-host"));
   term.focus();
+
+  // ---- 表示の色 ----
+  // The terminal colours of this PC (色 button / 設定 tab), with the device's
+  // own 端末の色 over them: its tint as the background and its colour as a
+  // band under the title bar, so windows side by side tell apart.
+  let devTint = "";
+  const twBar = document.getElementById("tw-bar"), twHost = document.getElementById("tw-host");
+  function termColorsNow() {
+    const c = screenColors("term"), tint = DEVICE_TINTS[devTint];
+    if (tint) {
+      c.bg = tint.bg;
+      if (contrastRatio(c.fg, c.bg) < 4.5) c.fg = SCREEN_DEFAULTS.term.fg;
+      if (contrastRatio(c.cursor, c.bg) < 2) c.cursor = SCREEN_DEFAULTS.term.cursor;
+    }
+    return c;
+  }
+  function applyTermColors() {
+    const c = termColorsNow(), tint = DEVICE_TINTS[devTint];
+    term.options.theme = xtermTheme(c);
+    document.body.style.background = c.bg;
+    wrap.style.background = c.bg;
+    twHost.style.background = c.bg;
+    twBar.style.borderBottom = tint ? `4px solid ${tint.band}` : "1px solid #2a3442";
+  }
+  applyTermColors();
+  onScreenColors("term", applyTermColors);
+  rt().EventsOn("term:device", ev => { devTint = (ev && ev.tint) || ""; applyTermColors(); });
+  document.getElementById("tw-color").onclick = e => openScreenColorPanel("term", e.currentTarget, applyTermColors, () => term.focus());
   let closed = false;
   let locked = false; // the lock overlay is up: keys go nowhere
 
@@ -244,27 +279,43 @@ async function bootTerminalWindow() {
   const pasteText = document.getElementById("tw-paste-text");
   const pasteCr = document.getElementById("tw-paste-cr");
   const pasteInfo = document.getElementById("tw-paste-info");
-  function sendText(text) {
+  // Every send waits for the one before it: the backend serves each call on
+  // a goroutine of its own, and two quick keys could reach the device (and,
+  // with 同時入力, the other windows) the other way round. local: this
+  // device only (SendReply), never relayed.
+  let sendChain = Promise.resolve();
+  function sendKeys(text, local) {
+    const b64 = bytesToB64(new TextEncoder().encode(text));
+    sendChain = sendChain.then(() => (local ? Term().SendReply(b64) : Term().Send(b64)).catch(() => {}));
+  }
+  function sendText(text, local) {
     if (closed || !text) return;
     if (connecting && !switchBtn.classList.contains("hidden")) { if (switchBtn.disabled) switchingHint(); else loginHint(); return; }
-    Term().Send(bytesToB64(new TextEncoder().encode(text))).catch(() => {});
+    sendKeys(text, local);
   }
   // The confirmation is its own OS window (Tera Term style, see
   // paste_app.go); the in-window dialog below is only the fallback if that
   // window cannot be started.
-  function openPasteDialog(text, withCR) {
+  // single: a one-line paste, confirmed only because of 同時入力 (no Enter
+  // unless withCR).
+  function openPasteDialog(text, withCR, single) {
     if (closed) return;
     term.clearSelection();
-    Term().OpenPasteWindow(bytesToB64(new TextEncoder().encode(text)), !!withCR)
-      .catch(e => { if (/既に開いています/.test(String(e))) flashNote(terr(e)); else openPasteDialogInline(text, withCR); });
+    Term().OpenPasteWindow(bytesToB64(new TextEncoder().encode(text)), !!withCR, !!single)
+      .catch(e => { if (/既に開いています/.test(String(e))) flashNote(terr(e)); else openPasteDialogInline(text, withCR, single); });
   }
   rt().EventsOn("term:paste-done", () => { term.focus(); setTimeout(() => term.focus(), 150); setTimeout(() => term.focus(), 500); });
-  function openPasteDialogInline(text, withCR) {
+  // Whether the inline dialog's text goes to the other windows: decided
+  // when it opens, as it says (the backend does the same for the window).
+  let inlineRelay = false;
+  function openPasteDialogInline(text, withCR, single) {
     if (closed) return;
     pasteText.value = text;
-    pasteCr.checked = !!withCR || pasteCrPref();
+    pasteCr.checked = single ? !!withCR : (!!withCR || pasteCrPref());
+    inlineRelay = bc.join;
     const n = text.split(/\r\n|\r|\n/).length;
-    pasteInfo.textContent = t("{n} 行。各行の末尾は Enter として機器へ送られます。内容はここで編集できます。", { n });
+    pasteInfo.textContent = t("{n} 行。各行の末尾は Enter として機器へ送られます。内容はここで編集できます。", { n })
+      + (inlineRelay && bcPeers() > 0 ? "　" + t("同時入力中: この内容はほかの {n} 台の窓にも送られます", { n: bcPeers() }) : "");
     pasteDlg.classList.remove("hidden");
     pasteText.focus();
     pasteText.setSelectionRange(0, 0);
@@ -274,7 +325,7 @@ async function bootTerminalWindow() {
     let s = pasteText.value.replace(/\r\n|\r|\n/g, "\r");
     if (pasteCr.checked && !s.endsWith("\r")) s += "\r";
     closePasteDialog();
-    sendText(s);
+    sendText(s, !inlineRelay);
   }
   // One line goes straight to the device without the confirmation, as in
   // Tera Term, and without Enter: the user reads it at the prompt and decides
@@ -284,6 +335,15 @@ async function bootTerminalWindow() {
   function pasteOrConfirm(text, withCR) {
     if (locked) return; // every paste path ends here
     const one = text.replace(/(\r\n|\r|\n)$/, "");
+    // While 同時入力 is on, a paste is always confirmed (the window says how
+    // many other windows get it), even one line by right-click. Decided by
+    // this window's own switch, not the count, which may lag behind a peer
+    // that has just logged in. A single line keeps its no-Enter rule.
+    if (bc.join) {
+      const single = !!one && !/[\r\n]/.test(one);
+      openPasteDialog(single ? one : text, withCR, single);
+      return;
+    }
     if (one && !/[\r\n]/.test(one)) {
       term.clearSelection();
       sendText(withCR ? one + "\r" : one);
@@ -617,6 +677,7 @@ async function bootTerminalWindow() {
   // reach the toolbar (貼り付け…, ログ停止) or the terminal's input behind it.
   const setInert = on => [...wrap.children].forEach(el => { if (el !== lockEl) el.inert = on; });
   function showLock() {
+    closeScreenColorPanel(); // nothing but the lock screen stays usable
     locked = true;
     setInert(true);
     lockEl.classList.remove("hidden");
@@ -673,6 +734,10 @@ async function bootTerminalWindow() {
   closeDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); hideCloseDlg(); } });
   Term().IsLocked().then(v => { if (v) showLock(); }).catch(() => {});
   let lastInput = Date.now(), lockWarned = false;
+  // Keys arriving from another window (同時入力) are use of this window too:
+  // otherwise every window but the one typed in would lock on its own idle
+  // time and drop out of 同時入力 in the middle of the work.
+  rt().EventsOn("term:remote-input", () => { if (!locked) { lastInput = Date.now(); lockWarned = false; wrap.dataset.remoteInput = String(lastInput); } });
   ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) { lastInput = Date.now(); lockWarned = false; } }, { passive: true }));
   setInterval(async () => {
     if (locked) return;
@@ -712,6 +777,9 @@ async function bootTerminalWindow() {
   // modifier can look like a CPR (Shift+F3 = ESC[1;2R): a reply's row is at
   // least 1 and a key's first number is 1 with a modifier 2–8 — told apart
   // by xterm.js only for "1;N" with N ≤ 8, which no terminal query answers.
+  // Mouse reports: X10 / normal (ESC[M + 3 bytes), SGR (ESC[<b;x;yM / m),
+  // urxvt (ESC[b;x;yM).
+  const isMouseReport = d => /^(\x1b\[M[\s\S]{3}|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[\d+;\d+;\d+M)+$/.test(d);
   const isTermReply = d => /^\x1b(\[(\?[\d;]*c|>[\d;]*c|\??\d+;\d+R|0n|\??[\d;]*\$y|[IO]|[\d;]*t)|\][^\x07]*(\x07|\x1b\\)|P[^\x1b]*\x1b\\)$/.test(d)
     && !/^\x1b\[1;[2-8]R$/.test(d);
   term.onData(d => {
@@ -723,10 +791,46 @@ async function bootTerminalWindow() {
       if (switchBtn.disabled) switchingHint(); else loginHint();
       return;
     }
-    Term().Send(bytesToB64(new TextEncoder().encode(d))).catch(() => {});
+    // A reply to the device's own query is this device's alone: never
+    // relayed to the other windows by 同時入力.
+    // A reply to the device's own query, or a mouse report (vim / htop with
+    // mouse on), is this device's alone: never relayed by 同時入力.
+    if (isTermReply(d) || isMouseReport(d)) { sendKeys(d, true); return; }
+    sendKeys(d, false);
   });
   // Close drops the live session; Discard drops a line held for takeover.
   window.addEventListener("beforeunload", () => { if (!closed) Term().Close(); else Term().Discard().catch(() => {}); });
+
+  // ---- 同時入力 / 並べ直す（broadcast.go・term_bcast.go）----
+  // On: keys typed here go to every window that has it on too, and those
+  // windows' keys come here. Shown in orange around the whole window, with
+  // how many windows take part, so it is never on unnoticed.
+  const bcBtn = document.getElementById("tw-bcast"), bcPill = document.getElementById("tw-bc-pill");
+  const bcFrame = h(`<div id="tw-bc-frame" class="hidden" style="position:absolute;inset:0;border:3px solid #f97316;pointer-events:none;z-index:25"></div>`);
+  wrap.appendChild(bcFrame);
+  let bc = { join: false, ready: false, joined: 0, readyN: 0 };
+  function renderBcast() {
+    bcBtn.classList.toggle("bc-on", bc.join);
+    bcBtn.textContent = bc.join ? t("同時入力 オン") : t("同時入力");
+    bcFrame.classList.toggle("hidden", !bc.join);
+    bcPill.classList.toggle("hidden", !bc.join);
+    if (bc.join) {
+      bcPill.textContent = bc.joined > 1 ? t("同時入力中（{r} / {n} 台）", { r: bc.readyN, n: bc.joined }) : t("同時入力: 相手の窓なし");
+      bcPill.dataset.tip = t("同時入力がオンの窓 {n} 台のうち、いまキーを受け取れる窓が {r} 台です（ログイン中・切断中・ロック中の窓は受け取りません）", { n: bc.joined, r: bc.readyN });
+    }
+  }
+  rt().EventsOn("term:bcast", ev => { bc = ev || bc; renderBcast(); });
+  // How many other windows get what is typed here now.
+  function bcPeers() { return bc.join ? Math.max(0, (bc.readyN || 0) - (bc.ready ? 1 : 0)) : 0; }
+  Term().BroadcastState().then(ev => { bc = ev || bc; renderBcast(); }).catch(() => {});
+  bcBtn.onclick = () => {
+    Term().SetBroadcast(!bc.join).then(ev => {
+      bc = ev || bc; renderBcast();
+      flashNote(bc.join ? t("同時入力をオンにしました") : t("同時入力をオフにしました"));
+    }).catch(e => flashNote(terr(e)));
+    term.focus();
+  };
+  document.getElementById("tw-tile").onclick = () => { Term().Tile().catch(e => flashNote(terr(e))); term.focus(); };
 
   // Kick off: use the stdin password if present, else prompt in-window.
   const res = await Term().Start();

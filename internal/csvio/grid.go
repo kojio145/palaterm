@@ -34,7 +34,7 @@ var deviceKinds = map[string]string{
 	"osType": "os", "commandSet": "set", "enabled": "bool", "useGroupCreds": "bool",
 	"password": "secret", "enablePassword": "secret", "keyPassphrase": "secret",
 	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode", "guiPort": "int", "useMyBastion": "bool",
-	"cli": "bool", "gui": "bool", "guiScheme": "scheme",
+	"cli": "bool", "gui": "bool", "guiScheme": "scheme", "termColor": "tint",
 }
 
 var hopKinds = map[string]string{
@@ -71,6 +71,7 @@ func DeviceCells(d model.Device) map[string]string {
 		"useMyBastion": boolOut(d.UseMyBastion, false),
 		"guiPort":      itoa(d.GUIPort),
 		"cli":          boolOut(!d.CLIOff, false), "gui": boolOut(d.GUIOn, false), "guiScheme": d.EffectiveGUIScheme(),
+		"termColor": d.TermColor,
 	}
 	for i, b := range d.Bastions {
 		if i >= model.MaxBastions {
@@ -184,6 +185,14 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		return ""
 	}
 
+	tint := func(k string) string {
+		v, ok := model.ParseTermColor(get(k))
+		if !ok {
+			bad(k, "端末の色は 赤 / 橙 / 黄 / 緑 / 青 / 紫 か空欄です")
+		}
+		return v
+	}
+
 	d := model.Device{
 		Name: get("name"), Group: get("group"), Site: get("site"), Role: get("role"),
 		Host: get("host"), Conn: model.ConnMethod(conn("conn", "ssh", "telnet", "serial")),
@@ -194,6 +203,7 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		AuthMethod: auth("authMethod"), KeyFile: get("keyFile"), KeyPassphrase: c["keyPassphrase"],
 		LegacyAlgos: flag("legacyAlgos", false), GUIPort: num("guiPort"), UseMyBastion: flag("useMyBastion", false),
 		CLIOff: !flag("cli", true), GUIOn: flag("gui", false), GUIScheme: scheme("guiScheme"),
+		TermColor: tint("termColor"),
 	}
 	switch m := modeIn(get("bastionMode")); m {
 	case model.BastionViaShell, model.BastionViaTunnel:

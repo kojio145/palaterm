@@ -322,7 +322,7 @@ function renderDeviceList() {
     <tr data-row="${esc(d.id)}" data-key="${esc(d.id)}">
       <td><input type="checkbox" class="dev-sel" data-enable="${esc(d.id)}" ${devSel.has(d.id) ? "checked" : ""}></td>
       ${listViewDragCell(LV)}
-      <td><input class="cell inl-name" data-id="${esc(d.id)}" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600" data-tip="${esc(scopeGroup || !d.group ? d.name : d.name + "  /  " + t("グループ「{g}」", { g: d.group }))}"></td>
+      <td><input class="cell inl-name" data-id="${esc(d.id)}" data-name="${esc(d.name)}" value="${esc(d.name)}" style="font-weight:600${DEVICE_TINTS[d.termColor] ? `;box-shadow:inset 4px 0 0 ${DEVICE_TINTS[d.termColor].band}` : ""}" data-tip="${esc(scopeGroup || !d.group ? d.name : d.name + "  /  " + t("グループ「{g}」", { g: d.group }))}"></td>
       ${allView ? `<td><div class="clip" data-tip="${esc(d.group || t("（グループ未設定）"))}">${esc(d.group || t("（未設定）"))}</div></td>` : ""}
       <td><input class="cell inl-host mono" data-id="${esc(d.id)}" value="${esc(d.host)}" data-tip="${esc(d.host)}"></td>
       <td><input class="cell inl-site" data-id="${esc(d.id)}" value="${esc(d.site || "")}" placeholder="${esc(t("拠点"))}" data-tip="${esc(d.site || "")}"></td>
@@ -526,6 +526,8 @@ function renderDeviceList() {
   function wireSelBar() {
     const bClear = document.getElementById("bulk-clear");
     if (bClear) bClear.onclick = () => { devs.forEach(d => devSel.delete(d.id)); syncSel(); };
+    const bTile = document.getElementById("bulk-tile");
+    if (bTile) bTile.onclick = () => tiledConnect(visible.filter(d => devSel.has(d.id)).concat(devs.filter(d => devSel.has(d.id) && !visible.includes(d))).map(d => d.id));
     const bEdit = document.getElementById("bulk-edit");
     if (bEdit) bEdit.onclick = () => bulkEditDialog(selIds());
     const bDel = document.getElementById("bulk-del");
@@ -543,11 +545,34 @@ function renderDeviceList() {
   root.querySelectorAll(".inl-set").forEach(el => el.onchange = () => inlineSave(el.dataset.id, { commandSet: el.value }));
 }
 
+// 並べて接続 (broadcast.go): the devices' terminal windows in a grid, with
+// 同時入力 on only if the 設定 tab says so. Over 16 is refused before anything opens. direct: the run
+// tab's 踏み台: 使わない.
+let tiledMax = 0; // App.MaxTiled, asked once
+async function tiledConnect(ids, direct) {
+  if (!tiledMax) tiledMax = await App().MaxTiled().catch(() => 16);
+  const max = tiledMax;
+  const usable = ids.filter(id => { const d = devById(id); return d && !d.cliOff; });
+  if (!usable.length) { toast(t("接続できる機器がありません（GUI だけの機器は対象外です）"), "err"); return; }
+  if (usable.length > max) { toast(t("並べて接続できるのは {m} 台までです（{n} 台選択中）", { m: max, n: usable.length }), "err"); return; }
+  try {
+    const rep = await App().SpawnTiled(usable, !!direct) || {};
+    const bc = " " + ((INV.settings || {}).tiledBroadcast ? t("（同時入力オン）") : t("（同時入力はオフ。必要な窓で「同時入力」を押してください）"));
+    const skipped = (rep.skipped || []).concat(ids.filter(id => !usable.includes(id)).map(id => {
+      const d = devById(id);
+      return d ? d.name + ": " + t("CLI を使わない機器です") : t("機器が見つかりません（削除されたか、一覧が更新されました）");
+    }));
+    if (skipped.length) toast(t("{n} 台の窓を並べて開きました。開けなかった機器: {s}", { n: rep.opened || 0, s: skipped.map(terr).join(" / ") }) + bc, "warn");
+    else toast(t("{n} 台の窓を並べて開きました", { n: rep.opened || 0 }) + bc + (direct ? " " + t("（踏み台なし）") : ""), "ok");
+  } catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
+}
+
 // The bar above the list while devices are ticked ("" when none).
 function devSelBar(selCount) {
   if (!selCount) return "";
   return `<div class="row-inline" style="gap:8px;margin:-4px 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:10px;font-size:13px">
       <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
+      <button class="btn sm primary" id="bulk-tile" data-tip="${esc(t("選択した機器の単独接続窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）"))}">${esc(t("並べて接続"))}</button>
       <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
       <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
       <button class="btn sm" id="bulk-clear">${esc(t("選択解除"))}</button>
@@ -624,6 +649,7 @@ function bulkEditDialog(ids) {
           <select id="bk-gui" style="flex:1">${keep}<option value="on">${esc(t("GUI を使う"))}</option><option value="off">${esc(t("GUI を使わない"))}</option></select></div></div>
       <div class="field"><label><input type="checkbox" id="bk-site-on" style="width:auto"> ${esc(t("拠点を変更"))}</label><input id="bk-site" placeholder="${esc(t("空欄にすると拠点を消します"))}"></div>
       <div class="field"><label><input type="checkbox" id="bk-role-on" style="width:auto"> ${esc(t("役割を変更"))}</label><input id="bk-role" placeholder="${esc(t("空欄にすると役割を消します"))}"></div>
+      <div class="field"><label>${esc(t("端末の色"))}</label><select id="bk-tint">${keep}<option value="">${esc(t("なし（窓の色のまま）"))}</option>${deviceTintKeys().map(k => `<option value="${k}">■ ${esc(t(DEVICE_TINTS[k].name))}</option>`).join("")}</select></div>
     </div>
     <details style="margin-top:4px"><summary class="link" style="text-decoration:none;font-size:13px">${esc(t("認証情報をまとめて変更（パスワードの定期変更など）"))}</summary>
       <div class="muted" style="font-size:12px;margin:6px 0 8px">${esc(t("チェックした項目だけが、選択した全機器に設定されます。「グループ既定を使う」機器は、個別の欄が書き換わるだけでログインには既定が使われます。踏み台はその段がある機器にだけ入ります。"))}</div>
@@ -674,7 +700,7 @@ function bulkEditDialog(ids) {
   $n("#bk-ok").onclick = async () => {
     const patch = {};
     const pick = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v; };
-    pick("#bk-group", "group"); pick("#bk-set", "commandSet"); pick("#bk-os", "osType");
+    pick("#bk-group", "group"); pick("#bk-set", "commandSet"); pick("#bk-os", "osType"); pick("#bk-tint", "termColor");
     const cred = $n("#bk-cred").value;
     if (cred !== "__keep__") patch.useGroupCreds = cred === "group";
     const onOff = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v === "on"; };
@@ -938,6 +964,8 @@ function editDevice(dev, preGroup, template) {
     </div>
     <div class="grid-2">
       <div class="field"><label><span data-tip="${esc(t("機器の役割を表す自由なラベルです。拠点と同じく、設定タブのテンプレートで {role} として使えます"))}">${esc(t("役割（任意） ⓘ"))}</span></label><input id="f-role" value="${esc(d.role || "")}" placeholder="${esc(t("例: コア / エッジ / FW"))}"></div>
+      <div class="field"><label><span data-tip="${esc(t("この機器の単独接続窓の背景とタイトル帯をこの色にします。本番機は赤・検証機は緑のようにしておくと、並べた窓の中で接続先を取り違えにくくなります"))}">${esc(t("端末の色（任意） ⓘ"))}</span></label>
+        <select id="f-tint"><option value="">${esc(t("なし（窓の色のまま）"))}</option>${deviceTintKeys().map(k => `<option value="${k}" ${d.termColor === k ? "selected" : ""}>■ ${esc(t(DEVICE_TINTS[k].name))}</option>`).join("")}</select></div>
     </div>
     <div class="row-inline" style="gap:28px;margin:2px 0 10px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="f-cli" ${d.cliOff ? "" : "checked"} style="width:auto">
@@ -1276,6 +1304,7 @@ function editDevice(dev, preGroup, template) {
       guiOn: node.querySelector("#f-gui").checked,
       guiScheme: node.querySelector("#f-guischeme").value === "http" ? "http" : "",
       useMyBastion: mineBox.checked,
+      termColor: node.querySelector("#f-tint").value,
     };
     // The scheme's own port is stored as 0 (= follow the scheme).
     const gp = parseInt(node.querySelector("#f-guiport").value, 10) || 0;

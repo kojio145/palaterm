@@ -552,7 +552,20 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.JumpCommands = []string{}
 	s.SecretCommands = []string{}
 	s.CredsKept = []string{}
-	s.MissingColumns = append([]string{}, c.MissingColumns...)
+	// A file without 端末の色 (older than v1.8.0) leaves the devices'
+	// colours as they are rather than clearing them: a display preference,
+	// not worth a warning. The other missing columns go back to defaults.
+	keepTint := false
+	for _, k := range c.MissingColumns {
+		if k == "termColor" {
+			keepTint = true
+		} else {
+			s.MissingColumns = append(s.MissingColumns, k)
+		}
+	}
+	if s.MissingColumns == nil {
+		s.MissingColumns = []string{}
+	}
 
 	// Profiles first: they may rename keys the devices use.
 	keyMap := map[string]string{}
@@ -721,7 +734,10 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		}
 		if i, ok := devByKey[devKey(d)]; ok {
 			d.ID = inv.Devices[i].ID
-			if len(c.MissingColumns) > 0 {
+			if keepTint {
+				d.TermColor = inv.Devices[i].TermColor
+			}
+			if len(s.MissingColumns) > 0 {
 				s.MissingColumnsReset++
 			}
 			// A GUI pin names the address: a device moved to another one

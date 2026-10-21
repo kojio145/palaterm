@@ -570,16 +570,34 @@ func TestApplyValidatesAgainstInventory(t *testing.T) {
 func TestImportNamesMissingColumns(t *testing.T) {
 	inv := sampleInventory()
 	inv.Devices[0].GUIOn, inv.Devices[0].UseMyBastion = true, true
+	inv.Devices[0].TermColor = "red"
 	c, err := ReadDevicesCSVText("name,group,host,conn\na-rt1,A社,192.0.2.1,ssh\nnew1,A社,192.0.2.99,ssh\n", "devices.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.MissingColumns) != 5 {
+	if len(c.MissingColumns) != 6 {
 		t.Fatalf("missing columns = %v", c.MissingColumns)
 	}
 	s, _ := Apply(inv, c, Options{})
 	if s.MissingColumnsReset != 1 || len(s.MissingColumns) != 5 {
-		t.Errorf("reset=%d cols=%v (want 1 updated device counted, new one not)", s.MissingColumnsReset, s.MissingColumns)
+		t.Errorf("reset=%d cols=%v (want 1 updated device counted, new one not; 端末の色 not named)", s.MissingColumnsReset, s.MissingColumns)
+	}
+	// 端末の色 (v1.8.0) missing: the device keeps its colour.
+	for _, d := range inv.Devices {
+		if d.Name == "a-rt1" && d.TermColor != "red" {
+			t.Errorf("an older CSV cleared the terminal colour: %q", d.TermColor)
+		}
+	}
+	// A file with the column sets it, empty included.
+	c, _ = ReadDevicesCSVText("name,group,host,conn,useMyBastion,cli,gui,guiScheme,guiPort,termColor\na-rt1,A社,192.0.2.1,ssh,false,true,false,https,0,\n", "devices.csv")
+	s, _ = Apply(inv, c, Options{})
+	for _, d := range inv.Devices {
+		if d.Name == "a-rt1" && d.TermColor != "" {
+			t.Errorf("an empty 端末の色 did not clear it: %q", d.TermColor)
+		}
+	}
+	if len(s.MissingColumns) != 0 || s.MissingColumnsReset != 0 {
+		t.Errorf("complete file named missing columns: %v / %d", s.MissingColumns, s.MissingColumnsReset)
 	}
 }
 

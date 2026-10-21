@@ -51,7 +51,7 @@ type Term struct {
 	closeFn   func() error
 	logDir    string // Settings.LogDir once the vault is open ("" => logs/)
 	slog      *logstore.Stream
-	lastLog   string // the last session's log file (its folder is what ログフォルダ opens)
+	lastLog   string        // the last session's log file (its folder is what ログフォルダ opens)
 	pasteOpen bool          // a paste-confirmation window is showing
 	pw        string        // master password, kept for a reconnect
 	dev       *model.Device // the device once the vault is open
@@ -78,6 +78,12 @@ type Term struct {
 	pasteProc   *os.Process      // the open paste-confirmation window (ended on Lock)
 	unlockFails int              // wrong passwords in a row at the lock screen
 	quitting    bool             // quitForParent: close without asking
+	bc          bcastState       // 同時入力 (term_bcast.go)
+	inQ         *lineQueue       // INPUT waiting to be sent (bcastSend)
+	placeQ      *lineQueue       // grid places waiting to be made (doPlace)
+	placed      bool             // a PLACE came before startup: it wins over the start place
+	sendMu      sync.Mutex       // one send at a time: here and the relay in the same order
+	tiled       bool             // placed in a grid: its size is not remembered
 	unlockMu    sync.Mutex       // serialises Unlock attempts
 }
 
@@ -108,8 +114,13 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 		runner:    runpkg.New(reg),
 		pwCh:      make(chan string, 1),
 	}
+	// 並べて接続 may open the window with 同時入力 on (設定 tab).
+	t.bc.join = os.Getenv(bcastEnv) == "1"
+	t.inQ = newLineQueue(t.bcastSend)
+	t.placeQ = newLineQueue(t.doPlace)
 	go func() {
 		sc := bufio.NewScanner(os.Stdin)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024) // INPUT lines (bcastChunk)
 		if sc.Scan() {
 			t.pwCh <- sc.Text()
 		}
@@ -128,6 +139,17 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 				}
 			case line == termCloseLine:
 				t.quitForParent()
+			case strings.HasPrefix(line, termLineInput+" "):
+				t.bcastIn(strings.TrimPrefix(line, termLineInput+" "))
+			case strings.HasPrefix(line, termLineBcN+" "):
+				t.bcastCounts(strings.TrimPrefix(line, termLineBcN+" "))
+			case strings.HasPrefix(line, termLinePlace+" "):
+				if r, ok := parseRect(strings.TrimPrefix(line, termLinePlace+" ")); ok {
+					t.mu.Lock()
+					t.placed = true
+					t.mu.Unlock()
+					t.placeAt(r)
+				}
 			}
 		}
 	}()
@@ -135,9 +157,21 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 }
 
 func (t *Term) startup(ctx context.Context) {
+	t.mu.Lock()
 	t.ctx = ctx
-	termWin.fit(ctx)
-	placeNearParent(ctx, termWin)
+	placed := t.placed
+	t.mu.Unlock()
+	switch cell, ok := parseRect(os.Getenv(tileEnv)); {
+	case placed:
+		// 並べ直す reached the window while it was starting: that place
+		// stands (it is queued already).
+	case ok:
+		t.placeAt(cell) // 並べて接続: its grid cell
+	default:
+		termWin.fit(ctx)
+		placeNearParent(ctx, termWin)
+	}
+	t.bcastReport()
 }
 
 // domReady brings this window to the front and gives the WebView2 the
@@ -226,6 +260,12 @@ func (t *Term) rememberSize() {
 	if t.ctx == nil {
 		return
 	}
+	t.mu.Lock()
+	tiled := t.tiled
+	t.mu.Unlock()
+	if tiled {
+		return // a grid cell's size is no size for the next window
+	}
 	w, h := runtime.WindowGetSize(t.ctx)
 	if w < termWin.MinW || h < termWin.MinH {
 		return
@@ -273,6 +313,8 @@ func (t *Term) connect(pw string) {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "機器が見つかりません"})
 		return
 	}
+	// The device's 端末の色, shown from the start of the login.
+	runtime.EventsEmit(t.ctx, "term:device", map[string]string{"tint": dev.TermColor})
 
 	// Tick elapsed/total seconds to the UI while connecting, so a slow or
 	// failing connection shows progress instead of a silent wait.
@@ -495,6 +537,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		// Reconnect may open the session again.
 		t.send, t.resizeFn, t.closeFn, t.exp = nil, nil, nil, nil
 		t.mu.Unlock()
+		t.bcastReport() // no longer takes keys from the other windows
 		p, _ := slog.Close()
 		if p == "" {
 			// Nothing was logged: drop the folder claimed at connect time, or
@@ -523,6 +566,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
 	t.mu.Unlock()
+	t.bcastReport() // takes keys from the other windows now
 	// A serial device record has no host; the title shows the port and baud
 	// actually opened instead ("COM3 @ 9600"), so an auto-detected port is
 	// never a mystery.
@@ -550,7 +594,7 @@ func (t *Term) AllowHostKeyChange() error {
 	for _, addr := range dev.HostKeyNames() {
 		hk.Delete(addr)
 	}
-	fmt.Fprintln(os.Stdout, termEventClearHostKey+" "+dev.ID)
+	childLine(termEventClearHostKey + " " + dev.ID)
 	go t.connect(pw)
 	return nil
 }
@@ -598,7 +642,13 @@ func (t *Term) SetLogging(on bool) (string, error) {
 // see paste_app.go) with text; whatever comes back confirmed is sent to the
 // device as if typed, line endings normalised to CR, with a final Enter
 // when the window's checkbox says so. One at a time per terminal.
-func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
+//
+// single: a one-line paste (confirmed only because 同時入力 is on): the
+// window starts without 最後に Enter を送る unless withCR (Alt+V), as a
+// one-line paste sends no Enter. Whether the text goes to the other windows
+// is decided now, when the window says so (or does not), not when it is
+// confirmed.
+func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 	raw, err := base64.StdEncoding.DecodeString(textB64)
 	if err != nil {
 		return err
@@ -613,7 +663,12 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		return fmt.Errorf("貼り付けの確認ウィンドウが既に開いています")
 	}
 	t.pasteOpen = true
+	relay := t.bc.join
 	t.mu.Unlock()
+	peers := 0
+	if relay {
+		peers = t.bcastPeers()
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		t.pasteDone()
@@ -639,7 +694,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 	t.pasteProc = cmd.Process
 	t.mu.Unlock()
 	go func() {
-		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR})
+		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR, Bcast: peers, Single: single})
 		_ = stdin.Close()
 	}()
 	go func() {
@@ -662,12 +717,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR bool) error {
 		if res.CR && !strings.HasSuffix(s, "\r") {
 			s += "\r"
 		}
-		t.mu.Lock()
-		send, locked := t.send, t.locked
-		t.mu.Unlock()
-		if send != nil && s != "" && !locked {
-			_ = send(s)
-		}
+		t.sendText(s, relay)
 		runtime.EventsEmit(t.ctx, "term:paste-done", true)
 	}()
 	return nil
@@ -680,19 +730,46 @@ func (t *Term) pasteDone() {
 	t.mu.Unlock()
 }
 
-// Send forwards keystrokes (base64) to the device.
+// Send forwards keystrokes (base64) to the device, and with 同時入力 on to
+// the other windows too.
 func (t *Term) Send(dataB64 string) error {
-	t.mu.Lock()
-	s, locked := t.send, t.locked
-	t.mu.Unlock()
-	if s == nil || locked {
-		return nil
-	}
 	raw, err := base64.StdEncoding.DecodeString(dataB64)
 	if err != nil {
 		return err
 	}
-	return s(string(raw))
+	return t.sendText(string(raw), true)
+}
+
+// SendReply forwards what is this device's alone, never relayed by 同時入力:
+// the terminal's own answer to a query from the device (cursor position,
+// device attributes), a mouse report, and a paste confirmed in a dialog
+// opened while 同時入力 was off.
+func (t *Term) SendReply(dataB64 string) error {
+	raw, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil {
+		return err
+	}
+	return t.sendText(string(raw), false)
+}
+
+// sendText sends s to the device and, when relay is allowed and 同時入力 is
+// on, to the other windows first: a slow line here (a 9600-baud console)
+// no longer holds the others back, and a session that drops halfway does
+// not keep them from getting it. One at a time, so every device gets the
+// keys in the same order.
+func (t *Term) sendText(s string, relay bool) error {
+	t.sendMu.Lock()
+	defer t.sendMu.Unlock()
+	t.mu.Lock()
+	send, locked := t.send, t.locked
+	t.mu.Unlock()
+	if send == nil || locked || s == "" {
+		return nil
+	}
+	if relay {
+		t.bcastOut(s)
+	}
+	return send(s)
 }
 
 // Resize notifies the device of a new terminal size.
@@ -759,6 +836,7 @@ func (t *Term) Lock() {
 	t.locked = true
 	ctx, pp := t.ctx, t.pasteProc
 	t.mu.Unlock()
+	t.bcastReport()
 	// A paste confirmation left open would otherwise still send to the device
 	// from its own window, lock or no lock.
 	if pp != nil {
@@ -788,6 +866,7 @@ func (t *Term) Unlock(pw string) bool {
 	if t.pw != "" && subtle.ConstantTimeCompare([]byte(pw), []byte(t.pw)) == 1 {
 		t.locked, t.unlockFails = false, 0
 		t.mu.Unlock()
+		t.bcastReport()
 		return true
 	}
 	t.unlockFails++

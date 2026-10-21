@@ -17,6 +17,7 @@ async function bootViewerWindow() {
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-wrap" style="width:auto"> ${esc(t("折り返し"))}</label>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-follow" style="width:auto"> ${esc(t("自動更新（追記を追う）"))}</label>
       <button class="btn sm" id="lv-reload">${esc(t("再読込"))}</button>
+      <button class="btn sm" id="lv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべてのログ表示窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="lv-font-dec" title="Ctrl+-">A−</button>
       <button class="btn sm" id="lv-font-inc" title="Ctrl++">A＋</button>
       <button class="btn sm" id="lv-find" title="Ctrl+F">${esc(t("検索"))}</button>
@@ -35,6 +36,12 @@ async function bootViewerWindow() {
   </div>`);
   document.body.appendChild(wrap);
   const ta = document.getElementById("lv-text"), note = document.getElementById("lv-note"), status = document.getElementById("lv-status");
+  // 表示の色: by default a light page, unlike the black terminal, so a log
+  // is never taken for a live session (colors.js).
+  const applyColors = c => { ta.style.background = c.bg; ta.style.color = c.fg; };
+  applyColors(screenColors("viewer"));
+  onScreenColors("viewer", applyColors);
+  document.getElementById("lv-color").onclick = e => openScreenColorPanel("viewer", e.currentTarget, applyColors, () => ta.focus());
   let noteTimer = null;
   function flash(text) { note.textContent = text; note.classList.remove("hidden"); clearTimeout(noteTimer); noteTimer = setTimeout(() => note.classList.add("hidden"), 1500); }
   function show(d, keepPos) {
@@ -113,7 +120,7 @@ async function bootViewerWindow() {
     if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
-    if (e.key === "Escape" && bar.classList.contains("hidden")) { V().Close(); }
+    if (e.key === "Escape" && bar.classList.contains("hidden") && !document.getElementById("sc-pop")) { V().Close(); }
   });
   ta.focus();
 }
@@ -133,6 +140,7 @@ async function bootWatchWindow() {
     <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442">
       <div id="wv-name" style="color:#e6ecf3;font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
       <span id="wv-state" class="pill" style="font-size:11px"></span>
+      <button class="btn sm" id="wv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての画面表示窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="wv-font-dec" title="Ctrl+-">A−</button>
       <button class="btn sm" id="wv-font-inc" title="Ctrl++">A＋</button>
       <button class="btn sm" id="wv-log" data-tip="${esc(t("同じログを文字で開きます（検索・全文コピー）"))}">${esc(t("ログ表示"))}</button>
@@ -148,11 +156,16 @@ async function bootWatchWindow() {
   const term = new Terminal({
     convertEol: false, cursorBlink: false, disableStdin: true, scrollback: 10000,
     fontFamily: '"Consolas", monospace', fontSize,
-    theme: { background: "#000000", foreground: "#d6dee8", cursor: "#5b9bff" },
+    theme: xtermTheme(screenColors("watch")),
   });
   const fit = new (window.FitAddon.FitAddon)();
   term.loadAddon(fit);
   term.open(document.getElementById("wv-host"));
+  // 表示の色: navy by default, unlike the terminal one types into.
+  const applyColors = c => { term.options.theme = xtermTheme(c); document.body.style.background = c.bg; wrap.style.background = c.bg; };
+  applyColors(screenColors("watch"));
+  onScreenColors("watch", applyColors);
+  document.getElementById("wv-color").onclick = e => openScreenColorPanel("watch", e.currentTarget, applyColors);
   const refit = () => { try { fit.fit(); } catch (e) {} };
   refit();
   window.addEventListener("resize", refit);
@@ -171,7 +184,7 @@ async function bootWatchWindow() {
     if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
-    if (e.key === "Escape") W().Close();
+    if (e.key === "Escape" && !document.getElementById("sc-pop")) W().Close();
   }, true); // capture: the terminal's own textarea would swallow the keys
 
   // Poll the file from where the last read ended; a full chunk means more

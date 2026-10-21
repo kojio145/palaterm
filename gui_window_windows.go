@@ -328,16 +328,7 @@ func saveGUIWinSize(w, h int32) {
 }
 
 // dpi is the window's DPI (96 = 100 %).
-func (w *guiWin) dpi() int32 {
-	if procGetDpiForWindow.Find() != nil {
-		return 96
-	}
-	d, _, _ := procGetDpiForWindow.Call(uintptr(w.hwnd))
-	if d == 0 {
-		return 96
-	}
-	return int32(d)
-}
+func (w *guiWin) dpi() int32 { return windowDPI(uintptr(w.hwnd)) }
 
 // place sizes the window for its monitor's scaling (the remembered size,
 // else the default) and centres it over the main window, on the main
@@ -355,8 +346,8 @@ func (w *guiWin) place() {
 	} else {
 		mon, _, _ = pMonitorFromWindw.Call(uintptr(w.hwnd), monitorDefaultToNearest)
 	}
-	mi := monitorInfo{CbSize: uint32(unsafe.Sizeof(monitorInfo{}))}
-	if ok, _, _ := pGetMonitorInfo.Call(mon, uintptr(unsafe.Pointer(&mi))); ok == 0 {
+	mi, ok := monitorWork(mon)
+	if !ok {
 		return
 	}
 	// Move onto the parent's monitor first: the DPI read below is that

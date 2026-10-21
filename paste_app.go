@@ -30,6 +30,11 @@ type pasteReq struct {
 	Device string `json:"device"`
 	Text   string `json:"text"`
 	CR     bool   `json:"cr"`
+	// Bcast is how many other windows get the text too (同時入力), 0 when off.
+	Bcast int `json:"bcast,omitempty"`
+	// Single: a one-line paste, confirmed only because of 同時入力 (no
+	// Enter unless CR, whatever the remembered checkbox says).
+	Single bool `json:"single,omitempty"`
 }
 
 // pasteRes is the answer: OK false means cancelled.

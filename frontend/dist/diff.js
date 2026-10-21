@@ -20,6 +20,7 @@ async function bootDiffWindow() {
       <button class="btn sm" id="dw-next" title="Alt+↓ / F8">▼ ${esc(t("次の差分"))}</button>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-noise" checked style="width:auto"> ${esc(t("時刻・カウンタの違いを無視"))}</label>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-only" style="width:auto"> ${esc(t("差分の周辺だけ表示"))}</label>
+      <button class="btn sm" id="dw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての差分窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="dw-font-dec" title="Ctrl+-">A−</button>
       <button class="btn sm" id="dw-font-inc" title="Ctrl++">A＋</button>
       <button class="btn sm" id="dw-find" title="Ctrl+F">${esc(t("検索"))}</button>
@@ -49,6 +50,16 @@ async function bootDiffWindow() {
   </div>`);
   document.body.appendChild(wrap);
   const body = document.getElementById("dw-body"), map = document.getElementById("dw-map");
+  // 表示の色 (colors.js): the text area's colours; on a light background
+  // the highlight colours switch to their dark-text versions (dw-light).
+  const applyColors = c => {
+    body.style.background = c.bg; map.style.background = c.bg;
+    body.style.setProperty("--dw-fg", c.fg);
+    body.classList.toggle("dw-light", isLightColor(c.bg));
+  };
+  applyColors(screenColors("diff"));
+  onScreenColors("diff", applyColors);
+  document.getElementById("dw-color").onclick = e => openScreenColorPanel("diff", e.currentTarget, applyColors);
   let doc = null, rows = [], blocks = [], cur = -1;
 
   // Fold the edit script into side-by-side rows: a run of removed lines
@@ -185,7 +196,7 @@ async function bootDiffWindow() {
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
-    if (e.key === "Escape") { if (!fbar.classList.contains("hidden")) closeFind(); else D().Close(); }
+    if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!fbar.classList.contains("hidden")) closeFind(); else D().Close(); }
   });
   await load();
 }

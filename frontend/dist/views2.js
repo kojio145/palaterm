@@ -458,6 +458,11 @@ function renderRun() {
   }).join("");
 
   const enabledCount = (filtered ? visible : devs).filter(d => d.enabled).length;
+  // 並べて接続 opens the ticked devices that have a CLI (GUI-only ones have
+  // no terminal): the count on its button.
+  const tileOrder = new Map(visible.map((d, i) => [d.id, i]));
+  const tileDevs = runTargetDevices().filter(d => !d.cliOff).sort((a, b) => (tileOrder.get(a.id) ?? 1e9) - (tileOrder.get(b.id) ?? 1e9));
+  const tileCount = tileDevs.length;
   const hiddenChecked = filtered ? devs.filter(d => d.enabled && !visible.includes(d)).length : 0;
   const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
   const sortArrow = k => runSort.key === k ? (runSort.dir > 0 ? " ▲" : " ▼") : "";
@@ -502,6 +507,7 @@ function renderRun() {
       <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
       ${!running && (failedCount || canceledCount) ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(retryLabel)}</button>` : ""}
       ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、機器名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
+      ${runGroupSel && devs.length ? `<button class="btn" id="btn-tile" ${tileCount === 0 ? "disabled" : ""} data-tip="${esc(t("チェックした実行対象の機器（絞り込み中は表示中の機器だけ）の単独接続窓をまとめて開き、画面いっぱいに並べます（最大 16 台）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）。「踏み台: 使わない」もこの窓に効きます"))}">${esc(t("並べて接続（{n}台）", { n: tileCount }))}</button>` : ""}
       ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「順番待ち」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
       <div style="flex-basis:100%;height:0;margin:-4px 0 0"></div>
       ${groups.length || ungroupedCount ? `<select id="run-grp" class="btn" style="padding-right:8px" ${running ? "disabled" : ""}>
@@ -596,6 +602,10 @@ function renderRun() {
   });
 
   document.getElementById("btn-run").onclick = () => startRun(false);
+  // 並べて接続: the same devices a run would take (the ticked ones, only the
+  // visible ones while filtered), in the table's order.
+  const btnTile = document.getElementById("btn-tile");
+  if (btnTile) btnTile.onclick = () => tiledConnect(tileDevs.map(d => d.id), runDirect);
   document.getElementById("btn-dry").onclick = () => startRun(true);
   const setSel = document.getElementById("run-set");
   if (setSel) setSel.onchange = async () => {
@@ -1323,6 +1333,8 @@ function renderSettings() {
       <div class="field"><label><span data-tip="${esc(t("対話窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます"))}">${esc(t("対話窓の右クリック ⓘ"))}</span></label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-rc-off" type="checkbox" ${s.rightClickPasteOff ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを無効にする"))}</label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
+      <div class="field"><label><span data-tip="${esc(t("機器一覧・実行タブの「並べて接続」で開いた窓を、最初から同時入力オンにするかどうかです。オフ（既定）なら、同時入力は各窓の「同時入力」ボタンで必要な窓だけオンにします。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続の同時入力 ⓘ"))}</span></label>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-tile-bcast" type="checkbox" ${s.tiledBroadcast ? "checked" : ""}> ${esc(t("並べて接続した窓を同時入力オンで開く（既定: オフ）"))}</label></div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
         <tr><td class="mono">{host}</td><td>${esc(t("機器名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
@@ -1342,17 +1354,19 @@ function renderSettings() {
       <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
       <div class="modal-actions"><button class="btn primary" id="mb-save">${esc(t("保存"))}</button></div>
     </div>
+    ${screenColorsPanelHTML()}
     <div class="panel" style="padding:22px;max-width:620px;margin-top:16px;border-color:var(--err)">
       <div style="font-weight:600;margin-bottom:4px;color:var(--err)">${esc(t("危険な操作"))}</div>
       <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワードを削除して、はじめての起動の状態に戻します（ログと export フォルダは残ります）。マスターパスワードの入力と 2 回の確認があります。"))}</div>
       <button class="btn danger" id="set-reset" type="button">${esc(t("すべてのデータをリセット（初期化）"))}</button>
     </div>`;
   renderMyBastion();
+  wireScreenColorsPanel();
   document.getElementById("set-reset").onclick = resetVaultFlow;
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = myLoginsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-tile-bcast", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
@@ -1385,6 +1399,7 @@ function renderSettings() {
     out.maskLogSecrets = !!document.getElementById("set-mask").checked;
     out.rightClickPasteOff = !!document.getElementById("set-rc-off").checked;
     out.rightClickPasteConfirm = !!document.getElementById("set-rc-confirm").checked;
+    out.tiledBroadcast = !!document.getElementById("set-tile-bcast").checked;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };

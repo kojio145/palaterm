@@ -55,7 +55,8 @@ type App struct {
 
 	// Open terminal windows → their stdin (LockTerminals).
 	termsMu sync.Mutex
-	terms   map[*exec.Cmd]io.WriteCloser
+	terms   map[*exec.Cmd]*termChild
+	termSeq int
 
 	lang string // UI language, for the backend's own dialogs
 
@@ -79,7 +80,7 @@ type App struct {
 func NewApp() *App {
 	reg := profile.NewRegistry()
 	a := &App{
-		terms:     map[*exec.Cmd]io.WriteCloser{},
+		terms:     map[*exec.Cmd]*termChild{},
 		profiles:  reg,
 		runner:    runpkg.New(reg),
 		vaultPath: defaultVaultPath(),
@@ -91,7 +92,11 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// On screen at once (the old fit), then where it was last closed:
+	// placeMainWindow runs in the background and may not find the window
+	// on a slow start.
 	mainWin.fit(ctx)
+	placeMainWindow()
 	// Materialize the tool's folder layout next to the exe so users can find
 	// everything: logs / export destinations / internal parts (data).
 	for _, d := range []string{"logs", filepath.Join("export", "bundles"), filepath.Join("export", "command-sets"), filepath.Join("export", "os-profiles"), "data"} {
@@ -189,6 +194,7 @@ func (a *App) flushPersist() { a.writePending() }
 
 // shutdown runs when the main window closes.
 func (a *App) shutdown(ctx context.Context) {
+	saveMainPlacement()
 	closeGUIWindows()
 	a.flushPersist()
 	trayHide()
@@ -1036,8 +1042,9 @@ type DevicePatch struct {
 	CommandSet    *string `json:"commandSet,omitempty"`
 	UseGroupCreds *bool   `json:"useGroupCreds,omitempty"`
 	UseMyBastion  *bool   `json:"useMyBastion,omitempty"`
-	CLI           *bool   `json:"cli,omitempty"` // CLI を使う (Device.CLIOff = !CLI)
-	GUI           *bool   `json:"gui,omitempty"` // GUI を使う
+	CLI           *bool   `json:"cli,omitempty"`       // CLI を使う (Device.CLIOff = !CLI)
+	GUI           *bool   `json:"gui,omitempty"`       // GUI を使う
+	TermColor     *string `json:"termColor,omitempty"` // 端末の色 ("" = none)
 	// The devices' own credentials (a password rotated on fifty devices at
 	// once), and one jump-host hop's (BastionHop is 1-based; devices
 	// without that hop are left as they are).
@@ -1106,6 +1113,9 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 		}
 		if p.GUI != nil {
 			d.GUIOn = *p.GUI
+		}
+		if p.TermColor != nil {
+			d.TermColor = *p.TermColor // checked and normalised by ValidateIn below
 		}
 		if p.Username != nil {
 			d.Username = strings.TrimSpace(*p.Username)
@@ -2384,6 +2394,13 @@ type termClosed struct {
 //
 // direct opens it without the device's jump hosts (踏み台を使わずに接続).
 func (a *App) SpawnTerminal(id string, manual, direct bool) error {
+	_, err := a.spawnTerminal(id, manual, direct, nil)
+	return err
+}
+
+// spawnTerminal is SpawnTerminal with extra environment for the child
+// (並べて接続: its grid cell and 同時入力 on, see broadcast.go).
+func (a *App) spawnTerminal(id string, manual, direct bool, extra []string) (*termChild, error) {
 	a.mu.Lock()
 	locked := a.inv == nil
 	pw := a.password
@@ -2396,17 +2413,17 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	}
 	a.mu.Unlock()
 	if locked {
-		return fmt.Errorf("vault is locked")
+		return nil, fmt.Errorf("vault is locked")
 	}
 	if label == "" {
-		return fmt.Errorf("機器が見つかりません")
+		return nil, fmt.Errorf("機器が見つかりません")
 	}
 	if cliOff {
-		return fmt.Errorf("この機器は CLI を使わない設定です（機器の編集で「CLI を使う」をオンにしてください）")
+		return nil, fmt.Errorf("この機器は CLI を使わない設定です（機器の編集で「CLI を使う」をオンにしてください）")
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	args := []string{"--connect", id, "--label", label}
 	if manual {
@@ -2417,21 +2434,24 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	}
 	cmd := exec.Command(exe, args...)
 	// The window's place in the cascade: five sessions opened in a row used
-	// to land on exactly the same spot, one hiding the next.
-	cmd.Env = childEnv(fmt.Sprintf("%s=%d", cascadeEnv, a.openTerminals()))
+	// to land on exactly the same spot, one hiding the next. A window of
+	// 並べて接続 has its grid cell instead.
+	env := append([]string{fmt.Sprintf("%s=%d", cascadeEnv, a.openTerminals())}, extra...)
+	cmd.Env = childEnv(env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// The child never writes the vault; it reports the one thing it needs
 	// persisted — the user allowing a changed host key — on stdout, and the
-	// main window applies it.
+	// main window applies it. 同時入力 and 並べ直す come up the same way
+	// (broadcast.go).
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	tieToMainWindow(cmd.Process.Pid)
 	trackChild(cmd.Process)
@@ -2441,22 +2461,25 @@ func (a *App) SpawnTerminal(id string, manual, direct bool) error {
 	// written in between would be read as the password.
 	_, _ = io.WriteString(stdin, pw+"\n")
 	a.termsMu.Lock()
-	a.terms[cmd] = stdin
+	a.termSeq++
+	child := newTermChild(stdin, a.termSeq)
+	a.terms[cmd] = child
 	a.termsMu.Unlock()
 	go func() {
 		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024) // relayed keys (bcastChunk) fit
 		for sc.Scan() {
-			if dev, ok := strings.CutPrefix(sc.Text(), termEventClearHostKey+" "); ok {
-				_ = a.ClearHostKeys(strings.TrimSpace(dev))
-			}
+			a.termLine(cmd, sc.Text())
 		}
 		_ = cmd.Wait()
 		a.termsMu.Lock()
 		delete(a.terms, cmd)
 		a.termsMu.Unlock()
+		child.out.close()
 		_ = stdin.Close()
+		a.sendBcastCounts()
 	}()
-	return nil
+	return child, nil
 }
 
 // termLockLine is what LockTerminals writes to a terminal window's stdin.
@@ -2481,8 +2504,8 @@ const termCloseLine = "CLOSE"
 func (a *App) sendToTerminals(line string) {
 	a.termsMu.Lock()
 	defer a.termsMu.Unlock()
-	for _, w := range a.terms {
-		_, _ = io.WriteString(w, line+"\n")
+	for _, c := range a.terms {
+		c.put(line)
 	}
 }
 
@@ -2514,6 +2537,7 @@ type QuitRequest struct {
 // process: × used to end a batch by hand without a word) and asks in the
 // page, styled like the rest of the app: ConfirmQuit finishes the close.
 func (a *App) beforeClose(ctx context.Context) bool {
+	saveMainPlacement()
 	a.mu.Lock()
 	quitting, trayQuit, running := a.quitting, a.trayQuit, a.runActive
 	// The tray's 終了 counts for this close only: cancelled at the
@@ -2554,7 +2578,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.7.13"
+const appVersion = "1.8.0"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

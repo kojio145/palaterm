@@ -24,7 +24,7 @@ func TestGridRowCarriesEveryDeviceField(t *testing.T) {
 		Group: "lab", Site: "本社", Role: "コア", OSType: "cisco-ios", CommandSet: "bk",
 		AuthMethod: model.AuthPublicKey, KeyFile: `C:\k\id`, KeyPassphrase: "pp", Username: "ops", Password: "pw", EnablePassword: "en",
 		LegacyAlgos: true, Bastions: []model.Bastion{hop}, BastionMode: model.BastionViaTunnel,
-		Bastion: &model.Bastion{Host: "192.0.2.99"}, UseGroupCreds: true, Enabled: true, GUIPort: 10443, UseMyBastion: true, CLIOff: true, GUIOn: true, GUIScheme: "http",
+		Bastion: &model.Bastion{Host: "192.0.2.99"}, UseGroupCreds: true, Enabled: true, GUIPort: 10443, UseMyBastion: true, CLIOff: true, GUIOn: true, GUIScheme: "http", TermColor: "red",
 	}
 	// Mine only exists on copies resolved for a connection, never in a row.
 	resolvedOnly := map[string]bool{"Mine": true}

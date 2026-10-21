@@ -47,6 +47,7 @@ var deviceCols = []col{
 	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
 	{"legacyAlgos", "旧暗号を許可"}, {"useMyBastion", "自分の踏み台を使う"}, {"bastionMode", "踏み台の通り方"},
 	{"cli", "CLIを使う"}, {"gui", "GUIを使う"}, {"guiScheme", "GUIの方式"}, {"guiPort", "GUIポート"},
+	{"termColor", "端末の色"},
 }
 
 // hopFields are one jump host's columns (prefixed bastion<n> / 踏み台<n>_).
@@ -122,6 +123,7 @@ func ExportLang(devices []model.Device, lang string) (string, error) {
 			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
 			boolOut(d.LegacyAlgos, ja), boolOut(d.UseMyBastion, ja), modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, ja),
 			boolOut(!d.CLIOff, ja), boolOut(d.GUIOn, ja), d.EffectiveGUIScheme(), itoa(d.GUIPort),
+			termColorOut(d.TermColor, ja),
 		}
 		for n := 0; n < hops; n++ {
 			if n < len(d.Bastions) {
@@ -168,7 +170,8 @@ func ImportInfo(text string) ([]model.Device, []string, error) {
 		return nil, nil, err
 	}
 	var missing []string
-	for _, key := range []string{"useMyBastion", "cli", "gui", "guiScheme", "guiPort"} {
+	// termColor: an older file keeps the devices' colours (bundle).
+	for _, key := range []string{"useMyBastion", "cli", "gui", "guiScheme", "guiPort", "termColor"} {
 		if !has(key) {
 			missing = append(missing, key)
 		}
@@ -274,6 +277,7 @@ func importWith(text string) ([]model.Device, func(string) bool, error) {
 			CLIOff:         !parseBool(get(row, "cli"), true),
 			GUIOn:          parseBool(get(row, "gui"), false),
 			GUIScheme:      schemeIn(get(row, "guiScheme")),
+			TermColor:      termColorIn(get(row, "termColor")),
 		}
 		if perHop {
 			// One column per jump-host field. A hop is there when its host is.
@@ -329,6 +333,22 @@ func schemeIn(v string) string {
 	}
 	return "" // https (the default) and anything else
 
+}
+
+// termColorIn reads 端末の色 by key or Japanese name; anything else is
+// kept as typed so Validate names it rather than the import dropping it.
+func termColorIn(v string) string {
+	if c, ok := model.ParseTermColor(v); ok {
+		return c
+	}
+	return strings.TrimSpace(v)
+}
+
+func termColorOut(v string, ja bool) string {
+	if ja {
+		return model.TermColorJa(v)
+	}
+	return v
 }
 
 // ---- the fixed values, in the words of the export's language ----

@@ -15,7 +15,12 @@ var (
 	// One notch below the earlier 1440×960: that overflowed a laptop screen
 	// at 125 % scaling (1536×864 logical), the common case in the office.
 	// Still above MinWidth so nothing in the tables wraps.
-	mainWin   = winSize{W: 1280, H: 800, MinW: 1100, MinH: 680}
+	// The minimum is small enough to push the window aside while a terminal
+	// is in use, and fits any laptop at any scaling; the page narrows its
+	// side bar and margins below 1100 and 760 wide, and scrolls the rest
+	// (style.css). (Was 1100×680: it ran under a 150 % laptop's taskbar and
+	// could not be shrunk out of the way, 2026-10-21.)
+	mainWin   = winSize{W: 1280, H: 800, MinW: 480, MinH: 320}
 	termWin   = winSize{W: 1080, H: 680, MinW: 640, MinH: 400}
 	pasteWin  = winSize{W: 980, H: 640, MinW: 480, MinH: 320}
 	viewerWin = winSize{W: 1080, H: 700, MinW: 480, MinH: 320}

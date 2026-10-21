@@ -367,3 +367,30 @@ func TestImportWithoutCLIGUIColumns(t *testing.T) {
 		t.Errorf("devices = %+v", ds)
 	}
 }
+
+// 端末の色 goes out in the export's language and reads back by key or
+// Japanese name; a word it does not know is left for Validate to name.
+func TestTermColorColumn(t *testing.T) {
+	d := model.Device{Name: "r1", Host: "192.0.2.1", Conn: model.ConnSSH, Enabled: true, TermColor: "red"}
+	for _, ja := range []string{"en", "ja"} {
+		text, err := ExportLang([]model.Device{d}, ja)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := Import(text)
+		if err != nil || len(out) != 1 || out[0].TermColor != "red" {
+			t.Fatalf("lang=%s: %v %+v", ja, err, out)
+		}
+	}
+	text := "name,host,termColor\nr1,192.0.2.1,緑\nr2,192.0.2.2,PURPLE\nr3,192.0.2.3,ピンク\n"
+	out, err := Import(text)
+	if err != nil || len(out) != 3 || out[0].TermColor != "green" || out[1].TermColor != "purple" || out[2].TermColor != "ピンク" {
+		t.Fatalf("%v %+v", err, out)
+	}
+	if err := out[2].Validate(); err == nil {
+		t.Error("unknown colour passed Validate")
+	}
+	if _, errs := CellsDevice(map[string]string{"name": "r1", "host": "192.0.2.1", "termColor": "ピンク"}); len(errs) != 1 || errs[0].Col != "termColor" {
+		t.Errorf("grid did not flag the colour: %+v", errs)
+	}
+}

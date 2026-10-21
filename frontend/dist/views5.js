@@ -45,6 +45,7 @@ function gridOptionsBuild(kind) {
     case "set": return [{ v: "", label: t("（なし）"), alias: ["（なし）"] }].concat((INV.commandSets || []).map(s => ({ v: s.name, label: s.name })));
     case "group": return (INV.deviceGroups || []).map(g => ({ v: g.name, label: g.name }));
     case "scheme": return [{ v: "https", label: "https" }, { v: "http", label: "http" }];
+    case "tint": return [{ v: "", label: t("なし"), alias: ["なし", "none"] }].concat(deviceTintKeys().map(k => ({ v: k, label: t(DEVICE_TINTS[k].name), alias: [DEVICE_TINTS[k].name] })));
   }
   return null;
 }

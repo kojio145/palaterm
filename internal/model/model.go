@@ -182,8 +182,45 @@ type Device struct {
 	// shared device list then carries as this one flag.
 	UseMyBastion bool `json:"useMyBastion,omitempty"`
 
+	// TermColor tints the device's terminal window (端末の色): one of
+	// TermColors' keys, or empty for the window's usual colours. A
+	// production device in red stands out among windows side by side.
+	TermColor string `json:"termColor,omitempty"`
+
 	// Whether this device is included in batch runs.
 	Enabled bool `json:"enabled"`
+}
+
+// TermColors are the device tints (Device.TermColor), with their Japanese
+// names; the page draws them (colors.js DEVICE_TINTS has the same keys).
+var TermColors = []struct{ Key, Ja string }{
+	{"red", "赤"}, {"orange", "橙"}, {"yellow", "黄"}, {"green", "緑"}, {"blue", "青"}, {"purple", "紫"},
+}
+
+// ParseTermColor reads a tint by key or Japanese name ("" for none); ok is
+// false for anything else.
+func ParseTermColor(v string) (string, bool) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "", "なし", "none":
+		return "", true
+	}
+	for _, c := range TermColors {
+		if v == c.Key || v == c.Ja {
+			return c.Key, true
+		}
+	}
+	return "", false
+}
+
+// TermColorJa is a tint's Japanese name ("" for none or unknown).
+func TermColorJa(key string) string {
+	for _, c := range TermColors {
+		if c.Key == key {
+			return c.Ja
+		}
+	}
+	return ""
 }
 
 // UsesBastion reports whether the device goes through any jump host: its own
@@ -859,6 +896,11 @@ type Settings struct {
 	// enabled 予約 is still to fire (set in the 予約 tab): for PCs that
 	// cannot be woken for one (wake timers off, modern standby).
 	ScheduleKeepAwake bool `json:"scheduleKeepAwake,omitempty"`
+
+	// TiledBroadcast opens the windows of 並べて接続 with 同時入力 already on.
+	// Off by default (user request 2026-10-21): each window is turned on by
+	// hand, so keys never reach several devices unasked.
+	TiledBroadcast bool `json:"tiledBroadcast,omitempty"`
 }
 
 // RightClickPaste returns what a right-click does in the interactive
@@ -900,6 +942,11 @@ func (s Settings) EffectiveAutoLockMin() int {
 func (d *Device) Validate() error {
 	if strings.TrimSpace(d.Name) == "" {
 		return errors.New("名前は必須です")
+	}
+	if c, ok := ParseTermColor(d.TermColor); ok {
+		d.TermColor = c
+	} else {
+		return fmt.Errorf("端末の色が不正です: %q（赤・橙・黄・緑・青・紫 か空欄）", d.TermColor)
 	}
 	switch d.Conn {
 	case ConnSSH, ConnTelnet:
@@ -1122,10 +1169,10 @@ func SampleGroupName(lang string) string {
 // sampleSetNamesEN maps the built-in sample sets' names to their English
 // form: a vault created under the English UI is seeded with these.
 var sampleSetNamesEN = map[string]string{
-	"【サンプル】Cisco_ルータ":     "[Sample] Cisco router",
-	"【サンプル】Cisco_L2SW":    "[Sample] Cisco L2 switch",
-	"【サンプル】Cisco_L3SW":    "[Sample] Cisco L3 switch",
-	"【サンプル】FortiGate":     "[Sample] FortiGate",
+	"【サンプル】Cisco_ルータ":    "[Sample] Cisco router",
+	"【サンプル】Cisco_L2SW":   "[Sample] Cisco L2 switch",
+	"【サンプル】Cisco_L3SW":   "[Sample] Cisco L3 switch",
+	"【サンプル】FortiGate":    "[Sample] FortiGate",
 	"【サンプル】IXルータ":        "[Sample] NEC IX router",
 	"【サンプル】ALAXALA_L2SW": "[Sample] ALAXALA L2 switch",
 }
