@@ -370,11 +370,15 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 	conv := listimport.Convert(t, &r)
 	out.Missing = conv.Missing
 	out.Total = len(conv.Rows)
+	lines := map[int]bool{}
 	for _, row := range conv.Rows {
 		if row.Excluded != "" {
 			out.Excluded++
 		}
-		if len(out.Rows) < 8 {
+		// The first 8 lines, each with all its devices (a pair is never
+		// shown cut in two).
+		if lines[row.Line] || len(lines) < 8 {
+			lines[row.Line] = true
 			out.Rows = append(out.Rows, RuleTestRow{Line: row.Line, Unit: row.Unit, Label: row.Label, Values: row.Values, Raw: row.Raw, Filled: row.Filled, Excluded: row.Excluded, Exclusion: row.Exclusion})
 		}
 	}

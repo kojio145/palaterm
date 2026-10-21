@@ -2025,3 +2025,28 @@ I18N_EN_PATTERNS.push(
   [/^機器「(.+?)」は (.+?) 行目で選ばれています。どちらかを別の機器にしてください$/, 'Device "$1" is already chosen on row $2. Choose another device for one of them'],
   [/^機器名「(.+?)」が (.+?) 行目と重なっています$/, 'Device name "$1" is also on row $2'],
 );
+Object.assign(I18N_EN, {
+  "列({l}): {c}": "Column ({l}): {c}",
+  "元の列({l}): {c}": "Source column ({l}): {c}",
+});
+Object.assign(I18N_EN, {
+  "1台目と同じ {c}": "As device 1: {c}",
+  "1台目と同じ 組み立て {t}": "As device 1: combined {t}",
+  "1台目と同じ（既定値 {v}）": "As device 1 (default {v})",
+  "1台目と同じ（使わない）": "As device 1 (not used)",
+  "（選んでください）": "(choose)",
+  "必須: 2台目の機器名の列を選びます。この列が空の行には 2台目を作りません": "Required: the column with device 2's name. Rows where it is empty give no device 2",
+  "（見本 {n} 行目）": "(sample row {n})",
+  "見本の先頭の行には 2台目がありません": "The first sample rows have no device 2",
+  "この行に 2台目はありません（2台目の機器名が空）": "No device 2 on this row (its name is empty)",
+});
+Object.assign(I18N_EN, {
+  "見出しの行（何行目）": "Header row (number)",
+  "項目名（ホスト名・IP など）が書いてある行": "The row with the column names (host name, IP, …)",
+  "データの開始行（何行目）": "First data row (number)",
+  "空欄＝見出しのすぐ下": "Empty = right below the header",
+  "普通は空欄。見出しとデータの間に説明の行があるときだけ": "Usually empty. Only when rows of notes sit between the header and the data",
+  "表の左端の列（AE など）": "Table's first column (e.g. AE)",
+  "空欄＝自動": "Empty = automatic",
+  "普通は空欄。表の左にメモなど関係ない列があるときだけ": "Usually empty. Only when unrelated columns (notes) sit left of the table",
+});

@@ -637,3 +637,10 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
 .li-ucell { background: rgba(167,139,250,.04); }
 .li-ures { font-family: "Consolas", monospace; font-size: 12px; color: var(--text-dim); margin-top: 4px; word-break: break-all; }
 .li-unit { display: inline-block; font-size: 10px; color: #a78bfa; border: 1px solid rgba(167,139,250,.5); border-radius: 4px; padding: 0 5px; margin-top: 2px; font-family: "Segoe UI", "Meiryo", sans-serif; }
+.li-map select.li-need { border-color: var(--err); }
+.li-needtxt { color: #f87171; }
+tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,178,.04); }
+.li-pos { align-items: flex-start; }
+.li-pos .field { max-width: 230px; }
+.li-pos input[type=number], .li-pos input[type=text] { width: 175px; }
+.li-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
