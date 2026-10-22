@@ -407,7 +407,8 @@ func sampleGrid(rows [][]string, headerRow int) [][]string {
 	for r := 0; r < nr; r++ {
 		nc = max(nc, len(rows[r]))
 	}
-	nc = min(nc, 30)
+	// IV (256) is as wide as an .xls goes: a list reaching IU shows whole.
+	nc = min(nc, 300)
 	out := make([][]string, nr)
 	for r := 0; r < nr; r++ {
 		out[r] = make([]string, nc)

@@ -95,6 +95,7 @@ type PlanRow struct {
 	Status     string   `json:"status"`
 	Name       string   `json:"name"`
 	Host       string   `json:"host"`
+	Site       string   `json:"site,omitempty"`
 	Link       string   `json:"link"` // "new", "skip" or the device ID written to
 	MatchBy    string   `json:"matchBy,omitempty"`
 	MatchName  string   `json:"matchName,omitempty"`
@@ -196,7 +197,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		pr := PlanRow{Line: row.Line, ID: row.ID, Unit: row.Unit, Label: row.Label, Name: strings.TrimSpace(row.Values["name"]), Candidates: []Cand{}, Cells: []Cell{}, Errors: []string{}}
 		if row.Excluded != "" {
 			pr.Status, pr.Link, pr.Note, pr.Exclusion = "skip", "skip", row.Excluded, row.Exclusion
-			pr.Host = strings.TrimSpace(row.Values["host"])
+			pr.Host, pr.Site = strings.TrimSpace(row.Values["host"]), strings.TrimSpace(row.Values["site"])
 			p.Rows = append(p.Rows, pr)
 			continue
 		}
@@ -214,7 +215,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		for _, e := range errs {
 			fr.errs[e.Col] = e.Msg
 		}
-		pr.Name, pr.Host = dev.Name, dev.Host
+		pr.Name, pr.Host, pr.Site = dev.Name, dev.Host, dev.Site
 		p.Rows = append(p.Rows, pr)
 		fr.pr = &p.Rows[len(p.Rows)-1]
 		rows = append(rows, fr)
@@ -542,7 +543,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	if err := inv.ValidateIn(&d); err != nil {
 		pr.Errors = append(pr.Errors, err.Error())
 	}
-	pr.Name, pr.Host = d.Name, d.Host
+	pr.Name, pr.Host, pr.Site = d.Name, d.Host, d.Site
 	switch {
 	case asked || pr.MatchBy == "ip":
 		pr.Status = "ask"
