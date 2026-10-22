@@ -55,7 +55,7 @@ function liRenderList(root) {
   const nFields = r => (r.fields || []).filter(f => f.source || f.default).length;
   const visible = listViewApply(LV, rules, r => [r.name, r.sampleName || ""],
     (r, k) => k === "fields" ? nFields(r) : k === "exclude" ? (r.exclude || []).length : k === "lastUsed" ? (r.lastUsed || "") : r.name);
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("一覧の取り込み"))}</div>
         <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}<br>
@@ -88,7 +88,7 @@ function liRenderList(root) {
               <button class="btn sm" data-rexp="${esc(r.id)}" data-tip="${esc(t("export\\import-rules\\ に書き出します。パスワード欄の既定値・置き換えの値は含めません"))}">${esc(t("書き出し"))}</button>
               <button class="btn sm act-del" data-rdel="${esc(r.id)}">${esc(t("削除"))}</button>
             </div></td></tr>`).join("")}</tbody></table>`}
-    </div>`;
+    </div>`);
   listViewWire(LV, root, renderListImport, focus);
   wireColResize(root);
   if (!listViewActive(LV)) wireRowReorder(root.querySelector("#li-rbody"), async order => {

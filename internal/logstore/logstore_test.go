@@ -293,3 +293,68 @@ func TestScheduleToken(t *testing.T) {
 		t.Error("bad file name accepted")
 	}
 }
+
+// A log folder Windows cannot make is refused before trying, with the
+// reason in Japanese (the frontend translates it) — not Windows' English
+// error text, and not a folder made under another name ("logs." → "logs").
+func TestRootNameProblem(t *testing.T) {
+	for _, tc := range []struct{ root, want string }{
+		{`C:\lab\a<b`, "使えない文字 <"},
+		{`C:\lab\a>b|c`, "使えない文字 > |"},
+		{`lab\what?`, "使えない文字 ?"},
+		{`lab\x*`, "使えない文字 *"},
+		{`lab\q"q`, `使えない文字 "`},
+		{`C:\lab\a:b`, "使えない文字 :"},
+		{"lab\\a\tb", "制御文字"},
+		{"lab\\a\nb", "制御文字"},
+		{`C:\lab\CON`, "予約名"},
+		{`lab\nul.txt`, "予約名"},
+		{`lab/com1`, "予約名"},
+		{`lab\LPT9\logs`, "予約名"},
+		{`lab\aux .log`, "予約名"},
+		{`C:\lab\logs.`, "末尾が空白やピリオド"},
+		{`C:\lab\logs \x`, "末尾が空白やピリオド"},
+		{`\\lab-nas`, "共有フォルダ"},
+	} {
+		got := RootNameProblem(tc.root)
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("RootNameProblem(%q) = %q, want it to say %q", tc.root, got, tc.want)
+		}
+	}
+	for _, ok := range []string{
+		"logs", `C:\lab\logs`, `D:/lab/logs/2026`, `\\lab-nas\share\ops logs`, `..\logs`, `.\logs`,
+		`lab.logs`, `C:\lab\com`, `C:\lab\console`, `C:\lab\com10`, `C:\lab\事前ログ`, `"C:\lab\logs"`, `C:logs`,
+	} {
+		if got := RootNameProblem(ok); got != "" {
+			t.Errorf("RootNameProblem(%q) = %q, want none", ok, got)
+		}
+	}
+}
+
+func TestCheckRootRefusesBadNamesInJapanese(t *testing.T) {
+	base := t.TempDir()
+	// (A space at the very end is trimmed as typed — CleanRoot — so it is
+	// tested inside the path.)
+	for _, name := range []string{"a<b", "CON", "logs.", `logs \x`, "a\tb"} {
+		root := filepath.Join(base, name)
+		err := CheckRoot(root)
+		if err == nil {
+			t.Errorf("CheckRoot(%q) accepted", root)
+			continue
+		}
+		msg := err.Error()
+		if !strings.HasPrefix(msg, "ログの保存先フォルダ「") || !strings.Contains(msg, "を作れません: ") {
+			t.Errorf("CheckRoot(%q) = %q, want the Japanese form", root, msg)
+		}
+		if strings.Contains(msg, "The ") || strings.Contains(msg, "\t") {
+			t.Errorf("CheckRoot(%q) = %q: Windows' text or a raw control character", root, msg)
+		}
+	}
+	// Nothing was made for a refused name ("logs." would have become "logs").
+	if _, err := os.Stat(filepath.Join(base, "logs")); err == nil {
+		t.Error("a folder was made for a refused name")
+	}
+	if err := CheckRoot(filepath.Join(base, "ops logs")); err != nil {
+		t.Errorf("usable folder refused: %v", err)
+	}
+}

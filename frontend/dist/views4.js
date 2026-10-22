@@ -164,7 +164,7 @@ function renderSchedulesView() {
       <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
       <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join(t("　"))}</div></td>
     </tr>`).join("");
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("予約"))}</div>
         <div class="page-sub">${esc(t("決まった時刻に自動で実行して、ログを取ります"))}</div></div>
@@ -203,7 +203,7 @@ function renderSchedulesView() {
       ${!log.length ? `<div class="empty">${esc(t("まだ記録はありません"))}</div>`
         : !shownLog.length ? `<div class="empty">${esc(t("絞り込みに一致する記録がありません"))}</div>`
         : `<table class="fixed" data-colw="schedlog"><thead><tr>${listViewTh(LG, "due", t("予定日時"), "width:170px")}${listViewTh(LG, "schedule", t("予約"), "width:200px")}${listViewTh(LG, "kind", t("結果"), "width:90px")}${listViewTh(LG, "result", t("成功 / 失敗"), "width:120px")}<th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody>${logRows}</tbody></table>`}
-    </div>`}`;
+    </div>`}`);
 
   listViewWire(LV, root, renderSchedulesView, focus);
   listViewWire(LG, root, renderSchedulesView, focus);

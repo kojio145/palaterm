@@ -26,7 +26,7 @@ function renderCommands() {
       </div></td>
     </tr>`).join("");
 
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("コマンドセット一覧"))}</div>
         <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書き出し（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
@@ -42,7 +42,7 @@ function renderCommands() {
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
         : `<table class="fixed" data-colw="commands"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:260px")}${listViewTh(LV, "count", t("コマンド数"), "width:120px")}<th>${esc(t("プレビュー"))}</th><th style="width:200px"></th></tr></thead>
            <tbody id="cs-body">${rows}</tbody></table>`}
-    </div>`;
+    </div>`);
   listViewWire(LV, root, renderCommands, focus);
   wireColResize(root);
 
@@ -550,29 +550,21 @@ function renderRun() {
            <th>${esc(t("メッセージ"))}</th><th style="width:${LANG === "ja" ? 220 : 240}px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
   // A detached element loses its scroll offset, so the old panel stays in
-  // the DOM: the nodes around it and its children are swapped instead.
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  const newPanel = tpl.content.querySelector(".panel.scrollx");
-  if (oldPanel && newPanel && oldPanel.parentNode === root && newPanel.parentNode === tpl.content && oldPanel.dataset.view === viewKey) {
-    [...root.childNodes].forEach(n => { if (n !== oldPanel) n.remove(); });
-    const nodes = [...tpl.content.childNodes];
-    const at = nodes.indexOf(newPanel);
-    oldPanel.before(...nodes.slice(0, at));
-    oldPanel.after(...nodes.slice(at + 1));
-    oldPanel.replaceChildren(...newPanel.childNodes);
-  } else {
-    if (newPanel) newPanel.dataset.view = viewKey;
-    root.replaceChildren(tpl.content);
-  }
+  // the DOM (only its contents swapped), and the filter box being typed in
+  // stays as it is (see patchKeeping): the nodes around them are drawn anew.
+  const keepPanel = oldPanel && oldPanel.dataset.view === viewKey
+    ? { o: oldPanel, find: f => f.querySelector(".panel.scrollx"), inner: true } : null;
+  patchKeeping(root, html.replace('<div class="panel scrollx">', `<div class="panel scrollx" data-view="${esc(viewKey)}">`),
+    [keepPanel, keepFocusedBox(root, "run-filter")]);
 
-  // Filter / sort wiring. The text box re-renders on every keystroke and the
-  // focus is put back afterwards (see focusId above).
+  // Filter / sort wiring. The text box re-renders on every keystroke; a box
+  // kept across the redraw is wired already and keeps its caret.
   const fIn = document.getElementById("run-filter");
-  if (fIn) {
+  if (fIn && !fIn._lvWired) {
+    fIn._lvWired = true;
     wireFilterInput(fIn, () => { runFilter.text = fIn.value; renderRun(); }, val => { runFilter.text = val; });
-    if (focusId === "run-filter") { fIn.focus(); restoreBoxSelection(fIn, focusSel); }
   }
+  if (fIn && focusId === "run-filter" && document.activeElement !== fIn) { fIn.focus(); restoreBoxSelection(fIn, focusSel); }
   const fSite = document.getElementById("run-filter-site");
   if (fSite) fSite.onchange = () => { runFilter.site = fSite.value; renderRun(); };
   const fSt = document.getElementById("run-filter-status");
@@ -1551,7 +1543,7 @@ function renderOSTypes() {
   const visible = listViewApply(LV, profiles,
     p => [p.name, p.key, p.prompt],
     (p, k) => k === "login" ? (p.login || []).length : p[k]);
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("OSタイプ設定"))}</div>
         <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読み込みで戻せます。書き出しは「機器」タブの一式書き出しにまとまっています"))}</div></div>
@@ -1576,7 +1568,7 @@ function renderOSTypes() {
             <button class="btn sm act-copy" data-pcopy="${esc(p.key)}">${esc(t("複製"))}</button>
             <button class="btn sm act-del" data-pdel="${esc(p.key)}">${esc(t("削除"))}</button>
           </div></td></tr>`).join("")}</tbody></table>`}
-    </div>`;
+    </div>`);
   listViewWire(LV, root, renderOSTypes, focus);
   wireColResize(root);
   if (!listViewActive(LV)) wireRowReorder(root.querySelector("#prof-body"), async order => {

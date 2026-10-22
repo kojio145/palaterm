@@ -19,7 +19,7 @@ async function bootViewerWindow() {
       <button class="btn sm" id="lv-reload">${esc(t("再読み込み"))}</button>
       <button class="btn sm" id="lv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべてのログ表示窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="lv-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
-      <button class="btn sm" id="lv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="lv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
       <button class="btn sm" id="lv-find" data-tip="${esc(t("検索（Ctrl+F）"))}">${esc(t("検索"))}</button>
       <button class="btn sm" id="lv-copy">${esc(t("全文コピー"))}</button>
       <button class="btn sm" id="lv-folder" data-tip="${esc(t("このログがあるフォルダを開きます"))}">${esc(t("フォルダを開く"))}</button>
@@ -144,7 +144,7 @@ async function bootWatchWindow() {
       <span id="wv-state" class="pill" style="font-size:11px"></span>
       <button class="btn sm" id="wv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての画面表示窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="wv-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
-      <button class="btn sm" id="wv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="wv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
       <button class="btn sm" id="wv-log" data-tip="${esc(t("同じログを文字で開きます（検索・全文コピー）"))}">${esc(t("ログ表示"))}</button>
     </div>
     <div style="padding:2px 12px;background:var(--bg);color:#8b97a8;font-size:11px;border-bottom:1px solid var(--border)">${esc(t("表示のみ（キー入力は機器に送りません）。操作するときは本体の「接続」から別に接続してください"))}</div>

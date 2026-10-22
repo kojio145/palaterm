@@ -22,7 +22,7 @@ async function bootDiffWindow() {
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-only" style="width:auto"> ${esc(t("差分の周辺だけ表示"))}</label>
       <button class="btn sm" id="dw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての差分窓に反映）"))}">${esc(t("色"))}</button>
       <button class="btn sm" id="dw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
-      <button class="btn sm" id="dw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="dw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
       <button class="btn sm" id="dw-find" data-tip="${esc(t("検索（Ctrl+F）"))}">${esc(t("検索"))}</button>
     </div>
     <div id="dw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid var(--border);font-size:12px">

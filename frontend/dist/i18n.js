@@ -2207,6 +2207,13 @@ Object.assign(I18N_EN, {
 I18N_EN_PATTERNS.push(
   [/^ログの保存先フォルダ「(.+)」を作れません: /, 'Cannot create the log folder "$1": '],
   [/^ログの保存先フォルダ「(.+)」に書き込めません: /, 'Cannot write to the log folder "$1": '],
+  // Why a log folder name cannot be made (logstore.RootNameProblem), after
+  // the "Cannot create the log folder" above.
+  [/「(.+?)」に Windows のフォルダ名に使えない文字 (.+?) があります（< > : " \| \? \* は使えません）$/, '"$1" has characters Windows does not allow in folder names: $2 (< > : " | ? * cannot be used)'],
+  [/制御文字（改行・タブなど）が含まれています$/, "it contains a control character (a line break, a tab...)"],
+  [/「(.+?)」のように末尾が空白やピリオドの名前は Windows では作れません$/, 'Windows cannot make a name that ends in a space or a period, like "$1"'],
+  [/「(.+?)」は Windows の予約名（CON・PRN・AUX・NUL・COM1〜9・LPT1〜9）のため使えません$/, '"$1" is a name Windows reserves (CON, PRN, AUX, NUL, COM1-9, LPT1-9)'],
+  [/共有フォルダは \\\\サーバー名\\共有名 の形で指定してください$/, "give a shared folder as \\\\server\\share"],
   [/内部エラーが発生しました（(.+)）。data\\error\.log に記録しました/, "Internal error ($1). Recorded in data\\error.log"],
 );
 

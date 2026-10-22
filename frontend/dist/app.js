@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.10";
+const APP_VERSION = "1.9.11";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -111,6 +111,41 @@ document.addEventListener("keydown", e => {
   const btn = [...document.querySelectorAll("#modal .modal-actions button")]
     .find(b => !b.classList.contains("primary") && !b.classList.contains("danger") && !b.disabled);
   if (btn) { e.preventDefault(); btn.click(); }
+});
+
+// Tab / Shift+Tab go round inside the open dialog — or the small window on
+// top of it — instead of walking out onto the page behind (which the
+// overlay hides, so the focus seemed lost). A calendar popped out of a
+// date picker keeps its own keys.
+function tabStops(box) {
+  return [...box.querySelectorAll('a[href], button, input, select, textarea, summary, [tabindex], [contenteditable="true"]')]
+    .filter(el => !el.disabled && el.tabIndex >= 0 && el.type !== "hidden" && !el.closest("[inert]")
+      && el.getClientRects().length && getComputedStyle(el).visibility !== "hidden");
+}
+document.addEventListener("keydown", e => {
+  if (e.key !== "Tab" || e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return;
+  const subs = [...document.querySelectorAll(".sub-overlay:not(.hidden)")];
+  const ov = $("#modal-overlay");
+  const box = subs.length ? subs[subs.length - 1] : ov && !ov.classList.contains("hidden") ? $("#modal") : null;
+  if (!box) return;
+  const ae = document.activeElement;
+  if (ae && ae.closest && ae.closest(".dp-pop")) return;
+  const stops = tabStops(box);
+  if (!stops.length) { e.preventDefault(); return; }
+  const first = stops[0], last = stops[stops.length - 1];
+  const go = el => { e.preventDefault(); el.focus(); };
+  if (!ae || !box.contains(ae)) { go(e.shiftKey ? last : first); return; }
+  if (stops.includes(ae)) {
+    if (e.shiftKey && ae === first) go(last);
+    else if (!e.shiftKey && ae === last) go(first);
+    return;
+  }
+  // The focus sits on something inside that is not a stop itself (the
+  // dialog body after a click): go round when no stop lies that way.
+  const after = stops.some(el => ae.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const before = stops.some(el => ae.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING);
+  if (!e.shiftKey && !after) go(first);
+  else if (e.shiftKey && !before) go(last);
 });
 
 // subConfirm asks a yes/no question in a small window over the open dialog
@@ -284,12 +319,102 @@ function wireFilterInput(el, onChange, onText) {
     if (timer) { clearTimeout(timer); timer = null; if (el.isConnected) setTimeout(onChange, 0); }
   });
 }
+// ---- Redrawing a tab around the filter box ----
+// A list tab is drawn from one HTML string; setting it with innerHTML made
+// a new filter box on every keystroke, and putting the caret and selection
+// back on the new box lost a key now and then at very fast typing. Instead
+// the nodes in keep stay where they are: the old node and each of its
+// ancestors are kept (their attributes brought up to date), and everything
+// around them is replaced with the new HTML. keep lists {o, n, inner}: o is
+// the node in root, n its counterpart in html; inner takes n's children
+// into o (a panel that keeps its scroll offset) instead of leaving o's own
+// (a text box, kept as it is with what is being typed). A kept node is
+// never detached, so it keeps the focus, the selection and an IME
+// composition. When the shapes differ, the whole of root is replaced.
+function syncAttrs(o, n) {
+  [...o.attributes].forEach(a => { if (!n.hasAttribute(a.name)) o.removeAttribute(a.name); });
+  [...n.attributes].forEach(a => { if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value); });
+}
+// One level of the walk: which new child each kept old child stands for,
+// and the pairs below it. null when the shapes differ (a kept node at a
+// different depth or tag, or kept children in another order — moving one
+// would detach it).
+function keepLevel(oParent, nParent, pairs) {
+  const childOf = (anc, x) => { while (x && x.parentNode !== anc) x = x.parentNode; return x; };
+  const map = new Map(), sub = new Map();
+  for (const p of pairs) {
+    const nc = childOf(nParent, p.n), oc = childOf(oParent, p.o);
+    if (!nc || !oc || nc.nodeName !== oc.nodeName || (nc === p.n) !== (oc === p.o)) return null;
+    if (map.has(nc) ? map.get(nc) !== oc : [...map.values()].includes(oc)) return null;
+    map.set(nc, oc);
+    sub.set(nc, (sub.get(nc) || []).concat(p));
+  }
+  const order = [...nParent.childNodes].filter(c => map.has(c)).map(c => map.get(c));
+  const oldOrder = [...oParent.childNodes].filter(c => order.includes(c));
+  if (order.some((c, i) => c !== oldOrder[i])) return null;
+  return { map, sub, order };
+}
+function keepCheck(oParent, nParent, pairs) {
+  const lv = keepLevel(oParent, nParent, pairs);
+  if (!lv) return false;
+  for (const [nc, oc] of lv.map) {
+    const ps = lv.sub.get(nc);
+    if (ps.some(p => p.o === oc) ? ps.length !== 1 : !keepCheck(oc, nc, ps)) return false;
+  }
+  return true;
+}
+function keepApply(oParent, nParent, pairs) {
+  const { map, sub, order } = keepLevel(oParent, nParent, pairs);
+  [...oParent.childNodes].forEach(c => { if (!order.includes(c)) c.remove(); });
+  let k = 0;
+  for (const nc of [...nParent.childNodes]) {
+    if (map.has(nc)) k++;
+    else oParent.insertBefore(nc, order[k] || null);
+  }
+  for (const [nc, oc] of map) {
+    const ps = sub.get(nc);
+    syncAttrs(oc, nc);
+    if (ps[0].o !== oc) keepApply(oc, nc, ps);
+    else if (ps[0].inner) oc.replaceChildren(...nc.childNodes);
+    // A kept text box takes the new text only when the state was changed
+    // from elsewhere (the clear button): never while an IME is composing,
+    // nor when it shows that text already (the user is typing it).
+    else if (oc.tagName === "INPUT" && !imeComposing && oc.value !== nc.value) oc.value = nc.value;
+  }
+}
+// keep: [{o, find, inner}] — o is the node in root, find(fragment) its
+// counterpart in the new HTML.
+function patchKeeping(root, html, keep) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const pairs = (keep || []).filter(p => p && p.o && p.o !== root && root.contains(p.o))
+    .map(p => ({ o: p.o, n: p.find(tpl.content), inner: !!p.inner })).filter(p => p.n);
+  if (pairs.length && keepCheck(root, tpl.content, pairs)) keepApply(root, tpl.content, pairs);
+  else root.replaceChildren(tpl.content);
+}
+// The filter box being typed in, as a keep entry (none when the focus is
+// elsewhere: then the box is drawn anew like the rest).
+function keepFocusedBox(root, prefix) {
+  const el = document.activeElement;
+  if (!el || el.tagName !== "INPUT" || !el.id || !el.id.startsWith(prefix) || !root.contains(el)) return null;
+  return { o: el, find: f => f.querySelector("#" + CSS.escape(el.id)) };
+}
+// Draw a list tab: the filter box being typed in stays (see patchKeeping).
+function renderListTab(root, html) {
+  patchKeeping(root, html, [keepFocusedBox(root, "lv-text-")]);
+}
 function listViewWire(key, root, rerender, focus) {
   const v = listView(key);
   const txt = root.querySelector(`#lv-text-${CSS.escape(key)}`);
   if (txt) {
-    wireFilterInput(txt, () => { v.text = txt.value; rerender(); }, val => { v.text = val; });
-    if (focus && focus.id === txt.id) { txt.focus(); restoreBoxSelection(txt, focus.sel); }
+    // A box kept across the redraw is wired already: only the redraw to
+    // call is brought up to date.
+    txt._lvRerender = rerender;
+    if (!txt._lvWired) {
+      txt._lvWired = true;
+      wireFilterInput(txt, () => { v.text = txt.value; txt._lvRerender(); }, val => { v.text = val; });
+    }
+    if (focus && focus.id === txt.id && document.activeElement !== txt) { txt.focus(); restoreBoxSelection(txt, focus.sel); }
   }
   root.querySelectorAll(`.lv-sel[data-lv="${CSS.escape(key)}"]`).forEach(s => s.onchange = () => { v.sel[s.dataset.sel] = s.value; rerender(); });
   root.querySelectorAll(`.lv-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.text = ""; v.sel = {}; rerender(); });

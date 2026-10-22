@@ -27,7 +27,7 @@ async function bootPasteWindow() {
       <div style="color:var(--text);font-size:15px;font-weight:600">${esc(t("貼り付けの確認"))}</div>
       <div class="muted" style="font-size:12px;flex:1">${esc(req.device || "")}</div>
       <button class="btn sm" id="pw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
-      <button class="btn sm" id="pw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="pw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
     </div>
     <div id="pw-info" class="muted" style="font-size:12px;margin-bottom:8px"></div>
     ${req.bcast > 0 ? `<div id="pw-bcast" style="font-size:13px;font-weight:600;margin-bottom:8px;padding:6px 10px;border:1px solid #f97316;border-radius:8px;background:#431407;color:#fed7aa">${esc(t("同時入力中: この内容はほかの {n} 台の窓にも送られます", { n: req.bcast }))}</div>` : ""}
@@ -114,7 +114,7 @@ async function bootTerminalWindow() {
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
         <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての端末窓に反映）"))}">${esc(t("色"))}</button>
         <button class="btn sm" id="tw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
-        <button class="btn sm" id="tw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+        <button class="btn sm" id="tw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
         <button class="btn sm" id="tw-find" data-tip="${esc(t("検索（Ctrl+Shift+F。Ctrl+F は機器へ送ります）"))}">${esc(t("検索"))}</button>
         <button class="btn sm" id="tw-paste" data-tip="${esc(t("貼り付け（Alt+V）"))}">${esc(t("貼り付け…"))}</button>
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
@@ -199,7 +199,7 @@ async function bootTerminalWindow() {
   wirePasswordToggles(document.getElementById("tw-pw-field"));
   wirePasswordToggles(document.getElementById("tw-lock-field"));
 
-  // Font size: remembered per machine (localStorage), changed with the A−/A＋
+  // Font size: remembered per machine (localStorage), changed with the A−/A+
   // buttons, Ctrl+wheel, Ctrl+plus/minus; Ctrl+0 restores the default.
   const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
   let fontSize = FONT_DEF;

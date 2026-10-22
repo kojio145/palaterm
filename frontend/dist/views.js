@@ -53,7 +53,7 @@ function renderGroupChooser() {
   // Devices without a group (a deleted group leaves them there) get a card
   // of their own; nothing else in this tab would reach them.
   const ungroupedN = (INV.devices || []).filter(d => !d.group).length;
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("機器グループを選択"))}</div>
         <div class="page-sub">${esc(t("グループを選ぶか、新規に作成してください。グループ作成後にそのグループへ機器を追加します"))}</div></div>
@@ -98,7 +98,7 @@ function renderGroupChooser() {
     ${!devs.length ? `<div class="muted" style="font-size:13px;line-height:1.9;margin-top:14px;max-width:720px">
       <b>${esc(t("はじめかた"))}</b><br>
       ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンドセットタブにあります"))}
-    </div>` : ""}`;
+    </div>` : ""}`);
   listViewWire(LV, root, renderGroupChooser, focus);
   const gs = document.getElementById("grp-sort");
   if (gs) gs.onchange = () => {
@@ -353,7 +353,7 @@ function renderDeviceList() {
   [...devSel].forEach(id => { if (!allIds.has(id)) devSel.delete(id); });
   const selCount = devs.filter(d => devSel.has(d.id)).length;
   const scopeLabel = scopeGroup ? esc(t("グループ「{g}」", { g: scopeGroup.name })) : esc(ungroupedView ? t("（グループ未設定）") : t("全機器"));
-  root.innerHTML = `
+  renderListTab(root, `
     <div class="page-head">
       <div class="row-inline" style="gap:12px">
         <button class="btn sm" id="back-choose">${esc(t("← 対象選択"))}</button>
@@ -384,7 +384,7 @@ function renderDeviceList() {
             ${listViewTh(LV, "name", t("機器名"), "width:130px")}${allView ? listViewTh(LV, "group", t("グループ"), "width:110px") : ""}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
             ${listViewTh(LV, "os", "OS", "width:112px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:112px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
-    </div>`;
+    </div>`);
   listViewWire(LV, root, renderDeviceList, focus);
   if (cellFocus) {
     const el = root.querySelector(`.${cellFocus.cls}[data-id="${CSS.escape(cellFocus.id)}"]`);

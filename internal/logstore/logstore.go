@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -307,6 +308,12 @@ func CleanRoot(root string) string {
 // folder that fails here, rather than every later run failing on it.
 func CheckRoot(root string) error {
 	dir := ResolveRoot(root)
+	// A name Windows cannot make is refused before trying, with the reason
+	// in words: MkdirAll would answer in Windows' own English, or quietly
+	// make another folder ("logs." becomes "logs").
+	if why := RootNameProblem(root); why != "" {
+		return fmt.Errorf("ログの保存先フォルダ「%s」を作れません: %s", printable(dir), why)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("ログの保存先フォルダ「%s」を作れません: %w", dir, err)
 	}
@@ -318,6 +325,64 @@ func CheckRoot(root string) error {
 	f.Close()
 	_ = os.Remove(name)
 	return nil
+}
+
+// RootNameProblem says why Windows cannot make a folder of the log root as
+// typed ("" when every part of it is a usable name): a character Windows
+// refuses (< > : " | ? *, a colon after the drive), a control character,
+// a reserved device name (CON, PRN, AUX, NUL, COM1–9, LPT1–9, with or
+// without an extension), or a part ending in a space or a period. Both
+// \ and / separate the parts; the drive or \\server\share in front is left
+// as it is.
+func RootNameProblem(root string) string {
+	root = CleanRoot(root)
+	rest := root
+	// The drive (C:) or share (\\server\share) in front.
+	if len(rest) >= 2 && rest[1] == ':' && (rest[0]|0x20) >= 'a' && (rest[0]|0x20) <= 'z' {
+		rest = rest[2:]
+	} else if strings.HasPrefix(rest, `\\`) || strings.HasPrefix(rest, `//`) {
+		parts := strings.FieldsFunc(rest, func(r rune) bool { return r == '\\' || r == '/' })
+		if len(parts) < 2 {
+			return "共有フォルダは \\\\サーバー名\\共有名 の形で指定してください"
+		}
+		rest = strings.Join(parts[2:], `\`)
+	}
+	for _, part := range strings.FieldsFunc(rest, func(r rune) bool { return r == '\\' || r == '/' }) {
+		if part == "." || part == ".." {
+			continue
+		}
+		if strings.ContainsFunc(part, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return "制御文字（改行・タブなど）が含まれています"
+		}
+		var bad []string
+		for _, r := range part {
+			if strings.ContainsRune(`<>:"|?*`, r) && !slices.Contains(bad, string(r)) {
+				bad = append(bad, string(r))
+			}
+		}
+		if len(bad) > 0 {
+			return fmt.Sprintf("「%s」に Windows のフォルダ名に使えない文字 %s があります（< > : \" | ? * は使えません）", part, strings.Join(bad, " "))
+		}
+		if strings.HasSuffix(part, " ") || strings.HasSuffix(part, ".") {
+			return fmt.Sprintf("「%s」のように末尾が空白やピリオドの名前は Windows では作れません", part)
+		}
+		stem, _, _ := strings.Cut(part, ".")
+		if reservedName(strings.TrimRight(stem, " ")) {
+			return fmt.Sprintf("「%s」は Windows の予約名（CON・PRN・AUX・NUL・COM1〜9・LPT1〜9）のため使えません", part)
+		}
+	}
+	return ""
+}
+
+// printable shows a path in a message with its control characters as □
+// (a line break would split the message).
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return '□'
+		}
+		return r
+	}, s)
 }
 
 // ResolveRoot makes a relative log root absolute against the executable's
