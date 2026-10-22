@@ -105,6 +105,9 @@ type PlanRow struct {
 	Errors     []string `json:"errors"`
 	// Exclusion is the condition that left the row out (the page words it).
 	Exclusion *model.ImportCond `json:"exclusion,omitempty"`
+	// RuleSkip: the rule leaves the row out (an exclusion or no name) —
+	// nothing to choose for it, unlike a row set to skip in the preview.
+	RuleSkip bool `json:"ruleSkip,omitempty"`
 	// Changes: importing the row changes a device (a new one, or a value
 	// taken from the file); a matched row without changes only records
 	// the import.
@@ -196,7 +199,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		row := &conv.Rows[i]
 		pr := PlanRow{Line: row.Line, ID: row.ID, Unit: row.Unit, Label: row.Label, Name: strings.TrimSpace(row.Values["name"]), Candidates: []Cand{}, Cells: []Cell{}, Errors: []string{}}
 		if row.Excluded != "" {
-			pr.Status, pr.Link, pr.Note, pr.Exclusion = "skip", "skip", row.Excluded, row.Exclusion
+			pr.Status, pr.Link, pr.Note, pr.Exclusion, pr.RuleSkip = "skip", "skip", row.Excluded, row.Exclusion, true
 			pr.Host, pr.Site = strings.TrimSpace(row.Values["host"]), strings.TrimSpace(row.Values["site"])
 			p.Rows = append(p.Rows, pr)
 			continue

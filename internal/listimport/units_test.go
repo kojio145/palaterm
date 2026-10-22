@@ -183,3 +183,25 @@ func TestUnitValidationAndExport(t *testing.T) {
 		t.Errorf("round trip: %+v %v", got.Units, err)
 	}
 }
+
+// A row the rule leaves out is marked so (the preview tells it from a row
+// set to skip there); a row set to skip is not.
+func TestRuleSkipMarked(t *testing.T) {
+	r := pairRule()
+	r.Exclude = []model.ImportCond{{Target: "field", Key: "site", Op: "equals", Value: "支社"}}
+	tb, err := ReadTable(pairSheet(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv := Convert(tb, r, nil)
+	p := BuildPlan(&model.Inventory{}, conv, r, Options{Group: "g", Decisions: map[int]Decision{2: {Link: "skip"}}})
+	for _, pr := range p.Rows {
+		want := pr.Line == 4 // 支社: the exclusion
+		if pr.RuleSkip != want {
+			t.Errorf("row %s: RuleSkip %v, want %v (status %s)", RowLabel(pr.Line, pr.Unit, pr.Label), pr.RuleSkip, want, pr.Status)
+		}
+		if pr.ID == 2 && pr.Status != "skip" {
+			t.Errorf("row 2 set to skip: status %s", pr.Status)
+		}
+	}
+}

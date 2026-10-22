@@ -91,3 +91,16 @@ func TestLockForgetsTheList(t *testing.T) {
 		t.Errorf("read while locked: %v (kept %v)", err, bookCache.book != nil)
 	}
 }
+
+// sampleGrid cuts a wide sheet at 300 columns and says how wide it was.
+func TestSampleGridCols(t *testing.T) {
+	row := make([]string, 320)
+	g, cols := sampleGrid([][]string{row, row}, 1)
+	if len(g[0]) != 300 || cols != 320 {
+		t.Fatalf("grid %d columns, cols %d; want 300, 320", len(g[0]), cols)
+	}
+	g, cols = sampleGrid([][]string{make([]string, 255)}, 1)
+	if len(g[0]) != 255 || cols != 255 {
+		t.Fatalf("grid %d columns, cols %d; want 255, 255", len(g[0]), cols)
+	}
+}

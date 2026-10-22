@@ -335,6 +335,7 @@ type RuleTest struct {
 	Sheets   []string            `json:"sheets"`
 	Sheet    string              `json:"sheet"`
 	Grid     [][]string          `json:"grid"` // the sheet's top-left corner, merges filled per the rule
+	Cols     int                 `json:"cols"` // the columns those rows reach (more than the grid's when it is cut)
 	Headers  []listimport.Header `json:"headers"`
 	Rows     []RuleTestRow       `json:"rows"`
 	Total    int                 `json:"total"`    // value rows
@@ -360,7 +361,7 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 		return out, nil
 	}
 	out.Sheet = sh.Name
-	out.Grid = sampleGrid(listimport.FilledRows(sh, &r), r.HeaderRow)
+	out.Grid, out.Cols = sampleGrid(listimport.FilledRows(sh, &r), r.HeaderRow)
 	t, err := listimport.ReadTable(sh, &r)
 	if err != nil {
 		out.Error = err.Error()
@@ -399,15 +400,18 @@ func hasName(r *model.ImportRule) (model.ImportField, bool) {
 }
 
 // sampleGrid is the sheet's top-left corner for the editor's picture of
-// it: enough rows to show the header and a few values, long cells cut.
-func sampleGrid(rows [][]string, headerRow int) [][]string {
+// it: enough rows to show the header and a few values, long cells cut —
+// and how many columns those rows reach (the editor says when it cut some).
+func sampleGrid(rows [][]string, headerRow int) ([][]string, int) {
 	nr := max(12, headerRow+6)
 	nr = min(nr, 40, len(rows))
 	nc := 0
 	for r := 0; r < nr; r++ {
 		nc = max(nc, len(rows[r]))
 	}
-	// IV (256) is as wide as an .xls goes: a list reaching IU shows whole.
+	// 300 columns: past IV (256, as wide as an .xls goes), so an .xls shows
+	// whole; a wider xlsx or CSV is cut and the editor says so.
+	cols := nc
 	nc = min(nc, 300)
 	out := make([][]string, nr)
 	for r := 0; r < nr; r++ {
@@ -420,7 +424,7 @@ func sampleGrid(rows [][]string, headerRow int) [][]string {
 			out[r][c] = v
 		}
 	}
-	return out
+	return out, cols
 }
 
 // TraceImportSteps runs steps over a sample value, keeping each step's

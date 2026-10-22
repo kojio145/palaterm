@@ -2071,4 +2071,6 @@ Object.assign(I18N_EN, {
   "機種の値から、この PalaTerm にあるコマンドセットのうち、名前がメーカー・種別（Cisco と L2 など）に合うものが 1 つだけのときに選びます。設定変更・保存のコマンドを含むコマンドセットは選びません。取り込み直しでは、既存の機器のコマンドセットは変えません": "Chooses one of this PalaTerm's command sets when exactly one is named for the model's maker and kind (Cisco and L2, say). Sets with commands that change or save configuration are never chosen. Re-imports leave an existing device's command set as it is",
   "推測（既存の機器は変えません）": "guess (existing devices keep theirs)",
   "推測": "guess",
+  "除外": "Excluded",
+  "先頭 {n} 列まで表示しています（ほか {m} 列。下の紐付けではすべての列を選べます）": "Showing the first {n} columns ({m} more; the field table below offers every column)",
 });

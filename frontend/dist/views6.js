@@ -216,6 +216,8 @@ function liShowValue(key, v) {
 }
 
 function liRenderEdit(root) {
+  const sb = root.querySelector(".li-sheetbox");
+  const gridScroll = sb ? [sb.scrollLeft, sb.scrollTop] : null;
   const r = LI.rule;
   const test = LI.test;
   const headers = (test && test.headers) || [];
@@ -319,7 +321,7 @@ function liRenderEdit(root) {
           <option value="fill" ${r.mergeOnlyFirst ? "" : "selected"}>${esc(t("すべてのセルで同じ値"))}</option>
           <option value="first" ${r.mergeOnlyFirst ? "selected" : ""}>${esc(t("左上のセルだけ"))}</option></select></div>
       </div>
-      <div id="li-gridbox">${liGridHTML()}</div>
+      <div id="li-gridbox"></div>
       ${test && test.error ? `<div class="li-err">${esc(terr(test.error))}</div>` : ""}
       ${test && (test.warnings || []).length ? `<div class="li-warn">${test.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
     </div>
@@ -386,7 +388,19 @@ function liRenderEdit(root) {
     </div>
 
     <div id="li-resbox">${liResultsHTML()}</div>`;
+  liSetGrid(root.querySelector("#li-gridbox"), liGridHTML(), gridScroll);
   liWireEdit(root);
+}
+
+// liSetGrid puts the sample sheet in its box, where it was scrolled to (the
+// column being looked for stays in view across a redraw).
+function liSetGrid(box, html, scroll) {
+  const old = box.querySelector(".li-sheetbox");
+  const pos = scroll || (old ? [old.scrollLeft, old.scrollTop] : null);
+  box.innerHTML = html;
+  box._html = html;
+  const nb = box.querySelector(".li-sheetbox");
+  if (nb && pos) { nb.scrollLeft = pos[0]; nb.scrollTop = pos[1]; }
 }
 
 // The sample rows as the rule turns them (redrawn on every test).
@@ -437,8 +451,9 @@ function liGridHTML() {
     }
     html += `</tr>`;
   });
+  const cut = (test.cols || 0) > nc ? `<span class="li-warntxt">${esc(t("先頭 {n} 列まで表示しています（ほか {m} 列。下の紐付けではすべての列を選べます）", { n: nc, m: test.cols - nc }))}</span>` : "";
   return html + `</tbody></table></div>
-    <div class="li-legend"><span><i class="h"></i>${esc(t("見出しの行"))}</span><span><i class="v"></i>${esc(t("読み取る値"))}</span><span><i class="out"></i>${esc(t("表の外（読まない）"))}</span></div>`;
+    <div class="li-legend">${cut}<span><i class="h"></i>${esc(t("見出しの行"))}</span><span><i class="v"></i>${esc(t("読み取る値"))}</span><span><i class="out"></i>${esc(t("表の外（読まない）"))}</span></div>`;
 }
 function colLetter(n) { let s = ""; while (n > 0) { n--; s = String.fromCharCode(65 + n % 26) + s; n = Math.floor(n / 26); } return s; }
 
@@ -470,8 +485,14 @@ function liRefreshResults() {
     const k = td.dataset.res, fr = liFieldRule(k);
     td.innerHTML = sample && fr && (fr.source || fr.default) ? liShowValue(k, sample.values[k]) + ((sample.filled || []).includes(k) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") + liGuessNote(sample, k) + liFromNote(sample, k) : "";
   });
+  // The sample sheet (up to 40 × 300 cells) is rebuilt only when it shows
+  // something else — not at every key typed in a default or a step, which
+  // would also throw it back to column A.
   const box = root.querySelector("#li-gridbox");
-  if (box) box.innerHTML = liGridHTML();
+  if (box) {
+    const html = liGridHTML();
+    if (html !== box._html) liSetGrid(box, html);
+  }
   const rb = root.querySelector("#li-resbox");
   if (rb) rb.innerHTML = liResultsHTML();
   // Device 2's column follows what device 1 now gives (a default typed
@@ -811,7 +832,7 @@ async function liStartImport(path) {
     const last = rules.slice().sort((a, b) => String(b.lastUsed || "").localeCompare(String(a.lastUsed || "")))[0];
     const groups = (INV.deviceGroups || []).map(g => g.name);
     const same = groups.find(g => g === base);
-    LI.imp = { path, ruleId: (byFile || last || {}).id || "", group: same || base, newGroup: !same, decisions: {}, deleteIds: [], preview: null, error: "", filter: { skip: true } };
+    LI.imp = { path, ruleId: (byFile || last || {}).id || "", group: same || base, newGroup: !same, decisions: {}, deleteIds: [], preview: null, error: "", filter: { excl: true } };
     LI.view = "import";
     renderListImport();
     liPreview();
@@ -844,6 +865,9 @@ async function liPreview() {
 // being typed keeps its focus and caret, and a redraw waits for an IME
 // conversion in progress (it would cut it off).
 let liComposing = false, liRedrawLater = false;
+// liGroupTimer: the wait after the last key in the group name — one for
+// every redraw of the field, so a redraw never leaves an old one running.
+let liGroupTimer = null;
 function liRedrawImport() {
   if (LI.view !== "import" || !LI.imp) return;
   const root = document.getElementById("tab-import");
@@ -859,13 +883,20 @@ function liRedrawImport() {
 const LI_STATUS = {
   add: ["li-p-add", "追加"], upd: ["li-p-upd", "更新"], ask: ["li-p-ask", "要確認"],
   err: ["li-p-err", "取り込めない"], same: ["li-p-same", "変更なし"], skip: ["li-p-skip", "取り込まない"],
+  excl: ["li-p-skip", "除外"],
 };
 const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", guess: "推測（既存の機器は変えません）", new: "" };
 
-// liRuleSkipped: a row the rule leaves out (an exclusion, no name) — no
-// device to choose for it.
-function liRuleSkipped(row) {
-  return row.status === "skip" && !(row.candidates || []).length && (String(row.note || "").startsWith("除外条件") || row.note === "機器名が空です");
+// liRowStatus is the status a preview row is shown and filtered under: a
+// row the rule leaves out (an exclusion, no name) is 除外, apart from one
+// set to 取り込まない here.
+function liRowStatus(row) { return row.ruleSkip ? "excl" : row.status; }
+
+// liCellMarks: 既定 / 推測 after a preview row's value of a field.
+function liCellMarks(row, key) {
+  const c = (row.cells || []).find(x => x.key === key);
+  if (!c || !c.file) return "";
+  return (c.filled ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") + (c.guessed ? ` <span class="li-guess">${esc(t("推測"))}</span>` : "");
 }
 
 function liMatchNote(row) {
@@ -883,11 +914,10 @@ function liRenderImport(root) {
   const imp = LI.imp, pv = imp.preview, plan = pv && pv.plan;
   const rules = liRules();
   const groups = (INV.deviceGroups || []).map(g => g.name);
-  const counts = (plan && plan.counts) || {};
   const rows = plan ? plan.rows : [];
-  // Hiding 取り込まない hides the rows the rule leaves out: a row with
-  // candidates to pick from, or set to 取り込まない here, stays in view.
-  const visible = rows.filter(r => !imp.filter[r.status] || (r.status === "skip" && !liRuleSkipped(r)));
+  const counts = {};
+  rows.forEach(r => { const k = liRowStatus(r); counts[k] = (counts[k] || 0) + 1; });
+  const visible = rows.filter(r => !imp.filter[liRowStatus(r)]);
   const devs = plan ? plan.devices : [];
   const devByID = new Map(devs.map(d => [d.id, d]));
   // The device picker per row offers what matters for that row (the device
@@ -945,18 +975,18 @@ function liRenderImport(root) {
     ${imp.error ? `<div class="li-err">${esc(imp.error)}</div>` : ""}
     ${pv && (pv.warnings || []).length ? `<div class="li-warn">${pv.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
     ${pv && (pv.missing || []).length ? `<div class="li-warn">${esc(t("ファイルに無い列: {c}（その項目は既定値で埋めます）", { c: pv.missing.join("、") }))}</div>` : ""}
-    ${plan ? `<div class="panel">
+    ${plan ? `<div class="panel li-planbox">
       <div class="li-h" style="padding:12px 14px 0"><b>${esc(t("プレビュー（{n} 行）", { n: rows.length }))}</b>
         <div class="chips">${Object.keys(LI_STATUS).filter(k => counts[k]).map(k => `<button class="li-pill ${LI_STATUS[k][0]}" data-filt="${k}" aria-pressed="${imp.filter[k] ? "false" : "true"}">${esc(t(LI_STATUS[k][1]))} ${counts[k]}</button>`).join("")}</div></div>
       <div class="scrollx"><table class="li-prev"><thead><tr><th style="width:56px">${esc(t("行"))}</th><th style="width:110px">${esc(t("判定"))}</th>
         <th style="width:170px">${esc(t("機器名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:110px">${esc(t("拠点名"))}</th><th>${esc(t("内容・変更点"))}</th><th style="width:230px">${esc(t("どの機器に"))}</th></tr></thead><tbody>
         ${visible.length ? visible.map(row => {
-          const [cls, lbl] = LI_STATUS[row.status] || ["", row.status];
+          const [cls, lbl] = LI_STATUS[liRowStatus(row)] || ["", row.status];
           const diff = (row.cells || []).filter(c => c.state !== "same" && c.state !== "new");
-          const excluded = liRuleSkipped(row);
+          const excluded = row.ruleSkip;
           return `<tr class="li-r-${row.status}">
             <td class="muted">${row.unit > 1 ? `${row.line}-${row.unit}` : row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
-            <td class="mono"><div class="clip">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip">${esc(row.site || "")}</div></td>
+            <td class="mono"><div class="clip">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip">${esc(row.site || "")}${liCellMarks(row, "site")}</div></td>
             <td>${row.status === "add" ? `<div class="muted" style="font-size:12px">${summary(row)}</div>` : ""}
               ${diff.map(c => cellLine(row, c)).join("")}
               ${liMatchNote(row) ? `<div class="li-note">${esc(liMatchNote(row))}</div>` : ""}
@@ -997,22 +1027,20 @@ function liWireImport(root) {
   });
   // Typing the new group's name: the preview follows a moment after the
   // last key (not during an IME conversion), the field keeping its focus.
-  let gt;
   const gn = q("#li-gnew");
   liComposing = false; liRedrawLater = false;
   const typed = () => {
     if (!imp.newGroup) return;
     imp.group = gn.value;
-    clearTimeout(gt);
-    if (!liComposing) gt = setTimeout(again, 400);
+    clearTimeout(liGroupTimer);
+    if (!liComposing) liGroupTimer = setTimeout(again, 400);
   };
   gn.oninput = typed;
-  gn.addEventListener("compositionstart", () => { liComposing = true; clearTimeout(gt); });
-  gn.addEventListener("compositionend", () => {
-    liComposing = false;
-    typed();
-    if (liRedrawLater) { liRedrawLater = false; liRedrawImport(); }
-  });
+  gn.addEventListener("compositionstart", () => { liComposing = true; clearTimeout(liGroupTimer); });
+  // The redraw held back during the conversion comes with the next preview,
+  // a moment later: redrawn at once, a click that ended the conversion (on
+  // 取り込む, say) would land on a button already replaced.
+  gn.addEventListener("compositionend", () => { liComposing = false; liRedrawLater = false; typed(); });
   q("#li-gold").onchange = e => { if (!imp.newGroup) { imp.group = e.target.value; imp.decisions = {}; imp.deleteIds = []; again(); } };
   root.querySelectorAll("[data-filt]").forEach(b => b.onclick = () => { imp.filter[b.dataset.filt] = !imp.filter[b.dataset.filt]; renderListImport(); });
   root.querySelectorAll("[data-link]").forEach(sel => sel.onchange = async () => {

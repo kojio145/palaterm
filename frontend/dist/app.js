@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.6";
+const APP_VERSION = "1.9.7";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -269,9 +269,13 @@ function saveColWidths(key, w) {
 // the panel (not the page) scrolls: the title, toolbar and filter row above
 // it stay where they are, and the sticky header row stays in view. Called
 // after each render (from wireColResize) and on window resize.
+// The panel's top is measured as if the page were not scrolled: a render
+// while .content is scrolled (a long page left inside its tab) would else
+// give a cap taller than the window.
 function fitPanels(root) {
   (root || document).querySelectorAll(".panel.scrollx").forEach(p => {
-    const top = p.getBoundingClientRect().top;
+    const sc = p.closest(".content");
+    const top = p.getBoundingClientRect().top + (sc ? sc.scrollTop : 0);
     const h = Math.max(160, Math.floor(window.innerHeight - top - 28));
     p.style.maxHeight = h + "px";
   });
@@ -956,6 +960,12 @@ async function switchTab(name) {
   document.querySelectorAll(".tab").forEach(el =>
     el.classList.toggle("active", el.id === "tab-" + name));
   savePlace();
+  // A tab starts at its top: a long page scrolled down (the import preview)
+  // would otherwise leave the next tab scrolled, and fitPanels then measures
+  // its list from above the window — the list runs past the bottom and the
+  // title and toolbar scroll away with it.
+  const content = document.querySelector(".content");
+  if (content) content.scrollTop = 0;
   if (name !== "import" && typeof liLeftTab === "function") liLeftTab();
   // Coming from a group's device list with no group chosen in the run tab
   // yet: start on that group instead of an empty table.

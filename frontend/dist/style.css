@@ -627,6 +627,11 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
 .li-missing { border-top: 1px solid var(--border); padding: 12px 16px; font-size: 13px; background: rgba(59,130,246,.05); }
 .li-mlist { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; }
 .li-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
+/* The preview's counts and its やめる / 取り込む stay at the window's bottom
+   edge while a long preview scrolls (the panel must not clip for sticky). */
+.li-planbox { overflow: visible; }
+.li-planbox .li-foot { position: sticky; bottom: 0; z-index: 4; background: var(--panel); border-radius: 0 0 12px 12px; }
+.li-warntxt { color: var(--warn); }
 .li-src { font-family: "Segoe UI", "Meiryo", sans-serif; font-size: 10px; color: var(--text-dim); text-decoration: none; display: inline-block; margin-right: 2px; }
 .li-picklist { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .li-pickrow { text-align: left; background: var(--bg-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
