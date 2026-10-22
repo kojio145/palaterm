@@ -56,11 +56,11 @@ func TestSteps(t *testing.T) {
 		{"SSH2", []model.ImportStep{{Type: "map", Rows: []model.ImportMapRow{{Match: "equals", From: "ssh2", To: "ssh"}}}}, "ssh"},
 	}
 	for _, c := range cases {
-		if got := ApplySteps(c.in, c.steps); got != c.want {
+		if got := ApplySteps(c.in, c.steps, nil); got != c.want {
 			t.Errorf("ApplySteps(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	tr := TraceSteps(" admin/x ", []model.ImportStep{step("trim"), step("split", "sep", "/", "keep", "left")})
+	tr := TraceSteps(" admin/x ", []model.ImportStep{step("trim"), step("split", "sep", "/", "keep", "left")}, nil)
 	if len(tr) != 2 || tr[0] != "admin/x" || tr[1] != "admin" {
 		t.Errorf("TraceSteps = %q", tr)
 	}
@@ -112,7 +112,7 @@ func convert(t *testing.T, s *sheet.Sheet, r *model.ImportRule) *Converted {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Convert(tb, r)
+	return Convert(tb, r, nil)
 }
 
 func TestReadAndConvert(t *testing.T) {
@@ -127,7 +127,7 @@ func TestReadAndConvert(t *testing.T) {
 	if len(tb.Rows) != 5 {
 		t.Fatalf("rows = %d, want 5 (the blank row dropped)", len(tb.Rows))
 	}
-	c := Convert(tb, r)
+	c := Convert(tb, r, nil)
 	if len(c.Missing) != 0 {
 		t.Errorf("missing = %v", c.Missing)
 	}

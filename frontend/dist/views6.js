@@ -162,6 +162,8 @@ function liStepLabel(s) {
     case "replace": return s.to ? t("「{a}」→「{b}」", { a: s.from, b: s.to }) : t("「{a}」を削る", { a: s.from });
     case "regex": return t("正規表現 {p}", { p: s.pattern });
     case "map": return t("置き換え表（{n} 件）", { n: (s.rows || []).length });
+    case "guessOS": return t("機種から OS タイプを推測");
+    case "guessSet": return t("機種からコマンドセットを推測");
   }
   return s.type;
 }
@@ -227,43 +229,41 @@ function liRenderEdit(root) {
   };
   // A header with its Excel column letter (「機器名称（AG）」): a wide
   // sheet's columns are known by their letters.
-  const colOf = new Map(headers.map(h => [h.name, h.col]));
-  const colLet = n => colOf.has(n) ? colLetter(colOf.get(n)) : "";
-  const colOpt = n => colLet(n) ? t("列({l}): {c}", { l: colLet(n), c: n }) : t("列: {c}", { c: n });
+  const colLet = liColLetter;
+  const colOpt = liColOpt;
   const units = r.units || (r.units = []);
   // What "as device 1" takes, in words: the column (or the combination,
   // the default) device 1 reads — so the choice says where the value
   // comes from instead of a bare "same".
-  const sameAs = key => {
-    const fr = liFieldRule(key) || {};
-    if (fr.source === "column") return t("1台目と同じ {c}", { c: colOpt(fr.column) });
-    if (fr.source === "template") return t("1台目と同じ 組み立て {t}", { t: fr.template || "" });
-    if (fr.default) return t("1台目と同じ（既定値 {v}）", { v: liField(key).kind === "secret" ? "●●●" : fr.default });
-    return t("1台目と同じ（使わない）");
-  };
+  const sameAs = liSameAs;
   const unitCell = (u, f) => {
     const uf = liUnitField(u, f.key) || { steps: [] };
     const cur = uf.source === "column" ? "col:" + (uf.column || "") : uf.source === "template" ? "tpl" : "";
-    const smp = liSampleRow(u + 2);
     const isName = f.key === "name";
-    const base = liFieldRule(f.key) || {};
     // The device's name decides whether a row has this device: it is the
     // one field never taken from device 1.
     const first = isName ? `<option value="" ${cur ? "" : "selected"}>${esc(t("（選んでください）"))}</option>`
       : `<option value="">${esc(sameAs(f.key))}</option>`;
-    const shows = smp && smp.values && f.key in smp.values && (uf.source || base.source || base.default);
     return `<select data-usrc="${u}:${esc(f.key)}" class="${isName && !cur ? "li-need" : ""}" data-guard-skip>
       ${first}
       ${colOpts(uf.source === "column" ? uf.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(colOpt(n))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
       <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
       ${uf.source === "template" ? `<input type="text" class="li-tpl" data-utpl="${u}:${esc(f.key)}" value="${esc(uf.template || "")}" placeholder="{機器名(副)}" data-guard-skip>` : ""}
+      ${fbHTML(uf, `data-ufb="${u}:${esc(f.key)}`, `data-ufbadd="${u}:${esc(f.key)}`)}
       ${uf.source ? `<div class="li-steps" style="margin-top:4px">${(uf.steps || []).map(s => `<button class="li-step" data-ustep="${u}:${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
         <button class="li-step add" data-ustep="${u}:${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(uf.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>` : ""}
-      ${isName && !cur ? `<div class="li-ures li-needtxt">${esc(t("必須: 2台目の機器名の列を選びます。この列が空の行には 2台目を作りません"))}</div>` : ""}
       ${LI.tent.has(`u${u}:${f.key}`) ? `<span class="li-tentb" title="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}
-      ${shows ? `<div class="li-ures">→ ${liShowValue(f.key, smp.values[f.key])}${isName ? " " + esc(t("（見本 {n} 行目）", { n: smp.line })) : ""}</div>`
-        : isName && cur && LI.test ? `<div class="li-ures">${esc(t("見本の先頭の行には 2台目がありません"))}</div>` : ""}`;
+      <div class="li-ures" data-ures="${u}:${esc(f.key)}">${liUnitRes(u, f.key)}</div>`;
   };
+  // The fallback columns under a column choice: read in turn while the
+  // value is still empty (an address in the PPPoE or the gateway column).
+  const fbHTML = (fr, attr, addAttr) => fr.source !== "column" ? "" :
+    (fr.fallback || []).map((fb, i) => `<div class="li-fb"><span class="muted">${esc(t("空のときは →"))}</span>
+      <select ${attr}:${i}" data-guard-skip>
+        <option value="" ${fb ? "" : "selected"}>${esc(fb ? t("（外す）") : t("（選んでください）"))}</option>
+        ${colOpts(fb).filter(n => n !== fr.column).map(n => `<option value="${esc(n)}" ${fb === n ? "selected" : ""}>${esc(colOpt(n))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
+      </select></div>`).join("")
+    + `<button class="li-fbadd" ${addAttr}" type="button">${esc(t("＋ 空のときは別の列"))}</button>`;
   const srcSelect = (f) => {
     const fr = liFieldRule(f.key) || {};
     const cur = fr.source === "column" ? "col:" + (fr.column || "") : fr.source === "template" ? "tpl" : "";
@@ -271,7 +271,8 @@ function liRenderEdit(root) {
       <option value="">${esc(t("（使わない）"))}</option>
       ${colOpts(fr.source === "column" ? fr.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(colOpt(n))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
       <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
-      ${fr.source === "template" ? `<input type="text" class="li-tpl" data-tpl="${esc(f.key)}" value="${esc(fr.template || "")}" placeholder="{拠点コード}-{機器名称}" data-guard-skip>` : ""}`;
+      ${fr.source === "template" ? `<input type="text" class="li-tpl" data-tpl="${esc(f.key)}" value="${esc(fr.template || "")}" placeholder="{拠点コード}-{機器名称}" data-guard-skip>` : ""}
+      ${fbHTML(fr, `data-fb="${esc(f.key)}`, `data-fbadd="${esc(f.key)}`)}`;
   };
   const condTargets = () => {
     const mapped = r.fields.filter(f => f.source || f.default).map(f => f.key);
@@ -350,7 +351,7 @@ function liRenderEdit(root) {
             <td><div class="li-steps">${(fr.steps || []).map((s, i) => `<button class="li-step" data-step="${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
               ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
             <td>${liValueInput(f.key, fr.default || "", "li-def-" + f.key)}</td>
-            <td class="li-res" data-res="${esc(f.key)}">${sample && used ? liShowValue(f.key, sample.values[f.key]) + ((sample.filled || []).includes(f.key) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") : ""}</td>
+            <td class="li-res" data-res="${esc(f.key)}">${sample && used ? liShowValue(f.key, sample.values[f.key]) + ((sample.filled || []).includes(f.key) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") + liGuessNote(sample, f.key) + liFromNote(sample, f.key) : ""}</td>
             ${units.map((un, u) => `<td class="li-ucell">${unitCell(u, f)}</td>`).join("")}
           </tr>`;
         }).join("")}
@@ -467,12 +468,22 @@ function liRefreshResults() {
   const sample = liSampleRow();
   root.querySelectorAll("[data-res]").forEach(td => {
     const k = td.dataset.res, fr = liFieldRule(k);
-    td.innerHTML = sample && fr && (fr.source || fr.default) ? liShowValue(k, sample.values[k]) + ((sample.filled || []).includes(k) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") : "";
+    td.innerHTML = sample && fr && (fr.source || fr.default) ? liShowValue(k, sample.values[k]) + ((sample.filled || []).includes(k) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") + liGuessNote(sample, k) + liFromNote(sample, k) : "";
   });
   const box = root.querySelector("#li-gridbox");
   if (box) box.innerHTML = liGridHTML();
   const rb = root.querySelector("#li-resbox");
   if (rb) rb.innerHTML = liResultsHTML();
+  // Device 2's column follows what device 1 now gives (a default typed
+  // there shows at once): its "→ value" and its "as device 1 (…)" choice.
+  root.querySelectorAll("[data-ures]").forEach(d => {
+    const s = d.dataset.ures, i = s.indexOf(":");
+    d.innerHTML = liUnitRes(+s.slice(0, i), s.slice(i + 1));
+  });
+  root.querySelectorAll("select[data-usrc]").forEach(sel => {
+    const s = sel.dataset.usrc, key = s.slice(s.indexOf(":") + 1);
+    if (key !== "name" && sel.options.length) sel.options[0].textContent = liSameAs(key);
+  });
   root.querySelectorAll(".li-secret").forEach(s => s.onclick = () => { s.textContent = s.textContent.startsWith("●") ? s.dataset.secret : "●●●●●●"; });
   liWireGrid(root);
 }
@@ -482,6 +493,9 @@ function liRuleOut() {
   const r = JSON.parse(JSON.stringify(LI.rule));
   r.fields = r.fields.filter(f => f.source || f.default || (f.steps || []).length);
   r.fields.forEach(f => { if (!f.source) f.steps = []; });
+  const fbClean = f => { f.fallback = f.source === "column" ? (f.fallback || []).filter(x => x) : []; if (!f.fallback.length) delete f.fallback; };
+  r.fields.forEach(fbClean);
+  (r.units || []).forEach(u => (u.fields || []).forEach(fbClean));
   r.units = (r.units || []).map(u => ({ label: (u.label || "").trim(), fields: (u.fields || []).filter(f => f.source) }));
   r.headerRow = Math.max(1, parseInt(r.headerRow, 10) || 1);
   r.dataRow = Math.max(0, parseInt(r.dataRow, 10) || 0);
@@ -584,6 +598,30 @@ function liWireEdit(root) {
     }
     rerun();
   });
+  const fbSet = (f, i, v) => {
+    f.fallback = f.fallback || [];
+    if (v) f.fallback[i] = v; else f.fallback.splice(i, 1);
+    rerun();
+  };
+  root.querySelectorAll("[data-fb]").forEach(sel => sel.onchange = () => {
+    const s = sel.dataset.fb, i = s.lastIndexOf(":");
+    fbSet(liEnsureField(s.slice(0, i)), +s.slice(i + 1), sel.value);
+  });
+  root.querySelectorAll("[data-fbadd]").forEach(b => b.onclick = () => {
+    const f = liEnsureField(b.dataset.fbadd);
+    (f.fallback = f.fallback || []).push("");
+    renderListImport();
+  });
+  root.querySelectorAll("[data-ufb]").forEach(sel => sel.onchange = () => {
+    const p = sel.dataset.ufb.split(":"), i = +p.pop(), u = +p.shift();
+    fbSet(liEnsureUnitField(u, p.join(":")), i, sel.value);
+  });
+  root.querySelectorAll("[data-ufbadd]").forEach(b => b.onclick = () => {
+    const s = b.dataset.ufbadd, j = s.indexOf(":");
+    const f = liEnsureUnitField(+s.slice(0, j), s.slice(j + 1));
+    (f.fallback = f.fallback || []).push("");
+    renderListImport();
+  });
   root.querySelectorAll("[data-utpl]").forEach(inp => inp.oninput = () => { const [u, key] = uk(inp); liEnsureUnitField(u, key).template = inp.value; liTestSoon(false); });
   root.querySelectorAll("[data-ustep]").forEach(b => b.onclick = () => { const [u, key] = uk(b); liStepEditor(key, u + 1); });
   root.querySelectorAll("[data-ulabel]").forEach(inp => inp.oninput = () => { r.units[+inp.dataset.ulabel].label = inp.value; });
@@ -630,7 +668,10 @@ async function liSave(thenExport) {
 
 // ---- the step editor (a dialog over the rule editor) ----
 
-const LI_STEP_TYPES = [["split", "区切って残す"], ["map", "置き換え表"], ["replace", "文字を置き換える・削る"], ["regex", "正規表現"], ["trim", "前後の空白を除く"], ["width", "全角を半角にする"], ["lower", "小文字にする"], ["upper", "大文字にする"]];
+const LI_STEP_TYPES = [["split", "区切って残す"], ["map", "置き換え表"], ["replace", "文字を置き換える・削る"], ["regex", "正規表現"], ["trim", "前後の空白を除く"], ["width", "全角を半角にする"], ["lower", "小文字にする"], ["upper", "大文字にする"],
+  ["guessOS", "機種から OS タイプを推測"], ["guessSet", "機種からコマンドセットを推測"]];
+// The guessing steps belong to one field each.
+const LI_STEP_FOR = { guessOS: "osType", guessSet: "commandSet" };
 
 function liStepEditor(key, unit = 0) {
   // unit: 0 = the first device's field, u = the u-th further device's.
@@ -646,7 +687,7 @@ function liStepEditor(key, unit = 0) {
       ${secret ? `<button class="btn sm" id="se-show" type="button">${esc(t("表示"))}</button>` : ""}</div></div>
     <div id="se-list" class="li-flow"></div>
     <div class="row-inline" style="gap:6px;margin-top:8px">
-      <select id="se-type" data-guard-skip>${LI_STEP_TYPES.map(([v, l]) => `<option value="${v}">${esc(t(l))}</option>`).join("")}</select>
+      <select id="se-type" data-guard-skip>${LI_STEP_TYPES.filter(([v]) => !LI_STEP_FOR[v] || LI_STEP_FOR[v] === key).map(([v, l]) => `<option value="${v}">${esc(t(l))}</option>`).join("")}</select>
       <button class="btn sm" id="se-add" type="button">${esc(t("＋ 手順を追加"))}</button>
     </div>
     <div class="li-result"><span class="muted">${esc(t("結果"))}</span> <span id="se-out" class="mono"></span></div>
@@ -678,6 +719,8 @@ function liStepEditor(key, unit = 0) {
         </tbody></table><button class="btn sm" type="button" data-rowadd="${i}">${esc(t("＋ 行を追加"))}</button>
         <span style="margin-left:10px">${esc(t("表に無い値は"))} <select ${a} data-k="miss" data-guard-skip><option value="keep" ${s.miss !== "empty" ? "selected" : ""}>${esc(t("そのまま"))}</option><option value="empty" ${s.miss === "empty" ? "selected" : ""}>${esc(t("空にする（既定値で埋まる）"))}</option></select></span>`;
     }
+    if (s.type === "guessOS") return `<span class="muted">${esc(t("機種の値（IX2215・C2960 など）から、この PalaTerm にある OS タイプを選びます。判定できないときは空になり、既定値で埋まります。先に置き換え表を置けば、そちらが優先です"))}</span>`;
+    if (s.type === "guessSet") return `<span class="muted">${esc(t("機種の値から、この PalaTerm にあるコマンドセットのうち、名前がメーカー・種別（Cisco と L2 など）に合うものが 1 つだけのときに選びます。設定変更・保存のコマンドを含むコマンドセットは選びません。取り込み直しでは、既存の機器のコマンドセットは変えません"))}</span>`;
     return `<span class="muted">${esc(t("設定はありません"))}</span>`;
   };
   let seq = 0;
@@ -801,7 +844,7 @@ const LI_STATUS = {
   add: ["li-p-add", "追加"], upd: ["li-p-upd", "更新"], ask: ["li-p-ask", "要確認"],
   err: ["li-p-err", "取り込めない"], same: ["li-p-same", "変更なし"], skip: ["li-p-skip", "取り込まない"],
 };
-const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", new: "" };
+const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", guess: "推測（既存の機器は変えません）", new: "" };
 
 function liMatchNote(row) {
   switch (row.matchBy) {
@@ -842,14 +885,14 @@ function liRenderImport(root) {
     const fil = c.secret ? (c.file ? "●●●●●●" : t("（空）")) : (c.file || t("（空）"));
     return `<div class="li-cell"><span class="li-ck">${esc(liFieldLabel(c.key))}</span>
       <span class="li-cv">${c.secret ? esc(t("変更あり")) : `<span class="${ch ? "li-old" : "li-new"}"><span class="li-src">PalaTerm</span> ${esc(cur)}</span> <span class="li-src">/</span> <span class="${ch ? "li-new" : "li-old"}"><span class="li-src">${esc(t("ファイル"))}</span> ${esc(fil)}</span>`}</span>
-      ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : ""}
+      ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""}
       <select data-choice="${row.id}:${esc(c.key)}" data-guard-skip>
         <option value="keep" ${ch ? "" : "selected"}>${esc(t("PalaTerm の値を残す"))}</option>
         <option value="file" ${ch ? "selected" : ""}>${esc(t("ファイルの値にする"))}</option></select></div>`;
   };
   const summary = row => {
     const vals = (row.cells || []).filter(c => c.key !== "name" && c.key !== "host" && c.file).slice(0, 5)
-      .map(c => esc(liFieldLabel(c.key)) + ": " + (c.secret ? "●●●" : esc(c.file)) + (c.filled ? `<span class="li-filled">${esc(t("既定"))}</span>` : ""));
+      .map(c => esc(liFieldLabel(c.key)) + ": " + (c.secret ? "●●●" : esc(c.file)) + (c.filled ? `<span class="li-filled">${esc(t("既定"))}</span>` : "") + (c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""));
     return vals.join("、");
   };
   root.innerHTML = `
@@ -1056,12 +1099,64 @@ async function liSuggest() {
   for (const f of sg.fields || []) {
     const fr = liEnsureField(f.key);
     fr.source = "column"; fr.column = f.column; fr.colIndex = f.colIndex;
+    fr.steps = (f.steps || []).map(st => ({ ...st }));
     LI.tent.add(f.key);
   }
   if ((sg.unit || []).length) {
-    LI.rule.units = [{ label: t("バックアップ"), fields: sg.unit.map(f => ({ key: f.key, source: "column", column: f.column, colIndex: f.colIndex, steps: [] })) }];
+    LI.rule.units = [{ label: t("バックアップ"), fields: sg.unit.map(f => ({ key: f.key, source: "column", column: f.column, colIndex: f.colIndex, steps: (f.steps || []).map(st => ({ ...st })) })) }];
     for (const f of sg.unit) LI.tent.add("u0:" + f.key);
   }
   LI.tentN = (sg.fields || []).length + (sg.unit || []).length;
   LI.tentUndo = snap;
+}
+
+// liColLetter is a header's Excel column letter ("" when the sample has
+// no such header); liColOpt names a column as every choice does:
+// 「列(AE): 資産番号」.
+function liColLetter(n) {
+  const h = ((LI.test && LI.test.headers) || []).find(x => x.name === n);
+  return h ? colLetter(h.col) : "";
+}
+function liColOpt(n) {
+  const l = liColLetter(n);
+  return l ? t("列({l}): {c}", { l, c: n }) : t("列: {c}", { c: n });
+}
+
+// liSameAs words what device 2 takes from device 1 for a field: the column
+// (or the combination, the default) device 1 reads.
+function liSameAs(key) {
+  const fr = liFieldRule(key) || {};
+  if (fr.source === "column") return t("1台目と同じ {c}", { c: liColOpt(fr.column) });
+  if (fr.source === "template") return t("1台目と同じ 組み立て {t}", { t: fr.template || "" });
+  if (fr.default) return t("1台目と同じ（既定値 {v}）", { v: liField(key).kind === "secret" ? "●●●" : fr.default });
+  return t("1台目と同じ（使わない）");
+}
+
+// liUnitRes is what device u+2's cell of a field shows under its choice:
+// the sample's value for it, or why there is none.
+function liUnitRes(u, key) {
+  const uf = liUnitField(u, key) || {};
+  const base = liFieldRule(key) || {};
+  const smp = liSampleRow(u + 2);
+  const isName = key === "name";
+  if (isName && !uf.source) return `<span class="li-needtxt">${esc(t("必須: 2台目の機器名の列を選びます。この列が空の行には 2台目を作りません"))}</span>`;
+  if (smp && smp.values && key in smp.values && (uf.source || base.source || base.default)) {
+    return "→ " + liShowValue(key, smp.values[key]) + liGuessNote(smp, key) + liFromNote(smp, key) + (isName ? " " + esc(t("（見本 {n} 行目）", { n: smp.line })) : "");
+  }
+  if (isName && LI.test) return esc(t("見本の先頭の行には 2台目がありません"));
+  return "";
+}
+
+// liFromNote: which fallback column a sample value came from (nothing when
+// from the field's own column).
+function liFromNote(row, key) {
+  const from = row && row.from && row.from[key];
+  if (!from) return "";
+  const h = ((LI.test && LI.test.headers) || []).find(x => x.name === from);
+  return ` <span class="li-from">${esc(h ? t("（列({l}) から）", { l: colLetter(h.col) }) : t("（{c} から）", { c: from }))}</span>`;
+}
+
+// liGuessNote marks a value a guessing step chose.
+function liGuessNote(row, key) {
+  return row && (row.guessed || []).includes(key) ? ` <span class="li-guess">${esc(t("推測"))}</span>` : "";
 }

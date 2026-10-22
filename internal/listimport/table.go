@@ -206,16 +206,32 @@ func (t *Table) column(name string, idx int) int {
 
 var reTemplate = regexp.MustCompile(`\{([^{}]+)\}`)
 
-// sourceValue is a field's value before its steps, and the columns it
-// names that the table does not have (they read empty).
-func (t *Table) sourceValue(f *model.ImportField, row SrcRow) (v string, missing []string) {
+// sourceValueFrom is a field's value before its steps, the fallback column
+// it came from ("" for the field's own), and the columns it names that the
+// table does not have (they read empty).
+func (t *Table) sourceValueFrom(f *model.ImportField, row SrcRow) (v, from string, missing []string) {
 	switch f.Source {
 	case "column":
-		c := t.column(f.Column, f.ColIndex)
-		if c == 0 {
-			return "", []string{f.Column}
+		if c := t.column(f.Column, f.ColIndex); c == 0 {
+			missing = append(missing, f.Column)
+		} else {
+			v = row.Cells[c]
 		}
-		return row.Cells[c], nil
+		// Empty: the next column that has the value.
+		for _, fb := range f.Fallback {
+			if strings.TrimSpace(fb) == "" {
+				continue
+			}
+			c := t.column(fb, 0)
+			if c == 0 {
+				missing = append(missing, fb)
+				continue
+			}
+			if strings.TrimSpace(v) == "" && strings.TrimSpace(row.Cells[c]) != "" {
+				v, from = row.Cells[c], fb
+			}
+		}
+		return v, from, missing
 	case "template":
 		out := reTemplate.ReplaceAllStringFunc(f.Template, func(m string) string {
 			name := m[1 : len(m)-1]
@@ -226,7 +242,7 @@ func (t *Table) sourceValue(f *model.ImportField, row SrcRow) (v string, missing
 			}
 			return strings.TrimSpace(row.Cells[c])
 		})
-		return out, missing
+		return out, "", missing
 	}
-	return "", nil
+	return "", "", nil
 }

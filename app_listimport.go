@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"github.com/kojio145/palaterm/internal/bundle"
+	"github.com/kojio145/palaterm/internal/guard"
 	"github.com/kojio145/palaterm/internal/listimport"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/sheet"
@@ -257,7 +258,7 @@ func fileStamp(path string) (string, error) {
 // given a rule, runs it. It is kept only while the vault is open, checked
 // under the cache's lock: Lock closes the vault, then forgets the cache, so
 // a read finishing around a lock is either not kept or forgotten.
-func (a *App) readList(path string, r *model.ImportRule) (*sheet.Book, string, *listimport.Table, *listimport.Converted, error) {
+func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, envSig string) (*sheet.Book, string, *listimport.Table, *listimport.Converted, error) {
 	if path == "" {
 		return nil, "", nil, nil, fmt.Errorf("ファイルが選ばれていません")
 	}
@@ -284,7 +285,7 @@ func (a *App) readList(path string, r *model.ImportRule) (*sheet.Book, string, *
 	if r == nil {
 		return b, stamp, nil, nil, nil
 	}
-	sig := ruleSig(r)
+	sig := ruleSig(r) + envSig
 	if bookCache.conv != nil && bookCache.rule == sig {
 		return b, stamp, bookCache.table, bookCache.conv, nil
 	}
@@ -296,7 +297,7 @@ func (a *App) readList(path string, r *model.ImportRule) (*sheet.Book, string, *
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
-	conv := listimport.Convert(t, r)
+	conv := listimport.Convert(t, r, env)
 	bookCache.rule, bookCache.table, bookCache.conv = sig, t, conv
 	return b, stamp, t, conv, nil
 }
@@ -319,6 +320,8 @@ type RuleTestRow struct {
 	Values   map[string]string `json:"values"`
 	Raw      map[string]string `json:"raw"`
 	Filled   []string          `json:"filled"`
+	From     map[string]string `json:"from,omitempty"`
+	Guessed  []string          `json:"guessed,omitempty"`
 	Excluded string            `json:"excluded,omitempty"`
 	// Exclusion is the condition behind Excluded (the page words it).
 	Exclusion *model.ImportCond `json:"exclusion,omitempty"`
@@ -343,7 +346,7 @@ type RuleTest struct {
 
 // TestImportRule tries a rule (as edited, unsaved) on a sample file.
 func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error) {
-	b, _, _, _, err := a.readList(path, nil)
+	b, _, _, _, err := a.readList(path, nil, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +370,8 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 	if _, ok := hasName(&r); !ok {
 		return out, nil // nothing mapped yet: the headers are what the editor needs
 	}
-	conv := listimport.Convert(t, &r)
+	env, _ := a.importEnv(listimport.RuleGuesses(&r))
+	conv := listimport.Convert(t, &r, env)
 	out.Missing = conv.Missing
 	out.Total = len(conv.Rows)
 	lines := map[int]bool{}
@@ -379,7 +383,7 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 		// shown cut in two).
 		if lines[row.Line] || len(lines) < 8 {
 			lines[row.Line] = true
-			out.Rows = append(out.Rows, RuleTestRow{Line: row.Line, Unit: row.Unit, Label: row.Label, Values: row.Values, Raw: row.Raw, Filled: row.Filled, Excluded: row.Excluded, Exclusion: row.Exclusion})
+			out.Rows = append(out.Rows, RuleTestRow{Line: row.Line, Unit: row.Unit, Label: row.Label, Values: row.Values, Raw: row.Raw, Filled: row.Filled, From: row.From, Guessed: row.Guessed, Excluded: row.Excluded, Exclusion: row.Exclusion})
 		}
 	}
 	return out, nil
@@ -421,7 +425,8 @@ func sampleGrid(rows [][]string, headerRow int) [][]string {
 // TraceImportSteps runs steps over a sample value, keeping each step's
 // result (the step editor shows them as the user types).
 func (a *App) TraceImportSteps(v string, steps []model.ImportStep) []string {
-	return listimport.TraceSteps(v, steps)
+	env, _ := a.importEnv(listimport.HasGuess(steps))
+	return listimport.TraceSteps(v, steps, env)
 }
 
 // errListChanged: the file or the rule changed between the preview and
@@ -471,11 +476,12 @@ func (a *App) readForImport(req ListImportReq) (*model.ImportRule, *sheet.Book, 
 	}
 	r := a.inv.ImportRules[i]
 	a.mu.Unlock()
-	b, stamp, t, conv, err := a.readList(req.Path, &r)
+	env, esig := a.importEnv(listimport.RuleGuesses(&r))
+	b, stamp, t, conv, err := a.readList(req.Path, &r, env, esig)
 	if err != nil {
 		return nil, nil, nil, nil, "", err
 	}
-	return &r, b, t, conv, stamp + ":" + ruleSig(&r), nil
+	return &r, b, t, conv, stamp + ":" + ruleSig(&r) + ":" + esig, nil
 }
 
 // importGroup checks the group the import goes to (caller holds a.mu).
@@ -574,7 +580,7 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 // and the usual fields' columns by their header names (the editor fills
 // them in marked 仮 for the user to check).
 func (a *App) SuggestImportRule(path string, r model.ImportRule) (*listimport.Suggestion, error) {
-	b, _, _, _, err := a.readList(path, nil)
+	b, _, _, _, err := a.readList(path, nil, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -584,4 +590,59 @@ func (a *App) SuggestImportRule(path string, r model.ImportRule) (*listimport.Su
 	}
 	sg := listimport.Suggest(sh, r)
 	return &sg, nil
+}
+
+// setSafety remembers guard.Check's verdict per command set (by its name
+// and commands): the rule editor asks for the environment at every key.
+var setSafety struct {
+	sync.Mutex
+	m map[string]bool
+}
+
+func setSafe(name string, texts []string) bool {
+	key := name + "\x00" + strings.Join(texts, "\n")
+	setSafety.Lock()
+	defer setSafety.Unlock()
+	if v, ok := setSafety.m[key]; ok {
+		return v
+	}
+	if setSafety.m == nil || len(setSafety.m) > 1000 {
+		setSafety.m = map[string]bool{}
+	}
+	v := len(guard.Check(texts)) == 0
+	setSafety.m[key] = v
+	return v
+}
+
+// importEnv is what the guessing steps choose from: this PalaTerm's OS
+// types and command sets, each set marked unsafe when a command in it
+// changes a device (guard.Check) — such a set is never guessed. The
+// signature changes with them (a preview's stamp then no longer fits).
+// Only a rule that guesses needs it (need false: nil, "").
+func (a *App) importEnv(need bool) (*listimport.Env, string) {
+	if !need {
+		return nil, ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.inv == nil {
+		return nil, ""
+	}
+	env := &listimport.Env{}
+	var sb strings.Builder
+	for _, p := range a.inv.CustomProfiles {
+		env.Profiles = append(env.Profiles, listimport.EnvProfile{Key: p.Key, Name: p.Name})
+		sb.WriteString(p.Key + "\x00" + p.Name + "\x01")
+	}
+	for _, cs := range a.inv.CommandSets {
+		var texts []string
+		for _, c := range cs.Commands {
+			texts = append(texts, c.Text)
+		}
+		safe := setSafe(cs.Name, texts)
+		env.Sets = append(env.Sets, listimport.EnvSet{Name: cs.Name, Safe: safe})
+		fmt.Fprintf(&sb, "%s\x00%v\x01", cs.Name, safe)
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return env, hex.EncodeToString(sum[:6])
 }

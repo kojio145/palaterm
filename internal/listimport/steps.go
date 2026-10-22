@@ -18,20 +18,75 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// ApplySteps runs a field's steps over v in order.
-func ApplySteps(v string, steps []model.ImportStep) string {
-	for _, s := range steps {
-		v = applyStep(v, s)
-	}
+// ApplySteps runs a field's steps over v in order. The guessing steps
+// choose from env (this PalaTerm's OS types and command sets); nil only
+// where no rule can hold one.
+func ApplySteps(v string, steps []model.ImportStep, env *Env) string {
+	v, _ = applySteps(v, steps, env)
 	return v
+}
+
+// applySteps is ApplySteps also telling whether a guessing step decided
+// the value — guessed it, or found nothing to guess (it is empty then) — as
+// opposed to keeping one a 置き換え表 had already made an OS type or a
+// command set. Such a value depends on this PalaTerm, not on the file.
+func applySteps(v string, steps []model.ImportStep, env *Env) (string, bool) {
+	decided := false
+	for _, s := range steps {
+		switch s.Type {
+		case "guessOS":
+			if k, ok := knownOS(v, env); ok {
+				v, decided = k, false
+			} else if env != nil {
+				v, decided = GuessOS(v, env), true
+			}
+		case "guessSet":
+			if n, ok := knownSet(v, env); ok {
+				v, decided = n, false
+			} else if env != nil {
+				v, decided = GuessSet(v, env), true
+			}
+		default:
+			v = applyStep(v, s)
+		}
+	}
+	return v, decided
+}
+
+// HasGuess reports whether steps hold a guessing step (only then does a
+// value need this PalaTerm's OS types and command sets).
+func HasGuess(steps []model.ImportStep) bool {
+	for _, s := range steps {
+		if s.Type == "guessOS" || s.Type == "guessSet" {
+			return true
+		}
+	}
+	return false
+}
+
+// RuleGuesses reports whether any field of the rule guesses.
+func RuleGuesses(r *model.ImportRule) bool {
+	for _, f := range r.Fields {
+		if HasGuess(f.Steps) {
+			return true
+		}
+	}
+	for _, u := range r.Units {
+		for _, f := range u.Fields {
+			if HasGuess(f.Steps) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TraceSteps is ApplySteps keeping the value after each step (the rule
 // editor shows them under each step).
-func TraceSteps(v string, steps []model.ImportStep) []string {
+func TraceSteps(v string, steps []model.ImportStep, env *Env) []string {
 	out := make([]string, 0, len(steps))
 	for _, s := range steps {
-		v = applyStep(v, s)
+		v, _ = applySteps(v, []model.ImportStep{s}, env)
 		out = append(out, v)
 	}
 	return out

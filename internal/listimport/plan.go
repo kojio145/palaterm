@@ -58,6 +58,8 @@ func isSecret(key string) bool { return gridByKey[key].Kind == "secret" }
 //	take  the source changed it, PalaTerm did not: the file's value
 //	keep  PalaTerm changed it, the source did not: kept
 //	ask   both changed, or no record of the last import: Choice decides
+//	guess the value is a guess from this PalaTerm's OS types or command
+//	      sets: an existing device keeps its own unless chosen otherwise
 //	new   a new device
 type Cell struct {
 	Key    string `json:"key"`
@@ -67,6 +69,8 @@ type Cell struct {
 	Choice string `json:"choice"` // "file" | "keep": what is written
 	Secret bool   `json:"secret,omitempty"`
 	Filled bool   `json:"filled,omitempty"`
+	// Guessed: a guessing step gave the file's value (shown as 推測).
+	Guessed bool `json:"guessed,omitempty"`
 }
 
 // Cand is an existing device of the group, as the preview names it.
@@ -449,6 +453,10 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	for _, k := range fr.row.Filled {
 		filled[k] = true
 	}
+	guessed := map[string]bool{}
+	for _, k := range fr.row.Guessed {
+		guessed[k] = true
+	}
 	if fr.pickErr != "" {
 		pr.Errors = append(pr.Errors, fr.pickErr)
 		pr.Status = "err"
@@ -466,7 +474,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	}
 	if fr.linked < 0 { // a new device
 		for _, k := range keys {
-			pr.Cells = append(pr.Cells, Cell{Key: k, File: fr.cells[k], State: "new", Choice: "file", Secret: isSecret(k), Filled: filled[k]})
+			pr.Cells = append(pr.Cells, Cell{Key: k, File: fr.cells[k], State: "new", Choice: "file", Secret: isSecret(k), Filled: filled[k], Guessed: guessed[k]})
 			if msg, ok := fr.errs[k]; ok {
 				pr.Errors = append(pr.Errors, FieldLabel(k)+": "+msg)
 			}
@@ -489,11 +497,16 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	}
 	for _, k := range keys {
 		f, c := fr.cells[k], cc[k]
-		cell := Cell{Key: k, File: f, Cur: c, Secret: isSecret(k), Filled: filled[k]}
+		cell := Cell{Key: k, File: f, Cur: c, Secret: isSecret(k), Filled: filled[k], Guessed: guessed[k]}
 		b, has := inv.ImportRecords[cur.ID].Base[k]
 		switch {
 		case f == c:
 			cell.State, cell.Choice = "same", "keep"
+		case guessed[k]:
+			// Decided by a guess from what this PalaTerm holds (an OS type,
+			// a command set — or none found), not by the source: it changes
+			// with this PalaTerm's sets, so an existing device keeps its own.
+			cell.State, cell.Choice = "guess", "keep"
 		case !has:
 			cell.State, cell.Choice = "ask", "keep"
 		case b == c:

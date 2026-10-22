@@ -128,6 +128,24 @@ func Suggest(s *sheet.Sheet, r model.ImportRule) Suggestion {
 			break
 		}
 	}
+	// A model column gives the OS type and the command set by the guessing
+	// steps (the raw model, as before, would not import).
+	// The words in order of preference: a 型番 column before a 機種 one.
+model:
+	for _, mw := range modelWords {
+		for _, h := range t.Headers {
+			if used[h.Col] || h.Name == "" || strings.HasSuffix(h.Name, ")") && strings.Contains(h.Name, " (") {
+				continue
+			}
+			if w := normWord(h.Name); strings.Contains(w, normWord(mw)) && !hasAny(w, []string{"コード", "code", "数", "種別", "区分"}) {
+				used[h.Col] = true
+				out.Fields = append(out.Fields,
+					model.ImportField{Key: "osType", Source: "column", Column: h.Name, ColIndex: h.Col, Steps: []model.ImportStep{{Type: "guessOS"}}},
+					model.ImportField{Key: "commandSet", Source: "column", Column: h.Name, ColIndex: h.Col, Steps: []model.ImportStep{{Type: "guessSet"}}})
+				break model
+			}
+		}
+	}
 	// A second device is offered only with a name of its own.
 	hasName := false
 	for _, f := range out.Unit {
@@ -138,6 +156,10 @@ func Suggest(s *sheet.Sheet, r model.ImportRule) Suggestion {
 	}
 	return out
 }
+
+// modelWords are what a model column is headed with, most telling first
+// (a 機器種別 column says ルータ or L2SW, not the model: never taken).
+var modelWords = []string{"型番", "型式", "機種", "モデル", "model", "製品名"}
 
 func hasAny(w string, words []string) bool {
 	for _, x := range words {

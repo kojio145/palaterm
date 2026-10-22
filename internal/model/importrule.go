@@ -63,9 +63,13 @@ type ImportField struct {
 	// that by ColIndex, 1-based from column A), "template" (text with
 	// {header} placeholders, joining columns) or "" (no source: the default
 	// only).
-	Source   string       `json:"source,omitempty"`
-	Column   string       `json:"column,omitempty"`
-	ColIndex int          `json:"colIndex,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Column   string `json:"column,omitempty"`
+	ColIndex int    `json:"colIndex,omitempty"`
+	// Fallback are further columns (by header) read in turn while the
+	// value is still empty: a device's address in either the PPPoE column
+	// or the gateway column, whichever its line filled in.
+	Fallback []string     `json:"fallback,omitempty"`
 	Template string       `json:"template,omitempty"`
 	Steps    []ImportStep `json:"steps,omitempty"`
 	// Default fills the field when the value is empty after the steps.
@@ -82,6 +86,8 @@ type ImportField struct {
 //	map      置き換え表: Rows; Miss keep|empty for a value no row matches
 //	lower / upper  小文字・大文字にする
 //	width    全角を半角にする (NFKC)
+//	guessOS  機種から OS タイプを推測 (this PalaTerm's OS types)
+//	guessSet 機種からコマンドセットを推測 (only a single clear, read-only match)
 type ImportStep struct {
 	Type    string         `json:"type"`
 	Sep     string         `json:"sep,omitempty"`
@@ -130,7 +136,7 @@ type ImportMatch struct {
 }
 
 // ImportStepTypes are the step types a rule may use.
-var ImportStepTypes = []string{"trim", "split", "replace", "regex", "map", "lower", "upper", "width"}
+var ImportStepTypes = []string{"trim", "split", "replace", "regex", "map", "lower", "upper", "width", "guessOS", "guessSet"}
 
 // ImportCondOps are the operators an exclusion condition may use.
 var ImportCondOps = []string{"empty", "notempty", "contains", "notcontains", "equals", "notequals"}
@@ -278,7 +284,7 @@ func (r *ImportRule) Validate() error {
 // Validate checks one step.
 func (s *ImportStep) Validate() error {
 	switch s.Type {
-	case "trim", "lower", "upper", "width":
+	case "trim", "lower", "upper", "width", "guessOS", "guessSet":
 	case "split":
 		if s.Sep == "" {
 			return fmt.Errorf("区切り文字を入力してください")

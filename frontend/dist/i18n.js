@@ -2057,3 +2057,18 @@ Object.assign(I18N_EN, {
   "元に戻す": "Undo",
   "確認した（札を消す）": "Checked (remove the marks)",
 });
+Object.assign(I18N_EN, {
+  "空のときは →": "If empty →",
+  "（外す）": "(remove)",
+  "＋ 空のときは別の列": "+ Another column if empty",
+  "（列({l}) から）": "(from column {l})",
+  "（{c} から）": "(from {c})",
+});
+Object.assign(I18N_EN, {
+  "機種から OS タイプを推測": "Guess the OS type from the model",
+  "機種からコマンドセットを推測": "Guess the command set from the model",
+  "機種の値（IX2215・C2960 など）から、この PalaTerm にある OS タイプを選びます。判定できないときは空になり、既定値で埋まります。先に置き換え表を置けば、そちらが優先です": "Chooses one of this PalaTerm's OS types from the model (IX2215, C2960, …). When unsure it gives nothing and the default fills in. A replacement table before it wins",
+  "機種の値から、この PalaTerm にあるコマンドセットのうち、名前がメーカー・種別（Cisco と L2 など）に合うものが 1 つだけのときに選びます。設定変更・保存のコマンドを含むコマンドセットは選びません。取り込み直しでは、既存の機器のコマンドセットは変えません": "Chooses one of this PalaTerm's command sets when exactly one is named for the model's maker and kind (Cisco and L2, say). Sets with commands that change or save configuration are never chosen. Re-imports leave an existing device's command set as it is",
+  "推測（既存の機器は変えません）": "guess (existing devices keep theirs)",
+  "推測": "guess",
+});

@@ -87,7 +87,7 @@ func TestLockForgetsTheList(t *testing.T) {
 	if bookCache.book != nil || bookCache.conv != nil {
 		t.Error("the file kept after a lock")
 	}
-	if _, _, _, _, err := a.readList(path, nil); err == nil || bookCache.book != nil {
+	if _, _, _, _, err := a.readList(path, nil, nil, ""); err == nil || bookCache.book != nil {
 		t.Errorf("read while locked: %v (kept %v)", err, bookCache.book != nil)
 	}
 }

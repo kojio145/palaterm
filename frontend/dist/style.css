@@ -646,3 +646,15 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
 .li-hint { font-size: 11px; color: var(--text-dim); margin-top: 4px; line-height: 1.5; }
 .li-tentb { display: inline-block; font-size: 10px; color: var(--warn); border: 1px solid rgba(245,158,11,.5); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: 1px; font-weight: 600; }
 .li-tentbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.35); border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text); }
+/* The import screen's wide tables scroll inside their box instead of running
+   past the panel (the sample sheet both ways, under its sticky row and
+   column labels). */
+#tab-import .scrollx { overflow-x: auto; max-width: 100%; }
+#tab-import .li-sheetbox { overflow: auto; }
+.li-fb { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
+.li-fb select { flex: 1; min-width: 0; }
+.li-fbadd { background: none; border: 0; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; padding: 3px 0 0; }
+.li-fbadd:hover { text-decoration: underline; }
+.li-from { font-size: 10px; color: var(--run); font-family: "Segoe UI", "Meiryo", sans-serif; }
+.li-guess { font-size: 10px; color: #38bdf8; border: 1px solid rgba(56,189,248,.5); border-radius: 4px; padding: 0 4px; margin-left: 4px; font-family: "Segoe UI", "Meiryo", sans-serif; }
+.li-cs-guess { color: #38bdf8; border-color: rgba(56,189,248,.5); }

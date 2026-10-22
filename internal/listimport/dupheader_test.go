@@ -43,7 +43,7 @@ func TestDuplicateHeaders(t *testing.T) {
 			t.Errorf("header %d = %s, want %s", i, names[i], want[i])
 		}
 	}
-	c := Convert(tb, r)
+	c := Convert(tb, r, nil)
 	if len(c.Rows) != 3 {
 		t.Fatalf("rows = %+v", c.Rows)
 	}

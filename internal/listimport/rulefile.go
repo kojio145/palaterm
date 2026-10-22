@@ -80,6 +80,9 @@ func ExportRule(r model.ImportRule, app string) ([]byte, error) {
 		switch f.Source {
 		case "column":
 			secretCols[foldHeader(f.Column)] = true
+			for _, fb := range f.Fallback {
+				secretCols[foldHeader(fb)] = true
+			}
 		case "template":
 			for _, m := range reTemplate.FindAllStringSubmatch(f.Template, -1) {
 				secretCols[foldHeader(m[1])] = true

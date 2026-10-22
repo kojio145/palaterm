@@ -28,6 +28,13 @@ type Row struct {
 	// Filled are the fields whose value is the default (the source was
 	// empty after the steps).
 	Filled []string `json:"filled"`
+	// From names, per field, the fallback column its value came from
+	// (only for those read from one).
+	From map[string]string `json:"from,omitempty"`
+	// Guessed are the fields a guessing step decided: an OS type or command
+	// set chosen from this PalaTerm's, or none found (empty, the default
+	// then). Either way the value depends on this PalaTerm, not the file.
+	Guessed []string `json:"guessed,omitempty"`
 	// Key is the row's match key: the key column's text (KeyBy names the
 	// column), or the name when there is none or it is empty (KeyBy "").
 	Key      string `json:"key"`
@@ -101,8 +108,9 @@ func Mapped(r *model.ImportRule) []model.ImportField {
 	return out
 }
 
-// Convert runs the rule over the table's rows.
-func Convert(t *Table, r *model.ImportRule) *Converted {
+// Convert runs the rule over the table's rows; env is what the guessing
+// steps choose from (this PalaTerm's OS types and command sets).
+func Convert(t *Table, r *model.ImportRule, env *Env) *Converted {
 	fields := Mapped(r)
 	missing := map[string]bool{}
 	out := &Converted{Missing: []string{}}
@@ -126,12 +134,21 @@ func Convert(t *Table, r *model.ImportRule) *Converted {
 			for i := range fs {
 				f := &fs[i]
 				row.Keys = append(row.Keys, f.Key)
-				v, miss := t.sourceValue(f, src)
+				v, from, miss := t.sourceValueFrom(f, src)
 				for _, m := range miss {
 					missing[m] = true
 				}
+				if from != "" {
+					if row.From == nil {
+						row.From = map[string]string{}
+					}
+					row.From[f.Key] = from
+				}
 				row.Raw[f.Key] = v
-				v = ApplySteps(v, f.Steps)
+				v, guessed := applySteps(v, f.Steps, env)
+				if guessed {
+					row.Guessed = append(row.Guessed, f.Key)
+				}
 				if strings.TrimSpace(v) == "" && f.Default != "" {
 					v = f.Default
 					row.Filled = append(row.Filled, f.Key)
