@@ -109,7 +109,8 @@ html, body {
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 /* A list's row buttons (接続・GUI・編集・複製・削除): packed tight so the
    row fits a 1280-wide window in English too. */
-td.ops { padding-left: 4px; padding-right: 4px; text-align: right; white-space: nowrap; }
+/* The right padding keeps 削除 off the list's scrollbar. */
+td.ops { padding-left: 4px; padding-right: 14px; text-align: right; white-space: nowrap; }
 td.ops .ops-btns { display: inline-flex; gap: 3px; }
 td.ops .btn.sm { padding: 5px 6px; }
 .btn.run { background: var(--ok); border-color: var(--ok); color: #06210f; font-weight: 650; }
@@ -610,7 +611,12 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
 .li-p-err { color: #f87171; background: rgba(239,68,68,.12); border-color: rgba(239,68,68,.4); }
 .li-p-same { color: var(--text-dim); background: rgba(147,161,178,.10); border-color: rgba(147,161,178,.25); }
 .li-p-skip { color: var(--text-dim); border-color: var(--border); }
-.li-prev td { vertical-align: top; padding: 8px 10px; font-size: 13px; }
+/* Fixed column widths: a long value (a site name) never widens its column
+   and squeezes 内容・変更点 into a tall, narrow strip. */
+table.li-prev { table-layout: fixed; min-width: 1000px; }
+#tab-import .li-prevbox { overflow: auto; }
+.li-prevbox thead th { position: sticky; top: 0; background: var(--panel); z-index: 3; }
+.li-prev td { vertical-align: top; padding: 8px 10px; font-size: 13px; overflow-wrap: anywhere; }
 .li-prev td select { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; max-width: 100%; }
 .li-prev tr.li-r-ask td { background: rgba(245,158,11,.04); }
 .li-prev tr.li-r-skip td, .li-prev tr.li-r-same td { color: var(--text-dim); }
@@ -625,7 +631,7 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
 .li-note { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .li-rerr { font-size: 12px; color: #f87171; margin-top: 2px; }
 .li-missing { border-top: 1px solid var(--border); padding: 12px 16px; font-size: 13px; background: rgba(59,130,246,.05); }
-.li-mlist { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; }
+.li-mlist { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; max-height: 150px; overflow-y: auto; }
 .li-foot { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--border); }
 /* The preview's counts and its やめる / 取り込む stay at the window's bottom
    edge while a long preview scrolls (the panel must not clip for sticky). */

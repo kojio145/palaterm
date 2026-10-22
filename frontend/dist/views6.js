@@ -911,6 +911,10 @@ function liMatchNote(row) {
 }
 
 function liRenderImport(root) {
+  // The preview scrolls inside its box: a redraw (a row's choice changed)
+  // puts it back where it was.
+  const ob = root.querySelector(".li-prevbox");
+  const prevScroll = ob ? [ob.scrollLeft, ob.scrollTop] : null;
   const imp = LI.imp, pv = imp.preview, plan = pv && pv.plan;
   const rules = liRules();
   const groups = (INV.deviceGroups || []).map(g => g.name);
@@ -978,15 +982,15 @@ function liRenderImport(root) {
     ${plan ? `<div class="panel li-planbox">
       <div class="li-h" style="padding:12px 14px 0"><b>${esc(t("プレビュー（{n} 行）", { n: rows.length }))}</b>
         <div class="chips">${Object.keys(LI_STATUS).filter(k => counts[k]).map(k => `<button class="li-pill ${LI_STATUS[k][0]}" data-filt="${k}" aria-pressed="${imp.filter[k] ? "false" : "true"}">${esc(t(LI_STATUS[k][1]))} ${counts[k]}</button>`).join("")}</div></div>
-      <div class="scrollx"><table class="li-prev"><thead><tr><th style="width:56px">${esc(t("行"))}</th><th style="width:110px">${esc(t("判定"))}</th>
-        <th style="width:170px">${esc(t("機器名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:110px">${esc(t("拠点名"))}</th><th>${esc(t("内容・変更点"))}</th><th style="width:230px">${esc(t("どの機器に"))}</th></tr></thead><tbody>
+      <div class="scrollx li-prevbox"><table class="li-prev"><thead><tr><th style="width:64px">${esc(t("行"))}</th><th style="width:110px">${esc(t("判定"))}</th>
+        <th style="width:180px">${esc(t("機器名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:150px">${esc(t("拠点名"))}</th><th>${esc(t("内容・変更点"))}</th><th style="width:230px">${esc(t("どの機器に"))}</th></tr></thead><tbody>
         ${visible.length ? visible.map(row => {
           const [cls, lbl] = LI_STATUS[liRowStatus(row)] || ["", row.status];
           const diff = (row.cells || []).filter(c => c.state !== "same" && c.state !== "new");
           const excluded = row.ruleSkip;
           return `<tr class="li-r-${row.status}">
             <td class="muted">${row.unit > 1 ? `${row.line}-${row.unit}` : row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
-            <td class="mono"><div class="clip">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip">${esc(row.site || "")}${liCellMarks(row, "site")}</div></td>
+            <td class="mono"><div class="clip" title="${esc(row.name || "")}">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip2" title="${esc(row.site || "")}">${esc(row.site || "")}${liCellMarks(row, "site")}</div></td>
             <td>${row.status === "add" ? `<div class="muted" style="font-size:12px">${summary(row)}</div>` : ""}
               ${diff.map(c => cellLine(row, c)).join("")}
               ${liMatchNote(row) ? `<div class="li-note">${esc(liMatchNote(row))}</div>` : ""}
@@ -1008,7 +1012,27 @@ function liRenderImport(root) {
       </div>
     </div>` : imp.busy ? `<div class="empty">${esc(t("読み込み中…"))}</div>` : ""}`;
   liWireImport(root);
+  liFitPreview(root);
+  const nb = root.querySelector(".li-prevbox");
+  if (nb && prevScroll) { nb.scrollLeft = prevScroll[0]; nb.scrollTop = prevScroll[1]; }
 }
+
+// liFitPreview caps the preview's table at the window's bottom edge, less
+// what the panel shows under it (the missing devices, the counts and
+// buttons): the rows scroll inside it under their header, and the choices
+// above stay in view.
+function liFitPreview(root) {
+  const box = root.querySelector(".li-prevbox");
+  if (!box) return;
+  const sc = box.closest(".content");
+  const top = box.getBoundingClientRect().top + (sc ? sc.scrollTop : 0);
+  let below = 0;
+  for (let el = box.nextElementSibling; el; el = el.nextElementSibling) below += el.offsetHeight;
+  box.style.maxHeight = Math.max(240, Math.floor(window.innerHeight - top - below - 28)) + "px";
+}
+window.addEventListener("resize", () => {
+  if (LI.view === "import") liFitPreview(document.getElementById("tab-import"));
+});
 
 function liWireImport(root) {
   const imp = LI.imp;
