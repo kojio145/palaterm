@@ -76,7 +76,7 @@ async function renderSchedules() {
   try {
     [list, st, log] = await Promise.all([App().ListSchedules(), App().GetScheduleStatus(), App().ScheduleLog(100)]);
   } catch (e) {
-    if (gen === schedRenderGen) root.innerHTML = `<div class="empty">${esc(terr(e))}</div>`;
+    if (gen === schedRenderGen) root.innerHTML = pageError(t("予約"), t("読み込み失敗") + ": " + terr(e));
     return;
   }
   if (gen !== schedRenderGen) return;
@@ -137,13 +137,13 @@ function renderSchedulesView() {
         <div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("コマンド"))}</span>　${esc(schedCommandsLabel(sc))}</div></td>
       <td><div style="font-size:12px;line-height:1.6">${(sc.slots || []).map(x => esc(slotLabel(x))).join("<br>")}</div>
         <div style="font-size:12px;margin-top:4px"><span class="muted">${esc(t("次の実行"))}</span>　<span class="mono">${esc(nextText(sc))}</span></div></td>
-      <td style="text-align:right;white-space:nowrap;width:300px">
+      <td class="ops" style="width:300px"><div class="ops-btns">
         ${finished(sc) ? "" : `<button class="btn sm" data-now="${esc(sc.id)}">${esc(t("今すぐ実行"))}</button>`}
         ${finished(sc) ? "" : sc.enabled ? `<button class="btn sm" data-stop="${esc(sc.id)}">${esc(t("⏸ 止める"))}</button>` : `<button class="btn sm" data-resume="${esc(sc.id)}">${esc(t("▶ 再開"))}</button>`}
-        <button class="btn sm" data-edit="${esc(sc.id)}">${esc(t("編集"))}</button>
+        <button class="btn sm act-edit" data-edit="${esc(sc.id)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-dup="${esc(sc.id)}" data-tip="${esc(t("同じ日時・機器・コマンドで新しい予約を作ります（別のグループに同じ予約を、など）"))}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(sc.id)}">${esc(t("削除"))}</button>
-      </td>
+      </div></td>
     </tr>`).join("");
   const nFinished = list.filter(finished).length;
   const logRows = shownLog.map(e => `
@@ -220,7 +220,7 @@ function renderSchedulesView() {
     const sc = list.find(x => x.id === b.dataset.stop);
     if (sc && sc.running && !(await uiConfirm({ title: t("予約を止める"), message: t("この予約は今実行中です。止めると、実行中の回も中止します。よろしいですか？"), okLabel: t("⏸ 止める"), danger: true }))) return;
     try { await App().SetScheduleEnabled(b.dataset.stop, false); toast(t("止めました（「▶ 再開」でまた動きます）"), "ok"); }
-    catch (e) { toast(terr(e), "err"); }
+    catch (e) { toast(t("止められません") + ": " + terr(e), "err"); }
     renderSchedules();
   });
   root.querySelectorAll("[data-resume]").forEach(b => b.onclick = async () => {
@@ -232,14 +232,14 @@ function renderSchedulesView() {
   if (delFin) delFin.onclick = async () => {
     if (!(await uiConfirm({ title: t("終了した予約を削除"), message: t("もう実行されない予約（{n} 件）を一覧から削除します。実行記録とログは残ります。", { n: nFinished }), okLabel: t("削除"), danger: true }))) return;
     try { const n = await App().DeleteFinishedSchedules(); toast(t("{n} 件削除しました", { n }), "ok"); }
-    catch (e) { toast(terr(e), "err"); }
+    catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
     renderSchedules();
   };
   root.querySelectorAll("[data-now]").forEach(b => b.onclick = async () => {
     const sc = list.find(x => x.id === b.dataset.now);
     if (!(await uiConfirm({ title: t("今すぐ実行"), message: t("予約「{n}」を今すぐ 1 回実行しますか？（ほかの一括実行中なら終わってから）", { n: esc(sc ? sc.name : "") }), okLabel: t("▶ 実行") }))) return;
     try { await App().RunScheduleNow(b.dataset.now); toast(t("実行を予約しました"), "ok"); }
-    catch (e) { toast(terr(e), "err"); }
+    catch (e) { toast(t("実行できません") + ": " + terr(e), "err"); }
   });
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => editSchedule(list.find(x => x.id === b.dataset.edit)));
   // 複製: a new schedule prefilled from this one (its slots as saved, its
@@ -253,8 +253,8 @@ function renderSchedulesView() {
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     const sc = list.find(x => x.id === b.dataset.del);
     if (!(await uiConfirm({ title: t("予約を削除"), message: t("予約「<b>{n}</b>」を削除しますか？", { n: esc(sc ? sc.name : "") }), okLabel: t("削除"), danger: true }))) return;
-    try { await App().DeleteSchedule(b.dataset.del); renderSchedules(); }
-    catch (e) { toast(terr(e), "err"); }
+    try { await App().DeleteSchedule(b.dataset.del); renderSchedules(); toast(t("削除しました"), "ok"); }
+    catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
   });
   root.querySelectorAll("[data-log]").forEach(b => b.onclick = () => showLog(b.dataset.log));
 }
@@ -381,7 +381,7 @@ function editSchedule(sc, prefill) {
 
     <div class="modal-actions">
       <button class="btn" id="sc-cancel-edit">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="sc-save">${esc(t("保存"))}</button>
+      <button class="btn primary" id="sc-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
     </div>
   </div>`);
   openModal(node, "set-edit");
@@ -474,7 +474,7 @@ function editSchedule(sc, prefill) {
           ${at ? `<span class="sl-date-host" data-i="${i}"></span>` : ""}
           ${sl.kind === "weekly" ? WEEKDAYS.map((w, wi) => `<label class="row-inline" style="gap:3px;font-weight:normal;cursor:pointer;font-size:13px"><input type="checkbox" class="sl-wd" value="${wi}" style="width:auto" ${sl.weekdays.includes(wi) ? "checked" : ""}>${esc(t(w))}</label>`).join("") : ""}
           ${sl.kind !== "interval" || at ? `<span class="sl-time-host" data-i="${i}"></span>` : ""}
-          ${slots.length > 1 ? `<button class="btn sm act-del" type="button" data-rm-slot="${i}" style="margin-left:auto" title="${esc(t("この日時を削除"))}">×</button>` : ""}
+          ${slots.length > 1 ? `<button class="btn sm act-del" type="button" data-rm-slot="${i}" style="margin-left:auto" data-tip="${esc(t("この日時を削除"))}">×</button>` : ""}
         </div>
         ${sl.kind === "interval" ? `
         <div class="row-inline" style="gap:8px;flex-wrap:wrap;margin-top:8px">
@@ -593,7 +593,7 @@ function editSchedule(sc, prefill) {
       await App().SaveSchedule(obj);
       closeModal(); toast(t("予約を保存しました（止めるときは一覧の「⏸ 止める」）"), "ok");
       switchTab("schedule");
-    } catch (e) { toast(t("保存できません") + ": " + terr(e), "err"); }
+    } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   }
 }
 

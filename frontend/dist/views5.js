@@ -359,12 +359,12 @@ function renderGrid(force) {
     <div class="grid-wrap" id="g-wrap" tabindex="0">
       <table class="grid" id="g-table">
         <colgroup><col style="width:46px">${G.vc.map(c => `<col style="width:${gridColW(c)}px">`).join("")}</colgroup>
-        <thead><tr><th class="g-corner g-rh" title="${esc(t("すべて選択"))}"></th>${G.vc.map((c, ci) => `<th data-c="${ci}" class="${ci === 0 && c.key === "name" ? "g-stick" : ""}" title="${esc(gridColTitle(c))}"><button class="g-hmenu${G.colFilter[c.key] || G.sort.key === c.key ? " on" : ""}" type="button" data-hmenu="${esc(c.key)}" tabindex="-1" title="${esc(t("並べ替え・絞り込み"))}">${G.sort.key === c.key ? (G.sort.dir > 0 ? "▲" : "▼") : ""}${G.colFilter[c.key] ? "⏷" : "▾"}</button>${esc(gridColTitle(c))}<span class="g-rz" data-rz="${ci}" title="${esc(t("ドラッグで列幅を変更（ダブルクリックで内容に合わせる）"))}"></span></th>`).join("")}</tr></thead>
+        <thead><tr><th class="g-corner g-rh" data-tip="${esc(t("すべて選択"))}"></th>${G.vc.map((c, ci) => `<th data-c="${ci}" class="${ci === 0 && c.key === "name" ? "g-stick" : ""}" data-tip="${esc(gridColTitle(c))}"><button class="g-hmenu${G.colFilter[c.key] || G.sort.key === c.key ? " on" : ""}" type="button" data-hmenu="${esc(c.key)}" tabindex="-1" data-tip="${esc(t("並べ替え・絞り込み"))}">${G.sort.key === c.key ? (G.sort.dir > 0 ? "▲" : "▼") : ""}${G.colFilter[c.key] ? "⏷" : "▾"}</button>${esc(gridColTitle(c))}<span class="g-rz" data-rz="${ci}" data-tip="${esc(t("ドラッグで列幅を変更（ダブルクリックで内容に合わせる）"))}"></span></th>`).join("")}</tr></thead>
         <tbody id="g-body"></tbody>
       </table>
-      <div class="g-fill hidden" id="g-fill" title="${esc(t("ドラッグで連番・コピー（Ctrl を押しながらで連番とコピーを入れ替え）。ダブルクリックで最後の行まで"))}"></div>
+      <div class="g-fill hidden" id="g-fill" data-tip="${esc(t("ドラッグで連番・コピー（Ctrl を押しながらで連番とコピーを入れ替え）。ダブルクリックで最後の行まで"))}"></div>
       <div class="g-clip hidden" id="g-clip"></div>
-      <button class="g-dd hidden" id="g-dd" type="button" tabindex="-1" title="${esc(t("一覧から選ぶ（ダブルクリック・Space・F4 でも開きます。複数のセルを選んでいればまとめて入ります）"))}">▼</button>
+      <button class="g-dd hidden" id="g-dd" type="button" tabindex="-1" data-tip="${esc(t("一覧から選ぶ（ダブルクリック・Space・F4 でも開きます。複数のセルを選んでいればまとめて入ります）"))}">▼</button>
       <div class="g-list hidden" id="g-list" tabindex="-1"></div>
     </div>
     <datalist id="g-dl"></datalist>`;
@@ -392,7 +392,7 @@ function gridRenderBody() {
     const blank = gridIsBlank(row);
     const mark = blank ? "" : !row.id ? markNew : !sameCells(row.base, row.cells) ? "●" : "";
     const tip = conf ? tipConf : blank ? "" : !row.id ? tipNew : mark ? tipChg : "";
-    let tr = `<tr class="${blank ? "g-blank" : !row.id ? "g-new" : ""}${conf ? " g-conf" : ""}"><th class="g-rh" data-r="${r}" ${tip ? `data-tip="${esc(tip)}"` : ""}><button class="g-ins" type="button" data-ins="${r}" tabindex="-1" title="${tipIns}">＋</button>${mark ? `<span class="g-mark${!row.id ? " new" : ""}">${esc(mark)}</span>` : ""}${r + 1}</th>`;
+    let tr = `<tr class="${blank ? "g-blank" : !row.id ? "g-new" : ""}${conf ? " g-conf" : ""}"><th class="g-rh" data-r="${r}" ${tip ? `data-tip="${esc(tip)}"` : ""}><button class="g-ins" type="button" data-ins="${r}" tabindex="-1" data-tip="${tipIns}">＋</button>${mark ? `<span class="g-mark${!row.id ? " new" : ""}">${esc(mark)}</span>` : ""}${r + 1}</th>`;
     vc.forEach((c, ci) => {
       const v = row.cells[c.key] || "";
       const b = row.base ? (row.base[c.key] || "") : null;
@@ -409,7 +409,7 @@ function gridRenderBody() {
   if (prev && prev.sig === sig && body.rows.length === rowsHtml.length && rowsHtml.length) {
     rowsHtml.forEach((hh, r) => { if (hh !== prev.rows[r]) body.rows[r].outerHTML = hh; });
   } else {
-    body.innerHTML = rowsHtml.join("") || `<tr><td colspan="${vc.length + 1}" class="empty">${esc(G.filter ? t("絞り込みに一致する行がありません") : t("行がありません。「＋ 行を追加」か、Excel からの貼り付けで追加できます"))}</td></tr>`;
+    body.innerHTML = rowsHtml.join("") || `<tr><td colspan="${vc.length + 1}" class="empty">${esc(G.filter ? t("絞り込みに一致する行がありません") : t("行がありません。「＋ 末尾に行を追加」か、Excel からの貼り付けで追加できます"))}</td></tr>`;
   }
   G.rendered = { sig, rows: rowsHtml };
   G.tds = G.view.length ? [...body.rows].map(tr => [...tr.cells].slice(1)) : [];
@@ -432,7 +432,7 @@ function gridStatus() {
   if (Object.keys(G.conflicts).length) parts.push(`<span style="color:var(--warn)">${esc(t("他の画面と競合 {n} 行", { n: Object.keys(G.conflicts).length }))}</span>`);
   if (G.sort.key || G.filter || Object.keys(G.colFilter).length) parts.push(esc(t("並べ替え・絞り込みは表示だけ（保存される順番は変わりません）")) + (G.sort.key ? ` <a href="#" class="link" id="g-sortfix">${esc(t("この並び順で確定"))}</a>` : "") + ` <a href="#" class="link" id="g-viewreset">${esc(t("解除"))}</a>`);
   if (G.busy) parts.push(`<b style="color:var(--accent)">${esc(t("保存中…"))}</b>`);
-  if (gridChangeCount()) parts.push(esc(G.savedAt ? t("下書きを自動保存 {t}", { t: G.savedAt.toLocaleTimeString() }) : t("下書きは自動保存されます")));
+  if (gridChangeCount()) parts.push(esc(G.savedAt ? t("下書きを自動保存 {t}", { t: G.savedAt.toTimeString().slice(0, 8) }) : t("下書きは自動保存されます")));
   else parts.push(esc(t("未保存の変更はありません")));
   el.innerHTML = parts.join(" ・ ");
   const fix = document.getElementById("g-sortfix");
@@ -1393,7 +1393,7 @@ function gridFind(replace) {
     <button class="btn sm" id="gf-next">${esc(t("次へ"))}</button>
     ${replace ? `<button class="btn sm" id="gf-rep">${esc(t("置換"))}</button><button class="btn sm" id="gf-all">${esc(t("すべて置換"))}</button>` : ""}
     <span class="muted" id="gf-info" style="font-size:12px"></span>
-    <button class="btn sm" id="gf-close">×</button>`;
+    <button class="btn sm" id="gf-close" data-tip="${esc(t("閉じる（Esc）"))}">×</button>`;
   bar.classList.remove("hidden");
   const q = bar.querySelector("#gf-q");
   q.focus(); q.select();
@@ -1484,10 +1484,12 @@ function gridColsDialog() {
     <div class="row-inline" style="gap:14px;font-size:13px;flex-wrap:wrap">
       ${hops.map(n => `<label style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-hop="${n}" ${G.cols.some(c => c.hop === n && G.vis.has(c.key)) ? "checked" : ""} style="width:auto">${esc(t("踏み台{n}", { n }))}</label>`).join("")}
     </div>
+    <div class="row-inline" style="gap:6px;margin-top:12px">
+      <button class="btn sm" id="gv-basic" type="button">${esc(t("基本の列だけ"))}</button>
+      <button class="btn sm" id="gv-all" type="button">${esc(t("すべて表示"))}</button>
+    </div>
     <div class="modal-actions">
-      <button class="btn" id="gv-basic">${esc(t("基本の列だけ"))}</button>
-      <button class="btn" id="gv-all">${esc(t("すべて表示"))}</button>
-      <button class="btn primary" id="gv-ok">${esc(t("閉じる"))}</button>
+      <button class="btn" id="gv-ok" type="button">${esc(t("閉じる"))}</button>
     </div>
   </div>`);
   openModal(node, "mid");

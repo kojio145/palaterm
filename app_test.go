@@ -852,3 +852,33 @@ func TestNecIXPagerMigrationFromInterim(t *testing.T) {
 	}
 	t.Fatal("nec-ix profile missing")
 }
+
+// A new profile never takes the key of one renamed since: "X_copy" saved,
+// renamed "Y" (its key stays custom:X_copy), then a new "X_copy" — Y stays.
+func TestSaveProfileNewKeyNeverReplaces(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveProfile(profile.Profile{Name: "X_copy", Prompt: "#"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveProfile(profile.Profile{Key: "custom:X_copy", Name: "Y", Prompt: "Y#"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveProfile(profile.Profile{Name: "X_copy", Prompt: "X#"}); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]string{}
+	keys := map[string]bool{}
+	for _, p := range a.inv.CustomProfiles {
+		byName[p.Name] = p.Key
+		if keys[p.Key] {
+			t.Errorf("key %s twice", p.Key)
+		}
+		keys[p.Key] = true
+	}
+	if byName["Y"] != "custom:X_copy" || byName["X_copy"] == "" || byName["X_copy"] == "custom:X_copy" {
+		t.Errorf("profiles after the second X_copy: %v", byName)
+	}
+}

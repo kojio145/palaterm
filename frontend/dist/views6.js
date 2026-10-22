@@ -26,10 +26,13 @@ function liRule(id) { return liRules().find(r => r.id === id); }
 function renderListImport() {
   const root = document.getElementById("tab-import");
   liFields().then(() => {
-    if (LI.view === "edit" && LI.rule) liRenderEdit(root);
+    if (LI.view === "edit" && LI.rule) {
+      liRenderEdit(root);
+      if (LI.sample && !LI.test) liRunTest(true); // read again after the tab was left
+    }
     else if (LI.view === "import" && LI.imp) liRenderImport(root);
     else liRenderList(root);
-  }).catch(e => { root.innerHTML = `<div class="empty">${esc(terr(e))}</div>`; });
+  }).catch(e => { root.innerHTML = pageError(t("一覧の取り込み"), t("読み込み失敗") + ": " + terr(e)); });
 }
 
 // ---- the rule list ----
@@ -46,43 +49,52 @@ function liWhere(r) {
 
 function liRenderList(root) {
   const rules = liRules();
+  // Sort / filter / drag to reorder, as the other lists (see listView in app.js).
+  const LV = "importRules";
+  const focus = listViewFocus();
+  const nFields = r => (r.fields || []).filter(f => f.source || f.default).length;
+  const visible = listViewApply(LV, rules, r => [r.name, r.sampleName || ""],
+    (r, k) => k === "fields" ? nFields(r) : k === "exclude" ? (r.exclude || []).length : k === "lastUsed" ? (r.lastUsed || "") : r.name);
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("一覧の取り込み"))}</div>
-        <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}</div></div>
+        <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}<br>
+          ${esc(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="li-rimp" data-tip="${esc(t("人から受け取った変換ルール（JSON）を読み込みます"))}">${esc(t("ルールを読み込む"))}</button>
-        <button class="btn primary" id="li-radd">${esc(t("＋ ルールを作る"))}</button>
+        <button class="btn" id="li-radd">${esc(t("＋ ルールを作る"))}</button>
+        <button class="btn primary" id="li-pick" ${rules.length ? "" : "disabled"} ${rules.length ? "" : `data-tip="${esc(t("先に変換ルールを作ってください"))}"`}>${esc(t("ファイルを選んで取り込む…"))}</button>
       </div>
     </div>
-    <div class="li-drop">
-      <div style="flex:1 1 260px;min-width:0">
-        <div class="li-drop-t">${esc(t("取り込むファイルを選んでください"))}</div>
-        <div class="muted" style="font-size:12px">${esc(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div>
-      </div>
-      <button class="btn primary" id="li-pick" ${rules.length ? "" : "disabled"}>${esc(t("ファイルを選んで取り込む…"))}</button>
-    </div>
+    ${rules.length ? listViewBar(LV, t("絞り込み（ルール名・見本ファイル）")) : ""}
     <div class="panel scrollx">
       ${rules.length === 0
-        ? `<div class="muted" style="font-size:13px;padding:14px;line-height:1.8">${esc(t("変換ルールがありません。「＋ ルールを作る」で、元のファイルのどの列を PalaTerm のどの項目にするかを決めてください。見本のファイルを読み込むと、結果を見ながら作れます。"))}</div>`
-        : `<table class="fixed" data-colw="li-rules"><thead><tr>
-            <th style="width:240px">${esc(t("ルール名"))}</th><th>${esc(t("読み取り位置"))}</th>
-            <th style="width:90px">${esc(t("項目"))}</th><th style="width:90px">${esc(t("除外条件"))}</th>
-            <th style="width:120px">${esc(t("最後に使った日"))}</th><th style="width:260px"></th></tr></thead><tbody>
-          ${rules.map(r => `<tr>
+        ? `<div class="empty" style="line-height:1.8">${esc(t("変換ルールがありません。「＋ ルールを作る」で、元のファイルのどの列を PalaTerm のどの項目にするかを決めてください。見本のファイルを読み込むと、結果を見ながら作れます。"))}</div>`
+        : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する変換ルールがありません"))}</div>`
+        : `<table class="fixed" data-colw="li-rules2"><thead><tr><th style="width:30px"></th>
+            ${listViewTh(LV, "name", t("ルール名"), "width:240px")}<th>${esc(t("読み取り位置"))}</th>
+            ${listViewTh(LV, "fields", t("項目"), "width:90px")}${listViewTh(LV, "exclude", t("除外条件"), "width:100px")}
+            ${listViewTh(LV, "lastUsed", t("最後に使った日"), "width:130px")}<th style="width:260px"></th></tr></thead><tbody id="li-rbody">
+          ${visible.map(r => `<tr data-key="${esc(r.id)}">
+            ${listViewDragCell(LV)}
             <td><div class="clip"><b>${esc(r.name)}</b></div>${r.sampleName ? `<div class="muted clip" style="font-size:11px">${esc(r.sampleName)}</div>` : ""}</td>
             <td class="muted" style="font-size:12px"><div class="clip2">${esc(liWhere(r))}</div></td>
-            <td>${esc(t("{n} 項目", { n: (r.fields || []).filter(f => f.source || f.default).length }))}</td>
+            <td>${esc(t("{n} 項目", { n: nFields(r) }))}</td>
             <td>${esc(t("{n} 件", { n: (r.exclude || []).length }))}</td>
             <td class="muted">${esc(r.lastUsed || t("未使用"))}</td>
-            <td style="text-align:right;white-space:nowrap">
+            <td class="ops"><div class="ops-btns">
               <button class="btn sm act-edit" data-redit="${esc(r.id)}">${esc(t("編集"))}</button>
               <button class="btn sm act-copy" data-rcopy="${esc(r.id)}">${esc(t("複製"))}</button>
               <button class="btn sm" data-rexp="${esc(r.id)}" data-tip="${esc(t("export\\import-rules\\ に書き出します。パスワード欄の既定値・置き換えの値は含めません"))}">${esc(t("書き出し"))}</button>
               <button class="btn sm act-del" data-rdel="${esc(r.id)}">${esc(t("削除"))}</button>
-            </td></tr>`).join("")}</tbody></table>`}
+            </div></td></tr>`).join("")}</tbody></table>`}
     </div>`;
+  listViewWire(LV, root, renderListImport, focus);
   wireColResize(root);
+  if (!listViewActive(LV)) wireRowReorder(root.querySelector("#li-rbody"), async order => {
+    try { await App().ReorderImportRules(order); INV = await App().GetInventory(); renderListImport(); }
+    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); INV = await App().GetInventory(); renderListImport(); }
+  });
   root.querySelector("#li-radd").onclick = () => liOpenEditor(null);
   root.querySelector("#li-rimp").onclick = async () => {
     try {
@@ -95,17 +107,16 @@ function liRenderList(root) {
   };
   root.querySelector("#li-pick").onclick = () => liStartImport();
   root.querySelectorAll("[data-redit]").forEach(b => b.onclick = () => liOpenEditor(b.dataset.redit));
-  root.querySelectorAll("[data-rcopy]").forEach(b => b.onclick = async () => {
-    try { await App().CopyImportRule(b.dataset.rcopy); INV = await App().GetInventory(); renderListImport(); }
-    catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
-  });
+  // As a device's 複製: the copy opens as a new, unsaved rule — none exists
+  // until 保存.
+  root.querySelectorAll("[data-rcopy]").forEach(b => b.onclick = () => liOpenEditor(null, b.dataset.rcopy));
   root.querySelectorAll("[data-rexp]").forEach(b => b.onclick = () => liExport(b.dataset.rexp));
   root.querySelectorAll("[data-rdel]").forEach(b => b.onclick = async () => {
     const r = liRule(b.dataset.rdel);
     if (!r) return;
-    const ok = await uiConfirm({ title: t("ルールの削除"), message: esc(t("変換ルール「{n}」を削除しますか？ 取り込んだ機器はそのまま残ります。", { n: r.name })), okLabel: t("削除"), danger: true });
+    const ok = await uiConfirm({ title: t("変換ルールを削除"), message: t("変換ルール「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">取り込んだ機器はそのまま残ります</span>", { n: esc(r.name) }), okLabel: t("削除"), danger: true });
     if (!ok) return;
-    try { await App().DeleteImportRule(r.id); INV = await App().GetInventory(); renderListImport(); }
+    try { await App().DeleteImportRule(r.id); INV = await App().GetInventory(); renderListImport(); toast(t("削除しました"), "ok"); }
     catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
   });
 }
@@ -128,9 +139,12 @@ function liBlankRule() {
   };
 }
 
-function liOpenEditor(id) {
+// liOpenEditor edits rule id, or a new rule (filled from rule copyOf for 複製).
+function liOpenEditor(id, copyOf) {
   const src = id ? liRule(id) : null;
-  LI.rule = src ? JSON.parse(JSON.stringify(src)) : liBlankRule();
+  const from = copyOf ? liRule(copyOf) : null;
+  LI.rule = src ? JSON.parse(JSON.stringify(src)) : from ? liCopyOf(from) : liBlankRule();
+  LI.focusName = !!from; // the copy's name is picked, ready to be typed over
   LI.rule.fields = LI.rule.fields || [];
   LI.rule.exclude = LI.rule.exclude || [];
   LI.rule.match = LI.rule.match || {};
@@ -140,6 +154,17 @@ function liOpenEditor(id) {
   LI.view = "edit";
   renderListImport();
   if (LI.sample) liRunTest();
+}
+
+// liCopyOf is a new rule filled from r, named "<名前>_copy" (_copy2, …) as
+// every other copy is.
+function liCopyOf(r) {
+  const c = JSON.parse(JSON.stringify(r));
+  const taken = new Set(liRules().map(x => (x.name || "").trim().toLowerCase()));
+  let nm = r.name + "_copy";
+  for (let i = 2; taken.has(nm.toLowerCase()); i++) nm = `${r.name}_copy${i}`;
+  c.id = ""; c.name = nm; c.lastUsed = "";
+  return c;
 }
 
 function liDirty() { return LI.rule && JSON.stringify(LI.rule) !== LI.ruleStart; }
@@ -204,7 +229,10 @@ function liValueInput(key, val, id) {
       ${opts.filter(o => o.v !== "").map(o => `<option value="${esc(o.v)}" ${o.v === val ? "selected" : ""}>${esc(o.label)}</option>`).join("")}
       ${val && !has ? `<option value="${esc(val)}" selected>${esc(val)}</option>` : ""}</select>`;
   }
-  return `<input type="${f.kind === "secret" ? "password" : "text"}" id="${id}" value="${esc(val || "")}" placeholder="${esc(t("（なし）"))}" data-guard-skip autocomplete="off">`;
+  const inp = `<input type="${f.kind === "secret" ? "password" : "text"}" id="${id}" value="${esc(val || "")}" placeholder="${esc(t("（なし）"))}" data-guard-skip autocomplete="off">`;
+  // A password field gets the 👁 every password field has (in its own box,
+  // so the button sits on the field, not on the table cell).
+  return f.kind === "secret" ? `<span class="li-pwbox">${inp}</span>` : inp;
 }
 
 function liShowValue(key, v) {
@@ -250,11 +278,11 @@ function liRenderEdit(root) {
       ${first}
       ${colOpts(uf.source === "column" ? uf.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(colOpt(n))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
       <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
-      ${uf.source === "template" ? `<input type="text" class="li-tpl" data-utpl="${u}:${esc(f.key)}" value="${esc(uf.template || "")}" placeholder="{機器名(副)}" data-guard-skip>` : ""}
+      ${uf.source === "template" ? `<input type="text" class="li-tpl" data-utpl="${u}:${esc(f.key)}" value="${esc(uf.template || "")}" placeholder="${esc(t("{機器名(副)}"))}" data-guard-skip>` : ""}
       ${fbHTML(uf, `data-ufb="${u}:${esc(f.key)}`, `data-ufbadd="${u}:${esc(f.key)}`)}
       ${uf.source ? `<div class="li-steps" style="margin-top:4px">${(uf.steps || []).map(s => `<button class="li-step" data-ustep="${u}:${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
-        <button class="li-step add" data-ustep="${u}:${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(uf.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>` : ""}
-      ${LI.tent.has(`u${u}:${f.key}`) ? `<span class="li-tentb" title="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}
+        <button class="li-step add" data-ustep="${u}:${esc(f.key)}" data-tip="${esc(t("加工手順を編集"))}">${(uf.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>` : ""}
+      ${LI.tent.has(`u${u}:${f.key}`) ? `<span class="li-tentb" data-tip="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}
       <div class="li-ures" data-ures="${u}:${esc(f.key)}">${liUnitRes(u, f.key)}</div>`;
   };
   // The fallback columns under a column choice: read in turn while the
@@ -273,7 +301,7 @@ function liRenderEdit(root) {
       <option value="">${esc(t("（使わない）"))}</option>
       ${colOpts(fr.source === "column" ? fr.column : "").map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(colOpt(n))}${hdrNames.includes(n) ? "" : esc(t("（見本にない）"))}</option>`).join("")}
       <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
-      ${fr.source === "template" ? `<input type="text" class="li-tpl" data-tpl="${esc(f.key)}" value="${esc(fr.template || "")}" placeholder="{拠点コード}-{機器名称}" data-guard-skip>` : ""}
+      ${fr.source === "template" ? `<input type="text" class="li-tpl" data-tpl="${esc(f.key)}" value="${esc(fr.template || "")}" placeholder="${esc(t("{拠点コード}-{機器名称}"))}" data-guard-skip>` : ""}
       ${fbHTML(fr, `data-fb="${esc(f.key)}`, `data-fbadd="${esc(f.key)}`)}`;
   };
   const condTargets = () => {
@@ -289,13 +317,13 @@ function liRenderEdit(root) {
         <div class="page-sub">${esc(t("見本のファイルを読み込むと、列を選べて、結果がその場で出ます。見本はルールに保存しません"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         ${r.id ? `<button class="btn" id="li-eexp" data-tip="${esc(t("保存してから export\\import-rules\\ に書き出します。パスワード欄の既定値・置き換えの値は含めません"))}">${esc(t("書き出し"))}</button>` : ""}
-        <button class="btn" id="li-ecancel">${esc(t("やめる"))}</button>
-        <button class="btn primary" id="li-esave">${esc(t("保存"))}</button>
+        <button class="btn" id="li-ecancel">${esc(t("キャンセル"))}</button>
+        <button class="btn primary" id="li-esave" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
       </div>
     </div>
 
     <div class="panel li-sec"><div class="li-grid2">
-      <div class="field"><label>${esc(t("ルール名"))}</label><input type="text" id="li-name" value="${esc(r.name)}" placeholder="${esc(t("例: 資産管理（月次出力）"))}" data-guard-skip></div>
+      <div class="field"><label>${esc(t("ルール名"))} <span class="req">${esc(t("必須"))}</span></label><input type="text" id="li-name" value="${esc(r.name)}" placeholder="${esc(t("例: 資産管理（月次出力）"))}" data-guard-skip></div>
       <div class="field"><label>${esc(t("見本ファイル（ルールには保存しません）"))}</label>
         <div class="row-inline" style="gap:6px"><input type="text" readonly value="${esc(LI.sample ? LI.sample.split(/[\\/]/).pop() : "")}" placeholder="${esc(t("未選択"))}" style="flex:1" data-guard-skip>
         <button class="btn sm" id="li-sample">${esc(t("選ぶ…"))}</button></div>
@@ -335,7 +363,7 @@ function liRenderEdit(root) {
         <div class="row-inline" style="flex-wrap:wrap;gap:6px 12px;margin-top:6px">
           ${units.map((un, u) => `<span class="li-unitchip"><b>${esc(t("{n}台目", { n: u + 2 }))}</b>
             <input type="text" data-ulabel="${u}" value="${esc(un.label || "")}" placeholder="${esc(t("名前（例: バックアップ）"))}" maxlength="40" data-guard-skip>
-            <button class="btn sm act-del" data-udel="${u}" title="${esc(t("この台を外す"))}">×</button></span>`).join("")}
+            <button class="btn sm act-del" data-udel="${u}" data-tip="${esc(t("この台を外す"))}">×</button></span>`).join("")}
           ${units.length < 3 ? `<button class="btn sm" id="li-uadd">${esc(units.length ? t("＋ {n}台目を追加", { n: units.length + 2 }) : t("＋ 2台目を追加（冗長構成など）"))}</button>` : ""}
         </div>
       </div>
@@ -348,10 +376,10 @@ function liRenderEdit(root) {
           const fr = liFieldRule(f.key) || { steps: [] };
           const used = fr.source || fr.default;
           return `<tr class="${used ? "" : "li-unused"}">
-            <td><b>${esc(liFieldLabel(f.key))}</b>${f.key === "name" ? ` <span class="li-req">${esc(t("必須"))}</span>` : ""}</td>
-            <td>${srcSelect(f)}${LI.tent.has(f.key) ? `<span class="li-tentb" title="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}</td>
+            <td><b>${esc(liFieldLabel(f.key))}</b>${f.key === "name" ? ` <span class="req">${esc(t("必須"))}</span>` : ""}</td>
+            <td>${srcSelect(f)}${LI.tent.has(f.key) ? `<span class="li-tentb" data-tip="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}</td>
             <td><div class="li-steps">${(fr.steps || []).map((s, i) => `<button class="li-step" data-step="${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
-              ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" title="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
+              ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" data-tip="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
             <td>${liValueInput(f.key, fr.default || "", "li-def-" + f.key)}</td>
             <td class="li-res" data-res="${esc(f.key)}">${sample && used ? liShowValue(f.key, sample.values[f.key]) + ((sample.filled || []).includes(f.key) ? ` <span class="li-filled">${esc(t("既定"))}</span>` : "") + liGuessNote(sample, f.key) + liFromNote(sample, f.key) : ""}</td>
             ${units.map((un, u) => `<td class="li-ucell">${unitCell(u, f)}</td>`).join("")}
@@ -383,13 +411,15 @@ function liRenderEdit(root) {
         <select data-ctgt="${i}" data-guard-skip>${condTargets().concat(condTargets().some(o => o.v === c.target + ":" + c.key) || !c.key ? [] : [{ v: c.target + ":" + c.key, l: c.key }]).map(o => `<option value="${esc(o.v)}" ${o.v === c.target + ":" + c.key ? "selected" : ""}>${esc(o.l)}</option>`).join("")}</select>
         <select data-cop="${i}" data-guard-skip>${OPS.map(([v, l]) => `<option value="${v}" ${c.op === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
         ${c.op === "empty" || c.op === "notempty" ? "" : `<input type="text" data-cval="${i}" value="${esc(c.value || "")}" data-guard-skip>`}
-        <button class="btn sm act-del" data-cdel="${i}">×</button></div>`).join("")}
+        <button class="btn sm act-del" data-cdel="${i}" data-tip="${esc(t("この行を削除"))}">×</button></div>`).join("")}
       <button class="btn sm" id="li-cadd">${esc(t("＋ 条件を追加"))}</button>
     </div>
 
     <div id="li-resbox">${liResultsHTML()}</div>`;
   liSetGrid(root.querySelector("#li-gridbox"), liGridHTML(), gridScroll);
   liWireEdit(root);
+  wirePasswordToggles(root);
+  if (LI.focusName) { LI.focusName = false; const n = root.querySelector("#li-name"); n.focus(); n.select(); }
 }
 
 // liSetGrid puts the sample sheet in its box, where it was scrolled to (the
@@ -439,12 +469,12 @@ function liGridHTML() {
   const cols = (test.headers || []).map(h => h.col);
   const c1 = cols.length ? Math.min(...cols) : 1, c2 = cols.length ? Math.max(...cols) : nc;
   let html = `<div class="scrollx li-sheetbox"><table class="li-sheet"><thead><tr><th></th>`;
-  for (let c = 1; c <= nc; c++) html += `<th data-col="${c}" title="${esc(t("この列から表を読む"))}">${colLetter(c)}</th>`;
+  for (let c = 1; c <= nc; c++) html += `<th data-col="${c}" data-tip="${esc(t("この列から表を読む"))}">${colLetter(c)}</th>`;
   html += `</tr></thead><tbody>`;
   test.grid.forEach((row, i) => {
     const n = i + 1;
     const cls = n === hr ? "h" : n >= dr ? "v" : "";
-    html += `<tr class="${cls}"><td class="rn" data-row="${n}" title="${esc(t("この行を見出しにする"))}">${n}</td>`;
+    html += `<tr class="${cls}"><td class="rn" data-row="${n}" data-tip="${esc(t("この行を見出しにする"))}">${n}</td>`;
     for (let c = 1; c <= nc; c++) {
       const out = c < c1 || c > c2;
       html += `<td class="${out ? "out" : ""}">${esc(row[c - 1] || "")}</td>`;
@@ -476,7 +506,7 @@ async function liRunTest(rerender = true) {
     LI.test = res;
     if (rerender || before !== JSON.stringify(res.headers)) renderListImport();
     else liRefreshResults();
-  } catch (e) { toast(terr(e), "err"); }
+  } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
 }
 function liRefreshResults() {
   const root = document.getElementById("tab-import");
@@ -548,7 +578,7 @@ function liWireEdit(root) {
       LI.sample = p;
       if (liCanSuggest()) await liSuggest();
       await liRunTest(true);
-    } catch (e) { toast(terr(e), "err"); }
+    } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
   q("#li-sheet").onchange = e => {
     const v = e.target.value;
@@ -665,15 +695,22 @@ function liWireEdit(root) {
   };
   root.querySelectorAll(".li-secret").forEach(s => s.onclick = () => { s.textContent = s.textContent.startsWith("●") ? s.dataset.secret : "●●●●●●"; });
   q("#li-ecancel").onclick = async () => {
-    if (liDirty() && !(await uiConfirm({ title: t("確認"), message: esc(t("保存していない変更があります。破棄しますか？")), okLabel: t("破棄"), danger: true }))) return;
-    LI.view = "list"; LI.rule = null; App().ForgetListFile(); renderListImport();
+    if (liDirty() && !(await uiConfirm({ title: t("未保存の変更"), message: t("変換ルールに保存されていない変更があります。<br>破棄して閉じますか？"), okLabel: t("破棄して閉じる"), cancelLabel: t("編集に戻る"), danger: true }))) return;
+    LI.view = "list"; LI.rule = null; LI.test = null; App().ForgetListFile(); renderListImport();
   };
   q("#li-esave").onclick = () => liSave(false);
+  // Ctrl+Enter saves, as in every editor (this one is a page, not a dialog).
+  root.onkeydown = e => {
+    if (LI.view === "edit" && e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing && !modalOpen()) { e.preventDefault(); if (!e.repeat) liSave(false); }
+  };
   const ex = q("#li-eexp");
   if (ex) ex.onclick = () => liSave(true);
 }
 
 async function liSave(thenExport) {
+  // One save at a time (a second Ctrl+Enter while the vault is written).
+  if (LI.saving) return;
+  LI.saving = true;
   try {
     const id = await App().SaveImportRule(liRuleOut());
     INV = await App().GetInventory();
@@ -683,8 +720,10 @@ async function liSave(thenExport) {
     toast(t("保存しました"), "ok");
     LI.view = "list"; LI.rule = null;
     App().ForgetListFile();
+    LI.test = null;
     renderListImport();
   } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+  finally { LI.saving = false; }
 }
 
 // ---- the step editor (a dialog over the rule editor) ----
@@ -705,10 +744,10 @@ function liStepEditor(key, unit = 0) {
     <h3>${esc(t("加工手順: {f}", { f: liFieldLabel(key) }))}${unit ? esc("（" + liUnitName(unit - 1) + "）") : ""}</h3>
     <div class="field"><label>${esc(t("元の値（見本・書き換えて試せます）"))}</label>
       <div class="row-inline" style="gap:6px"><input type="${secret ? "password" : "text"}" id="se-in" class="mono" style="flex:1" value="${esc(input)}" autocomplete="off" data-guard-skip>
-      ${secret ? `<button class="btn sm" id="se-show" type="button">${esc(t("表示"))}</button>` : ""}</div></div>
+      </div></div>
     <div id="se-list" class="li-flow"></div>
     <div class="row-inline" style="gap:6px;margin-top:8px">
-      <select id="se-type" data-guard-skip>${LI_STEP_TYPES.filter(([v]) => !LI_STEP_FOR[v] || LI_STEP_FOR[v] === key).map(([v, l]) => `<option value="${v}">${esc(t(l))}</option>`).join("")}</select>
+      <select id="se-type" class="btn" style="padding-right:8px" data-guard-skip>${LI_STEP_TYPES.filter(([v]) => !LI_STEP_FOR[v] || LI_STEP_FOR[v] === key).map(([v, l]) => `<option value="${v}">${esc(t(l))}</option>`).join("")}</select>
       <button class="btn sm" id="se-add" type="button">${esc(t("＋ 手順を追加"))}</button>
     </div>
     <div class="li-result"><span class="muted">${esc(t("結果"))}</span> <span id="se-out" class="mono"></span></div>
@@ -720,8 +759,8 @@ function liStepEditor(key, unit = 0) {
   openModal(node, "wide");
   const list = node.querySelector("#se-list");
   const inp = node.querySelector("#se-in");
-  let shownPw = false;
-  const show = v => v === "" ? t("（空）") : (secret && !shownPw ? "●".repeat(Math.min(v.length, 12)) : v);
+  // The results show as the value does: in clear only while its 👁 is on.
+  const show = v => v === "" ? t("（空）") : (secret && inp.type === "password" ? "●".repeat(Math.min(v.length, 12)) : v);
   const cfg = (s, i) => {
     const a = `data-i="${i}"`;
     switch (s.type) {
@@ -736,7 +775,7 @@ function liStepEditor(key, unit = 0) {
         ${(s.rows || []).map((r, j) => `<tr><td><select ${a} data-j="${j}" data-k="match" data-guard-skip><option value="equals" ${r.match !== "contains" ? "selected" : ""}>${esc(t("一致"))}</option><option value="contains" ${r.match === "contains" ? "selected" : ""}>${esc(t("含む"))}</option></select></td>
           <td><input type="text" ${a} data-j="${j}" data-k="from" value="${esc(r.from || "")}" data-guard-skip></td>
           <td>${key === "osType" ? `<select ${a} data-j="${j}" data-k="to" data-guard-skip><option value="">${esc(t("（選ぶ）"))}</option>${PROFILES.map(p => `<option value="${esc(p.key)}" ${p.key === r.to ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>` : `<input type="text" ${a} data-j="${j}" data-k="to" value="${esc(r.to || "")}" data-guard-skip>`}</td>
-          <td><button class="btn sm act-del" type="button" data-rowdel="${i}:${j}">×</button></td></tr>`).join("")}
+          <td><button class="btn sm act-del" type="button" data-rowdel="${i}:${j}" data-tip="${esc(t("この行を削除"))}">×</button></td></tr>`).join("")}
         </tbody></table><button class="btn sm" type="button" data-rowadd="${i}">${esc(t("＋ 行を追加"))}</button>
         <span style="margin-left:10px">${esc(t("表に無い値は"))} <select ${a} data-k="miss" data-guard-skip><option value="keep" ${s.miss !== "empty" ? "selected" : ""}>${esc(t("そのまま"))}</option><option value="empty" ${s.miss === "empty" ? "selected" : ""}>${esc(t("空にする（既定値で埋まる）"))}</option></select></span>`;
     }
@@ -760,7 +799,7 @@ function liStepEditor(key, unit = 0) {
         <div class="li-scfg">${cfg(s, i)}</div><div class="li-safter mono" data-after="${i}"></div></div>
       <div class="row-inline" style="gap:4px;align-items:flex-start">
         <button class="btn sm" type="button" data-up="${i}" ${i ? "" : "disabled"}>↑</button>
-        <button class="btn sm act-del" type="button" data-del="${i}">×</button></div></div>`).join("")
+        <button class="btn sm act-del" type="button" data-del="${i}" data-tip="${esc(t("この手順を削除"))}">×</button></div></div>`).join("")
       : `<div class="muted" style="font-size:13px;padding:6px 0">${esc(t("手順がありません。元の値がそのまま使われます"))}</div>`;
     trace();
   };
@@ -790,8 +829,9 @@ function liStepEditor(key, unit = 0) {
     trace();
   });
   inp.oninput = trace;
-  const sh = node.querySelector("#se-show");
-  if (sh) sh.onclick = () => { shownPw = !shownPw; inp.type = shownPw ? "text" : "password"; sh.textContent = shownPw ? t("隠す") : t("表示"); trace(); };
+  wirePasswordToggles(node);
+  const eye = node.querySelector(".eye-btn");
+  if (eye) eye.addEventListener("click", () => trace());
   node.querySelector("#se-add").onclick = () => {
     const type = node.querySelector("#se-type").value;
     const s = { type };
@@ -802,7 +842,7 @@ function liStepEditor(key, unit = 0) {
   };
   const start = JSON.stringify(steps);
   node.querySelector("#se-cancel").onclick = async () => {
-    if (JSON.stringify(steps) !== start && !(await subConfirm(esc(t("加工手順の変更を破棄しますか？")), t("破棄")))) return;
+    if (JSON.stringify(steps) !== start && !(await subConfirm(esc(t("編集した内容は保存されていません。破棄して閉じますか？")), t("破棄して閉じる")))) return;
     closeModal();
   };
   node.querySelector("#se-ok").onclick = () => {
@@ -836,7 +876,7 @@ async function liStartImport(path) {
     LI.view = "import";
     renderListImport();
     liPreview();
-  } catch (e) { toast(terr(e), "err"); }
+  } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
 }
 
 let liPrevSeq = 0;
@@ -946,7 +986,8 @@ function liRenderImport(root) {
       ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""}
       <select data-choice="${row.id}:${esc(c.key)}" data-guard-skip>
         <option value="keep" ${ch ? "" : "selected"}>${esc(t("PalaTerm の値を残す"))}</option>
-        <option value="file" ${ch ? "selected" : ""}>${esc(t("ファイルの値にする"))}</option></select></div>`;
+        <option value="file" ${ch ? "selected" : ""}>${esc(t("ファイルの値にする"))}</option></select></div>
+      ${ch && c.cur && /^(host|bastion\d+Host)$/.test(c.key) ? `<div class="li-hostnote">${esc(t("⚠ 接続先が変わります。保存してあるパスワードで新しい接続先にログインします。別の機器になっていないか確かめてください"))}</div>` : ""}`;
   };
   const summary = row => {
     const vals = (row.cells || []).filter(c => c.key !== "name" && c.key !== "host" && c.key !== "site" && c.file).slice(0, 5)
@@ -959,7 +1000,8 @@ function liRenderImport(root) {
         <div class="page-sub">${esc(t("内容を確かめてから「取り込む」を押してください。この時点では何も変わっていません"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="li-repick">${esc(t("ファイルを選び直す"))}</button>
-        <button class="btn" id="li-back">${esc(t("戻る"))}</button>
+        <button class="btn" id="li-back">${esc(t("キャンセル"))}</button>
+        ${plan ? `<button class="btn primary" id="li-apply-top" ${writes.length || imp.deleteIds.length ? "" : "disabled"}>${esc(t("取り込む"))}</button>` : ""}
       </div>
     </div>
     <div class="panel li-sec">
@@ -990,7 +1032,7 @@ function liRenderImport(root) {
           const excluded = row.ruleSkip;
           return `<tr class="li-r-${row.status}">
             <td class="muted">${row.unit > 1 ? `${row.line}-${row.unit}` : row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
-            <td class="mono"><div class="clip" title="${esc(row.name || "")}">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip2" title="${esc(row.site || "")}">${esc(row.site || "")}${liCellMarks(row, "site")}</div></td>
+            <td class="mono"><div class="clip" data-tip="${esc(row.name || "")}">${esc(row.name || t("（空）"))}</div>${row.unit > 1 ? `<span class="li-unit">${esc(row.label || t("{n}台目", { n: row.unit }))}</span>` : ""}</td><td class="mono">${esc(row.host || "")}</td><td><div class="clip2" data-tip="${esc(row.site || "")}">${esc(row.site || "")}${liCellMarks(row, "site")}</div></td>
             <td>${row.status === "add" ? `<div class="muted" style="font-size:12px">${summary(row)}</div>` : ""}
               ${diff.map(c => cellLine(row, c)).join("")}
               ${liMatchNote(row) ? `<div class="li-note">${esc(liMatchNote(row))}</div>` : ""}
@@ -1007,7 +1049,7 @@ function liRenderImport(root) {
         <div class="li-mlist">${plan.missing.map(d => `<label class="row-inline" style="gap:6px"><input type="checkbox" data-mdel="${esc(d.id)}" ${imp.deleteIds.includes(d.id) ? "checked" : ""} data-guard-skip> ${esc(t("削除する"))}: <span class="mono">${esc(d.name)}</span> <span class="muted">${esc(d.host || "")}</span></label>`).join("")}</div></div>` : ""}
       <div class="li-foot">
         <span class="muted" style="font-size:12px">${esc(t("追加 {a}・更新 {u}。取り込めない行と取り込まない行は飛ばします", { a: nAdd, u: nUpd }))}${imp.deleteIds.length ? esc(t("。削除 {d}", { d: imp.deleteIds.length })) : ""}</span>
-        <div class="row-inline" style="gap:6px"><button class="btn" id="li-icancel">${esc(t("やめる"))}</button>
+        <div class="row-inline" style="gap:6px"><button class="btn" id="li-icancel">${esc(t("キャンセル"))}</button>
         <button class="btn primary" id="li-apply" ${writes.length || imp.deleteIds.length ? "" : "disabled"}>${esc(t("取り込む"))}</button></div>
       </div>
     </div>` : imp.busy ? `<div class="empty">${esc(t("読み込み中…"))}</div>` : ""}`;
@@ -1028,7 +1070,7 @@ function liFitPreview(root) {
   const top = box.getBoundingClientRect().top + (sc ? sc.scrollTop : 0);
   let below = 0;
   for (let el = box.nextElementSibling; el; el = el.nextElementSibling) below += el.offsetHeight;
-  box.style.maxHeight = Math.max(240, Math.floor(window.innerHeight - top - below - 28)) + "px";
+  box.style.maxHeight = Math.max(180, Math.floor(window.innerHeight - top - below - 28)) + "px";
 }
 window.addEventListener("resize", () => {
   if (LI.view === "import") liFitPreview(document.getElementById("tab-import"));
@@ -1095,8 +1137,8 @@ function liWireImport(root) {
     const asks = pv.plan.rows.filter(r => r.status === "ask").length;
     // Both questions when both apply: ticking a deletion must not let the
     // rows to check go in unasked.
-    if (asks && !(await uiConfirm({ title: t("確認"), message: esc(t("要確認の行が {n} 行あります。表示されている選択のとおりに取り込みますか？", { n: asks })), okLabel: t("取り込む") }))) return;
-    if (imp.deleteIds.length && !(await uiConfirm({ title: t("確認"), message: esc(t("このファイルに無い機器 {n} 台を削除します。よろしいですか？", { n: imp.deleteIds.length })), okLabel: t("削除して取り込む"), danger: true }))) return;
+    if (asks && !(await uiConfirm({ title: t("要確認の行があります"), message: esc(t("要確認の行が {n} 行あります。表示されている選択のとおりに取り込みますか？", { n: asks })), okLabel: t("取り込む") }))) return;
+    if (imp.deleteIds.length && !(await uiConfirm({ title: t("機器を削除"), message: esc(t("このファイルに無い機器 {n} 台を削除します。よろしいですか？", { n: imp.deleteIds.length })), okLabel: t("削除して取り込む"), danger: true }))) return;
     try {
       ap.disabled = true;
       const res = await App().ApplyListImport({ path: imp.path, ruleId: imp.ruleId, group: imp.group, newGroup: imp.newGroup, decisions: imp.decisions, deleteIds: imp.deleteIds, stamp: pv.stamp });
@@ -1115,6 +1157,9 @@ function liWireImport(root) {
       if (String(e).includes("プレビューのあとで変わりました")) liPreview();
     }
   };
+  // The same 取り込む at the top right, where every page has its main button.
+  const apTop = q("#li-apply-top");
+  if (apTop && ap) apTop.onclick = () => ap.click();
 }
 
 // liPickDevice asks which device of the group a row stands for: a list
@@ -1124,7 +1169,7 @@ function liPickDevice(devs) {
   return new Promise(resolve => {
     const node = h(`<div>
       <h3>${esc(t("結びつける機器を選ぶ"))}</h3>
-      <input type="text" id="lp-q" placeholder="${esc(t("機器名・IP アドレスで絞り込み"))}" autocomplete="off" style="width:100%;margin-bottom:8px" data-guard-skip>
+      <input type="text" id="lp-q" class="btn" placeholder="${esc(t("絞り込み（機器名・IP アドレス）"))}" autocomplete="off" style="width:100%;margin-bottom:8px;text-align:left;cursor:text" data-guard-skip>
       <div id="lp-list" class="li-picklist"></div>
       <div class="modal-actions"><button class="btn" id="lp-cancel" type="button">${esc(t("キャンセル"))}</button></div></div>`);
     openModal(node, "mid");
@@ -1146,7 +1191,9 @@ function liPickDevice(devs) {
 
 // liLeftTab: the tab was switched away from — the file read for it (often
 // with passwords) is not kept meanwhile; it is read again when needed.
-function liLeftTab() { App().ForgetListFile().catch(() => {}); }
+// The page's copy of the sample (its sheet and values, passwords among them)
+// goes too, read again when the editor is shown again.
+function liLeftTab() { App().ForgetListFile().catch(() => {}); LI.test = null; }
 
 // liExclText words why a row is left out, in the page's language: the
 // condition it met (row.exclusion), or the message (no device name).

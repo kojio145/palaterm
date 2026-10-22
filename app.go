@@ -840,13 +840,24 @@ func (a *App) SaveProfile(p profile.Profile) error {
 			}
 		}
 	}
-	if p.Key == "" {
-		p.Key = "custom:" + p.Name
-	}
+	isNew := p.Key == ""
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
+	}
+	// A new profile (追加, 複製) gets a key no profile has: a profile renamed
+	// since keeps its old key ("custom:X_copy" for one now called "Y"), and
+	// a new "X_copy" must not replace it.
+	if isNew {
+		taken := map[string]bool{}
+		for i := range a.inv.CustomProfiles {
+			taken[a.inv.CustomProfiles[i].Key] = true
+		}
+		p.Key = "custom:" + p.Name
+		for i := 2; taken[p.Key]; i++ {
+			p.Key = fmt.Sprintf("custom:%s#%d", p.Name, i)
+		}
 	}
 	found := false
 	for i := range a.inv.CustomProfiles {
@@ -2585,7 +2596,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.8"
+const appVersion = "1.9.9"
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
 // command set named after the file (an existing set of the same name is

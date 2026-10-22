@@ -104,3 +104,20 @@ func TestSampleGridCols(t *testing.T) {
 		t.Fatalf("grid %d columns, cols %d; want 255, 255", len(g[0]), cols)
 	}
 }
+
+// ReorderImportRules puts the rules in the dragged order.
+func TestReorderImportRules(t *testing.T) {
+	a, _, id := listImportApp(t)
+	r2 := a.inv.ImportRules[0]
+	r2.ID, r2.Name = "", "second"
+	id2, err := a.SaveImportRule(r2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ReorderImportRules([]string{id2, id}); err != nil {
+		t.Fatal(err)
+	}
+	if a.inv.ImportRules[0].ID != id2 || a.inv.ImportRules[1].ID != id {
+		t.Errorf("order %s, %s; want %s, %s", a.inv.ImportRules[0].ID, a.inv.ImportRules[1].ID, id2, id)
+	}
+}

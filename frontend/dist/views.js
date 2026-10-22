@@ -85,7 +85,7 @@ function renderGroupChooser() {
       ${visible.map(g => `<div class="choice" role="button" tabindex="0" ${active ? "" : 'draggable="true"'} data-open="${esc(g.name)}" data-grp="${esc(g.name)}">
         <div class="row-inline" style="justify-content:space-between;align-items:flex-start">
           <div class="choice-t clip" data-tip="${esc(g.name)}">${esc(g.name)}</div>
-          <button class="btn sm act-copy" type="button" data-dup="${esc(g.name)}" title="${esc(t("グループを複製"))}">${esc(t("複製"))}</button>
+          <button class="btn sm act-copy" type="button" data-dup="${esc(g.name)}" data-tip="${esc(t("グループを複製"))}">${esc(t("複製"))}</button>
         </div>
         <div class="choice-n">${esc(t("{n} 台", { n: groupCount(g.name) }))} <span class="muted" style="font-size:11px">${esc(active ? t("（並び替え・絞り込み中はドラッグ不可）") : t("⠿ ドラッグで並替"))}</span> ${gridDraftBadge(g.name, true)}</div>
       </div>`).join("")}
@@ -152,7 +152,7 @@ function duplicateGroupDialog(name) {
     } catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
   };
   node.querySelector("#dg-ok").onclick = go;
-  node.querySelector("#dg-name").addEventListener("keydown", e => { if (e.key === "Enter") go(); });
+  node.querySelector("#dg-name").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) go(); });
 }
 
 // Drag-and-drop reordering of group cards; persists the new order.
@@ -252,7 +252,7 @@ function newGroupPrompt() {
   };
   node.querySelector("#ng-cancel").onclick = closeModal;
   node.querySelector("#ng-create").onclick = create;
-  node.querySelector("#ng-name").addEventListener("keydown", e => { if (e.key === "Enter") create(); });
+  node.querySelector("#ng-name").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing) create(); });
 }
 
 // deviceView.group for the （グループ未設定） card: the devices without a group.
@@ -380,7 +380,7 @@ function renderDeviceList() {
             <span style="font-size:13px">${esc(t("「＋ 機器を追加」で 1 台ずつ登録、「表で編集」で Excel から貼り付け、「読み込み」で CSV や一式を取り込めます"))}</span><br>
             <span class="row-inline" style="gap:8px;justify-content:center;margin-top:10px"><button class="btn primary sm" id="empty-add">${esc(t("＋ 機器を追加"))}</button><button class="btn sm" id="empty-grid">${esc(t("表で編集"))}</button><button class="btn sm" id="empty-imp">${esc(t("読み込み"))}</button></span></div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
-        : `<table class="fixed" data-colw="${allView ? "devices-all" : "devices2"}"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} title="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
+        : `<table class="fixed" data-colw="${allView ? "devices-all" : "devices2"}"><thead><tr><th style="width:28px"><input type="checkbox" id="dev-chk-all" ${visible.length && visible.every(d => devSel.has(d.id)) ? "checked" : ""} data-tip="${esc(t("表示中の行を全選択/全解除"))}"></th><th style="width:28px"></th>
             ${listViewTh(LV, "name", t("機器名"), "width:130px")}${allView ? listViewTh(LV, "group", t("グループ"), "width:110px") : ""}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
             ${listViewTh(LV, "os", "OS", "width:112px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:112px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
@@ -570,9 +570,9 @@ async function tiledConnect(ids, direct) {
 // The bar above the list while devices are ticked ("" when none).
 function devSelBar(selCount) {
   if (!selCount) return "";
-  return `<div class="row-inline" style="gap:8px;margin:-4px 0 10px;padding:8px 12px;border:1px solid var(--accent);border-radius:10px;font-size:13px">
+  return `<div class="row-inline info-box" style="gap:8px;margin:-4px 0 10px">
       <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
-      <button class="btn sm primary" id="bulk-tile" data-tip="${esc(t("選択した機器の単独接続窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）"))}">${esc(t("並べて接続"))}</button>
+      <button class="btn sm primary" id="bulk-tile" data-tip="${esc(t("選択した機器の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）"))}">${esc(t("並べて接続"))}</button>
       <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
       <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
       <button class="btn sm" id="bulk-clear">${esc(t("選択解除"))}</button>
@@ -604,7 +604,7 @@ function groupCredsDialog(groupName) {
   </div>`);
   openModal(node, "mid");
   wirePasswordToggles(node);
-  node.querySelector("#gc-cancel").onclick = closeModal;
+  guardDiscard(node, "#gc-cancel");
   const saveBtn = node.querySelector("#gc-save");
   saveBtn.onclick = async () => {
     const out = { ...g, name: groupName,
@@ -696,7 +696,7 @@ function bulkEditDialog(ids) {
   };
   $n("#bk-group").onchange = groupNote;
   $n("#bk-cred").onchange = groupNote;
-  $n("#bk-cancel").onclick = closeModal;
+  guardDiscard(node, "#bk-cancel");
   $n("#bk-ok").onclick = async () => {
     const patch = {};
     const pick = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v; };
@@ -738,7 +738,7 @@ async function inlineSave(id, patch) {
     await App().SaveDevice(updated);
     await refreshInventory();
   } catch (e) {
-    toast(t("保存できません") + ": " + terr(e), "err");
+    toast(t("保存失敗") + ": " + terr(e), "err");
     await refreshInventory(); // revert the cell to the stored value
   }
 }
@@ -756,7 +756,7 @@ function exportNoBastionCreds() {
   try { return localStorage.getItem("palaterm.exportNoBastionCreds") === "1"; } catch (_) { return false; }
 }
 
-// 一式書出: pick a group (or all) → export\bundles\<group>\ holding devices.csv
+// 一式書き出し: pick a group (or all) → export\bundles\<group>\ holding devices.csv
 // plus the command sets and OS profiles those devices use (for "all devices":
 // every set and profile, i.e. a complete copy of the configuration).
 function exportBundleDialog(defaultGroup) {
@@ -964,7 +964,7 @@ function editDevice(dev, preGroup, template) {
     </div>
     <div class="grid-2">
       <div class="field"><label><span data-tip="${esc(t("機器の役割を表す自由なラベルです。拠点と同じく、設定タブのテンプレートで {role} として使えます"))}">${esc(t("役割（任意） ⓘ"))}</span></label><input id="f-role" value="${esc(d.role || "")}" placeholder="${esc(t("例: コア / エッジ / FW"))}"></div>
-      <div class="field"><label><span data-tip="${esc(t("この機器の単独接続窓の背景とタイトル帯をこの色にします。本番機は赤・検証機は緑のようにしておくと、並べた窓の中で接続先を取り違えにくくなります"))}">${esc(t("端末の色（任意） ⓘ"))}</span></label>
+      <div class="field"><label><span data-tip="${esc(t("この機器の端末窓の背景とタイトル帯をこの色にします。本番機は赤・検証機は緑のようにしておくと、並べた窓の中で接続先を取り違えにくくなります"))}">${esc(t("端末の色（任意） ⓘ"))}</span></label>
         <select id="f-tint"><option value="">${esc(t("なし（窓の色のまま）"))}</option>${deviceTintKeys().map(k => `<option value="${k}" ${d.termColor === k ? "selected" : ""}>■ ${esc(t(DEVICE_TINTS[k].name))}</option>`).join("")}</select></div>
     </div>
     <div class="row-inline" style="gap:28px;margin:2px 0 10px">
@@ -1341,6 +1341,6 @@ function editDevice(dev, preGroup, template) {
       if (!mk) return;
     }
     try { await App().SaveDevice(out); closeModal(); await refreshInventory(); toast(t("保存しました"), "ok"); }
-    catch (e) { toast(terr(e), "err"); }
+    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
 }

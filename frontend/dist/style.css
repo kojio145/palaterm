@@ -113,8 +113,24 @@ html, body {
 td.ops { padding-left: 4px; padding-right: 14px; text-align: right; white-space: nowrap; }
 td.ops .ops-btns { display: inline-flex; gap: 3px; }
 td.ops .btn.sm { padding: 5px 6px; }
+/* A list wider than the window (a narrow window, Windows' larger text)
+   keeps its row buttons at the right edge, over the columns scrolled under
+   them, instead of out of sight past the scrollbar. */
+.panel.scrollx > table td.ops { position: sticky; right: 0; z-index: 1; background: var(--panel); box-shadow: -8px 0 8px -8px rgba(0,0,0,.6); }
+.panel.scrollx > table:has(td.ops) thead th:last-child { right: 0; z-index: 4; }
+.panel.scrollx > table tr:hover td.ops { background: var(--bg-2); }
+.panel.scrollx > table tr.row-sel td.ops { background: linear-gradient(rgba(59,130,246,.13), rgba(59,130,246,.13)), var(--panel); }
 .btn.run { background: var(--ok); border-color: var(--ok); color: #06210f; font-weight: 650; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
+/* A button (or list box) that warns, fails or confirms by its colour. */
+.btn.warn-outline { color: var(--warn); border-color: var(--warn); }
+.btn.err-outline { color: var(--err); border-color: var(--err); }
+.btn.ok-outline { color: var(--ok); border-color: var(--ok); }
+/* Status pills (the separate windows' state and notes). */
+.pill { display: inline-flex; align-items: center; font-size: 12px; padding: 2px 10px; border-radius: 999px; white-space: nowrap; border: 1px solid var(--border); color: var(--text-dim); }
+.pill.ok { color: var(--ok); border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12); }
+.pill.run { color: var(--run); border-color: rgba(56,189,248,.45); background: rgba(56,189,248,.12); }
+.pill.err { color: #f87171; border-color: rgba(239,68,68,.5); background: rgba(239,68,68,.12); }
 
 /* ---- Tables ---- */
 table { width: 100%; border-collapse: collapse; }
@@ -449,7 +465,13 @@ th.sortable:hover { color: var(--text); }
 .stage-banner.stage-during { border-color: #b45309; background: rgba(180, 83, 9, .15); } .stage-banner.stage-during .sb-value { color: #fcd34d; }
 .stage-banner.stage-after { border-color: #15803d; background: rgba(21, 128, 61, .15); } .stage-banner.stage-after .sb-value { color: #86efac; }
 .stage-banner.stage-none { border-color: var(--warn); border-style: dashed; } .stage-banner.stage-none .sb-value, .stage-banner.stage-none .sb-note { color: var(--warn); }
-.warn-box { border: 1px solid var(--warn); border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13px; }
+/* One look for every warning box (and the import screen's .li-warn / .li-err
+   are the same box): tinted, with a border of its colour. */
+.warn-box, .li-warn { color: var(--warn); background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.4); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.7; }
+.warn-box.err, .li-err { color: #f87171; background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.35); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.7; }
+/* A notice, not a warning: the same box in the accent colour. */
+.info-box { color: var(--text); background: rgba(59,130,246,.08); border: 1px solid var(--accent); border-radius: 8px; padding: 8px 12px; margin: 8px 0; font-size: 13px; line-height: 1.7; }
+.warn-box.inline { display: inline-block; margin: 0; padding: 5px 10px; font-size: 12px; line-height: 1.4; }
 .warn-box .mono { font-family: "Consolas", monospace; }
 
 /* A small window over the open modal (コマンドをまとめて追加). */
@@ -550,8 +572,6 @@ table.grid .g-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7p
 .li-fields { display: flex; flex-wrap: wrap; gap: 0 14px; align-items: flex-end; }
 .li-fields .field { min-width: 120px; }
 .li-fields input[type=number] { width: 90px; }
-.li-drop { border: 1.5px dashed #3a4a60; border-radius: 12px; padding: 18px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; background: var(--bg-2); margin-bottom: 14px; }
-.li-drop-t { font-size: 15px; font-weight: 600; }
 .li-sheetbox { max-height: 330px; border: 1px solid var(--border); border-radius: 8px; }
 .li-sheet { border-collapse: separate; border-spacing: 0; font-family: "Consolas", monospace; font-size: 12px; width: auto; }
 .li-sheet th, .li-sheet td { padding: 3px 8px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0; }
@@ -566,13 +586,12 @@ table.grid .g-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7p
 .li-legend i.h { background: rgba(59,130,246,.35); }
 .li-legend i.v { background: rgba(34,197,94,.18); }
 .li-legend i.out { background: repeating-linear-gradient(45deg, transparent 0 3px, rgba(147,161,178,.3) 3px 6px); }
-.li-err { color: #f87171; background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.35); border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 13px; }
-.li-warn { color: var(--warn); background: rgba(245,158,11,.07); border: 1px solid rgba(245,158,11,.3); border-radius: 8px; padding: 8px 12px; margin: 10px 0; font-size: 12px; line-height: 1.7; }
 .li-map td { vertical-align: middle; padding: 6px 8px; }
-.li-map select, .li-map input[type=text], .li-map input[type=password] { width: 100%; background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 13px; }
+/* The import screen's fields look like every other form's (.field input):
+   the same background, border and corners — tighter only inside tables. */
+.li-map select, .li-map input[type=text], .li-map input[type=password] { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
 .li-map .li-tpl { margin-top: 4px; font-family: "Consolas", monospace; font-size: 12px; }
 .li-map tr.li-unused td:first-child b { color: var(--text-dim); font-weight: 500; }
-.li-req { font-size: 10px; color: var(--warn); border: 1px solid rgba(245,158,11,.4); border-radius: 4px; padding: 0 4px; }
 .li-steps { display: flex; flex-wrap: wrap; gap: 4px; }
 .li-step { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 6px; border: 1px solid rgba(56,189,248,.4); background: rgba(56,189,248,.10); color: var(--run); cursor: pointer; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .li-step.add { border-style: dashed; border-color: var(--border); background: transparent; color: var(--text-dim); }
@@ -582,7 +601,12 @@ table.grid .g-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7p
 .li-filled { font-size: 10px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; font-family: "Segoe UI", "Meiryo", sans-serif; }
 .li-ol { margin: 0 0 10px; padding-left: 20px; font-size: 13px; line-height: 1.8; }
 .li-cond { gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
-.li-cond select, .li-cond input, .li-fields select, .li-fields input, .li-target input, .li-target select { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px; font: inherit; font-size: 13px; }
+.li-cond select, .li-cond input, .li-fields select, .li-fields input, .li-target input, .li-target select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font: inherit; font-size: 13px; }
+.li-map select:focus, .li-map input:focus, .li-cond select:focus, .li-cond input:focus, .li-fields select:focus, .li-fields input:focus,
+.li-target input:focus, .li-target select:focus, .li-scfg input:focus, .li-scfg select:focus { outline: none; border-color: var(--accent); }
+.li-pwbox { display: block; position: relative; }
+.li-pwbox input { padding-right: 36px !important; }
+.li-pwbox .eye-btn { width: 26px; height: 24px; right: 4px; bottom: auto; top: 50%; transform: translateY(-50%); font-size: 13px; }
 .li-res-t td, .li-res-t th { padding: 6px 10px; font-size: 12px; white-space: nowrap; }
 .li-res-t td { font-family: "Consolas", monospace; }
 tr.li-skip td { color: var(--text-dim); text-decoration: line-through; }
@@ -592,7 +616,7 @@ tr.li-skip td:last-child { text-decoration: none; }
 .li-sn { color: var(--text-dim); font-size: 12px; padding-top: 2px; }
 .li-st { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
 .li-scfg { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
-.li-scfg input, .li-scfg select { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 7px; font: inherit; font-size: 13px; }
+.li-scfg input, .li-scfg select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font: inherit; font-size: 13px; }
 .li-safter { color: var(--run); font-size: 12px; margin-top: 6px; word-break: break-all; }
 .li-maptbl { width: auto; }
 .li-maptbl th, .li-maptbl td { padding: 3px 4px; border-bottom: 0; }
@@ -615,6 +639,15 @@ button.li-pill[aria-pressed="false"] { opacity: .4; }
    and squeezes 内容・変更点 into a tall, narrow strip. */
 table.li-prev { table-layout: fixed; min-width: 1000px; }
 #tab-import .li-prevbox { overflow: auto; }
+/* A low window (1280×720 at 125 %): the choices above the preview take
+   less room, so its rows keep most of it. */
+@media (max-height: 760px) {
+  #tab-import .page-head { margin-bottom: 10px; }
+  #tab-import .li-sec { padding: 10px 14px; margin-bottom: 10px; }
+  #tab-import .li-target .li-opt { padding: 8px 12px; gap: 6px; }
+  #tab-import .li-target .li-opt > .muted { display: none; }
+  #tab-import .li-target input, #tab-import .li-target select { padding: 6px 10px; }
+}
 .li-prevbox thead th { position: sticky; top: 0; background: var(--panel); z-index: 3; }
 .li-prev td { vertical-align: top; padding: 8px 10px; font-size: 13px; overflow-wrap: anywhere; }
 .li-prev td select { background: var(--bg-3); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font: inherit; font-size: 12px; max-width: 100%; }
@@ -629,6 +662,7 @@ table.li-prev { table-layout: fixed; min-width: 1000px; }
 .li-cs-ask { color: var(--warn); border-color: rgba(245,158,11,.5); }
 .li-cs-take { color: #a78bfa; border-color: rgba(167,139,250,.5); }
 .li-note { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.li-hostnote { font-size: 12px; color: var(--warn); margin: 0 0 4px; }
 .li-rerr { font-size: 12px; color: #f87171; margin-top: 2px; }
 .li-missing { border-top: 1px solid var(--border); padding: 12px 16px; font-size: 13px; background: rgba(59,130,246,.05); }
 .li-mlist { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; font-size: 12px; max-height: 150px; overflow-y: auto; }

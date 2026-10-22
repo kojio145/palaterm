@@ -24,7 +24,7 @@ const SCREEN_PRESETS = [
   { name: "琥珀", bg: "#000000", fg: "#ffb000" },
 ];
 function screenKindName(kind) {
-  return { term: t("単独接続窓"), viewer: t("ログ表示窓"), watch: t("画面表示窓（見るだけ）"), diff: t("差分窓") }[kind] || kind;
+  return { term: t("端末窓"), viewer: t("ログ表示窓"), watch: t("画面表示窓（見るだけ）"), diff: t("差分窓") }[kind] || kind;
 }
 
 // Device tints (Device.termColor): dark backgrounds for the terminal and a
@@ -155,7 +155,7 @@ function openScreenColorPanel(kind, anchor, apply, onClose) {
   }
   const pop = h(`<div id="sc-pop" class="sc-pop" data-kind="${kind}">
     <div class="sc-pop-head"><b>${esc(t("表示の色"))}</b> <span class="muted">${esc(screenKindName(kind))}</span>
-      <button type="button" class="btn sm sc-close">✕</button></div></div>`);
+      <button type="button" class="btn sm sc-close" data-tip="${esc(t("閉じる"))}">✕</button></div></div>`);
   pop.appendChild(screenColorEditor(kind, apply));
   pop.appendChild(h(`<div class="sc-note">${esc(t("この PC に保存され、同じ種類の窓すべてに使われます（設定タブでも変えられます）"))}</div>`));
   document.body.appendChild(pop);
@@ -188,7 +188,7 @@ function closeScreenColorPanel() {
 function screenColorsPanelHTML() {
   return `<div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="screen-colors">
     <div style="font-weight:600;margin-bottom:4px">${esc(t("表示の色"))}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("別ウィンドウで開く画面の文字色・背景色です（Tera Term の［ウィンドウの設定］と同じ）。変更はすぐ保存され、開いている窓にも反映されます。各窓の「色」ボタンからも変えられます。保存先はこの PC です（vault・一式書出には入りません）。機器ごとの「端末の色」（機器の編集）は単独接続窓の背景にさらに重ねて使われます"))}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("別ウィンドウで開く画面の文字色・背景色です（Tera Term の［ウィンドウの設定］と同じ）。変更はすぐ保存され、開いている窓にも反映されます。各窓の「色」ボタンからも変えられます。保存先はこの PC です（vault・一式書き出しには入りません）。機器ごとの「端末の色」（機器の編集）は端末窓の背景にさらに重ねて使われます"))}</div>
     <div id="sc-kinds"></div>
   </div>`;
 }

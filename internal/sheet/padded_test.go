@@ -45,3 +45,21 @@ func TestXLSXPadded(t *testing.T) {
 		t.Errorf("row = %q", row)
 	}
 }
+
+// A sparse sheet (one cell far right on every row) is capped at MaxCells
+// and says so.
+func TestSparseSheetCapped(t *testing.T) {
+	b := &Book{}
+	s := &sheetBuilder{name: "s"}
+	for r := 0; r < maxGridRows; r++ {
+		s.set(r, maxGridCols-1, "x")
+	}
+	s.finish(b)
+	cells := 0
+	for _, r := range b.Sheets[0].Rows {
+		cells += len(r)
+	}
+	if cells > MaxCells || len(b.Warnings) == 0 {
+		t.Fatalf("%d cells (cap %d), warnings %v", cells, MaxCells, b.Warnings)
+	}
+}

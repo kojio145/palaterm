@@ -19,17 +19,17 @@ function renderCommands() {
       <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
       <td class="mono muted"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
-      <td style="text-align:right;white-space:nowrap">
+      <td class="ops"><div class="ops-btns">
         <button class="btn sm act-edit" data-edit="${esc(s.name)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-copy="${esc(s.name)}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(s.name)}">${esc(t("削除"))}</button>
-      </td>
+      </div></td>
     </tr>`).join("");
 
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("コマンドセット一覧"))}</div>
-        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書出（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
+        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書き出し（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
@@ -59,16 +59,17 @@ function renderCommands() {
   };
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editCommandSet(INV.commandSets.find(s => s.name === b.dataset.edit)));
-  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = async () => {
-    try {
-      const nm = await App().CopyCommandSet(b.dataset.copy); await refreshInventory();
-      toast(t("複製しました: {n}", { n: nm }), "ok");
-      // The copy gets a placeholder name (…_copy); open it right away so the
-      // real name can be typed without hunting for the row.
-      const copy = (INV.commandSets || []).find(s => s.name === nm);
-      if (copy) { editCommandSet(copy); const inp = document.getElementById("s-name"); if (inp) { inp.focus(); inp.select(); } }
-    }
-    catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
+  root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
+    // As a device's 複製: a new, unsaved set filled from the source (its
+    // name with _copy) — nothing exists until 保存, so キャンセル leaves no
+    // "backup_copy" behind in the list.
+    const src = (INV.commandSets || []).find(s => s.name === b.dataset.copy);
+    if (!src) return;
+    const taken = new Set((INV.commandSets || []).map(s => s.name));
+    let nm = src.name + "_copy";
+    for (let i = 2; taken.has(nm); i++) nm = `${src.name}_copy${i}`;
+    editCommandSet(null, { ...JSON.parse(JSON.stringify(src)), name: nm });
+    const inp = document.getElementById("s-name"); if (inp) { inp.focus(); inp.select(); }
   });
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
     // The devices on this set are named: deleting it leaves them with a
@@ -115,8 +116,9 @@ function bulkCommandsDialog(onAdd) {
   ta.focus();
 }
 
-function editCommandSet(set) {
-  const s = set || { name: "", commands: [] };
+// editCommandSet edits set, or adds a new one (filled from tpl for 複製).
+function editCommandSet(set, tpl) {
+  const s = set || tpl || { name: "", commands: [] };
   // Working copy: one row per command, each with its own pause (sec).
   let cmds = (s.commands || []).map(c => ({
     text: c.text || "", pauseSec: c.pauseSec ?? 1, serialSec: c.serialSec ?? 1, wait: c.wait || "",
@@ -143,7 +145,7 @@ function editCommandSet(set) {
     <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="save">${esc(t("保存"))}</button>
+      <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
     </div>
   </div>`);
   openModal(node, "set-edit");
@@ -166,7 +168,7 @@ function editCommandSet(set) {
   function syncPause() {
     tbody.querySelectorAll(".c-pause, .c-spause").forEach(inp => {
       inp.disabled = !usePause.checked;
-      inp.title = usePause.checked ? "" : t("「待機秒を使う」がオフのため使いません");
+      inp.dataset.tip = usePause.checked ? "" : t("「待機秒を使う」がオフのため使いません");
     });
   }
   usePause.onchange = syncPause;
@@ -180,8 +182,8 @@ function editCommandSet(set) {
         <td><input class="c-pause" type="number" style="width:100%" value="${c.pauseSec}"></td>
         <td><input class="c-spause" type="number" style="width:100%" value="${c.serialSec}"></td>
         <td style="white-space:nowrap">
-          <button class="btn sm" type="button" data-ins="${i}" title="${esc(t("この行の下に挿入"))}">＋</button>
-          <button class="btn sm act-del" type="button" data-rm="${i}">×</button>
+          <button class="btn sm" type="button" data-ins="${i}" data-tip="${esc(t("この行の下に挿入"))}">＋</button>
+          <button class="btn sm act-del" type="button" data-rm="${i}" data-tip="${esc(t("この行を削除"))}">×</button>
         </td>
       </tr>`).join("");
     tbody.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
@@ -269,7 +271,7 @@ function runLidNote() {
   if (!running || !runPower || !runPower.lidPresent) return "";
   const act = runPower.onAC === false ? runPower.lidActionDC : runPower.lidActionAC;
   if (act === 0) return "";
-  return `<div style="font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 14px;margin:-6px 0 14px">${esc(t("ⓘ この PC は、ふたを閉じるとスリープして実行が止まります。ふたは開けたままにしてください（画面ロックは大丈夫です）"))}</div>`;
+  return `<div class="warn-box" style="margin:-6px 0 14px">${esc(t("ⓘ この PC は、ふたを閉じるとスリープして実行が止まります。ふたは開けたままにしてください（画面ロックは大丈夫です）"))}</div>`;
 }
 // True between pressing ■ 中止 and the backend's run:done, so the button can
 // say 中止中… and the completion toast can say what was stopped.
@@ -448,10 +450,10 @@ function renderRun() {
       <td style="text-align:right;white-space:nowrap">
         ${st.output ? `<span class="link" data-output="${esc(d.name)}" data-tip="${esc(t("接続確認で機器が表示した内容を見ます（ログは残していません）"))}">${esc(t("出力"))}</span> ` : ""}
         ${st.logPath ? `<span class="link" data-watch="${esc(st.logPath)}" data-tip="${esc(t("機器の画面を表示のみで開きます（実行中は出力をそのまま追います）"))}">${esc(t("画面"))}</span> <span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
-        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm" data-hk="${esc(d.id)}" style="color:var(--warn);border-color:var(--warn)">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
+        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm warn-outline" data-hk="${esc(d.id)}">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
-          ? `<button class="btn sm" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} style="color:var(--err);border-color:var(--err)" data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
-        ${!running ? `<button class="btn sm" data-editdev="${esc(d.id)}" data-tip="${esc(t("この機器の設定（アドレス・認証情報・踏み台など）を開きます。失敗の原因をここで直して ↻ で再実行"))}">${esc(t("編集"))}</button> ` : ""}
+          ? `<button class="btn sm err-outline" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
+        ${!running ? `<button class="btn sm act-edit" data-editdev="${esc(d.id)}" data-tip="${esc(t("この機器の設定（アドレス・認証情報・踏み台など）を開きます。失敗の原因をここで直して ↻ で再実行"))}">${esc(t("編集"))}</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
@@ -505,9 +507,9 @@ function renderRun() {
       <button class="btn run" id="btn-run" ${running || enabledCount === 0 ? "disabled" : ""}>${esc(filtered ? t("▶ 表示中の {n} 台を実行", { n: enabledCount }) : t("▶ 一括実行"))}</button>
       <button class="btn" id="btn-dry" ${running || enabledCount === 0 ? "disabled" : ""} data-tip="${esc(t("接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に"))}">${esc(t("⚡ 接続確認のみ"))}</button>
       <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
-      ${!running && (failedCount || canceledCount) ? `<button class="btn" id="btn-retry" style="color:var(--err);border-color:var(--err)">${esc(retryLabel)}</button>` : ""}
+      ${!running && (failedCount || canceledCount) ? `<button class="btn err-outline" id="btn-retry">${esc(retryLabel)}</button>` : ""}
       ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、機器名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
-      ${runGroupSel && devs.length ? `<button class="btn" id="btn-tile" ${tileCount === 0 ? "disabled" : ""} data-tip="${esc(t("チェックした実行対象の機器（絞り込み中は表示中の機器だけ）の単独接続窓をまとめて開き、画面いっぱいに並べます（最大 16 台）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）。「踏み台: 使わない」もこの窓に効きます"))}">${esc(t("並べて接続（{n}台）", { n: tileCount }))}</button>` : ""}
+      ${runGroupSel && devs.length ? `<button class="btn" id="btn-tile" ${tileCount === 0 ? "disabled" : ""} data-tip="${esc(t("チェックした実行対象の機器（絞り込み中は表示中の機器だけ）の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）。「踏み台: 使わない」もこの窓に効きます"))}">${esc(t("並べて接続（{n}台）", { n: tileCount }))}</button>` : ""}
       ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「順番待ち」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
       <div style="flex-basis:100%;height:0;margin:-4px 0 0"></div>
       ${groups.length || ungroupedCount ? `<select id="run-grp" class="btn" style="padding-right:8px" ${running ? "disabled" : ""}>
@@ -518,7 +520,7 @@ function renderRun() {
       <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
       </select>
-      ${anyBastion ? `<select id="run-route" class="btn" style="padding-right:8px${runDirect ? ";color:var(--warn);border-color:var(--warn)" : ""}" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
+      ${anyBastion ? `<select id="run-route" class="btn${runDirect ? " warn-outline" : ""}" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
         <option value="" ${runDirect ? "" : "selected"}>${esc(t("踏み台: 機器の設定どおり"))}</option>
         <option value="direct" ${runDirect ? "selected" : ""}>${esc(t("踏み台: 使わない（直接接続）"))}</option>
       </select>` : ""}
@@ -536,13 +538,13 @@ function renderRun() {
       <select id="run-filter-status" class="btn" style="padding-right:8px"><option value="">${esc(t("状態: すべて"))}</option>${["queued", "off", "done", "error", "canceled", "running"].map(p => `<option value="${p}" ${p === runFilter.status ? "selected" : ""}>${esc(statusLabel(p))}</option>`).join("")}</select>
       ${filtered ? `<button class="btn sm" id="run-filter-clear">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
       ${runSort.key ? `<button class="btn sm" id="run-sort-clear">${esc(t("並び順を戻す"))}</button>` : ""}
-      ${hiddenChecked ? `<span style="font-size:12px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:5px 10px">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。この実行には含まれません（含めるには絞り込みを解除）", { n: hiddenChecked }))}</span>` : ""}
+      ${hiddenChecked ? `<span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。この実行には含まれません（含めるには絞り込みを解除）", { n: hiddenChecked }))}</span>` : ""}
     </div>` : ""}
     <div class="panel scrollx">
       ${devs.length === 0 ? `<div class="empty">${esc(runGroupSel ? t("このグループには機器がありません。機器一覧で追加してください。") : t("「グループで対象を選択…」から実行するグループを選んでください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致する機器がありません"))}</div>`
         : `<table class="fixed" data-colw="run"><thead><tr>
-           <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} title="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
+           <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} data-tip="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
            ${th("phase", t("状態"), "126px")}${th("name", t("機器名"), "132px")}${th("host", t("IPアドレス"), "112px")}
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
            <th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
@@ -755,7 +757,7 @@ function adHocDialog() {
     openModal(node, "mid");
     const ta = node.querySelector("#ah-text");
     ta.focus();
-    node.querySelector("#ah-cancel").onclick = () => { closeModal(); resolve(false); };
+    guardDiscard(node, "#ah-cancel", null, () => resolve(false));
     node.querySelector("#ah-ok").onclick = () => {
       const prev = runAdHoc;
       runAdHoc = ta.value;
@@ -1280,10 +1282,13 @@ let myLoginsDirty = false;
 async function canLeaveSettings(nextTab) {
   const active = document.querySelector(".nav-btn.active");
   if (!active || active.dataset.tab !== "settings" || nextTab === "settings" || !(settingsDirty || myLoginsDirty)) return true;
+  // The button says what happens next: leave the tab, lock, or switch the language.
   const ok = await uiConfirm({
     title: t("未保存の変更"),
-    message: t("設定に保存されていない変更があります。<br>保存せずに移動しますか？"),
-    okLabel: t("破棄して移動"),
+    message: nextTab === "lock" ? t("設定に保存されていない変更があります。<br>保存せずにロックしますか？")
+      : nextTab === "lang" ? t("設定に保存されていない変更があります。<br>保存せずに言語を切り替えますか？")
+      : t("設定に保存されていない変更があります。<br>保存せずに移動しますか？"),
+    okLabel: nextTab === "lock" ? t("破棄してロック") : nextTab === "lang" ? t("破棄して切り替える") : t("破棄して移動"),
     danger: true,
   });
   if (ok) settingsDirty = myLoginsDirty = false;
@@ -1297,7 +1302,7 @@ function renderSettings() {
     <div class="page-head"><div><div class="page-title">${esc(t("設定"))}</div>
       <div class="page-sub">${esc(t("一括実行・ログ保存・自動ロックの共通設定"))}</div></div></div>
     <div class="panel" style="padding:22px;max-width:620px">
-      ${running ? `<div style="font-size:13px;color:var(--accent);border:1px solid var(--accent);border-radius:8px;padding:10px 14px;margin-bottom:16px">${esc(t("▶ 一括実行中です。実行中のバッチは開始時点の設定で動くため、ここでの変更は次回の実行から反映されます"))}</div>` : ""}
+      ${running ? `<div class="info-box" style="margin:0 0 16px">${esc(t("▶ 一括実行中です。実行中のバッチは開始時点の設定で動くため、ここでの変更は次回の実行から反映されます"))}</div>` : ""}
       <div class="grid-2">
         <div class="field"><label>${esc(t("最大並列数（0=無制限）"))}</label><input id="set-par" type="number" value="${s.maxParallel ?? 10}"></div>
         <div class="field"><label>${esc(t("接続タイムアウト（秒）"))}</label><input id="set-ct" type="number" value="${s.connectTimeout ?? 20}"></div>
@@ -1330,7 +1335,7 @@ function renderSettings() {
         <div class="field"><label><span data-tip="${esc(t("オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません。コマンドセットの行に {password} / {enable} を書いた場合だけは機器がその行をエコーするため、オフでもそのログはマスクされます"))}">${esc(t("ログ内のパスワードをマスクする ⓘ"))}</span></label>
           <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-mask" type="checkbox" ${s.maskLogSecrets ? "checked" : ""}> ${esc(t("パスワードを **** に置き換えて保存（既定: オフ）"))}</label></div>
       </div>
-      <div class="field"><label><span data-tip="${esc(t("対話窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます"))}">${esc(t("対話窓の右クリック ⓘ"))}</span></label>
+      <div class="field"><label><span data-tip="${esc(t("端末窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます"))}">${esc(t("対話窓の右クリック ⓘ"))}</span></label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-rc-off" type="checkbox" ${s.rightClickPasteOff ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを無効にする"))}</label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
       <div class="field"><label><span data-tip="${esc(t("機器一覧・実行タブの「並べて接続」で開いた窓を、最初から同時入力オンにするかどうかです。オフ（既定）なら、同時入力は各窓の「同時入力」ボタンで必要な窓だけオンにします。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続の同時入力 ⓘ"))}</span></label>
@@ -1345,14 +1350,14 @@ function renderSettings() {
         <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve・指定なし=Current。上の欄で変更可。予約で指定なしのときは reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
       <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
-      <div class="modal-actions"><button class="btn primary" id="set-save">${esc(t("保存"))}</button></div>
+      <div class="modal-actions"><button class="btn primary" id="set-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button></div>
     </div>
     <div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="my-bastion">
       <div style="font-weight:600;margin-bottom:4px">${esc(t("自分の踏み台"))}</div>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書出・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書き出し・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
       <div id="mb-rows"></div>
       <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
-      <div class="modal-actions"><button class="btn primary" id="mb-save">${esc(t("保存"))}</button></div>
+      <div class="modal-actions"><button class="btn primary" id="mb-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button></div>
     </div>
     ${screenColorsPanelHTML()}
     <div class="panel" style="padding:22px;max-width:620px;margin-top:16px;border-color:var(--err)">
@@ -1378,6 +1383,14 @@ function renderSettings() {
   };
   // Click a placeholder cell to copy it to the clipboard.
   wireCopyCells(root);
+  // Ctrl+Enter saves the panel being typed in, as in every editor.
+  root.onkeydown = e => {
+    if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.isComposing || modalOpen()) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    const btn = e.target.closest && e.target.closest(".panel") && e.target.closest(".panel").querySelector(".modal-actions .btn.primary:not([disabled])");
+    if (btn) btn.click();
+  };
   document.getElementById("set-save").onclick = async () => {
     const out = {
       maxParallel: parseInt(document.getElementById("set-par").value, 10) || 0,
@@ -1509,7 +1522,7 @@ function renderMyBastion() {
 
 // All profiles live in the vault and are equally editable — the seeded 14
 // defaults included. Deleting never touches the JSON files under
-// export\os-profiles\, so ファイル読込 can always restore a profile.
+// export\os-profiles\, so ファイル読み込み can always restore a profile.
 function renderOSTypes() {
   const root = document.getElementById("tab-ostypes");
   const profiles = INV.customProfiles || [];
@@ -1525,13 +1538,13 @@ function renderOSTypes() {
         <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読み込みで戻せます。書き出しは「機器」タブの一式書き出しにまとまっています"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>
-        <button class="btn primary" id="prof-add">${esc(t("＋ 追加"))}</button>
+        <button class="btn primary" id="prof-add">${esc(t("＋ OSタイプを追加"))}</button>
       </div>
     </div>
     ${profiles.length ? listViewBar(LV, t("絞り込み（名前・プロンプト）")) : ""}
     <div class="panel scrollx">
       ${profiles.length === 0
-        ? `<div class="muted" style="font-size:13px;padding:14px">${esc(t("プロファイルがありません。「読込」で export\\os-profiles\\ のJSONから復元するか、「＋ 追加」で作成してください。"))}</div>`
+        ? `<div class="empty">${esc(t("プロファイルがありません。「読み込み」で export\\os-profiles\\ のJSONから復元するか、「＋ OSタイプを追加」で作成してください。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するプロファイルがありません"))}</div>`
         : `<table class="fixed" data-colw="ostypes"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:280px")}${listViewTh(LV, "prompt", t("プロンプト（完了の目印）"))}${listViewTh(LV, "login", t("ログイン手順"), "width:110px")}<th style="width:220px"></th></tr></thead><tbody id="prof-body">
         ${visible.map(p => `<tr data-key="${esc(p.key)}">
@@ -1539,11 +1552,11 @@ function renderOSTypes() {
           <td><div class="clip" data-tip="${esc(p.name)}"><b>${esc(p.name)}</b></div></td>
           <td class="mono muted"><div class="clip" data-tip="${esc(p.prompt)}">${esc(p.prompt)}</div></td>
           <td class="muted">${esc(t("{n} 行", { n: (p.login || []).length }))}</td>
-          <td style="text-align:right;white-space:nowrap">
+          <td class="ops"><div class="ops-btns">
             <button class="btn sm act-edit" data-pedit="${esc(p.key)}">${esc(t("編集"))}</button>
             <button class="btn sm act-copy" data-pcopy="${esc(p.key)}">${esc(t("複製"))}</button>
             <button class="btn sm act-del" data-pdel="${esc(p.key)}">${esc(t("削除"))}</button>
-          </td></tr>`).join("")}</tbody></table>`}
+          </div></td></tr>`).join("")}</tbody></table>`}
     </div>`;
   listViewWire(LV, root, renderOSTypes, focus);
   wireColResize(root);
@@ -1557,25 +1570,27 @@ function renderOSTypes() {
   });
   root.querySelectorAll("[data-pedit]").forEach(b => b.onclick = () =>
     editProfile((INV.customProfiles || []).find(p => p.key === b.dataset.pedit)));
-  root.querySelectorAll("[data-pcopy]").forEach(b => b.onclick = async () => {
-    try {
-      const nm = await App().CopyProfile(b.dataset.pcopy);
-      INV = await App().GetInventory();
-      PROFILES = await App().ListProfiles();
-      renderOSTypes();
-      toast(t("複製しました: {n}", { n: nm }), "ok");
-    } catch (e) { toast(t("複製失敗") + ": " + terr(e), "err"); }
+  root.querySelectorAll("[data-pcopy]").forEach(b => b.onclick = () => {
+    // As a device's 複製: opened as a new, unsaved profile (…_copy) — none
+    // exists until 保存.
+    const src = (INV.customProfiles || []).find(p => p.key === b.dataset.pcopy);
+    if (!src) return;
+    const taken = new Set((INV.customProfiles || []).map(p => p.name.toLowerCase()));
+    let nm = src.name + "_copy";
+    for (let i = 2; taken.has(nm.toLowerCase()); i++) nm = `${src.name}_copy${i}`;
+    editProfile(null, { ...JSON.parse(JSON.stringify(src)), key: "", name: nm });
+    const inp = document.getElementById("p-name"); if (inp) { inp.focus(); inp.select(); }
   });
   root.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
     const p = (INV.customProfiles || []).find(x => x.key === b.dataset.pdel);
-    if (!(await uiConfirm({ title: t("プロファイルを削除"), message: t("OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">標準プロファイルは export\\os-profiles\\ のJSONから、自作のものは一式書出したフォルダから「読込」で戻せます</span>", { n: esc(p ? p.name : "") }), okLabel: t("削除"), danger: true }))) return;
+    if (!(await uiConfirm({ title: t("プロファイルを削除"), message: t("OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">標準プロファイルは export\\os-profiles\\ のJSONから、自作のものは一式書き出ししたフォルダから「読み込み」で戻せます</span>", { n: esc(p ? p.name : "") }), okLabel: t("削除"), danger: true }))) return;
     try {
       await App().DeleteProfile(b.dataset.pdel);
       INV = await App().GetInventory();
       PROFILES = await App().ListProfiles();
       renderOSTypes();
       toast(t("削除しました"), "ok");
-    } catch (e) { toast(terr(e), "err"); }
+    } catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
   });
   document.getElementById("prof-add").onclick = () => editProfile(null);
   document.getElementById("prof-imp").onclick = async () => {
@@ -1593,10 +1608,11 @@ function renderOSTypes() {
 
 // Profile editor modal (defaults and user-made profiles are edited the same
 // way).
-function editProfile(prof) {
+// editProfile edits prof, or adds a new one (filled from tpl for 複製).
+function editProfile(prof, tpl) {
     // 新規作成時は Cisco IOS 系の実例をすべて埋めた状態で開く（書き換えて使う）。
     // プロンプト・expectは「#」「Username:」等の文字そのまま（部分一致）。
-    const p = prof || {
+    const p = prof || tpl || {
       name: "",
       prompt: "#",
       login: [
@@ -1617,7 +1633,7 @@ function editProfile(prof) {
     const discCmd = (p.disconnect || []).map(s => s.send || "").filter(Boolean).join("\n") || "exit";
     const node = h(`<div>
       <h3>${esc(prof ? t("OSタイププロファイルを編集") : t("OSタイププロファイルを追加"))}</h3>
-      ${prof ? "" : `<p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("Cisco IOS系の実例を入れてあります。機器に合わせて書き換えてください。"))}</p>`}
+      ${prof || tpl ? "" : `<p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("Cisco IOS系の実例を入れてあります。機器に合わせて書き換えてください。"))}</p>`}
       <div class="grid-2">
         <div class="field"><label>${esc(t("プロファイル名"))} <span class="req">${esc(t("必須"))}</span></label><input id="p-name" value="${esc(p.name || "")}" placeholder="${esc(t("例: MyRouter OS"))}"></div>
         <div class="field"><label><span data-tip="${esc(t("コマンドが打てる状態のときに機器が出す表示（例: Router#）。コマンド送信後、これが再び現れたら「出力が終わった」と判定して次のコマンドを送ります。「#」のように末尾の記号だけ書いておけば、設定モードのプロンプト（例: FG(console)#）にも一致します"))}">${esc(t("プロンプト（コマンド完了の目印） ⓘ"))}</span> <span class="req">${esc(t("必須"))}</span></label><input id="p-prompt" class="mono" value="${esc(p.prompt || "")}"></div>
@@ -1677,8 +1693,8 @@ function editProfile(prof) {
           <td><input class="p-exp mono" style="width:100%" value="${esc(s.expect)}"></td>
           <td><input class="p-snd mono" style="width:100%" value="${esc(s.send)}" placeholder="${esc(s.enter ? t("（Enter だけ送る）") : s.sendRaw ? t("（制御文字を送る: {r}）", { r: JSON.stringify(s.sendRaw) }) : "")}"></td>
           <td style="white-space:nowrap">
-            <button class="btn sm" type="button" data-ins="${i}">＋</button>
-            <button class="btn sm act-del" type="button" data-rm="${i}">×</button>
+            <button class="btn sm" type="button" data-ins="${i}" data-tip="${esc(t("この行の下に挿入"))}">＋</button>
+            <button class="btn sm act-del" type="button" data-rm="${i}" data-tip="${esc(t("この行を削除"))}">×</button>
           </td>
         </tr>`).join("");
       tbody.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
@@ -1708,7 +1724,7 @@ function editProfile(prof) {
         <tr data-idx="${i}">
           <td><input class="a-exp mono" style="width:100%" value="${esc(a.expect)}" placeholder="[confirm]"></td>
           <td><input class="a-snd mono" style="width:100%" value="${esc(a.send)}" placeholder="${esc(t("（Enter）"))}"></td>
-          <td><button class="btn sm act-del" type="button" data-arm="${i}">×</button></td>
+          <td><button class="btn sm act-del" type="button" data-arm="${i}" data-tip="${esc(t("この行を削除"))}">×</button></td>
         </tr>`).join("") || `<tr><td colspan="3" class="muted" style="font-size:12px">${esc(t("（なし）"))}</td></tr>`;
       ansBody.querySelectorAll("[data-arm]").forEach(b => b.onclick = () => {
         answers = collectAns(); answers.splice(parseInt(b.dataset.arm, 10), 1); renderAns();
@@ -1766,7 +1782,7 @@ function editProfile(prof) {
         renderOSTypes();
         toast(t("保存しました"), "ok");
         return PROFILES.find(x => (out.key && x.key === out.key) || x.name === out.name) || { key: out.key, name: out.name };
-      } catch (e) { toast(terr(e), "err"); return null; }
+      } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); return null; }
     }
     node.querySelector("#p-save").onclick = saveProfile;
 }

@@ -8,40 +8,40 @@
 async function bootDiffWindow() {
   document.getElementById("lock").classList.add("hidden");
   document.getElementById("app").classList.add("hidden");
-  document.body.style.background = "#11151c";
+  document.body.style.background = "var(--bg)";
   const D = () => window.go.main.DiffWin;
-  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#11151c;font-family:'Segoe UI',sans-serif">
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #2a3442;flex-wrap:wrap">
-      <div id="dw-title" style="color:#e6ecf3;font-size:13px;font-weight:600;white-space:nowrap"></div>
+  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);font-family:'Segoe UI',sans-serif">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <div id="dw-title" style="color:var(--text);font-size:13px;font-weight:600;white-space:nowrap"></div>
       <div id="dw-verdict" style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap"></div>
       <div style="flex:1"></div>
-      <button class="btn sm" id="dw-prev" title="Alt+↑ / F7">▲ ${esc(t("前の差分"))}</button>
+      <button class="btn sm" id="dw-prev" data-tip="${esc(t("前の差分（Alt+↑ / F7）"))}">▲ ${esc(t("前の差分"))}</button>
       <span id="dw-pos" class="muted" style="font-size:12px;min-width:80px;text-align:center"></span>
-      <button class="btn sm" id="dw-next" title="Alt+↓ / F8">▼ ${esc(t("次の差分"))}</button>
+      <button class="btn sm" id="dw-next" data-tip="${esc(t("次の差分（Alt+↓ / F8）"))}">▼ ${esc(t("次の差分"))}</button>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-noise" checked style="width:auto"> ${esc(t("時刻・カウンタの違いを無視"))}</label>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="dw-only" style="width:auto"> ${esc(t("差分の周辺だけ表示"))}</label>
       <button class="btn sm" id="dw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての差分窓に反映）"))}">${esc(t("色"))}</button>
-      <button class="btn sm" id="dw-font-dec" title="Ctrl+-">A−</button>
-      <button class="btn sm" id="dw-font-inc" title="Ctrl++">A＋</button>
-      <button class="btn sm" id="dw-find" title="Ctrl+F">${esc(t("検索"))}</button>
+      <button class="btn sm" id="dw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
+      <button class="btn sm" id="dw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="dw-find" data-tip="${esc(t("検索（Ctrl+F）"))}">${esc(t("検索"))}</button>
     </div>
-    <div id="dw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid #2a3442;font-size:12px">
-      <input id="dw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:#e6ecf3;border:1px solid #2a3442;border-radius:6px;padding:4px 8px;font-size:12px">
+    <div id="dw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid var(--border);font-size:12px">
+      <input id="dw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
       <span id="dw-find-n" class="muted" style="min-width:70px"></span>
-      <button class="btn sm" id="dw-find-prev">▲</button>
-      <button class="btn sm" id="dw-find-next">▼</button>
-      <button class="btn sm" id="dw-find-close">✕</button>
+      <button class="btn sm" id="dw-find-prev" data-tip="${esc(t("前を検索（Shift+Enter）"))}">▲</button>
+      <button class="btn sm" id="dw-find-next" data-tip="${esc(t("次を検索（Enter）"))}">▼</button>
+      <button class="btn sm" id="dw-find-close" data-tip="${esc(t("閉じる（Esc）"))}">✕</button>
     </div>
-    <div style="display:flex;align-items:stretch;border-bottom:1px solid #2a3442;font-size:12px">
+    <div style="display:flex;align-items:stretch;border-bottom:1px solid var(--border);font-size:12px">
       <div style="width:22px"></div>
-      <div class="dw-head" style="flex:1;padding:4px 10px;background:#1a212b;border-right:1px solid #2a3442;display:flex;gap:8px;align-items:center"><span class="badge stage-before">A</span><span id="dw-name-a" style="color:#e6ecf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span><button class="btn sm" id="dw-open-a">${esc(t("ログ表示"))}</button></div>
-      <div class="dw-head" style="flex:1;padding:4px 10px;background:#1a212b;display:flex;gap:8px;align-items:center"><span class="badge stage-after">B</span><span id="dw-name-b" style="color:#e6ecf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span><button class="btn sm" id="dw-open-b">${esc(t("ログ表示"))}</button></div>
+      <div class="dw-head" style="flex:1;padding:4px 10px;background:var(--panel);border-right:1px solid var(--border);display:flex;gap:8px;align-items:center"><span class="badge stage-before">A</span><span id="dw-name-a" style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span><button class="btn sm" id="dw-open-a">${esc(t("ログ表示"))}</button></div>
+      <div class="dw-head" style="flex:1;padding:4px 10px;background:var(--panel);display:flex;gap:8px;align-items:center"><span class="badge stage-after">B</span><span id="dw-name-b" style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"></span><button class="btn sm" id="dw-open-b">${esc(t("ログ表示"))}</button></div>
     </div>
     <div style="flex:1;min-height:0;display:flex">
-      <div id="dw-map" title="${esc(t("クリックでその位置へ"))}" style="width:22px;position:relative;background:#0b0e13;border-right:1px solid #2a3442;cursor:pointer"></div>
+      <div id="dw-map" data-tip="${esc(t("クリックでその位置へ"))}" style="width:22px;position:relative;background:#0b0e13;border-right:1px solid var(--border);cursor:pointer"></div>
       <div id="dw-body" class="dw-body" style="flex:1;overflow:auto;background:#0b0e13"></div>
     </div>
-    <div id="dw-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid #2a3442;display:flex;gap:18px">
+    <div id="dw-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid var(--border);display:flex;gap:18px">
       <span><i class="dw-sw" style="background:rgba(250,204,21,.35)"></i> ${esc(t("変更された行"))}</span>
       <span><i class="dw-sw" style="background:rgba(239,68,68,.35)"></i> ${esc(t("A にだけある行"))}</span>
       <span><i class="dw-sw" style="background:rgba(34,197,94,.35)"></i> ${esc(t("B にだけある行"))}</span>
@@ -100,7 +100,7 @@ async function bootDiffWindow() {
     // Location bar: one marker per block, placed by row position.
     map.innerHTML = blocks.map((b, k) => {
       const top = (b.start / Math.max(1, rows.length)) * 100, hgt = Math.max(0.4, ((b.end - b.start + 1) / Math.max(1, rows.length)) * 100);
-      const color = b.del && b.add ? "#facc15" : b.del ? "#ef4444" : "#22c55e";
+      const color = b.del && b.add ? "#facc15" : b.del ? "var(--err)" : "var(--ok)";
       return `<div class="dw-mark" data-k="${k}" style="top:${top}%;height:${hgt}%;background:${color}"></div>`;
     }).join("") + `<div id="dw-view" style="position:absolute;left:0;right:0;border:1px solid rgba(255,255,255,.35);pointer-events:none"></div>`;
     map.querySelectorAll(".dw-mark").forEach(m => m.onclick = e => { e.stopPropagation(); goTo(parseInt(m.dataset.k, 10)); });
@@ -161,8 +161,8 @@ async function bootDiffWindow() {
     const noise = document.getElementById("dw-noise").checked;
     doc = await D().Load(noise);
     document.getElementById("dw-title").textContent = (doc.label ? doc.label + "　" : "") + t("差分");
-    document.getElementById("dw-name-a").textContent = doc.nameA; document.getElementById("dw-name-a").title = doc.pathA;
-    document.getElementById("dw-name-b").textContent = doc.nameB; document.getElementById("dw-name-b").title = doc.pathB;
+    document.getElementById("dw-name-a").textContent = doc.nameA; document.getElementById("dw-name-a").dataset.tip = doc.pathA;
+    document.getElementById("dw-name-b").textContent = doc.nameB; document.getElementById("dw-name-b").dataset.tip = doc.pathB;
     if (doc.err) { body.innerHTML = `<div style="padding:14px;color:var(--err)">${esc(terr(doc.err))}</div>`; return; }
     const al = align(doc.result.lines || []);
     rows = al.out; blocks = al.bl; cur = blocks.length ? 0 : -1;
@@ -178,8 +178,8 @@ async function bootDiffWindow() {
   }
   document.getElementById("dw-noise").onchange = load;
   document.getElementById("dw-only").onchange = () => { render(); if (cur >= 0) goTo(cur); };
-  document.getElementById("dw-open-a").onclick = () => D().OpenLog("a").catch(() => {});
-  document.getElementById("dw-open-b").onclick = () => D().OpenLog("b").catch(() => {});
+  document.getElementById("dw-open-a").onclick = () => D().OpenLog("a").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
+  document.getElementById("dw-open-b").onclick = () => D().OpenLog("b").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   // Font size.
   const FONT_DEF = 12, FONT_MIN = 8, FONT_MAX = 32;
   let fontSize = FONT_DEF;

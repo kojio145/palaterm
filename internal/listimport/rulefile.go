@@ -139,7 +139,9 @@ func ParseRule(data []byte) (model.ImportRule, error) {
 		return model.ImportRule{}, fmt.Errorf("新しい PalaTerm で書き出された変換ルールです（%s）。PalaTerm を更新してください", f.Format)
 	}
 	r := f.Rule
-	r.ID, r.LastUsed = "", ""
+	// The sample's file name is this PC's business: a rule handed over must
+	// not be picked by itself for a file of that name.
+	r.ID, r.LastUsed, r.SampleName = "", "", ""
 	if err := ValidateRule(&r); err != nil {
 		return model.ImportRule{}, err
 	}

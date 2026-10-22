@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.8";
+const APP_VERSION = "1.9.9";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -74,10 +74,12 @@ function closeModal() {
 // editor's "discard changes?" check still runs). Not while a small window
 // sits on top of it (it handles Esc itself) or the copy menu is open.
 document.addEventListener("keydown", e => {
-  if (e.defaultPrevented || document.querySelector(".sub-overlay") || $("#modal-overlay").classList.contains("hidden")) return;
+  if (e.defaultPrevented || document.querySelector(".sub-overlay:not(.hidden)") || $("#modal-overlay").classList.contains("hidden")) return;
   // Ctrl+Enter saves (the dialog's primary button): the editors have many
   // fields, and Enter alone belongs to the field it is typed in.
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    // A key held down repeats: one save, not one per repeat.
+    if (e.repeat) { e.preventDefault(); return; }
     const ok = document.querySelector("#modal .modal-actions button.primary:not([disabled])");
     if (ok) { e.preventDefault(); ok.click(); }
     return;
@@ -112,8 +114,9 @@ function subConfirm(message, okLabel, cancelLabel, okClass) {
 // throwing away edits: the form's values are compared with what they were
 // when the editor finished opening. The date pickers' buttons count too;
 // fields marked data-guard-skip (a filter, a list redrawn as it is filtered)
-// do not, and extra() adds what the editor keeps outside its fields.
-function guardDiscard(node, cancelSel, extra) {
+// do not, and extra() adds what the editor keeps outside its fields;
+// after() runs once the editor is closed (a promise to resolve, say).
+function guardDiscard(node, cancelSel, extra, after) {
   const snap = () => JSON.stringify([[...node.querySelectorAll("input:not([data-guard-skip]), select:not([data-guard-skip]), textarea:not([data-guard-skip])")]
     .map(el => el.type === "checkbox" || el.type === "radio" ? el.checked : el.value),
     [...node.querySelectorAll(".dp-val")].map(el => el.textContent), extra ? extra() : null]);
@@ -121,6 +124,7 @@ function guardDiscard(node, cancelSel, extra) {
   node.querySelector(cancelSel).onclick = async () => {
     if (snap() !== start && !(await subConfirm(esc(t("編集した内容は保存されていません。破棄して閉じますか？")), t("破棄して閉じる")))) return;
     closeModal();
+    if (after) after();
   };
 }
 
@@ -227,11 +231,15 @@ function listViewFocus() {
 // A filter box that re-renders its tab (and so itself) on every keystroke:
 // while an IME is composing, re-rendering would cut the composition off
 // (era → えrあ), so the change is applied once the text is committed.
+// The redraw waits for a pause in the typing (150 ms): a list of a thousand
+// devices takes about a second to draw, once per word instead of per key.
 let imeComposing = false;
 function wireFilterInput(el, onChange) {
-  el.addEventListener("compositionstart", () => { imeComposing = true; });
-  el.addEventListener("compositionend", () => { imeComposing = false; onChange(); });
-  el.addEventListener("input", e => { if (!e.isComposing && !imeComposing) onChange(); });
+  let timer = null;
+  const soon = () => { clearTimeout(timer); timer = setTimeout(onChange, 150); };
+  el.addEventListener("compositionstart", () => { imeComposing = true; clearTimeout(timer); });
+  el.addEventListener("compositionend", () => { imeComposing = false; soon(); });
+  el.addEventListener("input", e => { if (!e.isComposing && !imeComposing) soon(); });
   el.addEventListener("blur", () => { imeComposing = false; });
 }
 function listViewWire(key, root, rerender, focus) {
@@ -281,6 +289,60 @@ function fitPanels(root) {
   });
 }
 window.addEventListener("resize", () => fitPanels(document));
+// Something drawn above a list after it was sized (the device list's
+// selection bar, a comparison's result in the history tab, a details box
+// opened) moves the list down: the tab's height changes, so it is sized
+// again. Sizing a list never changes it a second time, so this settles.
+{
+  let fitQueued = false;
+  const fitObs = new ResizeObserver(() => {
+    if (fitQueued) return;
+    fitQueued = true;
+    requestAnimationFrame(() => { fitQueued = false; const tab = document.querySelector(".tab.active");
+      if (!tab) return;
+      fitPanels(tab);
+      if (tab.id === "tab-import" && typeof liFitPreview === "function") liFitPreview(tab);
+    });
+  });
+  document.querySelectorAll(".tab").forEach(el => fitObs.observe(el));
+}
+
+// pageError is a tab that could not load: its title stays, so the page is
+// still known by its name, with the reason under it.
+function pageError(title, msg) {
+  return `<div class="page-head"><div><div class="page-title">${esc(title)}</div></div></div><div class="empty">${esc(msg)}</div>`;
+}
+
+// colFitWidth is the width column i needs for its widest value (header
+// included), measured in the cells' own font: a field or a list box counts
+// its frame and arrow on top of its text.
+function colFitWidth(table, i) {
+  const span = document.createElement("span");
+  span.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap";
+  document.body.appendChild(span);
+  let w = 0;
+  // A cell of two lines (a name over its file name) is as wide as its
+  // widest line, not as both side by side.
+  const measure = (el, text, extra) => {
+    const cs = getComputedStyle(el);
+    span.style.font = cs.font; span.style.letterSpacing = cs.letterSpacing; span.style.textTransform = cs.textTransform;
+    for (const line of String(text).split("\n")) {
+      span.textContent = line.replace(/\s+/g, " ").trim();
+      w = Math.max(w, span.offsetWidth + extra);
+    }
+  };
+  const th = table.tHead && table.tHead.rows[0] && table.tHead.rows[0].cells[i];
+  if (th) measure(th, headText(th), 24);
+  [...(table.tBodies[0] ? table.tBodies[0].rows : [])].slice(0, 2000).forEach(tr => {
+    const td = tr.cells[i];
+    if (!td || td.colSpan > 1) return;
+    const f = td.querySelector("input:not([type=checkbox]), select, textarea");
+    if (f) measure(f, cellText(td), 46);
+    else measure(td, td.innerText, 24);
+  });
+  span.remove();
+  return w ? Math.max(40, Math.min(600, Math.ceil(w))) : 0;
+}
 
 function wireColResize(root) {
   fitPanels(root);
@@ -295,13 +357,17 @@ function wireColResize(root) {
       if (i === ths.length - 1) return;
       const grip = document.createElement("div");
       grip.className = "col-resizer";
-      grip.dataset.tip = t("ドラッグで列幅を変更（ダブルクリックで既定に戻す）");
+      grip.dataset.tip = t("ドラッグで列幅を変更（ダブルクリックで内容に合わせる・もう一度で既定に戻す）");
       th.appendChild(grip);
       grip.addEventListener("click", e => e.stopPropagation());
+      // Double-click: as wide as the column's widest value, as in Excel
+      // (and in 表で編集); a second double-click gives the default back.
       grip.addEventListener("dblclick", e => {
         e.stopPropagation();
-        delete saved[i]; saveColWidths(key, saved);
-        th.style.width = th.dataset.defw || "";
+        const fit = colFitWidth(table, i);
+        if (!fit || saved[i] === fit) { delete saved[i]; th.style.width = th.dataset.defw || ""; }
+        else { saved[i] = fit; th.style.width = fit + "px"; }
+        saveColWidths(key, saved);
       });
       grip.addEventListener("pointerdown", e => {
         e.preventDefault(); e.stopPropagation();
@@ -476,6 +542,8 @@ async function copyText(v, okMsg) {
 }
 function cellText(td) {
   const inp = td.querySelector("input:not([type=checkbox]), textarea");
+  // A password field copies as nothing, even while its 👁 shows it.
+  if (inp && (inp.type === "password" || inp.dataset.eyed)) return "";
   if (inp) return inp.value.trim();
   const sel = td.querySelector("select");
   if (sel) return sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : "";
@@ -505,7 +573,9 @@ document.addEventListener("contextmenu", e => {
   // right-clicked (its selection is not part of the page selection).
   let picked = "";
   const el = document.activeElement;
-  if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && (el === e.target || el.contains(e.target) || e.target.contains(el)) && el.selectionEnd > el.selectionStart) {
+  if (el && el.dataset.eyed) {
+    // A password field (masked or shown by its 👁): nothing to copy from it.
+  } else if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && (el === e.target || el.contains(e.target) || e.target.contains(el)) && el.selectionEnd > el.selectionStart) {
     picked = el.value.slice(el.selectionStart, el.selectionEnd);
   } else {
     picked = String(window.getSelection() || "");
@@ -606,7 +676,7 @@ function wirePasswordToggles(scope) {
     parent.style.position = "relative";
     const btn = document.createElement("button");
     btn.type = "button"; btn.className = "eye-btn"; btn.textContent = "👁";
-    btn.title = t("表示 / 非表示");
+    btn.dataset.tip = t("表示 / 非表示");
     btn.setAttribute("aria-label", t("表示 / 非表示"));
     btn.onclick = () => {
       const showing = inp.type === "text";
@@ -666,7 +736,7 @@ async function boot() {
     const n = (q && q.terminals) || 0;
     const lines = [];
     if (q && q.running) lines.push(esc(t("一括実行中です。PalaTerm を終了すると実行が止まります（実行中の機器のログは途中まで残ります）。")));
-    if (n > 0) lines.push(esc(t("対話接続のウィンドウが {n} 個開いています。PalaTerm を終了すると、これらも切断して閉じます（ログは保存されます）。", { n })));
+    if (n > 0) lines.push(esc(t("端末窓が {n} 個開いています。PalaTerm を終了すると、これらも切断して閉じます（ログは保存されます）。", { n })));
     const ok = await subConfirm(`<b>${esc(t("PalaTerm を終了"))}</b><br>` +
       lines.join("<br>") + "<br>" + esc(t("終了しますか？")),
       t("終了する"), t("キャンセル"));
@@ -753,7 +823,7 @@ async function enterApp() {
   try {
     if (sessionStorage.getItem(LOCK_DISCARDED_KEY)) {
       sessionStorage.removeItem(LOCK_DISCARDED_KEY);
-      toast(t("自動ロックのため、編集中だったダイアログの内容は破棄されました"), "warn");
+      toast(t("自動ロックのため、編集中だった内容（ダイアログ・変換ルール・設定）は破棄されました"), "warn");
     }
   } catch (e) { }
   // Locked while a batch ran: it went on meanwhile. Still going -> keep
@@ -835,6 +905,8 @@ $("#btn-lock").onclick = async () => {
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lock"))) return;
   // So would an editor left open (a device, a schedule, a command set).
   if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。ロックすると、その内容は保存されずに失われます。ロックしますか？")), t("ロックする")))) return;
+  // And a 変換ルール being edited (a page, not a dialog).
+  if (ruleEditUnsaved() && !(await uiConfirm({ title: t("ロック"), message: esc(t("変換ルールの編集内容が保存されていません。ロックすると失われます。ロックしますか？")), okLabel: t("ロックする"), danger: true }))) return;
   // The ロック button locks the terminal windows too (they stay connected
   // behind their own lock screen); the idle auto-lock below does not, since
   // a terminal can be in use while this window sits idle.
@@ -859,17 +931,30 @@ $("#btn-chpw").onclick = () => {
   openModal(node, "mid");
   wirePasswordToggles(node);
   node.querySelector("#cp-cancel").onclick = closeModal;
-  node.querySelector("#cp-ok").onclick = async () => {
+  // Enter in any field changes it, as in the other one-step dialogs.
+  // (Ctrl+Enter is the dialog's own key, handled once for every dialog.)
+  node.querySelectorAll("input").forEach(inp => inp.addEventListener("keydown", e => {
+    if (e.key !== "Enter" || e.isComposing || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    if (!e.repeat) node.querySelector("#cp-ok").click();
+  }));
+  const cpOk = node.querySelector("#cp-ok");
+  cpOk.onclick = async () => {
+    if (cpOk.disabled) return;
     const cur = node.querySelector("#cp-cur").value;
     const nw = node.querySelector("#cp-new").value;
     const nw2 = node.querySelector("#cp-new2").value;
     if (!nw) { toast(t("新しいパスワードを入力してください"), "err"); return; }
     if (nw !== nw2) { toast(t("確認用パスワードが一致しません"), "err"); return; }
+    // One change at a time: a second press while the first is at work
+    // would check the old password against the new one and say it failed.
+    cpOk.disabled = true;
     try {
       await App().ChangeMasterPassword(cur, nw);
       closeModal();
       toast(t("マスターパスワードを変更しました"), "ok");
-    } catch (e) { toast(terr(e), "err"); }
+    } catch (e) { toast(t("変更失敗") + ": " + terr(e), "err"); }
+    finally { cpOk.disabled = false; }
   };
 };
 
@@ -881,7 +966,7 @@ async function resetVaultFlow() {
   const ok = await uiConfirm({
     title: t("すべてのデータをリセット"),
     message: t("リセットすると、登録済みの<b>すべての機器・グループ・コマンドセット・OSタイププロファイル、およびマスターパスワード</b>が完全に削除されます。<br>この操作は<b>元に戻せません</b>。<br><span class=\"muted\" style=\"font-size:12px\">ログファイルと export フォルダ内の書き出しファイルは削除されず残ります</span>"),
-    okLabel: t("リセットする"),
+    okLabel: t("初期化する"),
     danger: true,
   });
   if (!ok) return;
@@ -907,11 +992,15 @@ async function resetVaultFlow() {
   openModal(node, "mid");
   wirePasswordToggles(node);
   node.querySelector("#rs-cancel").onclick = closeModal;
-  node.querySelector("#rs-ok").onclick = async () => {
+  node.querySelector("#rs-pw").addEventListener("keydown", e => { if (e.key === "Enter" && !e.isComposing && !e.repeat) node.querySelector("#rs-ok").click(); });
+  const rsOk = node.querySelector("#rs-ok");
+  rsOk.onclick = async () => {
+    if (rsOk.disabled) return;
     const pw = node.querySelector("#rs-pw").value;
     if (!pw) { toast(t("パスワードを入力してください"), "err"); return; }
+    rsOk.disabled = true;
     try { await App().ResetVault(pw); location.reload(); }
-    catch (e) { toast(t("リセット失敗") + ": " + terr(e), "err"); }
+    catch (e) { toast(t("リセット失敗") + ": " + terr(e), "err"); rsOk.disabled = false; }
   };
 }
 
@@ -939,7 +1028,15 @@ $("#btn-about").onclick = () => {
     // The reload drops an open editor; the run tab's state and the table
     // draft are saved the way ロック saves them, and the vault stays open
     // (boot comes straight back in).
+    if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lang"))) {
+      sel.value = LANG === "ja" ? "ja" : "en";
+      return;
+    }
     if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。言語を切り替えると、その内容は保存されずに失われます。切り替えますか？")), t("切り替える")))) {
+      sel.value = LANG === "ja" ? "ja" : "en";
+      return;
+    }
+    if (ruleEditUnsaved() && !(await uiConfirm({ title: t("言語の切り替え"), message: esc(t("変換ルールの編集内容が保存されていません。言語を切り替えると失われます。切り替えますか？")), okLabel: t("切り替える"), danger: true }))) {
       sel.value = LANG === "ja" ? "ja" : "en";
       return;
     }
@@ -1007,13 +1104,16 @@ setInterval(async () => {
   // A batch still running is no reason to stay open: it goes on behind the
   // lock screen and enterApp picks it up again (GetRunStatus) at unlock.
   // An open editor is lost — noted for a word after the unlock.
-  if (modalOpen()) { try { sessionStorage.setItem(LOCK_DISCARDED_KEY, "1"); } catch (e) { } }
+  if (modalOpen() || ruleEditUnsaved() || (typeof settingsDirty !== "undefined" && (settingsDirty || myLoginsDirty))) { try { sessionStorage.setItem(LOCK_DISCARDED_KEY, "1"); } catch (e) { } }
   if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
   saveUIState();
   try { await App().Lock(); } catch (e) { }
   location.reload();
 }, 15000);
 const LOCK_DISCARDED_KEY = "palaterm.lockDiscarded";
+// ruleEditUnsaved: the 一覧の取り込み rule editor (a page) holds edits not
+// saved — a reload (lock, language) would lose them as it loses a dialog.
+function ruleEditUnsaved() { return typeof liDirty === "function" && typeof LI !== "undefined" && LI.view === "edit" && liDirty(); }
 
 function profileName(key) {
   const p = PROFILES.find(p => p.key === key);

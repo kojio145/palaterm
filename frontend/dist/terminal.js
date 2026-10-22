@@ -19,21 +19,21 @@ function bytesToB64(bytes) {
 async function bootPasteWindow() {
   document.getElementById("lock").classList.add("hidden");
   document.getElementById("app").classList.add("hidden");
-  document.body.style.background = "#1a212b";
+  document.body.style.background = "var(--panel)";
   const P = () => window.go.main.Paste;
   const req = await P().Load();
-  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;padding:14px 18px;background:#1a212b;font-family:'Segoe UI',sans-serif">
+  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;padding:14px 18px;background:var(--panel);font-family:'Segoe UI',sans-serif">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
-      <div style="color:#e6ecf3;font-size:15px;font-weight:600">${esc(t("貼り付けの確認"))}</div>
+      <div style="color:var(--text);font-size:15px;font-weight:600">${esc(t("貼り付けの確認"))}</div>
       <div class="muted" style="font-size:12px;flex:1">${esc(req.device || "")}</div>
-      <button class="btn sm" id="pw-font-dec" title="Ctrl+-">A−</button>
-      <button class="btn sm" id="pw-font-inc" title="Ctrl++">A＋</button>
+      <button class="btn sm" id="pw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
+      <button class="btn sm" id="pw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
     </div>
     <div id="pw-info" class="muted" style="font-size:12px;margin-bottom:8px"></div>
     ${req.bcast > 0 ? `<div id="pw-bcast" style="font-size:13px;font-weight:600;margin-bottom:8px;padding:6px 10px;border:1px solid #f97316;border-radius:8px;background:#431407;color:#fed7aa">${esc(t("同時入力中: この内容はほかの {n} 台の窓にも送られます", { n: req.bcast }))}</div>` : ""}
-    <textarea id="pw-text" spellcheck="false" style="flex:1;min-height:120px;width:100%;resize:none;background:#0b0e13;color:#d6dee8;border:1px solid #2a3442;border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre;overflow:auto"></textarea>
+    <textarea id="pw-text" spellcheck="false" style="flex:1;min-height:120px;width:100%;resize:none;background:#0b0e13;color:#d6dee8;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre;overflow:auto"></textarea>
     <label style="display:flex;align-items:center;gap:6px;color:#c7d0dc;font-size:12px;margin:8px 0 12px"><input type="checkbox" id="pw-cr" style="width:auto"> ${esc(t("最後に Enter を送る"))}</label>
-    <div style="display:flex;justify-content:flex-end;gap:8px">
+    <div class="modal-actions" style="margin-top:0">
       <button class="btn" id="pw-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="pw-ok">${esc(t("貼り付け"))}</button>
     </div>
@@ -75,7 +75,10 @@ async function bootPasteWindow() {
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
     if (e.key === "Escape") { e.preventDefault(); cancel(); return; }
-    if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); submit(); }
+    // Enter or Ctrl+Enter (the primary button, as in the main window's
+    // dialogs) pastes; Shift+Enter is left to the textarea (a new line), and
+    // an Enter that confirms an IME conversion is not a paste.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submit(); }
   });
   const grab = () => { ta.focus(); ta.setSelectionRange(0, 0); };
   grab();
@@ -102,96 +105,99 @@ async function bootTerminalWindow() {
   document.body.style.background = "#000";
 
   const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#000">
-    <div id="tw-bar" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442;font-family:'Segoe UI',sans-serif">
-      <div id="tw-title" style="color:#e6ecf3;font-size:13px;flex:1 1 120px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t("対話接続"))}</div>
+    <div id="tw-bar" style="display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--bg);border-bottom:1px solid var(--border);font-family:'Segoe UI',sans-serif">
+      <div id="tw-title" style="color:var(--text);font-size:13px;flex:1 1 120px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t("対話接続"))}</div>
       <div class="tw-tools" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
         <span id="tw-bc-pill" class="pill hidden" style="background:#7c2d12;color:#fed7aa;border:1px solid #f97316"></span>
         <button class="btn sm" id="tw-bcast" data-tip="${esc(t("オンにした窓どうしで、この窓で打ったキーをすべての窓へ同時に送ります（Tera Term のブロードキャストコマンドのリアルタイムモードと同じ）。ログイン中・切断中・ロック中の窓には送りません"))}">${esc(t("同時入力"))}</button>
-        <button class="btn sm" id="tw-tile" data-tip="${esc(t("開いている単独接続窓をすべて、この窓のある画面いっぱいに並べます（開いた順）"))}">${esc(t("並べ直す"))}</button>
+        <button class="btn sm" id="tw-tile" data-tip="${esc(t("開いている端末窓をすべて、この窓のある画面いっぱいに並べます（開いた順）"))}">${esc(t("並べ直す"))}</button>
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
-        <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての単独接続窓に反映）"))}">${esc(t("色"))}</button>
-        <button class="btn sm" id="tw-font-dec" title="Ctrl+-">A−</button>
-        <button class="btn sm" id="tw-font-inc" title="Ctrl++">A＋</button>
-        <button class="btn sm" id="tw-find" title="Ctrl+Shift+F">${esc(t("検索"))}</button>
-        <button class="btn sm" id="tw-paste" title="Alt+V">${esc(t("貼り付け…"))}</button>
+        <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての端末窓に反映）"))}">${esc(t("色"))}</button>
+        <button class="btn sm" id="tw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
+        <button class="btn sm" id="tw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+        <button class="btn sm" id="tw-find" data-tip="${esc(t("検索（Ctrl+Shift+F。Ctrl+F は機器へ送ります）"))}">${esc(t("検索"))}</button>
+        <button class="btn sm" id="tw-paste" data-tip="${esc(t("貼り付け（Alt+V）"))}">${esc(t("貼り付け…"))}</button>
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
-        <button class="btn sm" id="tw-logview" data-tip="${esc(t("このセッションのログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
-        <button class="btn sm" id="tw-logdir">${esc(t("ログフォルダ"))}</button>
-        <button class="btn sm hidden" id="tw-break" title="Alt+B" data-tip="${esc(t("シリアル回線にブレーク信号を送ります（Tera Term の Alt+B）。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）"))}">${esc(t("ブレーク"))}</button>
-        <button class="btn sm hidden" id="tw-reconnect" style="color:#86efac;border-color:#15803d" data-tip="${esc(t("同じ機器にもう一度接続します（切断後に Enter キーでも再接続できます）"))}">${esc(t("再接続"))}</button>
-        <button class="btn sm hidden" id="tw-switch" style="color:#fcd34d;border-color:#b45309" data-tip="${esc(t("自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）"))}">${esc(t("手動に切り替え"))}</button>
+        <button class="btn sm" id="tw-logview" data-tip="${esc(t("この対話接続のログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
+        <button class="btn sm" id="tw-logdir" data-tip="${esc(t("この対話接続のログがあるフォルダを開きます（まだ何も記録していなければログフォルダ）"))}">${esc(t("ログフォルダを開く"))}</button>
+        <button class="btn sm hidden" id="tw-break" data-tip="${esc(t("シリアル回線にブレーク信号を送ります（Alt+B。Tera Term と同じ）。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）"))}">${esc(t("ブレーク"))}</button>
+        <button class="btn sm ok-outline hidden" id="tw-reconnect" data-tip="${esc(t("同じ機器にもう一度接続します（切断後に Enter キーでも再接続できます）"))}">${esc(t("再接続"))}</button>
+        <button class="btn sm warn-outline hidden" id="tw-switch" data-tip="${esc(t("自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）"))}">${esc(t("手動に切り替え"))}</button>
         <span id="tw-state" class="pill run">${esc(t("接続中…"))}</span>
       </div>
     </div>
     <div id="tw-takeover" class="hidden" style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#2a2412;border-bottom:1px solid #b45309;font-family:'Segoe UI',sans-serif;font-size:12px;color:#fcd34d">
       <span style="flex:1">${esc(t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。"))}</span>
-      <button class="btn sm" id="tw-takeover-ok" style="color:#fcd34d;border-color:#b45309">${esc(t("手動で続ける"))}</button>
+      <button class="btn sm warn-outline" id="tw-takeover-ok">${esc(t("手動で続ける"))}</button>
       <button class="btn sm" id="tw-takeover-close">${esc(t("切断する"))}</button>
     </div>
-    <div id="tw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid #2a3442;font-family:'Segoe UI',sans-serif;font-size:12px">
-      <input id="tw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:#e6ecf3;border:1px solid #2a3442;border-radius:6px;padding:4px 8px;font-size:12px">
+    <div id="tw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid var(--border);font-family:'Segoe UI',sans-serif;font-size:12px">
+      <input id="tw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
       <span id="tw-find-n" class="muted" style="min-width:70px"></span>
-      <button class="btn sm" id="tw-find-prev">▲</button>
-      <button class="btn sm" id="tw-find-next">▼</button>
-      <button class="btn sm" id="tw-find-close">✕</button>
+      <button class="btn sm" id="tw-find-prev" data-tip="${esc(t("前を検索（Shift+Enter）"))}">▲</button>
+      <button class="btn sm" id="tw-find-next" data-tip="${esc(t("次を検索（Enter）"))}">▼</button>
+      <button class="btn sm" id="tw-find-close" data-tip="${esc(t("閉じる（Esc）"))}">✕</button>
     </div>
     <div id="tw-host" style="flex:1;min-height:0;background:#000;padding:6px 6px 12px 6px"></div>
-    <div id="tw-paste-dlg" class="hidden" style="position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6)">
-      <div style="display:flex;flex-direction:column;width:calc(100vw - 32px);height:calc(100vh - 80px);background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:16px 22px;font-family:'Segoe UI',sans-serif">
-        <div style="color:#e6ecf3;font-size:14px;font-weight:600;margin-bottom:6px">${esc(t("貼り付けの確認"))} <span class="muted" style="font-size:11px;font-weight:400">${esc(t("（ウィンドウを広げると編集欄も広がります）"))}</span></div>
+    <div id="tw-paste-dlg" class="sub-overlay hidden" style="z-index:30;background:rgba(0,0,0,.6)">
+      <div class="sub-modal" style="display:flex;flex-direction:column;width:calc(100vw - 32px);height:calc(100vh - 80px);padding:16px 22px">
+        <h3 style="margin-bottom:6px">${esc(t("貼り付けの確認"))} <span class="muted" style="font-size:11px;font-weight:400">${esc(t("（ウィンドウを広げると編集欄も広がります）"))}</span></h3>
         <div id="tw-paste-info" class="muted" style="font-size:12px;margin-bottom:8px"></div>
-        <textarea id="tw-paste-text" spellcheck="false" style="flex:1;min-height:120px;width:100%;resize:none;background:#0b0e13;color:#d6dee8;border:1px solid #2a3442;border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre;overflow:auto"></textarea>
+        <textarea id="tw-paste-text" spellcheck="false" style="flex:1;min-height:120px;width:100%;resize:none;background:#0b0e13;color:#d6dee8;border:1px solid var(--border);border-radius:8px;padding:8px;font-family:Consolas,monospace;font-size:13px;white-space:pre;overflow:auto"></textarea>
         <label style="display:flex;align-items:center;gap:6px;color:#c7d0dc;font-size:12px;margin:8px 0 12px"><input type="checkbox" id="tw-paste-cr" style="width:auto"> ${esc(t("最後に Enter を送る"))}</label>
-        <div style="display:flex;justify-content:flex-end;gap:8px">
+        <div class="modal-actions" style="margin-top:0">
           <button class="btn" id="tw-paste-cancel">${esc(t("キャンセル"))}</button>
           <button class="btn primary" id="tw-paste-ok">${esc(t("貼り付け"))}</button>
         </div>
         <div class="muted" style="font-size:11px;margin-top:8px">${esc(t("Enter = 貼り付け ／ Shift+Enter = 改行を挿入 ／ Esc = キャンセル"))}</div>
       </div>
     </div>
-    <div id="tw-hk" class="hidden" style="position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7)">
-      <div style="width:min(620px,92vw);background:#1a212b;border:1px solid #b45309;border-radius:12px;padding:20px 22px;font-family:'Segoe UI',sans-serif">
-        <div style="color:#fcd34d;font-size:15px;font-weight:600;margin-bottom:8px">${esc(t("ホストキーが前回と異なります"))}</div>
-        <div id="tw-hk-msg" style="color:#e6ecf3;font-size:13px;line-height:1.8;margin-bottom:6px"></div>
-        <div class="muted" style="font-size:12px;line-height:1.7;margin-bottom:14px">${esc(t("機器を交換した／OSを再インストールした場合だけ許可してください。心当たりがなければ、なりすましの可能性があるため許可せずネットワーク管理者に確認してください。"))}</div>
-        <div style="display:flex;justify-content:flex-end;gap:8px">
+    <div id="tw-hk" class="sub-overlay hidden" style="z-index:30;background:rgba(0,0,0,.7)">
+      <div class="sub-modal" style="width:min(620px,92vw);border-color:var(--warn)">
+        <h3 style="color:var(--warn)">${esc(t("ホストキーが前回と異なります"))}</h3>
+        <div id="tw-hk-msg" style="font-size:13px;line-height:1.8;margin-bottom:6px"></div>
+        <div class="muted" style="font-size:12px;line-height:1.7">${esc(t("機器を交換した／OSを再インストールした場合だけ許可してください。心当たりがなければ、なりすましの可能性があるため許可せずネットワーク管理者に確認してください。"))}</div>
+        <div class="modal-actions">
           <button class="btn" id="tw-hk-cancel">${esc(t("キャンセル"))}</button>
           <button class="btn danger" id="tw-hk-ok">${esc(t("機器を交換したので許可して再接続"))}</button>
         </div>
       </div>
     </div>
-    <div id="tw-close" class="hidden" style="position:absolute;inset:0;z-index:35;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.7)">
-      <div style="width:min(460px,92vw);background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:20px 22px;font-family:'Segoe UI',sans-serif">
-        <div style="color:#e6ecf3;font-size:15px;font-weight:600;margin-bottom:8px">${esc(t("接続中です"))}</div>
-        <div style="color:#c7d0dc;font-size:13px;line-height:1.8;margin-bottom:16px">${esc(t("この機器との接続を切断して、ウィンドウを閉じますか？ ログはここまでの内容で保存されます。"))}</div>
-        <div style="display:flex;justify-content:flex-end;gap:8px">
+    <div id="tw-close" class="sub-overlay hidden" style="z-index:35;background:rgba(0,0,0,.7)">
+      <div class="sub-modal" style="width:min(460px,92vw)">
+        <h3>${esc(t("接続中です"))}</h3>
+        <div style="color:#c7d0dc;font-size:13px;line-height:1.8">${esc(t("この機器との接続を切断して、ウィンドウを閉じますか？ ログはここまでの内容で保存されます。"))}</div>
+        <div class="modal-actions">
           <button class="btn" id="tw-close-cancel">${esc(t("キャンセル"))}</button>
           <button class="btn danger" id="tw-close-ok">${esc(t("切断して閉じる"))}</button>
         </div>
       </div>
     </div>
-    <div id="tw-lock" class="hidden" style="position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:#0b0e13">
-      <div style="width:360px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px;font-family:'Segoe UI',sans-serif">
-        <div style="color:#e6ecf3;font-size:15px;font-weight:600;margin-bottom:6px">🔒 ${esc(t("ロック中"))}</div>
+    <div id="tw-lock" class="sub-overlay hidden" style="z-index:40;background:#0b0e13">
+      <div class="sub-modal" style="width:min(360px,92vw);padding:24px">
+        <h3 style="margin-bottom:6px">🔒 ${esc(t("ロック中"))}</h3>
         <div class="muted" style="font-size:12px;line-height:1.7;margin-bottom:12px">${esc(t("接続は保たれています。マスターパスワードを入力すると画面に戻ります。"))}</div>
-        <input id="tw-lock-in" type="password" style="width:100%;background:#11151c;color:#e6ecf3;border:1px solid #2a3442;border-radius:8px;padding:9px">
+        <div id="tw-lock-field">
+          <input id="tw-lock-in" type="password" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px">
+        </div>
         <div id="tw-lock-err" style="color:#f87171;font-size:12px;min-height:18px;margin-top:6px"></div>
-        <button id="tw-lock-ok" style="width:100%;margin-top:6px;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:9px;cursor:pointer">${esc(t("ロック解除"))}</button>
+        <button class="btn primary" id="tw-lock-ok" style="width:100%;margin-top:6px">${esc(t("ロック解除"))}</button>
       </div>
     </div>
-    <div id="tw-pw" class="hidden" style="position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85)">
-      <div style="width:340px;background:#1a212b;border:1px solid #2a3442;border-radius:12px;padding:24px">
-        <div style="color:#e6ecf3;margin-bottom:12px">${esc(t("マスターパスワード"))}</div>
-        <div id="tw-pw-field" style="position:relative">
-          <input id="tw-pw-in" type="password" style="width:100%;background:#11151c;color:#e6ecf3;border:1px solid #2a3442;border-radius:8px;padding:9px" autofocus>
+    <div id="tw-pw" class="sub-overlay hidden" style="z-index:30;background:rgba(0,0,0,.85)">
+      <div class="sub-modal" style="width:min(340px,92vw);padding:24px">
+        <h3>${esc(t("マスターパスワード"))}</h3>
+        <div id="tw-pw-field">
+          <input id="tw-pw-in" type="password" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px" autofocus>
         </div>
-        <button id="tw-pw-ok" style="width:100%;margin-top:12px;background:#16a34a;color:#fff;border:none;border-radius:8px;padding:9px;cursor:pointer">${esc(t("接続"))}</button>
+        <button class="btn primary" id="tw-pw-ok" style="width:100%;margin-top:12px">${esc(t("接続"))}</button>
       </div>
     </div>
   </div>`);
   document.body.appendChild(wrap);
   // Same show/hide eye affordance as the main window's master-password fields.
   wirePasswordToggles(document.getElementById("tw-pw-field"));
+  wirePasswordToggles(document.getElementById("tw-lock-field"));
 
   // Font size: remembered per machine (localStorage), changed with the A−/A＋
   // buttons, Ctrl+wheel, Ctrl+plus/minus; Ctrl+0 restores the default.
@@ -231,7 +237,7 @@ async function bootTerminalWindow() {
     document.body.style.background = c.bg;
     wrap.style.background = c.bg;
     twHost.style.background = c.bg;
-    twBar.style.borderBottom = tint ? `4px solid ${tint.band}` : "1px solid #2a3442";
+    twBar.style.borderBottom = tint ? `4px solid ${tint.band}` : "1px solid var(--border)";
   }
   applyTermColors();
   onScreenColors("term", applyTermColors);
@@ -249,7 +255,7 @@ async function bootTerminalWindow() {
   // e.code が空になるため）。
   // Alt+V は Tera Term の「貼り付け<CR>」: 確認ダイアログを開き、末尾 Enter をオンにしておく。
   term.attachCustomKeyEventHandler(e => {
-    if (locked) return false;
+    if (locked || hkOpen) return false;
     if (e.type !== "keydown" || e.metaKey) return true;
     // Alt+B = break, on a serial line only; elsewhere it stays the shell's /
     // IOS's "back one word" (Esc-B).
@@ -302,7 +308,7 @@ async function bootTerminalWindow() {
     if (closed) return;
     term.clearSelection();
     Term().OpenPasteWindow(bytesToB64(new TextEncoder().encode(text)), !!withCR, !!single)
-      .catch(e => { if (/既に開いています/.test(String(e))) flashNote(terr(e)); else openPasteDialogInline(text, withCR, single); });
+      .catch(e => { if (/既に開いています/.test(String(e))) flashNote(terr(e), 0, "err"); else openPasteDialogInline(text, withCR, single); });
   }
   rt().EventsOn("term:paste-done", () => { term.focus(); setTimeout(() => term.focus(), 150); setTimeout(() => term.focus(), 500); });
   // Whether the inline dialog's text goes to the other windows: decided
@@ -359,7 +365,8 @@ async function bootTerminalWindow() {
   pasteCr.addEventListener("change", () => setPasteCrPref(pasteCr.checked));
   document.getElementById("tw-paste-cancel").onclick = closePasteDialog;
   pasteText.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); confirmPaste(); }
+    // Enter or Ctrl+Enter pastes (as the paste window); Shift+Enter inserts a new line.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); confirmPaste(); }
     else if (e.key === "Escape") { e.preventDefault(); closePasteDialog(); }
   });
   term.textarea.addEventListener("paste", e => {
@@ -379,11 +386,11 @@ async function bootTerminalWindow() {
   });
   document.getElementById("tw-paste").onclick = () => pasteFromClipboard(false);
   document.getElementById("tw-logdir").onclick = () => {
-    Term().OpenLogDir().catch(() => {});
+    Term().OpenLogDir().catch(e => flashNote(t("フォルダを開けません") + ": " + terr(e), 0, "err"));
     term.focus();
   };
   document.getElementById("tw-logview").onclick = () => {
-    Term().OpenLogWindow().catch(e => flashNote(terr(e)));
+    Term().OpenLogWindow().catch(e => flashNote(t("ログを開けません") + ": " + terr(e), 0, "err"));
     term.focus();
   };
 
@@ -481,7 +488,7 @@ async function bootTerminalWindow() {
       logging = next;
       renderLogBtn();
       flashNote(logging ? t("ログを再開しました") : (p ? t("ログを停止しました: {f}", { f: p.split(/[\\/]/).pop() }) : t("ログを停止しました")));
-    }).catch(e => flashNote(terr(e)));
+    }).catch(e => flashNote(terr(e), 0, "err"));
     term.focus();
   };
 
@@ -493,11 +500,12 @@ async function bootTerminalWindow() {
   // 入ったことが分かるようにバーに「コピーしました」を短く出す。
   let selTimer = null, lastCopied = "", copiedTimer = null;
   const copiedEl = document.getElementById("tw-copied");
-  function flashNote(text, ms) {
+  // kind "err": red, and long enough to be read.
+  function flashNote(text, ms, kind) {
     copiedEl.textContent = text;
-    copiedEl.classList.remove("hidden");
+    copiedEl.className = "pill " + (kind || "ok");
     clearTimeout(copiedTimer);
-    copiedTimer = setTimeout(() => copiedEl.classList.add("hidden"), ms || 1800);
+    copiedTimer = setTimeout(() => copiedEl.classList.add("hidden"), ms || (kind === "err" ? 6000 : 1800));
   }
   function copySelection() {
     if (suppressCopy) return;
@@ -589,10 +597,29 @@ async function bootTerminalWindow() {
   });
   // A changed host key is answered in the window: allow (device replaced)
   // and reconnect, or leave it refused.
+  // Like the 接続中です question: キャンセル (also Esc) has the focus, and
+  // everything behind is inert so keys never reach the terminal meanwhile.
   const hkDlg = document.getElementById("tw-hk");
-  document.getElementById("tw-hk-cancel").onclick = () => { hkDlg.classList.add("hidden"); term.focus(); };
-  document.getElementById("tw-hk-ok").onclick = () => {
+  let hkOpen = false;
+  function showHk(msg) {
+    if (msg !== undefined) document.getElementById("tw-hk-msg").textContent = msg;
+    hkOpen = true;
+    hkDlg.classList.remove("hidden");
+    if (locked) return; // the lock screen decides what is inert; shown again on unlock
+    [...wrap.children].forEach(el => { el.inert = el !== hkDlg; });
+    setTimeout(() => document.getElementById("tw-hk-cancel").focus(), 30);
+  }
+  function hideHk() {
+    hkOpen = false;
     hkDlg.classList.add("hidden");
+    if (locked) { setInert(true); return; }
+    [...wrap.children].forEach(el => { el.inert = false; });
+    term.focus();
+  }
+  document.getElementById("tw-hk-cancel").onclick = hideHk;
+  hkDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideHk(); } });
+  document.getElementById("tw-hk-ok").onclick = () => {
+    hideHk();
     closed = false; connecting = true; typedHint = false; switchHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
@@ -629,8 +656,7 @@ async function bootTerminalWindow() {
     stateEl.className = "pill err";
     setOSTitle("", "", ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断"));
     if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
-      document.getElementById("tw-hk-msg").textContent = terr(ev.error);
-      hkDlg.classList.remove("hidden");
+      showHk(terr(ev.error));
     }
     if (ev.error) term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(ev.error) + "\x1b[0m\r\n");
     else term.write("\r\n\x1b[33m" + t("[切断されました]") + "\x1b[0m\r\n");
@@ -665,7 +691,7 @@ async function bootTerminalWindow() {
   reconnectBtn.onclick = () => { reconnect(); term.focus(); };
   function sendBreak() {
     if (breakBtn.classList.contains("hidden")) return;
-    Term().SendBreak().then(() => flashNote(t("ブレーク信号を送りました"))).catch(e => flashNote(terr(e)));
+    Term().SendBreak().then(() => flashNote(t("ブレーク信号を送りました"))).catch(e => flashNote(terr(e), 0, "err"));
     term.focus();
   }
   breakBtn.onclick = sendBreak;
@@ -693,7 +719,10 @@ async function bootTerminalWindow() {
     try { await doUnlock(); } finally { unlocking = false; okBtn.disabled = false; }
   }
   async function doUnlock() {
-    if (await Term().Unlock(lockIn.value)) { locked = false; setInert(false); lockEl.classList.add("hidden"); lastInput = Date.now(); term.focus(); }
+    if (await Term().Unlock(lockIn.value)) {
+      locked = false; setInert(false); lockEl.classList.add("hidden"); lastInput = Date.now();
+      if (hkOpen) showHk(); else term.focus();
+    }
     else { document.getElementById("tw-lock-err").textContent = t("マスターパスワードが違います"); lockIn.select(); }
   }
   document.getElementById("tw-lock-ok").onclick = tryUnlock;
@@ -712,7 +741,7 @@ async function bootTerminalWindow() {
     closeDlg.style.zIndex = "35";
     if (inertBefore) { [...wrap.children].forEach((el, i) => { el.inert = inertBefore[i]; }); inertBefore = null; }
     // Locked meanwhile (or before): the lock decides what stays inert.
-    if (locked) { setInert(true); lockIn.focus(); } else term.focus();
+    if (locked) { setInert(true); lockIn.focus(); } else if (hkOpen) document.getElementById("tw-hk-cancel").focus(); else term.focus();
   };
   rt().EventsOn("term:close-request", () => {
     // Closing sends nothing to the device, so a locked window may be closed
@@ -783,7 +812,7 @@ async function bootTerminalWindow() {
   const isTermReply = d => /^\x1b(\[(\?[\d;]*c|>[\d;]*c|\??\d+;\d+R|0n|\??[\d;]*\$y|[IO]|[\d;]*t)|\][^\x07]*(\x07|\x1b\\)|P[^\x1b]*\x1b\\)$/.test(d)
     && !/^\x1b\[1;[2-8]R$/.test(d);
   term.onData(d => {
-    if (locked) return;
+    if (locked || hkOpen) return;
     // After a disconnect, Enter opens the session again (the 再接続 button).
     if (closed) { if (d === "\r" && canReconnect()) reconnect(); return; }
     if (connecting && !switchBtn.classList.contains("hidden")) {
@@ -827,10 +856,10 @@ async function bootTerminalWindow() {
     Term().SetBroadcast(!bc.join).then(ev => {
       bc = ev || bc; renderBcast();
       flashNote(bc.join ? t("同時入力をオンにしました") : t("同時入力をオフにしました"));
-    }).catch(e => flashNote(terr(e)));
+    }).catch(e => flashNote(terr(e), 0, "err"));
     term.focus();
   };
-  document.getElementById("tw-tile").onclick = () => { Term().Tile().catch(e => flashNote(terr(e))); term.focus(); };
+  document.getElementById("tw-tile").onclick = () => { Term().Tile().catch(e => flashNote(terr(e), 0, "err")); term.focus(); };
 
   // Kick off: use the stdin password if present, else prompt in-window.
   const res = await Term().Start();

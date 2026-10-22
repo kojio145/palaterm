@@ -87,6 +87,19 @@ func (a *App) SaveImportRule(r model.ImportRule) (string, error) {
 	return r.ID, a.persist()
 }
 
+// ReorderImportRules puts the rules in the order of their IDs (the list's
+// drag to reorder, as the command sets and OS types have).
+func (a *App) ReorderImportRules(order []string) error {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	reorderSlots(a.inv.ImportRules, func(r model.ImportRule) string { return r.ID }, order)
+	a.mu.Unlock()
+	return a.persist()
+}
+
 // DeleteImportRule removes a rule.
 func (a *App) DeleteImportRule(id string) error {
 	a.mu.Lock()
@@ -255,9 +268,11 @@ func fileStamp(path string) (string, error) {
 }
 
 // readList reads the file (the one kept, while it has not changed) and,
-// given a rule, runs it. It is kept only while the vault is open, checked
-// under the cache's lock: Lock closes the vault, then forgets the cache, so
-// a read finishing around a lock is either not kept or forgotten.
+// given a rule, runs it. The reading and the converting happen outside the
+// cache's lock, so a lock (which forgets the cache) never waits for a big
+// file. What is read is kept only while the vault is open, checked under
+// the cache's lock: Lock closes the vault, then forgets the cache, so a
+// read finishing around a lock is either not kept or forgotten.
 func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, envSig string) (*sheet.Book, string, *listimport.Table, *listimport.Converted, error) {
 	if path == "" {
 		return nil, "", nil, nil, fmt.Errorf("ファイルが選ばれていません")
@@ -266,39 +281,61 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 	if err != nil {
 		return nil, "", nil, nil, err
 	}
+	sig := ""
+	if r != nil {
+		sig = ruleSig(r) + envSig
+	}
+	bookCache.Lock()
+	if a.locked() {
+		bookCache.Unlock()
+		return nil, "", nil, nil, fmt.Errorf("vault is locked")
+	}
+	var b *sheet.Book
+	if bookCache.book != nil && bookCache.path == path && bookCache.stamp == stamp {
+		b = bookCache.book
+		if r == nil {
+			bookCache.Unlock()
+			return b, stamp, nil, nil, nil
+		}
+		if bookCache.conv != nil && bookCache.rule == sig {
+			t, conv := bookCache.table, bookCache.conv
+			bookCache.Unlock()
+			return b, stamp, t, conv, nil
+		}
+	}
+	bookCache.Unlock()
+
+	fresh := b == nil
+	if fresh {
+		if b, err = sheet.ReadFile(path); err != nil {
+			return nil, "", nil, nil, err
+		}
+	}
+	var t *listimport.Table
+	var conv *listimport.Converted
+	if r != nil {
+		sh, err := listimport.PickSheet(b, r)
+		if err != nil {
+			return nil, "", nil, nil, err
+		}
+		if t, err = listimport.ReadTable(sh, r); err != nil {
+			return nil, "", nil, nil, err
+		}
+		conv = listimport.Convert(t, r, env)
+	}
+
 	bookCache.Lock()
 	defer bookCache.Unlock()
 	if a.locked() {
 		return nil, "", nil, nil, fmt.Errorf("vault is locked")
 	}
-	b := bookCache.book
-	if b == nil || bookCache.path != path || bookCache.stamp != stamp {
-		if b, err = sheet.ReadFile(path); err != nil {
-			return nil, "", nil, nil, err
-		}
-		if a.locked() {
-			return nil, "", nil, nil, fmt.Errorf("vault is locked")
-		}
+	if fresh || bookCache.path != path || bookCache.stamp != stamp {
 		bookCache.path, bookCache.stamp, bookCache.book = path, stamp, b
 		bookCache.rule, bookCache.table, bookCache.conv = "", nil, nil
 	}
-	if r == nil {
-		return b, stamp, nil, nil, nil
+	if r != nil {
+		bookCache.rule, bookCache.table, bookCache.conv = sig, t, conv
 	}
-	sig := ruleSig(r) + envSig
-	if bookCache.conv != nil && bookCache.rule == sig {
-		return b, stamp, bookCache.table, bookCache.conv, nil
-	}
-	sh, err := listimport.PickSheet(b, r)
-	if err != nil {
-		return nil, "", nil, nil, err
-	}
-	t, err := listimport.ReadTable(sh, r)
-	if err != nil {
-		return nil, "", nil, nil, err
-	}
-	conv := listimport.Convert(t, r, env)
-	bookCache.rule, bookCache.table, bookCache.conv = sig, t, conv
 	return b, stamp, t, conv, nil
 }
 
@@ -368,6 +405,21 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 		return out, nil
 	}
 	out.Headers = t.Headers
+	// The sample's password cells show masked, as everywhere else: under the
+	// header row, the columns a password field reads.
+	if sec := listimport.SecretColumns(t, &r); len(sec) > 0 {
+		dr := r.DataRow
+		if dr == 0 {
+			dr = r.HeaderRow + 1
+		}
+		for i := max(dr-1, 0); i < len(out.Grid); i++ {
+			for c := range sec {
+				if c-1 < len(out.Grid[i]) && out.Grid[i][c-1] != "" {
+					out.Grid[i][c-1] = "●●●●●●"
+				}
+			}
+		}
+	}
 	if _, ok := hasName(&r); !ok {
 		return out, nil // nothing mapped yet: the headers are what the editor needs
 	}

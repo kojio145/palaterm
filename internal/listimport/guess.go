@@ -207,14 +207,17 @@ func knownOS(v string, env *Env) (string, bool) {
 	return "", false
 }
 
-// knownSet is v when it already is one of this PalaTerm's command sets.
+// knownSet is v when it already is one of this PalaTerm's command sets —
+// a safe one: a set whose commands change a device is never taken by a
+// guessing step, not even when the value names it (it is guessed then,
+// and so marked, and never written over an existing device's set).
 func knownSet(v string, env *Env) (string, bool) {
 	t := strings.TrimSpace(v)
 	if env == nil || t == "" {
 		return "", false
 	}
 	for _, s := range env.Sets {
-		if t == s.Name {
+		if t == s.Name && s.Safe {
 			return s.Name, true
 		}
 	}

@@ -111,3 +111,16 @@ func TestSuggestSkipsKindColumn(t *testing.T) {
 		}
 	}
 }
+
+// A value naming an unsafe set (one that changes devices) is not taken as
+// it is: it is guessed (and marked so), and never becomes that set.
+func TestGuessSetNeverTakesAnUnsafeSetByName(t *testing.T) {
+	env := &Env{Sets: []EnvSet{{Name: "Cisco_L2SW 設定投入", Safe: false}, {Name: "show-basic", Safe: true}}}
+	steps := []model.ImportStep{{Type: "guessSet"}}
+	if v, guessed := applySteps("Cisco_L2SW 設定投入", steps, env); v == "Cisco_L2SW 設定投入" || !guessed {
+		t.Errorf("unsafe set by name: %q guessed %v", v, guessed)
+	}
+	if v, guessed := applySteps("show-basic", steps, env); v != "show-basic" || guessed {
+		t.Errorf("safe set by name: %q guessed %v", v, guessed)
+	}
+}

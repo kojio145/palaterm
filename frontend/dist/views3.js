@@ -34,6 +34,12 @@ function stageBadge(st) {
 // the run in the comparison selects.
 function runDirName(r) { return r.name || runTitle(r); }
 
+// runTipOf: the chosen run's time, group and stage, the tooltip of a
+// comparison select (an option cannot carry the app's tooltip).
+function runTipOf(dir) {
+  const r = dir && (histState.runs || []).find(x => x.dir === dir);
+  return r ? runTitle(r) : "";
+}
 function runTitle(r) {
   return `${fmtRunTime(r.startedAt)}${r.group ? "  " + r.group : ""}${r.stage ? "  [" + stageLabel(r.stage) + "]" : ""}`;
 }
@@ -54,7 +60,7 @@ async function renderHistory() {
   else root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
   let runs = [];
   try { runs = await App().ListRunHistory() || []; }
-  catch (e) { if (seq === histLoading) root.innerHTML = `<div class="empty">${esc(t("履歴を読めません")) + ": " + esc(terr(e))}</div>`; return; }
+  catch (e) { if (seq === histLoading) root.innerHTML = pageError(t("実行履歴"), t("履歴を読めません") + ": " + terr(e)); return; }
   if (seq !== histLoading) return; // a newer read is on its way
   histState.runs = runs;
   renderHistoryView();
@@ -81,7 +87,7 @@ function renderHistoryView() {
     histState.b = after ? after.dir : "";
   }
   const runOpt = sel => `<option value="">${esc(t("（選択）"))}</option>` + runs.map(r =>
-    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === sel ? "selected" : ""}>${esc(runDirName(r) + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
+    `<option value="${esc(r.dir)}" ${r.dir === sel ? "selected" : ""}>${esc(runDirName(r) + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
   // The work run (作業中 batch or interactive session) between A and B, same
   // group when known: it says what was done, so the compare can conclude
   // whether that work shows up in the after logs.
@@ -99,7 +105,7 @@ function renderHistoryView() {
     histState.c = mid ? mid.dir : "";
   }
   const workOpt = `<option value="">${esc(t("（なし）"))}</option>` + runs.filter(isWorkRun).map(r =>
-    `<option value="${esc(r.dir)}" title="${esc(runTitle(r))}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("対話接続") : "") + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
+    `<option value="${esc(r.dir)}" ${r.dir === histState.c ? "selected" : ""}>${esc(runDirName(r) + (r.interactive ? "  " + t("対話接続") : "") + (r.external ? "  " + t("［外部］") : ""))}</option>`).join("");
 
   // Sort / filter of the run rows (display only; see listView in app.js).
   // The comparison selects above the table always list every run.
@@ -144,7 +150,7 @@ function renderHistoryView() {
       <td style="text-align:right;white-space:nowrap;width:260px">
         <button class="btn sm" data-cmp-a="${esc(r.dir)}" ${histState.a === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較元(A)"))}</button>
         <button class="btn sm" data-cmp-b="${esc(r.dir)}" ${histState.b === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較先(B)"))}</button>
-        <button class="btn sm" data-folder="${esc(r.dir)}">${esc(t("フォルダ"))}</button>
+        <button class="btn sm" data-folder="${esc(r.dir)}">${esc(t("フォルダを開く"))}</button>
       </td>
     </tr>${devRows}`;
   }).join("");
@@ -154,20 +160,20 @@ function renderHistoryView() {
       <div><div class="page-title">${esc(t("実行履歴"))}</div>
         <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）"))}</div></div>
       <div class="row-inline">
-        <button class="btn" id="hist-refresh">${esc(t("再読込"))}</button>
+        <button class="btn" id="hist-refresh">${esc(t("再読み込み"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
       </div>
     </div>
     <div class="panel" style="padding:14px 18px;margin-bottom:16px">
       <div class="row-inline" style="gap:10px;flex-wrap:wrap">
         <b style="white-space:nowrap">${esc(t("比較"))}</b>
-        <span class="muted" style="font-size:12px">A</span><select id="cmp-a" class="btn" style="max-width:360px">${runOpt(histState.a)}</select>
-        <span class="muted" style="font-size:12px">B</span><select id="cmp-b" class="btn" style="max-width:360px">${runOpt(histState.b)}</select>
+        <span class="muted" style="font-size:12px">A</span><select id="cmp-a" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.a))}">${runOpt(histState.a)}</select>
+        <span class="muted" style="font-size:12px">B</span><select id="cmp-b" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.b))}">${runOpt(histState.b)}</select>
         <button class="btn primary" id="cmp-go" ${histState.a && histState.b && histState.a !== histState.b ? "" : "disabled"}>${esc(t("比較する"))}</button>
         ${bOlder ? `<span style="font-size:12px;color:var(--warn)">${esc(t("⚠ B は A より前の実行です（A=作業前・B=作業後 の順になっていません）"))}</span>` : ""}
       </div>
       <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
-        <span class="muted" style="font-size:12px" data-tip="${esc(t("A と B の間に行った作業（作業中の一括実行、または単独接続）。選ぶと、その作業内容と、作業前→作業後の差分から「変更が反映されたか」の結論を出します"))}">${esc(t("作業中（任意） ⓘ"))}</span><select id="cmp-c" class="btn" style="max-width:420px">${workOpt}</select>
+        <span class="muted" style="font-size:12px" data-tip="${esc(t("A と B の間に行った作業（作業中の一括実行、または対話接続）。選ぶと、その作業内容と、作業前→作業後の差分から「変更が反映されたか」の結論を出します"))}">${esc(t("作業中（任意） ⓘ"))}</span><select id="cmp-c" class="btn" style="max-width:420px" data-tip="${esc(histState.c && histState.c !== "-" ? runTipOf(histState.c) : "")}">${workOpt}</select>
         <span class="muted" style="font-size:12px">${esc(t("同じ機器名のログ同士を比べます（A=作業前・B=作業後）"))}</span>
       </div>
       <div id="cmp-result"></div>
@@ -461,7 +467,7 @@ function drawCompare() {
   // different devices that happen to share a name: say so above the result.
   const ga = a.group || "", gb = b.group || "";
   const groupWarn = ga !== gb
-    ? `<div style="margin-top:10px;font-size:13px;color:var(--warn);border:1px solid var(--warn);border-radius:8px;padding:8px 12px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
+    ? `<div class="warn-box" style="margin-top:10px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
     : "";
   const tools = `<div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:12px;font-size:13px">
       ${needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(work ? t("未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }) : t("判定不能の機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}

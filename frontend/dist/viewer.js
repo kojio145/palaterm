@@ -7,32 +7,32 @@
 async function bootViewerWindow() {
   document.getElementById("lock").classList.add("hidden");
   document.getElementById("app").classList.add("hidden");
-  document.body.style.background = "#11151c";
+  document.body.style.background = "var(--bg)";
   const V = () => window.go.main.Viewer;
   const doc = await V().Load();
-  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#11151c;font-family:'Segoe UI',sans-serif">
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442">
-      <div style="color:#e6ecf3;font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(doc.path)}">${esc(t("ログ"))}: ${esc(doc.name)}</div>
+  const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);font-family:'Segoe UI',sans-serif">
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg);border-bottom:1px solid var(--border)">
+      <div style="color:var(--text);font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-tip="${esc(doc.path)}">${esc(t("ログ"))}: ${esc(doc.name)}</div>
       <span id="lv-note" class="pill ok hidden"></span>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-wrap" style="width:auto"> ${esc(t("折り返し"))}</label>
       <label style="display:flex;align-items:center;gap:5px;color:#c7d0dc;font-size:12px;white-space:nowrap"><input type="checkbox" id="lv-follow" style="width:auto"> ${esc(t("自動更新（追記を追う）"))}</label>
-      <button class="btn sm" id="lv-reload">${esc(t("再読込"))}</button>
+      <button class="btn sm" id="lv-reload">${esc(t("再読み込み"))}</button>
       <button class="btn sm" id="lv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべてのログ表示窓に反映）"))}">${esc(t("色"))}</button>
-      <button class="btn sm" id="lv-font-dec" title="Ctrl+-">A−</button>
-      <button class="btn sm" id="lv-font-inc" title="Ctrl++">A＋</button>
-      <button class="btn sm" id="lv-find" title="Ctrl+F">${esc(t("検索"))}</button>
+      <button class="btn sm" id="lv-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
+      <button class="btn sm" id="lv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
+      <button class="btn sm" id="lv-find" data-tip="${esc(t("検索（Ctrl+F）"))}">${esc(t("検索"))}</button>
       <button class="btn sm" id="lv-copy">${esc(t("全文コピー"))}</button>
-      <button class="btn sm" id="lv-folder">${esc(t("フォルダ"))}</button>
+      <button class="btn sm" id="lv-folder" data-tip="${esc(t("このログがあるフォルダを開きます"))}">${esc(t("フォルダを開く"))}</button>
     </div>
-    <div id="lv-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid #2a3442;font-size:12px">
-      <input id="lv-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:#e6ecf3;border:1px solid #2a3442;border-radius:6px;padding:4px 8px;font-size:12px">
+    <div id="lv-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid var(--border);font-size:12px">
+      <input id="lv-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
       <span id="lv-find-n" class="muted" style="min-width:70px"></span>
-      <button class="btn sm" id="lv-find-prev">▲</button>
-      <button class="btn sm" id="lv-find-next">▼</button>
-      <button class="btn sm" id="lv-find-close">✕</button>
+      <button class="btn sm" id="lv-find-prev" data-tip="${esc(t("前を検索（Shift+Enter）"))}">▲</button>
+      <button class="btn sm" id="lv-find-next" data-tip="${esc(t("次を検索（Enter）"))}">▼</button>
+      <button class="btn sm" id="lv-find-close" data-tip="${esc(t("閉じる（Esc）"))}">✕</button>
     </div>
     <textarea id="lv-text" readonly spellcheck="false" style="flex:1;min-height:0;width:100%;resize:none;background:#0b0e13;color:#cbd5e1;border:none;padding:10px 14px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:auto;outline:none"></textarea>
-    <div id="lv-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid #2a3442"></div>
+    <div id="lv-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid var(--border)"></div>
   </div>`);
   document.body.appendChild(wrap);
   const ta = document.getElementById("lv-text"), note = document.getElementById("lv-note"), status = document.getElementById("lv-status");
@@ -43,7 +43,8 @@ async function bootViewerWindow() {
   onScreenColors("viewer", applyColors);
   document.getElementById("lv-color").onclick = e => openScreenColorPanel("viewer", e.currentTarget, applyColors, () => ta.focus());
   let noteTimer = null;
-  function flash(text) { note.textContent = text; note.classList.remove("hidden"); clearTimeout(noteTimer); noteTimer = setTimeout(() => note.classList.add("hidden"), 1500); }
+  // kind "err" shows red and stays long enough to be read.
+  function flash(text, kind) { note.textContent = text; note.className = "pill " + (kind || "ok"); clearTimeout(noteTimer); noteTimer = setTimeout(() => note.classList.add("hidden"), kind === "err" ? 6000 : 1500); }
   function show(d, keepPos) {
     const atBottom = ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 4;
     const top = ta.scrollTop;
@@ -54,13 +55,13 @@ async function bootViewerWindow() {
     ta.value = d.err ? t("ログを開けません") + ": " + terr(d.err) : d.text;
     if (hadSel) { ta.setSelectionRange(selA, selB); keepPos = true; }
     const lines = d.text ? d.text.split(/\r\n|\r|\n/).length : 0;
-    status.textContent = d.err ? "" : t("{n} 行 / {b} バイト", { n: lines, b: d.text.length }) + "　" + d.path;
+    status.textContent = d.err ? "" : t("{n} 行 / {c} 文字", { n: lines.toLocaleString(), c: d.text.length.toLocaleString() }) + "　" + d.path;
     if (!keepPos || (atBottom && !hadSel)) ta.scrollTop = ta.scrollHeight; else ta.scrollTop = top;
   }
   show(doc, false);
   async function reload(auto) {
     const d = await V().Load();
-    if (d.text !== ta.value) { show(d, true); if (!auto) flash(t("再読込しました")); }
+    if (d.text !== ta.value) { show(d, true); if (!auto) flash(t("再読み込みしました")); }
     else if (!auto) flash(t("変更なし"));
   }
   document.getElementById("lv-reload").onclick = () => reload(false);
@@ -76,7 +77,7 @@ async function bootViewerWindow() {
   const follow = document.getElementById("lv-follow");
   follow.checked = !!doc.live;
   setInterval(() => { if (follow.checked) reload(true); }, 2000);
-  document.getElementById("lv-folder").onclick = () => V().OpenFolder().catch(e => flash(terr(e)));
+  document.getElementById("lv-folder").onclick = () => V().OpenFolder().catch(e => flash(t("フォルダを開けません") + ": " + terr(e), "err"));
   const copyAll = () => { ta.select(); document.execCommand("copy"); flash(t("コピーしました")); ta.setSelectionRange(0, 0); };
   document.getElementById("lv-copy").onclick = copyAll;
   // Right-click: 選択した文字をコピー (app.js) plus 全文コピー.
@@ -113,14 +114,15 @@ async function bootViewerWindow() {
   document.getElementById("lv-find-next").onclick = () => findNext(1);
   document.getElementById("lv-find-prev").onclick = () => findNext(-1);
   document.getElementById("lv-find-close").onclick = closeFind;
-  fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); closeFind(); } });
+  fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
   fin.addEventListener("input", () => { lastQ = ""; fn.textContent = ""; });
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
     if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
     if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
-    if (e.key === "Escape" && bar.classList.contains("hidden") && !document.getElementById("sc-pop")) { V().Close(); }
+    // Esc closes an open find bar first, the window only after that (as the diff window).
+    if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!bar.classList.contains("hidden")) closeFind(); else V().Close(); }
   });
   ta.focus();
 }
@@ -137,22 +139,23 @@ async function bootWatchWindow() {
   document.body.style.background = "#000";
   const W = () => window.go.main.Watcher;
   const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:#000;font-family:'Segoe UI',sans-serif">
-    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:#11151c;border-bottom:1px solid #2a3442">
-      <div id="wv-name" style="color:#e6ecf3;font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg);border-bottom:1px solid var(--border)">
+      <div id="wv-name" style="color:var(--text);font-size:13px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
       <span id="wv-state" class="pill" style="font-size:11px"></span>
       <button class="btn sm" id="wv-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての画面表示窓に反映）"))}">${esc(t("色"))}</button>
-      <button class="btn sm" id="wv-font-dec" title="Ctrl+-">A−</button>
-      <button class="btn sm" id="wv-font-inc" title="Ctrl++">A＋</button>
+      <button class="btn sm" id="wv-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
+      <button class="btn sm" id="wv-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A＋</button>
       <button class="btn sm" id="wv-log" data-tip="${esc(t("同じログを文字で開きます（検索・全文コピー）"))}">${esc(t("ログ表示"))}</button>
     </div>
-    <div style="padding:2px 12px;background:#11151c;color:#8b97a8;font-size:11px;border-bottom:1px solid #2a3442">${esc(t("表示のみ（キー入力は機器に送りません）。操作するときは本体の「接続」から別に接続してください"))}</div>
+    <div style="padding:2px 12px;background:var(--bg);color:#8b97a8;font-size:11px;border-bottom:1px solid var(--border)">${esc(t("表示のみ（キー入力は機器に送りません）。操作するときは本体の「接続」から別に接続してください"))}</div>
     <div id="wv-host" style="flex:1;min-height:0;padding:4px 0 0 6px"></div>
   </div>`);
   document.body.appendChild(wrap);
 
   const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
   let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
+  // Its own size (palaterm_watch_font); until one is chosen here, the terminal window's.
+  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_watch_font") || localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
   const term = new Terminal({
     convertEol: false, cursorBlink: false, disableStdin: true, scrollback: 10000,
     fontFamily: '"Consolas", monospace', fontSize,
@@ -169,10 +172,10 @@ async function bootWatchWindow() {
   const refit = () => { try { fit.fit(); } catch (e) {} };
   refit();
   window.addEventListener("resize", refit);
-  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); term.options.fontSize = fontSize; refit(); }
+  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); term.options.fontSize = fontSize; try { localStorage.setItem("palaterm_watch_font", String(fontSize)); } catch (e) {} refit(); }
   document.getElementById("wv-font-inc").onclick = () => setFont(fontSize + 1);
   document.getElementById("wv-font-dec").onclick = () => setFont(fontSize - 1);
-  document.getElementById("wv-log").onclick = () => W().OpenLog().catch(e => toast(terr(e), "err"));
+  document.getElementById("wv-log").onclick = () => W().OpenLog().catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
 
   // Selection → Ctrl+C / right-click copies it (the terminal sends nothing).
   term.attachCustomKeyEventHandler(e => {
@@ -201,7 +204,7 @@ async function bootWatchWindow() {
     let more = false;
     try {
       const c = await W().Read(off);
-      if (!named) { document.getElementById("wv-name").textContent = t("画面") + ": " + c.name; document.getElementById("wv-name").title = c.path; named = true; }
+      if (!named) { document.getElementById("wv-name").textContent = t("画面") + ": " + c.name; document.getElementById("wv-name").dataset.tip = c.path; named = true; }
       if (c.err) { state.className = "pill"; state.textContent = terr(c.err); }
       else {
         if (c.off < off) term.reset();

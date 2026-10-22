@@ -72,13 +72,26 @@ func cellGrid(s *sheet.Sheet, onlyFirst bool) [][]string {
 		return s.Rows
 	}
 	rows := make([][]string, len(s.Rows))
+	// A merged area is filled only where the sheet has cells: up to its
+	// last row and its widest row (a merge reaching column ALL of row
+	// 100,000 in a small file must not become a hundred million cells),
+	// and all the filling together within sheet.MaxCells.
+	width, cells := 0, 0
 	for i, r := range s.Rows {
 		rows[i] = append([]string(nil), r...)
+		width = max(width, len(r))
+		cells += len(r)
 	}
 	for _, m := range s.Merges {
-		if m.R1 < 0 || m.C1 < 0 || m.R1 >= len(rows) || m.R2 < m.R1 || m.C2 < m.C1 || m.R2-m.R1 > 100000 || m.C2-m.C1 > 1000 {
+		if m.R1 < 0 || m.C1 < 0 || m.R1 >= len(rows) || m.C1 >= width || m.R2 < m.R1 || m.C2 < m.C1 {
 			continue
 		}
+		m.R2 = min(m.R2, len(rows)-1)
+		m.C2 = min(m.C2, width-1)
+		if cells+(m.R2-m.R1+1)*(m.C2+1) > sheet.MaxCells {
+			break
+		}
+		cells += (m.R2 - m.R1 + 1) * (m.C2 + 1)
 		v := ""
 		if m.C1 < len(rows[m.R1]) {
 			v = rows[m.R1][m.C1]
@@ -205,6 +218,44 @@ func (t *Table) column(name string, idx int) int {
 }
 
 var reTemplate = regexp.MustCompile(`\{([^{}]+)\}`)
+
+// SecretColumns are the table's columns a password field reads (its column,
+// the fallbacks, the ones its combination names — of every device of a row):
+// the rule editor shows the sample with those cells masked.
+func SecretColumns(t *Table, r *model.ImportRule) map[int]bool {
+	out := map[int]bool{}
+	add := func(f model.ImportField) {
+		if !isSecret(f.Key) {
+			return
+		}
+		switch f.Source {
+		case "column":
+			if c := t.column(f.Column, f.ColIndex); c != 0 {
+				out[c] = true
+			}
+			for _, fb := range f.Fallback {
+				if c := t.column(fb, 0); c != 0 {
+					out[c] = true
+				}
+			}
+		case "template":
+			for _, m := range reTemplate.FindAllStringSubmatch(f.Template, -1) {
+				if c := t.column(m[1], 0); c != 0 {
+					out[c] = true
+				}
+			}
+		}
+	}
+	for _, f := range r.Fields {
+		add(f)
+	}
+	for _, u := range r.Units {
+		for _, f := range u.Fields {
+			add(f)
+		}
+	}
+	return out
+}
 
 // sourceValueFrom is a field's value before its steps, the fallback column
 // it came from ("" for the field's own), and the columns it names that the

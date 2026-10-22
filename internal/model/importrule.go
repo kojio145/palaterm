@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"regexp"
+	"regexp/syntax"
 	"strings"
 )
 
@@ -198,6 +199,9 @@ func (r *ImportRule) Validate() error {
 			return fmt.Errorf("項目「%s」が 2 回設定されています", f.Key)
 		}
 		seen[f.Key] = true
+		if err := f.checkSize(); err != nil {
+			return fmt.Errorf("項目「%s」: %v", f.Key, err)
+		}
 		switch f.Source {
 		case "", "column", "template":
 		default:
@@ -238,6 +242,9 @@ func (r *ImportRule) Validate() error {
 				return fmt.Errorf("%d 台目の項目「%s」が 2 回設定されています", u+2, f.Key)
 			}
 			seen[f.Key] = true
+			if err := f.checkSize(); err != nil {
+				return fmt.Errorf("%d 台目の項目「%s」: %v", u+2, f.Key, err)
+			}
 			switch f.Source {
 			case "column":
 				if strings.TrimSpace(f.Column) == "" && f.ColIndex < 1 {
@@ -263,6 +270,9 @@ func (r *ImportRule) Validate() error {
 			return fmt.Errorf("%d 台目の機器名の元の値を設定してください（1 台目と同じ名前にはできません）", u+2)
 		}
 	}
+	if len(r.Exclude) > maxRuleExcludes {
+		return fmt.Errorf("除外条件は %d 件までです", maxRuleExcludes)
+	}
 	for i, c := range r.Exclude {
 		if c.Target != "field" && c.Target != "column" {
 			return fmt.Errorf("除外条件 %d の対象が不正です", i+1)
@@ -282,6 +292,32 @@ func (r *ImportRule) Validate() error {
 }
 
 // Validate checks one step.
+// The size a rule may have: generous for any real list, small enough that a
+// rule file someone hands over cannot keep an import busy for hours (a
+// 150,000-row 置き換え表 over a 200,000-row list) or compile a huge regexp.
+const (
+	maxRuleSteps     = 30
+	maxRuleMapRows   = 5000
+	maxRuleTemplate  = 1000
+	maxRuleFallbacks = 10
+	maxRuleExcludes  = 100
+	maxRegexpInsts   = 10000
+)
+
+// checkSize refuses a field larger than a rule ever needs.
+func (f *ImportField) checkSize() error {
+	if len(f.Steps) > maxRuleSteps {
+		return fmt.Errorf("加工手順は %d 個までです", maxRuleSteps)
+	}
+	if len([]rune(f.Template)) > maxRuleTemplate {
+		return fmt.Errorf("組み立ては %d 文字までです", maxRuleTemplate)
+	}
+	if len(f.Fallback) > maxRuleFallbacks {
+		return fmt.Errorf("「空のときは別の列」は %d 個までです", maxRuleFallbacks)
+	}
+	return nil
+}
+
 func (s *ImportStep) Validate() error {
 	switch s.Type {
 	case "trim", "lower", "upper", "width", "guessOS", "guessSet":
@@ -312,7 +348,16 @@ func (s *ImportStep) Validate() error {
 		if _, err := regexp.Compile(s.Pattern); err != nil {
 			return fmt.Errorf("正規表現の書き方が正しくありません（%v）", err)
 		}
+		// Short but huge once compiled ((?:a{1000}){1000}): refused.
+		if re, err := syntax.Parse(s.Pattern, syntax.Perl); err == nil {
+			if prog, err := syntax.Compile(re.Simplify()); err != nil || len(prog.Inst) > maxRegexpInsts {
+				return fmt.Errorf("正規表現が複雑すぎます")
+			}
+		}
 	case "map":
+		if len(s.Rows) > maxRuleMapRows {
+			return fmt.Errorf("置き換え表は %d 行までです", maxRuleMapRows)
+		}
 		if s.Miss != "keep" && s.Miss != "empty" {
 			s.Miss = "keep"
 		}

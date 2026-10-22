@@ -49,6 +49,11 @@ const (
 	maxGridCols = 1000
 	maxMerges   = 100000
 	maxWarnings = 50
+	// MaxCells caps the cells a sheet holds in all (each row as long as
+	// its last filled cell): 200,000 rows each with one cell in column ALL
+	// would else be 200 million string slots (3 GB) from a small file.
+	// Merged areas filled in later (listimport) count against it too.
+	MaxCells = 5000000
 )
 
 var (
@@ -133,6 +138,7 @@ type sheetBuilder struct {
 	rows    [][]string
 	merges  []Range
 	clipped bool
+	cells   int // the slots the rows hold (see MaxCells)
 }
 
 func (s *sheetBuilder) set(r, c int, v string) {
@@ -151,6 +157,11 @@ func (s *sheetBuilder) set(r, c int, v string) {
 	}
 	row := s.rows[r]
 	if c >= len(row) {
+		if s.cells+c+1-len(row) > MaxCells {
+			s.clipped = true
+			return
+		}
+		s.cells += c + 1 - len(row)
 		row = append(row, make([]string, c+1-len(row))...)
 	}
 	row[c] = v
@@ -175,7 +186,7 @@ func (s *sheetBuilder) merge(r1, c1, r2, c2 int) {
 
 func (s *sheetBuilder) finish(b *Book) {
 	if s.clipped {
-		b.warn("シート「%s」が大きすぎるため、%d 行・%d 列を超える部分は読み込んでいません", s.name, maxGridRows, maxGridCols)
+		b.warn("シート「%s」が大きすぎるため、%d 行・%d 列（合計 %d セル）を超える部分は読み込んでいません", s.name, maxGridRows, maxGridCols, MaxCells)
 	}
 	rows := s.rows
 	if rows == nil {
