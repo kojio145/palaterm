@@ -53,8 +53,8 @@ function renderCommands() {
   document.getElementById("add-set").onclick = () => editCommandSet(null);
   document.getElementById("cs-imp").onclick = async () => {
     try {
-      const nm = await App().ImportCommandSetFile();
-      if (nm) { await refreshInventory(); toast(t("「{n}」を読み込みました", { n: nm }), "ok"); }
+      const res = await importOneFile(() => App().ImportCommandSetFile(), t("コマンドセット"));
+      if (res) { await refreshInventory(); toast(res.same ? t("「{n}」は同じ内容で登録済みです", { n: res.name }) : t("「{n}」を読み込みました", { n: res.name }), "ok"); }
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
@@ -417,7 +417,7 @@ function renderRun() {
   const filtered = runFilterActive();
   // Keep the filter box's focus and caret across the re-render.
   const focusId = document.activeElement && document.activeElement.id;
-  const focusPos = focusId === "run-filter" ? document.activeElement.selectionStart : 0;
+  const focusSel = focusId === "run-filter" ? boxSelection(document.activeElement) : null;
   const rows = visible.map(d => {
     const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" };
     // One continuous bar per device across 接続 → ログイン → コマンド → 保存, so a
@@ -547,7 +547,7 @@ function renderRun() {
            <th style="width:36px"><input type="checkbox" id="run-chk-all" ${visible.length && visible.every(d => d.enabled) ? "checked" : ""} ${running ? "disabled" : ""} data-tip="${esc(filtered ? t("表示中の行を全選択/全解除") : t("全選択/全解除"))}"></th>
            ${th("phase", t("状態"), "126px")}${th("name", t("機器名"), "132px")}${th("host", t("IPアドレス"), "112px")}
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
-           <th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
+           <th>${esc(t("メッセージ"))}</th><th style="width:${LANG === "ja" ? 220 : 240}px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
   // A detached element loses its scroll offset, so the old panel stays in
   // the DOM: the nodes around it and its children are swapped instead.
@@ -570,8 +570,8 @@ function renderRun() {
   // focus is put back afterwards (see focusId above).
   const fIn = document.getElementById("run-filter");
   if (fIn) {
-    wireFilterInput(fIn, () => { runFilter.text = fIn.value; renderRun(); });
-    if (focusId === "run-filter") { fIn.focus(); try { fIn.setSelectionRange(focusPos, focusPos); } catch (e) { } }
+    wireFilterInput(fIn, () => { runFilter.text = fIn.value; renderRun(); }, val => { runFilter.text = val; });
+    if (focusId === "run-filter") { fIn.focus(); restoreBoxSelection(fIn, focusSel); }
   }
   const fSite = document.getElementById("run-filter-site");
   if (fSite) fSite.onchange = () => { runFilter.site = fSite.value; renderRun(); };
@@ -1221,6 +1221,9 @@ function wireEvents() {
     });
   });
   rt().EventsOn("run:done", applyRunDone);
+  // A bound method stopped on an internal error (recovered in the backend,
+  // logged in data\error.log): what it was doing may not have happened.
+  rt().EventsOn("app:internal-error", msg => toast(terr(msg) + " " + t("（操作は完了していない可能性があります）"), "err"));
 }
 
 // The end of a batch: the run:done event, or - for a page reloaded while the
@@ -1249,12 +1252,25 @@ function applyRunDone(payload) {
       warnings: r.warnings || [],
     };
   });
+  // The batch stopped on an internal error (logged in data\error.log):
+  // devices still shown as running did not finish.
+  const internalErr = payload && payload.error ? terr(payload.error) : "";
+  if (internalErr) {
+    Object.keys(runState).forEach(k => {
+      const s = runState[k];
+      if (s && s.phase !== "done" && s.phase !== "error" && s.phase !== "canceled") runState[k] = { ...s, phase: "error", message: internalErr };
+    });
+  }
   const wasCancel = cancelling;
   cancelling = false;
   const active = document.querySelector(".tab.active");
   if (active && active.id === "tab-run") renderRun();
   // Clear the "実行中" notice on the settings tab (unless mid-edit).
   else if (active && active.id === "tab-settings" && !settingsDirty && !myLoginsDirty) renderSettings();
+  if (internalErr) {
+    toast(t("一括実行が内部エラーで止まりました") + ": " + internalErr, "err");
+    return;
+  }
   if (wasCancel) {
     const v = Object.values(runState);
     toast(t("中止しました（完了 {a}・失敗 {b}・中止/未実行 {c}）", {
@@ -1396,7 +1412,9 @@ function renderSettings() {
       maxParallel: parseInt(document.getElementById("set-par").value, 10) || 0,
       connectTimeout: parseInt(document.getElementById("set-ct").value, 10) || 20,
       commandTimeout: parseInt(document.getElementById("set-cmt").value, 10) || 30,
-      logDir: document.getElementById("set-dir").value || "logs",
+      // Without the quotes Explorer's パスのコピー puts around it (the
+      // backend also checks the folder can be made, and says why not).
+      logDir: document.getElementById("set-dir").value.trim().replace(/^["']+|["']+$/g, "").trim() || "logs",
       logNameTemplate: document.getElementById("set-tmpl").value || "{host}_{site}_{role}_{stage}_{date}_{time}.txt",
       logDirTemplate: document.getElementById("set-dtmpl").value.trim() || "{date}_{time}_{group}_{stage}",
       // Empty = default (before / work / after); the backend validates.
@@ -1413,6 +1431,7 @@ function renderSettings() {
     out.rightClickPasteOff = !!document.getElementById("set-rc-off").checked;
     out.rightClickPasteConfirm = !!document.getElementById("set-rc-confirm").checked;
     out.tiledBroadcast = !!document.getElementById("set-tile-bcast").checked;
+    document.getElementById("set-dir").value = out.logDir;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
@@ -1595,12 +1614,12 @@ function renderOSTypes() {
   document.getElementById("prof-add").onclick = () => editProfile(null);
   document.getElementById("prof-imp").onclick = async () => {
     try {
-      const nm = await App().ImportOSProfileFile();
-      if (nm) {
+      const res = await importOneFile(() => App().ImportOSProfileFile(), t("OSタイププロファイル"));
+      if (res) {
         INV = await App().GetInventory();
         PROFILES = await App().ListProfiles();
         renderOSTypes();
-        toast(t("「{n}」を読み込みました", { n: nm }), "ok");
+        toast(res.same ? t("「{n}」は同じ内容で登録済みです", { n: res.name }) : t("「{n}」を読み込みました", { n: res.name }), "ok");
       }
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
@@ -1785,6 +1804,68 @@ function editProfile(prof, tpl) {
       } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); return null; }
     }
     node.querySelector("#p-save").onclick = saveProfile;
+}
+
+// importOneFile reads one command-set / OS-profile file (read: the backend
+// call with its file dialog). When a set / profile of that name is already
+// there and differs, nothing has changed yet: ask whether to replace it, add
+// the file under another name, or stop. Returns the FileImport, or null when
+// nothing was read.
+async function importOneFile(read, what) {
+  let res = await read();
+  if (!res || (!res.imported && !res.conflict)) return null; // dialog cancelled
+  if (res.conflict) {
+    const c = await uiChoice({
+      title: t("同じ名前があります"),
+      message: t("{what}「<b>{n}</b>」は既にあります。読み込んだファイルの内容で置き換えますか？", { what: esc(what), n: esc(res.conflict) }) +
+        `<br><span class="muted" style="font-size:12px">${esc(t("置き換えると、今の内容は戻せません（使っている機器はそのまま置き換えた内容を使います）"))}</span>`,
+      buttons: [{ id: "cancel", label: t("やめる") }, { id: "rename", label: t("別名で追加（{n}）", { n: res.altName }) }, { id: "replace", label: t("置き換える"), cls: "danger" }],
+    });
+    res = await App().ResolveFileImport(c === "replace" || c === "rename" ? c : "cancel");
+    if (!res || !res.imported) return null;
+  }
+  return res;
+}
+
+// unlockRecover is the lock screen's answer to a failed unlock (app.js
+// doUnlock): when the vault is damaged but its previous generation opens with
+// this password, offer to restore it. True when the vault is open now.
+async function unlockRecover(pw) {
+  const info = await App().GetUnlockInfo().catch(() => null);
+  if (!info || !info.backupAt) return false;
+  const ok = await uiConfirm({
+    title: t("保管庫を復元"),
+    message: t("保管庫のファイル（data\\palaterm_vault.enc）をこのパスワードで開けませんでした。ファイルが壊れている可能性があります。<br>1 世代前の控え（{at} に保存）はこのパスワードで開けます。控えから復元しますか？", { at: esc(info.backupAt) }) +
+      `<br><span class="muted" style="font-size:12px">${esc(t("今のファイルは消さずに palaterm_vault.enc.broken-日時 という名前で残します。控えのあとに行った変更は戻りません。"))}</span>`,
+    okLabel: t("1 世代前から復元"),
+  });
+  if (!ok) return false;
+  try {
+    const kept = await App().RestoreVaultBackup(pw);
+    toast(t("1 世代前の控えから復元しました（壊れていたファイルは data\\{f} として残しました）", { f: kept }), "ok");
+    return true;
+  } catch (e) { toast(t("復元できません") + ": " + terr(e), "err"); return false; }
+}
+
+// unlockNotices tells, right after an unlock, what the backend found: a
+// vault saved by a newer PalaTerm (opened read-only, unless the user chooses
+// to edit it here anyway), profiles that were given new keys.
+async function unlockNotices() {
+  const info = await App().GetUnlockInfo().catch(() => null);
+  if (!info) return;
+  if (info.rekeyed && info.rekeyed.length) {
+    toast(t("同じ内部キーを持つOSタイププロファイルを分けました: {list}（機器は先にあったプロファイルのままです。こちらを使う機器があれば選び直してください）", { list: info.rekeyed.join(", ") }), "warn");
+  }
+  if (info.newer && info.readOnly) {
+    const c = await uiChoice({
+      title: t("新しい版で保存された保管庫です"),
+      message: esc(t("この保管庫は新しい版の PalaTerm{v} で保存されています。この版で保存すると、新しい版で追加された設定が消えます。", { v: info.savedBy ? " (v" + info.savedBy + ")" : "" })) +
+        "<br>" + esc(t("新しい版の PalaTerm を使うことをお勧めします。この版では読み取り専用で開きます。")),
+      buttons: [{ id: "edit", label: t("この版で編集する（新しい版の設定は消えます）"), cls: "danger" }, { id: "ro", label: t("読み取り専用で開く"), cls: "primary" }],
+    });
+    if (c === "edit") { await App().AllowOlderSave(); toast(t("この版で保存できるようにしました"), "warn"); }
+    else toast(t("読み取り専用で開いています（変更は保存されません）"), "warn");
+  }
 }
 
 wireEvents();

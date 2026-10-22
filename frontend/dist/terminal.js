@@ -575,6 +575,7 @@ async function bootTerminalWindow() {
   function showSwitch(on) { switchBtn.classList.toggle("hidden", !on); switchBtn.disabled = false; }
   rt().EventsOn("term:ready", ev => {
     connecting = false;
+    setHkAsk(false);
     closed = false;
     showSwitch(false);
     takeoverBar.classList.add("hidden"); doFit();
@@ -616,10 +617,29 @@ async function bootTerminalWindow() {
     [...wrap.children].forEach(el => { el.inert = false; });
     term.focus();
   }
-  document.getElementById("tw-hk-cancel").onclick = hideHk;
-  hkDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hideHk(); } });
+  // Closing the question (キャンセル / Esc) leaves the window able to ask it
+  // again: the 再接続 button turns into 再接続（ホストキーを確認）, and it or
+  // Enter brings the question back rather than retrying into the same refusal.
+  let hkAsk = false;
+  function setHkAsk(on) {
+    hkAsk = on;
+    reconnectBtn.textContent = on ? t("再接続（ホストキーを確認）") : t("再接続");
+    reconnectBtn.dataset.tip = on
+      ? t("ホストキーの確認をもう一度表示します（Enter キーでも表示できます）")
+      : t("同じ機器にもう一度接続します（切断後に Enter キーでも再接続できます）");
+  }
+  function dismissHk() {
+    hideHk();
+    setHkAsk(true);
+    reconnectBtn.classList.remove("hidden");
+    term.write("\x1b[90m" + t("[Enter または「再接続（ホストキーを確認）」でホストキーの確認をもう一度表示します]") + "\x1b[0m\r\n");
+  }
+  document.getElementById("tw-hk-cancel").onclick = dismissHk;
+  hkDlg.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dismissHk(); } });
   document.getElementById("tw-hk-ok").onclick = () => {
     hideHk();
+    setHkAsk(false);
+    reconnectBtn.classList.add("hidden");
     closed = false; connecting = true; typedHint = false; switchHint = false;
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
@@ -649,6 +669,7 @@ async function bootTerminalWindow() {
   }
   rt().EventsOn("term:closed", ev => {
     closed = true;
+    setHkAsk(false);
     connecting = false;
     showSwitch(false);
     breakBtn.classList.add("hidden");
@@ -679,6 +700,7 @@ async function bootTerminalWindow() {
   let reconnecting = false;
   function canReconnect() { return !reconnectBtn.classList.contains("hidden") && !reconnecting; }
   function reconnect() {
+    if (hkAsk) { showHk(); return; } // the host-key question again (see dismissHk)
     reconnecting = true;
     reconnectBtn.classList.add("hidden");
     closed = false; connecting = true; typedHint = false; switchHint = false;
@@ -864,6 +886,9 @@ async function bootTerminalWindow() {
   // Kick off: use the stdin password if present, else prompt in-window.
   const res = await Term().Start();
   if (titleEl.textContent === t("対話接続")) titleEl.textContent = res.name || t("対話接続");
+  // The OS title keeps the device's name even when the first connection
+  // fails before term:ready has named it.
+  if (!osTitleDev && res.name) osTitleDev = res.name;
   // Only an automatic login can be switched away from.
   showSwitch(!res.manual);
   if (res.needPassword) {

@@ -51,8 +51,21 @@ func deriveKey(password string, salt []byte, n int) ([]byte, error) {
 	return scrypt.Key([]byte(password), salt, n, scryptR, scryptP, keyLen)
 }
 
-// Save encrypts inv with password and writes it atomically to path.
+// Writer is the version of the PalaTerm saving (set once at start-up),
+// recorded in the vault as Inventory.SavedBy.
+var Writer string
+
+// StampVersion is the format Save records (model.InventoryVersion; tests
+// raise it to make a vault "from a newer PalaTerm").
+var StampVersion = model.InventoryVersion
+
+// Save encrypts inv with password and writes it atomically to path. The vault
+// is stamped with this build's format (StampVersion) and version (Writer).
 func Save(path, password string, inv *model.Inventory) error {
+	inv.Version = StampVersion
+	if Writer != "" {
+		inv.SavedBy = Writer
+	}
 	plaintext, err := json.Marshal(inv)
 	if err != nil {
 		return fmt.Errorf("marshal inventory: %w", err)
@@ -166,8 +179,14 @@ func atomicWrite(path string, data []byte) error {
 	_ = os.Chmod(tmpName, 0o600)
 	// One generation back, for the day the current file is damaged anyway
 	// (disk error, an antivirus quarantine): <vault>.bak, same encryption.
+	// It keeps the time that generation was saved, which the offer to
+	// restore it names.
 	if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
-		_ = writeSynced(path+".bak", old)
+		if writeSynced(BackupPath(path), old) == nil {
+			if st, err := os.Stat(path); err == nil {
+				_ = os.Chtimes(BackupPath(path), st.ModTime(), st.ModTime())
+			}
+		}
 	}
 	// A terminal window reading the vault at that moment makes Windows
 	// refuse the replace (sharing violation); it lets go within moments.
@@ -178,6 +197,61 @@ func atomicWrite(path string, data []byte) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return err
+}
+
+// BackupPath is where Save keeps the previous generation of the vault.
+func BackupPath(path string) string { return path + ".bak" }
+
+// LoadBackup decrypts the previous generation (BackupPath) with password and
+// returns it with the time it was saved. The lock screen offers it when the
+// vault itself will not open with a password the backup accepts — a damaged
+// file rather than a mistyped password.
+func LoadBackup(path, password string) (*model.Inventory, time.Time, error) {
+	st, err := os.Stat(BackupPath(path))
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	inv, err := Load(BackupPath(path), password)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return inv, st.ModTime(), nil
+}
+
+// RestoreBackup puts the previous generation back in place of the vault. The
+// file it replaces is kept beside it as <path>.broken-<time>, whose name is
+// returned ("" when there was no file to keep). The backup stays as it is.
+func RestoreBackup(path string, now time.Time) (string, error) {
+	data, err := os.ReadFile(BackupPath(path))
+	if err != nil {
+		return "", err
+	}
+	if len(data) < len(magic) || string(data[:len(magic)]) != string(magic) {
+		return "", fmt.Errorf("not a PalaTerm vault file")
+	}
+	kept := ""
+	if _, err := os.Stat(path); err == nil {
+		stamp := now.Format("20060102-150405")
+		kept = path + ".broken-" + stamp
+		for i := 2; Exists(kept); i++ {
+			if i > 99 {
+				return "", fmt.Errorf("cannot name the damaged vault's copy")
+			}
+			kept = fmt.Sprintf("%s.broken-%s_%d", path, stamp, i)
+		}
+		if err := os.Rename(path, kept); err != nil {
+			return "", err
+		}
+	}
+	if err := writeSynced(path, data); err != nil {
+		// Put the original back rather than leave no vault at all.
+		if kept != "" {
+			_ = os.Remove(path)
+			_ = os.Rename(kept, path)
+		}
+		return "", err
+	}
+	return kept, nil
 }
 
 // RemoveBackups deletes the vault's backup (<path>.bak) and any temporary

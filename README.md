@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.9.9 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.9.10 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 > 日本語の概要: 複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
 > コマンドセットを並列実行してログを自動保存する Windows 用ツールです。Tera Term マクロや手作業のログ取得の置き換えを想定しています。
@@ -64,12 +64,16 @@ If you forget the master password the vault cannot be recovered.
 ## Installation
 
 None needed. Download `PalaTerm-vX.Y-win64.zip` from [Releases](../../releases), extract it, and put the `PalaTerm` folder wherever you like (e.g. `C:\Tools\PalaTerm`). Run `PalaTerm.exe` inside it — the vault, logs and exports are created in that folder, so nothing is scattered around the exe. The bare `PalaTerm.exe` is also attached for updating in place: replace the exe, keep the folder.
-All PalaTerm data (encrypted vault, logs, exports) is written next to the exe.
-There are two exceptions, neither of which holds PalaTerm data: the WebView2 runtime's own browser cache, which Windows keeps
-under `%APPDATA%\PalaTerm.exe\EBWebView\`, and the GUI window's temporary WebView2 profile, one per window under
-`%LOCALAPPDATA%\PalaTerm\GUI\w-<pid>-<ns>`, which is deleted when the window closes (left behind after a forced kill,
-cleaned up the next time PalaTerm starts or a GUI window closes).
+All PalaTerm data (encrypted vault, logs, exports) is written next to the exe. Its `data\` folder holds the vault and its previous copy (`.bak`),
+the schedule records (`schedule-log.json`, `schedule-dirs.json`, `schedule-checked.json` — names, IDs and times, no credentials),
+`palaterm.lock` (which PC and user have the folder open; released when PalaTerm exits) and `error.log` (written only when an internal error occurs).
+Outside the exe folder PalaTerm writes to two places, neither of which holds devices or credentials:
+- `%APPDATA%\PalaTerm.exe\` — the screen's WebView2 profile: the WebView2 runtime's own browser cache (`EBWebView\`) and the screen settings kept per PC (language, column widths, font sizes, colors).
+- `%LOCALAPPDATA%\PalaTerm\` — window positions and sizes (`main-window.json`, `term-window.json`, `gui-window.json`; numbers only) and the GUI window's temporary WebView2 profile,
+  one per window under `GUI\w-<pid>-<ns>`, which is deleted when the window closes (left behind after a forced kill, cleaned up the next time PalaTerm starts or a GUI window closes).
+
 To uninstall, delete the exe folder and, optionally, those two folders.
+One folder runs one PalaTerm: opening the same folder through another path (a drive letter and a UNC path, another PC or user) is refused while the first is open.
 
 Unsigned executables may trigger a Microsoft Defender SmartScreen warning on first
 launch ("More info" → "Run anyway"). Code signing is planned.
@@ -80,7 +84,7 @@ launch ("More info" → "Run anyway"). Code signing is planned.
 2. Run `PalaTerm.exe` inside the extracted `PalaTerm` folder.
 3. On first launch, set a master password and press "Create & start". It cannot be recovered if forgotten; everything is stored encrypted in `data\palaterm_vault.enc` next to the exe. A new vault comes with a "Sample group" and sample command sets ("[Sample] Cisco router" etc.) to look at or delete. If you moved the exe, copy your old `data\palaterm_vault.enc` next to it instead of creating a new vault.
 4. In the Devices tab, press "+ New group" and name it (e.g. `lab`).
-5. Press "+ Add device" and fill in the device name, address (IP or DNS name), connection (SSH / Telnet / serial), OS type and credentials. A jump host is optional ("+ Add jump host"). Ctrl+Enter saves.
+5. Press "+ Add device" and fill in the device name, address (IP or DNS name), connection (SSH / Telnet / serial), OS type and credentials. A jump host is optional ("+ Add jump host"). Ctrl+Enter saves. To check the login right away, open the Run tab, select the group, tick the device and press "⚡ Test login only".
 6. In the Command sets tab, press "+ Add set" and enter one command per line (e.g. `show version`); then assign the set to the device (device edit screen, the table cell, or "Edit as table" for many devices).
 7. In the Run tab, select the group, tick the devices and press "▶ Run batch" ("⚡ Test login only" logs in without sending anything and starts without a confirmation).
 8. Read the result per device in the Status / Message columns; "View log" opens the log as it is written, and a failed row's "Edit" opens the device for a fix before "↻ Re-run failed (n)".

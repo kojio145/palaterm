@@ -85,6 +85,11 @@ type Term struct {
 	sendMu      sync.Mutex       // one send at a time: here and the relay in the same order
 	tiled       bool             // placed in a grid: its size is not remembered
 	unlockMu    sync.Mutex       // serialises Unlock attempts
+	// replacedKeys are the stale pins dropped by AllowHostKeyChange, by
+	// address. The main window removes them from the vault a moment later,
+	// but connect reads the vault again right away; until the vault stops
+	// holding these exact fingerprints, connect leaves them out again.
+	replacedKeys map[string]string
 }
 
 // errLocked refuses what a locked window must not do.
@@ -276,6 +281,15 @@ func (t *Term) rememberSize() {
 }
 
 func (t *Term) connect(pw string) {
+	// A panic while connecting closes this window's session with the
+	// reason, instead of killing the window outright (logged in
+	// data\error.log).
+	defer func() {
+		if r := recover(); r != nil {
+			msg := logPanic("terminal connect", r)
+			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: msg})
+		}
+	}()
 	inv, err := vault.Load(t.vaultPath, pw)
 	if err != nil {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "マスターパスワードが違うか、vaultを開けません"})
@@ -287,7 +301,9 @@ func (t *Term) connect(pw string) {
 	// child process never writes the vault (the main window owns it), so a
 	// key first seen here is only held for this window's lifetime; it gets
 	// pinned permanently the first time the device runs in the main window.
-	hk := newMemHostKeys(inv.KnownHostKeys)
+	t.mu.Lock()
+	hk := seedHostKeys(inv.KnownHostKeys, t.replacedKeys)
+	t.mu.Unlock()
 	t.runner.HostKeys = hk
 	var dev *model.Device
 	if i := inv.DeviceIndex(t.deviceArg); i >= 0 {
@@ -577,6 +593,23 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
 }
 
+// seedHostKeys builds a window's host-key store from the vault's pins,
+// leaving out each pin the user has already let go (replaced: address ->
+// the stale fingerprint) while the vault still holds that same fingerprint.
+// Entries the vault no longer holds as-is are forgotten from replaced, so a
+// later change of key at that address is caught again.
+func seedHostKeys(known, replaced map[string]string) *memHostKeys {
+	hk := newMemHostKeys(known)
+	for addr, old := range replaced {
+		if known[addr] == old {
+			hk.Delete(addr)
+		} else {
+			delete(replaced, addr)
+		}
+	}
+	return hk
+}
+
 // AllowHostKeyChange is the answer to the host-key-mismatch prompt: the
 // user says the device was replaced. The stale pins for the device (and its
 // bastions) are dropped here, the main window is told to drop them from the
@@ -591,9 +624,17 @@ func (t *Term) AllowHostKeyChange() error {
 	if dev == nil || hk == nil {
 		return fmt.Errorf("機器が見つかりません")
 	}
+	t.mu.Lock()
 	for _, addr := range dev.HostKeyNames() {
+		if old := hk.GetHostKey(addr); old != "" {
+			if t.replacedKeys == nil {
+				t.replacedKeys = map[string]string{}
+			}
+			t.replacedKeys[addr] = old
+		}
 		hk.Delete(addr)
 	}
+	t.mu.Unlock()
 	childLine(termEventClearHostKey + " " + dev.ID)
 	go t.connect(pw)
 	return nil

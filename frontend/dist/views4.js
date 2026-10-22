@@ -21,7 +21,7 @@ function slotLabel(s) {
   const tm = s.time || "";
   if (s.kind === "once") return t("1回 {d} {t}", { d: s.date || "", t: tm });
   if (s.kind === "daily") return t("毎日 {t}", { t: tm });
-  if (s.kind === "weekly") return t("毎週 {w} {t}", { w: (s.weekdays || []).map(w => t(WEEKDAYS[w])).join("・"), t: tm });
+  if (s.kind === "weekly") return t("毎週 {w} {t}", { w: (s.weekdays || []).map(w => t(WEEKDAYS[w])).join(t("・")), t: tm });
   if (s.kind === "interval") {
     const c = s.count ? t("{n}回", { n: s.count }) : s.until ? t("{u} まで", { u: s.until }) : t("止めるまで");
     // startNow: in the save confirmation, before the start time is taken.
@@ -55,7 +55,7 @@ function schedCommandsLabel(sc) {
   const names = new Set(schedDeviceList(sc));
   const sets = [...new Set((INV.devices || []).filter(d => names.has(d.name) && (sc.ungrouped ? !d.group : d.group === sc.group))
     .map(d => d.commandSet || t("（未割り当て）")))];
-  return t("機器ごとの設定：{s}", { s: sets.join("、") || t("なし") });
+  return t("機器ごとの設定：{s}", { s: sets.join(t("、")) || t("なし") });
 }
 
 function schedKindLabel(e) {
@@ -130,13 +130,22 @@ function renderSchedulesView() {
     e => [fmtSchedTime(e.due), e.schedule, schedKindLabel(e), terr(e.message || "")],
     (e, k) => k === "due" ? (e.due || "") : k === "kind" ? schedKindLabel(e) : k === "result" ? (e.kind === "run" ? (e.failed || 0) * 100000 + (e.ok || 0) : -1) : (e.schedule || ""),
     { kind: schedKindLabel });
+  // Its newest 実行記録 line, when that went wrong: a mark under the state,
+  // the line itself as the tip, a click opens the 実行記録.
+  const lastMark = sc => {
+    const e = sc.lastProblem;
+    if (!e) return "";
+    const what = e.kind === "run" ? (e.failed ? t("失敗 {n} 台", { n: e.failed }) : t("外れた機器あり")) : schedKindLabel(e);
+    const tip = [fmtSchedTime(e.due), what, terr(e.message || "")].filter(Boolean).join(t("　"));
+    return `<div class="link sc-last" data-lastlog="1" style="font-size:12px;margin-top:4px;color:${e.kind === "missed" || e.kind === "skipped" || (e.kind === "run" && !e.failed) ? "var(--warn)" : "var(--err)"};text-decoration:none" data-tip="${esc(tip)}">${esc(t("⚠ 直近: {k}", { k: what }))}</div>`;
+  };
   const rows = shownList.map(sc => `
     <tr class="${!sc.enabled || finished(sc) ? "sc-dim" : ""}">
-      <td style="width:90px">${stateBadge(sc)}</td>
-      <td><div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("機器"))}</span>　${esc(schedDevicesLabel(sc))}${sc.stage ? " " + stageBadge(sc.stage) : ""}</div>
-        <div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("コマンド"))}</span>　${esc(schedCommandsLabel(sc))}</div></td>
+      <td style="width:90px">${stateBadge(sc)}${lastMark(sc)}</td>
+      <td><div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("機器"))}</span>${t("　")}${esc(schedDevicesLabel(sc))}${sc.stage ? " " + stageBadge(sc.stage) : ""}</div>
+        <div style="font-size:13px;line-height:1.6"><span class="muted">${esc(t("コマンド"))}</span>${t("　")}${esc(schedCommandsLabel(sc))}</div></td>
       <td><div style="font-size:12px;line-height:1.6">${(sc.slots || []).map(x => esc(slotLabel(x))).join("<br>")}</div>
-        <div style="font-size:12px;margin-top:4px"><span class="muted">${esc(t("次の実行"))}</span>　<span class="mono">${esc(nextText(sc))}</span></div></td>
+        <div style="font-size:12px;margin-top:4px"><span class="muted">${esc(t("次の実行"))}</span>${t("　")}<span class="mono">${esc(nextText(sc))}</span></div></td>
       <td class="ops" style="width:300px"><div class="ops-btns">
         ${finished(sc) ? "" : `<button class="btn sm" data-now="${esc(sc.id)}">${esc(t("今すぐ実行"))}</button>`}
         ${finished(sc) ? "" : sc.enabled ? `<button class="btn sm" data-stop="${esc(sc.id)}">${esc(t("⏸ 止める"))}</button>` : `<button class="btn sm" data-resume="${esc(sc.id)}">${esc(t("▶ 再開"))}</button>`}
@@ -153,7 +162,7 @@ function renderSchedulesView() {
       <td style="width:90px"><span class="dot st-${e.kind === "run" ? (e.failed ? "error" : "done") : e.kind === "missed" || e.kind === "skipped" || e.kind === "stopped" ? "canceled" : "error"}"></span>${esc(schedKindLabel(e))}</td>
       <td style="width:120px">${e.kind === "run" ? `<span style="color:var(--ok)">${e.ok || 0}</span> / <span style="color:var(--err)">${e.failed || 0}</span>` : ""}</td>
       <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
-      <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join("　")}</div></td>
+      <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join(t("　"))}</div></td>
     </tr>`).join("");
   root.innerHTML = `
     <div class="page-head">
@@ -166,7 +175,7 @@ function renderSchedulesView() {
       ${st.queued ? `<div style="color:var(--warn)">${esc(t("順番待ち: {n} 件（ほかの一括実行が終わりしだい実行。30 分を過ぎたらスキップ）", { n: st.queued }))}</div>` : ""}
       <div>${esc(sleepLine)}</div>
       ${canWake ? "" : `<label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer;margin-top:2px"><input type="checkbox" id="sc-keepawake" style="width:auto" ${keep ? "checked" : ""}> ${esc(t("放置してもスリープさせない"))}<span class="muted" style="font-size:12px">${esc(t("（画面ロック・画面オフはそのまま）"))}</span></label>`}
-      <div style="margin-top:4px">${esc(t("次の実行"))}：<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.next && st.nextName ? `<span class="muted" style="font-size:12px">　${esc(st.nextName)}</span>` : ""}</div>
+      <div style="margin-top:4px">${esc(t("次の実行"))}${t("：")}<b class="mono">${st.next ? esc(fmtSchedTime(st.next)) : "—"}</b>${st.next && st.nextName ? `<span class="muted" style="font-size:12px">${t("　")}${esc(st.nextName)}</span>` : ""}</div>
       <details style="margin-top:2px"><summary class="link" style="text-decoration:none;font-size:12px">${esc(t("詳しく"))}</summary>
         <div class="muted" style="font-size:12px;line-height:1.8;margin-top:6px">
         ${esc(t("・× で閉じてもトレイで動き続けます。トレイの「終了」で止まります"))}<br>
@@ -202,6 +211,7 @@ function renderSchedulesView() {
   const panel = root.querySelector(".panel.scrollx");
   if (panel && keepScroll) panel.scrollTop = keepScroll;
   root.querySelectorAll("[data-scview]").forEach(b => b.onclick = () => { schedTab.view = b.dataset.scview; renderSchedulesView(); });
+  root.querySelectorAll("[data-lastlog]").forEach(b => b.onclick = () => { schedTab.view = "log"; renderSchedulesView(); });
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
   root.querySelector("#sc-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const ka = root.querySelector("#sc-keepawake");
@@ -276,8 +286,34 @@ function wireScheduleEvents() {
   });
   rt().EventsOn("sched:done", e => {
     if (e.repeat && !e.last && !e.failed) return;
-    toast(e.repeat && e.last ? t("繰り返しの予約が終わりました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 })
-      : t("予約を実行しました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 }), e.failed ? "err" : "ok");
+    const missing = (e.missing || []).length ? " " + t("見つからない機器を外しました: {s}", { s: e.missing.join(", ") }) : "";
+    toast((e.repeat && e.last ? t("繰り返しの予約が終わりました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 })
+      : t("予約を実行しました（成功 {a}・失敗 {b}）", { a: e.ok || 0, b: e.failed || 0 })) + missing, e.failed ? "err" : missing ? "warn" : "ok");
+  });
+  // A 予約 that did not run as planned (missed, skipped, refused, error,
+  // stopped — the backend tells each once in a while, not every round).
+  // Gathered for a moment: an unlock can bring several at once, and the
+  // action that stopped a schedule (a device deleted) shows its own toast
+  // first — this one follows it instead of being wiped by it.
+  let pend = [], timer = 0;
+  rt().EventsOn("sched:problem", e => {
+    pend.push(e);
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const list = pend; pend = [];
+      const bad = list.some(x => x.kind === "error" || x.kind === "refused" || x.kind === "stopped");
+      let msg;
+      if (list.length === 1 && list[0].schedule) {
+        const x = list[0];
+        msg = t("予約「{n}」: {k}", { n: x.schedule, k: schedKindLabel(x) }) + (x.message ? " — " + terr(x.message) : "");
+      } else {
+        const counts = {};
+        list.forEach(x => { const k = schedKindLabel(x); counts[k] = (counts[k] || 0) + 1; });
+        msg = t("予約が予定どおりに動かなかった記録が {n} 件あります（{s}）。「予約の実行記録」で確かめてください", { n: list.length, s: Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(t("・")) });
+      }
+      toast(msg, bad ? "err" : "warn");
+      if (document.querySelector("#tab-schedule.active") && !document.querySelector("#modal-overlay:not(.hidden)")) renderSchedules();
+    }, 800);
   });
 }
 
@@ -578,9 +614,9 @@ function editSchedule(sc, prefill) {
     const shownNames = new Set(shownDevs().map(d => d.name));
     const hidden = names.filter(n => !shownNames.has(n)).length;
     const lines = [
-      `<b>${esc(t("いつ"))}</b>　${esc(slotLabel(startsNow ? { ...sl0, startNow: true } : sl0))}`,
-      `<b>${esc(t("機器"))}</b>　${esc(names.length <= 3 ? names.join(", ") : t("{a} ほか {n} 台", { a: names.slice(0, 3).join(", "), n: names.length - 3 }))}`,
-      `<b>${esc(t("コマンド"))}</b>　${esc(commands.length ? commands.join(" ／ ") : obj.commandSet || t("機器ごとのコマンドセット"))}`,
+      `<b>${esc(t("いつ"))}</b>${t("　")}${esc(slotLabel(startsNow ? { ...sl0, startNow: true } : sl0))}`,
+      `<b>${esc(t("機器"))}</b>${t("　")}${esc(names.length <= 3 ? names.join(", ") : t("{a} ほか {n} 台", { a: names.slice(0, 3).join(", "), n: names.length - 3 }))}`,
+      `<b>${esc(t("コマンド"))}</b>${t("　")}${esc(commands.length ? commands.join(t(" ／ ")) : obj.commandSet || t("機器ごとのコマンドセット"))}`,
     ];
     if (hidden) lines.push(`<span style="color:var(--warn)">${esc(t("絞り込みで表示されていない {n} 台も含みます", { n: hidden }))}</span>`);
     if (startsNow) lines.push(`<span style="color:var(--warn)">${esc(t("保存するとすぐ始まります"))}</span>`);
@@ -604,7 +640,7 @@ function schedAutoName(sc) {
   const cmd = sc.commands && sc.commands.length ? sc.commands[0] + (sc.commands.length > 1 ? t(" ほか") : "")
     : sc.commandSet || t("機器ごとのセット");
   const when = (sc.slots || []).length ? slotLabel(sc.slots[0]) + (sc.slots.length > 1 ? t(" ほか") : "") : "";
-  return `${g}・${cmd}・${when}`;
+  return [g, cmd, when].join(t("・"));
 }
 
 function nextHourStr() {

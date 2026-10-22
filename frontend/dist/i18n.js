@@ -486,7 +486,7 @@ const I18N_EN = {
   "ホスト名": "Device name",
   "IPアドレス": "IP address",
   "拠点名": "Site",
-  "拠点": "site",
+  "拠点": "Site",
   "役割": "Role",
   "役割（任意） ⓘ": "Role (optional) ⓘ",
   "例: コア / エッジ / FW": "e.g. core / edge / FW",
@@ -1305,7 +1305,7 @@ const I18N_EN = {
   "ログを停止しました: {f}": "Logging stopped: {f}",
   "ログを停止しました": "Logging stopped",
   "検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）": "Find (Enter = next / Shift+Enter = previous / Esc = close)",
-  "該当なし": "no matches",
+  "該当なし": "No matches",
   "接続していません": "Not connected",
   "はい": "Yes",
   "いいえ": "No",
@@ -1632,8 +1632,8 @@ const I18N_EN = {
   "外部": "External",
   "［外部］": "[external]",
   "外部フォルダ": "External folder",
-  "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put directly into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (前 / 中 / 後, before / after …)",
-  "他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）": "Logs taken elsewhere can be compared the same way: drop the folder directly into the logs folder and it is listed as \"External\", selectable as A, B or the work run (前 / 中 / 後, before / after … in the folder name set the default choice)",
+  "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put directly into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (before / after …, or the Japanese 前 / 中 / 後)",
+  "他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）": "Logs taken elsewhere can be compared the same way: drop the folder directly into the logs folder and it is listed as \"External\", selectable as A, B or the work run (words in the folder name such as before / after, or the Japanese 前 / 中 / 後, set the default choice)",
   "名前が完全には一致しないため、先頭が同じログ同士を比べています": "The names do not match exactly: logs whose names start the same way are compared",
   // v1.8.0: 表示の色・端末の色・並べて接続・同時入力
   "機器が見つかりません（削除されたか、一覧が更新されました）": "Device not found (deleted, or the list was refreshed)",
@@ -2021,7 +2021,7 @@ I18N_EN_PATTERNS.push(
   [/^機器名「(.+?)」が (.+?) 行目と重なっています$/, 'Device name "$1" is also on row $2'],
 );
 Object.assign(I18N_EN, {
-  "列({l}): {c}": "Column ({l}): {c}",
+  "列({l}): {c}": "Column {l}: {c}",
   "元の列({l}): {c}": "Source column ({l}): {c}",
 });
 Object.assign(I18N_EN, {
@@ -2112,4 +2112,141 @@ Object.assign(I18N_EN, {
   "要確認の行があります": "Rows to check",
   "絞り込み（機器名・IP アドレス）": "Filter (name, IP address)",
   "先頭 {n} 列まで表示しています（ほか {m} 列。下の紐付けではすべての列を選べます）": "Showing the first {n} columns ({m} more; the field table below offers every column)",
+});
+
+// v1.9.10 G5: the host-key question asked again,
+// one question for an open dialog plus an unsaved import rule.
+Object.assign(I18N_EN, {
+  "再接続（ホストキーを確認）": "Reconnect (check host key)",
+  "ホストキーの確認をもう一度表示します（Enter キーでも表示できます）": "Shows the host key question again (Enter does the same)",
+  "[Enter または「再接続（ホストキーを確認）」でホストキーの確認をもう一度表示します]": "[Press Enter or \"Reconnect (check host key)\" to see the host key question again]",
+  "編集中のダイアログと、保存されていない変換ルールの編集内容があります。ロックすると、どちらも失われます。ロックしますか？": "A dialog is being edited and an import rule has unsaved changes. Locking discards both. Lock?",
+  "編集中のダイアログと、保存されていない変換ルールの編集内容があります。言語を切り替えると、どちらも失われます。切り替えますか？": "A dialog is being edited and an import rule has unsaved changes. Switching the language discards both. Switch?",
+});
+
+// v1.9.10 G2: 一覧の取り込み — a column gone from the file, choices dropped on a changed list, separators, the rule limits' and sheet messages
+Object.assign(I18N_EN, {
+  "、": ", ",
+  "・": ", ",
+  "ファイルに無い列: {c}": "Columns not in the file: {c}",
+  "その列から読む項目は、既存の機器では今の値をそのまま残します（空にはしません）。新しく追加する機器では既定値になり、既定値が無ければ空です。列名が変わっただけなら、変換ルールでその列を選び直してください": "Existing devices keep their present values for the fields read from them (nothing is blanked). New devices get the default, or nothing when there is none. If a column was only renamed, choose it again in the import rule",
+  "元の一覧（ファイルまたは変換ルール）が変わったため、行ごとの選択と削除の指定を取り消しました。選び直してください": "The list (the file or the import rule) changed, so the choices made per row and the devices ticked for deletion were cleared. Choose them again",
+});
+I18N_EN_PATTERNS.push(
+  [/^項目「(.+?)」: /, 'Field "$1": '],
+  [/^(\d+) 台目の項目「(.+?)」: /, 'Device $1, field "$2": '],
+  [/^除外条件は (\d+) 件までです$/, "$1 exclusions at most"],
+  [/加工手順は (\d+) 個までです/, "$1 steps at most"],
+  [/組み立ては (\d+) 文字までです/, "a combination is $1 characters at most"],
+  [/「空のときは別の列」は (\d+) 個までです/, '"Another column if empty" takes $1 columns at most'],
+  [/正規表現が複雑すぎます/, "the regular expression is too complex"],
+  [/置き換え表は (\d+) 行までです/, "a replacement table has $1 rows at most"],
+  [/^シート「(.+?)」が大きすぎるため、(\d+) 行・(\d+) 列（合計 (\d+) セル）を超える部分は読み込んでいません$/, 'Sheet "$1" is too large: beyond $2 rows / $3 columns ($4 cells in all) was not read'],
+  [/^シート「(.+?)」の結合セルが多すぎるため、(\d+) 個の結合範囲は左上のセルだけに値があるものとして読みました$/, 'Sheet "$1" has too many merged cells: $2 merged area(s) were read with the value in the top-left cell only'],
+);
+
+// v1.9.10 G3: schedules stopped with their devices, told when they go wrong, kept across a restart; jump-host hop by host
+Object.assign(I18N_EN, {
+  "失敗 {n} 台": "{n} failed",
+  "外れた機器あり": "devices left out",
+  "⚠ 直近: {k}": "⚠ Last: {k}",
+  "見つからない機器を外しました: {s}": "Left out the devices not found: {s}",
+  "予約「{n}」: {k}": "Schedule \"{n}\": {k}",
+  "予約が予定どおりに動かなかった記録が {n} 件あります（{s}）。「予約の実行記録」で確かめてください": "{n} schedule record(s) did not go as planned ({s}). See the schedule log",
+  "⏸ 予約はロック解除まで動きません。その間に来た回は、解除したときに「見逃し」として記録します": "⏸ Schedules do not run until you unlock. Runs that come due meanwhile are recorded as missed at the unlock",
+  "⚠ この段の踏み台は {k} 種類あります: {list}": "⚠ This hop is {k} different jump hosts: {list}",
+  "{h}（{n} 台）": "{h} ({n} device(s))",
+  "どの踏み台にも同じ値を設定する": "Set the same values on every jump host",
+  "{h} の機器（{n} 台）にだけ設定する": "Set only on the devices via {h} ({n})",
+  "{n}段目の踏み台は機器によって違います（{list}）。すべてに同じ値を設定しますか？": "Hop {n} is a different jump host on different devices ({list}). Set the same values on all of them?",
+  "すべてに設定する": "Set on all",
+  "（{k} 台はその段が別の踏み台のため、変わっていません）": " ({k} devices have another jump host at that hop and were left as they are)",
+  "PalaTerm の終了中・ロック解除前などで実行できなかった回です（さかのぼって実行はしません）": "Missed (PalaTerm was not running, or waited to be unlocked); not run retroactively",
+});
+I18N_EN_PATTERNS.push(
+  [/^機器「(.+?)」が削除されたため停止しました$/, 'Stopped: device "$1" was deleted'],
+  [/^グループ「(.+?)」の削除で機器が「グループ未設定」へ移ったため停止しました$/, 'Stopped: deleting group "$1" made its devices ungrouped'],
+  [/^PalaTerm の終了中・ロック解除前などで ([0-9]+) 回分（(.+?)〜(.+?)）実行できませんでした（さかのぼって実行はしません）$/, "Missed $1 time(s) ($2–$3): PalaTerm was not running, or waited to be unlocked; they are not run retroactively"],
+  [/見つからない機器を外して実行しました: (.+)$/, "Ran without the devices not found: $1"],
+  [/^中止しました。/, "Canceled. "],
+);
+
+// v1.9.10 G4: name conflicts on reading a command-set / OS-profile file, the
+// vault's backup restore and newer-version guard, the log folder check,
+// internal errors.
+Object.assign(I18N_EN, {
+  "OSタイププロファイル": "OS profile",
+  "同じ名前があります": "Name already in use",
+  "{what}「<b>{n}</b>」は既にあります。読み込んだファイルの内容で置き換えますか？": "The {what} \"<b>{n}</b>\" already exists. Replace it with the file's contents?",
+  "置き換えると、今の内容は戻せません（使っている機器はそのまま置き換えた内容を使います）": "Replaced, the current contents cannot be brought back (devices using it then use the replaced contents)",
+  "やめる": "Cancel",
+  "別名で追加（{n}）": "Add as another ({n})",
+  "置き換える": "Replace",
+  "「{n}」は同じ内容で登録済みです": "\"{n}\" is already there with the same contents",
+  "保管庫を復元": "Restore the vault",
+  "保管庫のファイル（data\\palaterm_vault.enc）をこのパスワードで開けませんでした。ファイルが壊れている可能性があります。<br>1 世代前の控え（{at} に保存）はこのパスワードで開けます。控えから復元しますか？": "The vault file (data\\palaterm_vault.enc) did not open with this password; it may be damaged.<br>The previous copy (saved {at}) opens with this password. Restore it?",
+  "今のファイルは消さずに palaterm_vault.enc.broken-日時 という名前で残します。控えのあとに行った変更は戻りません。": "The current file is not deleted but kept as palaterm_vault.enc.broken-<date>. Changes made after the copy are not brought back.",
+  "1 世代前から復元": "Restore the previous copy",
+  "1 世代前の控えから復元しました（壊れていたファイルは data\\{f} として残しました）": "Restored from the previous copy (the damaged file is kept as data\\{f})",
+  "復元できません": "Cannot restore",
+  "保管庫のファイルが壊れています（1 世代前の控えから復元できます）": "The vault file is damaged (it can be restored from the previous copy)",
+  "保管庫は既に開いています": "The vault is already open",
+  "1 世代前の控えを開けません": "Cannot open the previous copy",
+  "同じ内部キーを持つOSタイププロファイルを分けました: {list}（機器は先にあったプロファイルのままです。こちらを使う機器があれば選び直してください）": "OS profiles sharing one internal key were separated: {list} (devices stay on the profile that was there first; choose this one again for any device meant to use it)",
+  "新しい版で保存された保管庫です": "Vault saved by a newer version",
+  "この保管庫は新しい版の PalaTerm{v} で保存されています。この版で保存すると、新しい版で追加された設定が消えます。": "This vault was saved by a newer PalaTerm{v}. Saving it with this version removes the settings the newer version added.",
+  "新しい版の PalaTerm を使うことをお勧めします。この版では読み取り専用で開きます。": "Using the newer PalaTerm is recommended. This version opens it read-only.",
+  "この版で編集する（新しい版の設定は消えます）": "Edit with this version (the newer settings are lost)",
+  "読み取り専用で開く": "Open read-only",
+  "この版で保存できるようにしました": "This version can now save the vault",
+  "読み取り専用で開いています（変更は保存されません）": "Opened read-only (changes are not saved)",
+  "この保管庫は新しい版の PalaTerm で保存されているため、読み取り専用で開いています（この版で保存すると新しい版の設定が消えます）。変更は保存されていません": "This vault was saved by a newer PalaTerm and is open read-only (saving with this version would remove the newer settings). The change was not saved",
+  "一括実行が内部エラーで止まりました": "The batch stopped on an internal error",
+  "（操作は完了していない可能性があります）": "(the operation may not have completed)",
+});
+I18N_EN_PATTERNS.push(
+  [/^ログの保存先フォルダ「(.+)」を作れません: /, 'Cannot create the log folder "$1": '],
+  [/^ログの保存先フォルダ「(.+)」に書き込めません: /, 'Cannot write to the log folder "$1": '],
+  [/内部エラーが発生しました（(.+)）。data\\error\.log に記録しました/, "Internal error ($1). Recorded in data\\error.log"],
+);
+
+// v1.9.10 G1: connection handling — a failed jump, a dropped session, an
+// unwritable log folder, a bug stopping one device, serial port and SSH
+// authentication messages (internal/runner, internal/session).
+I18N_EN_PATTERNS.push(
+  [/踏み台から (.+?) へ接続できませんでした（踏み台の表示: (".*?")）。/, "Could not connect from the jump host to $1 (the jump host showed $2). "],
+  [/踏み台から (.+?) へ接続できず、踏み台のプロンプト（(".*?")）に戻りました。アドレスとポート、踏み台からその機器へ通信できるか（経路・アクセス制限）を確認してください/,
+    "Could not connect from the jump host to $1: it went back to the jump host's prompt ($2). Check the address and port, and that the jump host can reach the device (routing, access restrictions)."],
+  [/ログイン後のプロンプト（(".*?")）が踏み台のプロンプトと同じため、中止しました。踏み台から (.+?) への接続に失敗して、踏み台に戻っている可能性があります。機器と踏み台のホスト名が同じ場合は、どちらかのホスト名を変えてください/,
+    "Stopped: the prompt after login ($1) is the jump host's own. The connection from the jump host to $2 probably failed and the session is back on the jump host. If the device and the jump host share a host name, rename one of them."],
+  [/宛先のポート番号と、機器側で SSH \/ Telnet が有効か（アクセス制限がないか）を確認してください/, "Check the destination port and that SSH / Telnet is enabled on the device (and not restricted)."],
+  [/アドレス（ホスト名）のつづりと、踏み台での名前解決を確認してください/, "Check the spelling of the address (host name) and name resolution on the jump host."],
+  [/踏み台に記録されたこの機器のホストキーが、今の機器と違います（機器の交換など）。踏み台の ~\/\.ssh\/known_hosts から該当する行を消してから実行してください/,
+    "The host key the jump host recorded for this device differs from the device's current one (replaced device?). Remove its line from ~/.ssh/known_hosts on the jump host, then run again."],
+  [/踏み台の ssh が認証で拒否されました。ユーザー名と、その機器の SSH 認証方式（パスワード／公開鍵）を確認してください/, "The jump host's ssh was refused at authentication. Check the username and the device's SSH authentication method (password / public key)."],
+  [/踏み台がジャンプコマンドを受け付けません。踏み台の「ジャンプコマンド」欄（ssh \/ telnet の書き方）を確認してください/, 'The jump host does not accept the jump command. Check the jump host\'s "Jump command" field (how ssh / telnet is written).'],
+  [/機器側が接続を切りました。機器のアクセス制限（許可する接続元）や同時ログイン数の上限を確認してください/, "The device closed the connection. Check the device's access restrictions (allowed sources) and its limit on concurrent logins."],
+  [/アドレスとポート、踏み台からその機器へ通信できるか（経路・アクセス制限）を確認してください/, "Check the address and port, and that the jump host can reach the device (routing, access restrictions)."],
+  [/機器との接続が切れました/, "the connection to the device was lost"],
+  [/^ログを書き込めないため、機器には接続しませんでした。設定タブの「ログ保存フォルダ」が書き込める場所か（ネットワークドライブの切断・権限・空き容量）、「ログファイル名テンプレート」を確認してください/,
+    'The log cannot be written, so the device was not connected to. Check that the "Log folder" in Settings can be written to (a disconnected network drive, permissions, free space) and the "Log file name template".'],
+  [/^内部エラーのため、この機器を中止しました: /, "Stopped this device after an internal error: "],
+  [/^内部エラー: /, "Internal error: "],
+  [/（またはサーバが受け付ける認証方式と合いません）/, " (or it does not match the authentication methods the server accepts)"],
+  [/^(\S+) は他のプログラム（Tera Term・別の対話接続など）が使用中です。そちらで接続を閉じてから、もう一度実行してください/, "$1 is in use by another program (Tera Term, another interactive session …). Close the connection there and try again."],
+  [/^(\S+) が見つかりません。USBシリアル変換ケーブルの接続と、機器の編集画面のCOMポートを確認してください/, "$1 not found. Check that the USB-serial adapter is plugged in and the COM port in the device editor."],
+  [/^(\S+) を開く権限がありません。他のプログラムが使用中でないかを確認してください/, "No permission to open $1. Check that no other program is using it."],
+  [/^(\S+) はボーレート (\d+) に対応していません。機器の編集画面のボーレートを確認してください/, "$1 does not support $2 baud. Check the baud rate in the device editor."],
+  [/^(\S+) はシリアルポートではありません。機器の編集画面のCOMポートを確認してください/, "$1 is not a serial port. Check the COM port in the device editor."],
+  // The raw error those messages end with, in ASCII brackets once translated.
+  [/(Log file name template"\.)（(.*)）$/, "$1 ($2)"],
+  [/(try again\.|device editor\.|is using it\.)（(open serial .*)）$/, "$1 ($2)"],
+);
+
+// v1.9.10: separators written straight into the schedule and grid views.
+Object.assign(I18N_EN, {
+  "　": "  ",
+  "：": ": ",
+  " ・ ": " · ",
+  " ／ ": " / ",
 });

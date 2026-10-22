@@ -170,15 +170,20 @@ func TestFailedCommandStopsTheDevice(t *testing.T) {
 	}
 }
 
-// A log that cannot be written makes the device an error, not 完了.
+// A log that cannot be written makes the device an error, not 完了 — and
+// stops it before anything is sent: a command set whose output is lost
+// must not run (review 2026-10-22 E9).
 func TestLogWriteFailureIsAnError(t *testing.T) {
 	notDir := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(notDir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res, _ := askingRun(t, []string{"show clock"}, nil, notDir)
-	if res.Success || !strings.Contains(res.Error, "ログを保存できませんでした") {
+	res, got := askingRun(t, []string{"show clock"}, nil, notDir)
+	if res.Success || !strings.HasPrefix(res.Error, logUnwritableMsg) {
 		t.Errorf("success=%v error=%q", res.Success, res.Error)
+	}
+	if strings.Contains(strings.Join(got, "|"), "show clock") {
+		t.Errorf("the command set ran without a log: %v", got)
 	}
 }
 

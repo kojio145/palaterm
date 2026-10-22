@@ -9,7 +9,9 @@
 package profile
 
 import (
+	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -84,6 +86,37 @@ type Profile struct {
 	// gets its Send (empty = Enter). Without one such a command waits out
 	// the command timeout and the rest of the set is lost.
 	Answers []Step `json:"answers,omitempty"`
+}
+
+// FreeKey is the key a new profile called name gets: "custom:<name>", or
+// "custom:<name>#2", "#3", … when taken says that one is in use. A profile
+// keeps its key when renamed (devices refer to it by key), so a new profile
+// must never be keyed by its name alone: "custom:X_copy" may belong to a
+// profile now called "Y", and reusing it made both one profile.
+func FreeKey(name string, taken func(key string) bool) string {
+	key := "custom:" + name
+	for i := 2; taken(key); i++ {
+		key = "custom:" + name + "#" + strconv.Itoa(i)
+	}
+	return key
+}
+
+// SameExceptName reports whether a and b differ at most in their key and
+// name: the same login, prompts and answers under another label.
+func SameExceptName(a, b Profile) bool {
+	a.Key, a.Name, b.Key, b.Name = "", "", "", ""
+	return reflect.DeepEqual(normSteps(a), normSteps(b))
+}
+
+// normSteps treats a nil step list and an empty one alike (JSON round trips
+// turn one into the other).
+func normSteps(p Profile) Profile {
+	for _, s := range []*[]Step{&p.Login, &p.Pager, &p.Disconnect, &p.Answers} {
+		if len(*s) == 0 {
+			*s = nil
+		}
+	}
+	return p
 }
 
 // Quote returns a copy of p with every prompt/expect treated as a literal

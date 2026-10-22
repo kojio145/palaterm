@@ -11,16 +11,16 @@
   "work": "sw1(config)#int gi0/1\nsw1(config-if)#desc uplink\nsw1(config-if)#sw mo acc\nsw1(config-if)#end"
  },
  "alaxala": {
-  "after": "lab-sw09# show running-config\n#Last modified by ops at Mon Jul 13 18:07:29 2026 with version 2.8\ninterface vlan 41\n  ip qos-flow-group MGMT_ONLY in\ninterface vlan 121\n  ip qos-flow-group VOICE_ONLY in\nip qos-flow-list VOICE_ONLY\n  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp ef",
-  "before": "lab-sw09# show running-config\n#Last modified by ops at Mon Jul 13 11:40:00 2026 with version 2.8\ninterface vlan 41\n  ip qos-flow-group MGMT_ONLY in",
+  "after": "lab-sw09# show running-config\n#Last modified by ops at Sat Jan 10 10:30:00 2026 with version 9.9\ninterface vlan 210\n  ip qos-flow-group LAB_FLOW_B in\ninterface vlan 220\n  ip qos-flow-group LAB_FLOW_A in\nip qos-flow-list LAB_FLOW_A\n  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp af41",
+  "before": "lab-sw09# show running-config\n#Last modified by ops at Sat Jan 10 09:00:00 2026 with version 9.9\ninterface vlan 210\n  ip qos-flow-group LAB_FLOW_B in",
   "expect": {
-   " > interface vlan 121": "reflected",
-   " > ip qos-flow-group VOICE_ONLY in": "reflected",
-   " > ip qos-flow-list VOICE_ONLY": "reflected",
+   " > interface vlan 220": "reflected",
+   " > ip qos-flow-group LAB_FLOW_A in": "reflected",
+   " > ip qos-flow-list LAB_FLOW_A": "reflected",
    "#unexpected": "0",
-   "ip qos-flow-list VOICE_ONLY > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef": "reflected"
+   "ip qos-flow-list LAB_FLOW_A > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp af41": "reflected"
   },
-  "work": "lab-sw09# configure terminal\nlab-sw09(config)# ip qos-flow-list VOICE_ONLY\nlab-sw09(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef\n!lab-sw09(config-ip-qos)# !\n!lab-sw09(config)# interface vlan 121\n!lab-sw09(config-if)#   ip qos-flow-group VOICE_ONLY in\n!lab-sw09(config)# save"
+  "work": "lab-sw09# configure terminal\nlab-sw09(config)# ip qos-flow-list LAB_FLOW_A\nlab-sw09(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp af41\n!lab-sw09(config-ip-qos)# !\n!lab-sw09(config)# interface vlan 220\n!lab-sw09(config-if)#   ip qos-flow-group LAB_FLOW_A in\n!lab-sw09(config)# save"
  },
  "bgp_nested": {
   "after": "r1#show running-config\nrouter bgp 65000\n neighbor 192.0.2.9 remote-as 65001\n address-family ipv4\n  network 192.0.2.0 mask 255.255.255.0\n exit-address-family",

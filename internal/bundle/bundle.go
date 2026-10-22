@@ -577,7 +577,22 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	}
 	for _, p := range c.Profiles {
 		s.Profiles++
-		if i, ok := profByKey[p.Key]; ok {
+		i, keyHit := profByKey[p.Key]
+		// The same key under another name is the same profile only when it
+		// still is: the same steps, renamed. A profile keeps its key when
+		// renamed, so "custom:X_copy" can be the user's "Y" here and the
+		// bundle's "X_copy" there — then the bundle's goes by its name (to a
+		// profile of that name, else added under a fresh key for its
+		// devices), and is never written over "Y".
+		if keyHit && !strings.EqualFold(inv.CustomProfiles[i].Name, p.Name) && !profile.SameExceptName(inv.CustomProfiles[i], p) {
+			keyHit = false
+			if _, nameHit := profByName[strings.ToLower(p.Name)]; !nameHit {
+				old := p.Key
+				p.Key = profile.FreeKey(p.Name, func(k string) bool { _, ok := profByKey[k]; return ok })
+				keyMap[old] = p.Key
+			}
+		}
+		if keyHit {
 			if opt.OverwriteShared {
 				inv.CustomProfiles[i] = p
 				changed = append(changed, p)

@@ -21,6 +21,13 @@ import (
 // bridges the two streams (so the device behind it becomes reachable).
 func fakeBastion(t *testing.T) (addr string, stop func()) {
 	t.Helper()
+	return fakeBastionWith(t, "jump-host$ ", nil)
+}
+
+// fakeBastionWith is fakeBastion with its own prompt, and every command
+// line typed at it sent to cmds (when not nil).
+func fakeBastionWith(t *testing.T, prompt string, cmds chan<- string) (addr string, stop func()) {
+	t.Helper()
 	signer := testSigner(t)
 	cfg := &ssh.ServerConfig{NoClientAuth: true}
 	cfg.AddHostKey(signer)
@@ -35,7 +42,7 @@ func fakeBastion(t *testing.T) (addr string, stop func()) {
 			if err != nil {
 				return
 			}
-			go serveBastion(conn, cfg)
+			go serveBastion(conn, cfg, prompt, cmds)
 		}
 	}()
 	return ln.Addr().String(), func() { ln.Close() }
@@ -53,7 +60,7 @@ func testSigner(t *testing.T) ssh.Signer {
 	return s
 }
 
-func serveBastion(nConn net.Conn, cfg *ssh.ServerConfig) {
+func serveBastion(nConn net.Conn, cfg *ssh.ServerConfig, prompt string, cmds chan<- string) {
 	sc, chans, reqs, err := ssh.NewServerConn(nConn, cfg)
 	if err != nil {
 		return
@@ -74,13 +81,13 @@ func serveBastion(nConn net.Conn, cfg *ssh.ServerConfig) {
 				req.Reply(req.Type == "shell" || req.Type == "pty-req", nil)
 			}
 		}(chReqs)
-		go bastionShell(ch)
+		go bastionShell(ch, prompt, cmds)
 	}
 }
 
-func bastionShell(ch ssh.Channel) {
+func bastionShell(ch ssh.Channel, prompt string, cmds chan<- string) {
 	defer ch.Close()
-	io.WriteString(ch, "\r\njump-host$ ")
+	io.WriteString(ch, "\r\n"+prompt)
 	buf := make([]byte, 1024)
 	var line strings.Builder
 	for {
@@ -93,13 +100,17 @@ func bastionShell(ch ssh.Channel) {
 			if b == '\r' || b == '\n' {
 				cmd := strings.TrimSpace(line.String())
 				line.Reset()
+				if cmds != nil {
+					select {
+					case cmds <- cmd:
+					default:
+					}
+				}
 				if strings.HasPrefix(cmd, "telnet ") {
 					target := strings.TrimSpace(strings.TrimPrefix(cmd, "telnet "))
 					bridgeTelnet(ch, target)
-					io.WriteString(ch, "\r\njump-host$ ")
-				} else {
-					io.WriteString(ch, "\r\njump-host$ ")
 				}
+				io.WriteString(ch, "\r\n"+prompt)
 			} else {
 				line.WriteByte(b)
 			}
@@ -112,10 +123,19 @@ func bastionShell(ch ssh.Channel) {
 
 // bridgeTelnet connects to target and pipes bytes both ways until either side
 // closes, so the device behind the jump host is reachable through this shell.
+//
+// A target in 198.51.100.0/24 (TEST-NET-2) stands for a device that does not
+// answer: after a few seconds the hop gives up the way a Cisco IOS hop does.
 func bridgeTelnet(ch ssh.Channel, target string) {
+	if strings.HasPrefix(target, "198.51.100.") {
+		io.WriteString(ch, "\r\nTrying "+target+" ...")
+		time.Sleep(3500 * time.Millisecond)
+		io.WriteString(ch, "\r\n% Connection timed out; remote host not responding\r\n")
+		return
+	}
 	conn, err := net.DialTimeout("tcp", target, 3*time.Second)
 	if err != nil {
-		io.WriteString(ch, "\r\ntelnet: unable to connect\r\n")
+		io.WriteString(ch, "\r\ntelnet: Unable to connect to remote host: Connection refused\r\n")
 		return
 	}
 	defer conn.Close()

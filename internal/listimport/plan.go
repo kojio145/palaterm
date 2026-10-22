@@ -60,6 +60,9 @@ func isSecret(key string) bool { return gridByKey[key].Kind == "secret" }
 //	ask   both changed, or no record of the last import: Choice decides
 //	guess the value is a guess from this PalaTerm's OS types or command
 //	      sets: an existing device keeps its own unless chosen otherwise
+//	lost  the file has no column for it (renamed or gone at the source):
+//	      the value is not the source's, an existing device keeps its own
+//	      (no choice: the page says so above the preview)
 //	new   a new device
 type Cell struct {
 	Key    string `json:"key"`
@@ -485,7 +488,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		}
 		d := fr.dev
 		d.ID = ""
-		stamp(pr, fr)
+		stamp(pr, fr, nil, nil)
 		if err := inv.ValidateIn(&d); err != nil {
 			pr.Errors = append(pr.Errors, err.Error())
 		}
@@ -494,6 +497,10 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	}
 	cur := inv.Devices[fr.linked]
 	cc := csvio.DeviceCells(cur)
+	lost := map[string]bool{}
+	for _, k := range fr.row.Lost {
+		lost[k] = true
+	}
 	asked, took := false, false
 	out := map[string]string{}
 	for k, v := range cc {
@@ -506,6 +513,14 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		switch {
 		case f == c:
 			cell.State, cell.Choice = "same", "keep"
+		case lost[k]:
+			// The column is gone from the file (renamed at the source, say):
+			// the empty value or default it reads says nothing about the
+			// device — taking it would blank every device's username and
+			// password. Kept, whatever was chosen.
+			cell.State, cell.Choice = "lost", "keep"
+			pr.Cells = append(pr.Cells, cell)
+			continue
 		case guessed[k]:
 			// Decided by a guess from what this PalaTerm holds (an OS type,
 			// a command set — or none found), not by the source: it changes
@@ -542,7 +557,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		}
 	}
 	d.ID, d.Group = cur.ID, cur.Group
-	stamp(pr, fr)
+	stamp(pr, fr, inv.ImportRecords[cur.ID].Base, lost)
 	if err := inv.ValidateIn(&d); err != nil {
 		pr.Errors = append(pr.Errors, err.Error())
 	}
@@ -559,10 +574,19 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 }
 
 // stamp keeps what the import writes, for the next one to compare with
-// (written to Inventory.ImportRecords by Apply).
-func stamp(pr *PlanRow, fr *fileRow) {
+// (written to Inventory.ImportRecords by Apply). A field lost from the file
+// (an existing device's) keeps the last import's record — or none: when the
+// column is back, the comparison is with what the source last said, not with
+// an empty value it never said.
+func stamp(pr *PlanRow, fr *fileRow, prev map[string]string, lost map[string]bool) {
 	rec := &model.ImportRecord{Key: fr.row.Key, KeyBy: fr.row.KeyBy, Base: map[string]string{}}
 	for k, v := range fr.cells {
+		if lost[k] {
+			if b, ok := prev[k]; ok {
+				rec.Base[k] = b
+			}
+			continue
+		}
 		rec.Base[k] = v
 	}
 	pr.rec = rec

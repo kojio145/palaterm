@@ -313,6 +313,13 @@ func startShell(client *ssh.Client) (*sshSession, error) {
 // generic handshake failure and nothing says which field to change.
 func authFailureHint(err error, user string, auth model.AuthMethod) string {
 	msg := err.Error()
+	// Some servers answer a refused keyboard-interactive (or public-key)
+	// attempt with a bare failure where x/crypto expects the next step, and
+	// the handshake ends as "ssh: unexpected message type 51 (expected 60)"
+	// — 51 being SSH_MSG_USERAUTH_FAILURE: the login was refused.
+	if strings.Contains(msg, "unexpected message type 51") {
+		return "ユーザー名またはパスワードが違います（またはサーバが受け付ける認証方式と合いません）"
+	}
 	if !strings.Contains(msg, "unable to authenticate") {
 		return ""
 	}

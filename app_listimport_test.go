@@ -92,6 +92,53 @@ func TestLockForgetsTheList(t *testing.T) {
 	}
 }
 
+// The import screen left while a list was being read: what was read is
+// not kept afterwards.
+func TestForgetWhileReading(t *testing.T) {
+	a, path, id := listImportApp(t)
+	listReadHook = forgetBook
+	defer func() { listReadHook = nil }()
+	if _, err := a.PreviewListImport(ListImportReq{Path: path, RuleID: id, Group: "g", NewGroup: true}); err != nil {
+		t.Fatal(err)
+	}
+	if bookCache.book != nil || bookCache.conv != nil {
+		t.Error("a list read across a forget was kept")
+	}
+	listReadHook = nil
+	if _, err := a.PreviewListImport(ListImportReq{Path: path, RuleID: id, Group: "g", NewGroup: true}); err != nil || bookCache.book == nil {
+		t.Errorf("a plain read is kept: %v", err)
+	}
+	forgetBook()
+}
+
+// The rule editor's sample masks the password column even when the rule
+// cannot read the table (the header row past the sheet's end).
+func TestSampleMaskedOnTableError(t *testing.T) {
+	a, _, _ := listImportApp(t)
+	path := filepath.Join(t.TempDir(), "pw.csv")
+	if err := os.WriteFile(path, []byte("機器名称,PW\nlab-sw01,x9Lp2q\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer forgetBook()
+	// By its header text, and (the header renamed since) by its column.
+	for _, col := range []string{"PW", "パスワード"} {
+		res, err := a.TestImportRule(path, model.ImportRule{Name: "r", HeaderRow: 9, Fields: []model.ImportField{
+			{Key: "name", Source: "column", Column: "機器名称", ColIndex: 1},
+			{Key: "password", Source: "column", Column: col, ColIndex: 2},
+		}})
+		if err != nil || res.Error == "" {
+			t.Fatalf("%s: res %+v, err %v", col, res, err)
+		}
+		for _, row := range res.Grid {
+			for _, v := range row {
+				if v == "x9Lp2q" {
+					t.Fatalf("%s: password shown: %q", col, res.Grid)
+				}
+			}
+		}
+	}
+}
+
 // sampleGrid cuts a wide sheet at 300 columns and says how wide it was.
 func TestSampleGridCols(t *testing.T) {
 	row := make([]string, 320)

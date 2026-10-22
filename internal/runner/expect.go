@@ -8,12 +8,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kojio145/palaterm/internal/session"
 )
 
 // ErrExpectTimeout means the pattern was not seen before the deadline.
 var ErrExpectTimeout = errors.New("expect timeout")
+
+// ErrClosed means the session ended before the pattern was seen: nothing
+// more is coming, so waiting out the timeout would only spin — and a
+// timeout's advice (タイムアウトを延ばす) would send the user the wrong way.
+var ErrClosed = errors.New("機器との接続が切れました")
 
 // Expecter is the handle callers outside this package hold on a session
 // returned by Connect or Open: something to pass back into StartInteractive
@@ -27,8 +33,19 @@ type expecter struct {
 
 	mu         sync.Mutex
 	buf        strings.Builder // accumulated output since last match
-	transcript strings.Builder // full session log
+	transcript strings.Builder // session log (only its tail once keepTail is set)
 	closed     bool
+
+	// keepTail, when set, bounds the transcript to about its last keepTail
+	// bytes: a batch device whose live log keeps the full output need not
+	// also hold hours of "show tech" in memory. dropped counts the bytes cut
+	// from the front, so Mark/Since offsets stay absolute; head keeps the
+	// first headKeep bytes after the latest Mark (a command's echo and the
+	// device's first answer, which rejectedLine reads).
+	keepTail int
+	dropped  int
+	headMark int
+	head     strings.Builder
 	readErr    error
 
 	rawSink func([]byte) // when set, incoming bytes are forwarded here (interactive mode)
@@ -60,6 +77,22 @@ func newExpecterTee(sess session.Session, tee func([]byte)) *expecter {
 }
 
 func (e *expecter) readLoop() {
+	// A panic here (in a tee or a sink) would take the whole program down,
+	// every other device and terminal with it: it ends this session instead,
+	// which the waits then report as a closed connection.
+	defer func() {
+		if p := recover(); p != nil {
+			e.mu.Lock()
+			e.closed = true
+			e.readErr = fmt.Errorf("内部エラー: %v", p)
+			e.mu.Unlock()
+			select {
+			case e.newData <- struct{}{}:
+			default:
+			}
+			_ = e.sess.Close()
+		}
+	}()
 	tmp := make([]byte, 4096)
 	for {
 		n, err := e.sess.Read(tmp)
@@ -69,7 +102,7 @@ func (e *expecter) readLoop() {
 			sink := e.rawSink
 			if sink == nil {
 				e.buf.Write(tmp[:n])
-				e.transcript.Write(tmp[:n])
+				e.record(tmp[:n])
 			}
 			e.mu.Unlock()
 			if sink == nil && e.tee != nil {
@@ -130,7 +163,7 @@ func (e *expecter) Expect(ctx context.Context, pattern string, timeout time.Dura
 		e.mu.Unlock()
 
 		if closed {
-			return ErrExpectTimeout
+			return ErrClosed
 		}
 
 		select {
@@ -141,6 +174,87 @@ func (e *expecter) Expect(ctx context.Context, pattern string, timeout time.Dura
 		case <-e.newData:
 		}
 	}
+}
+
+// Pending returns the output not yet consumed by an Expect (or a Drain).
+func (e *expecter) Pending() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.buf.String()
+}
+
+// Closed reports whether the session has ended (nothing more will arrive).
+func (e *expecter) Closed() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.closed
+}
+
+// headKeep is how much of a command's output Since still has after the
+// transcript's front was cut: the echo and the first lines of the answer.
+const headKeep = 4 << 10
+
+// record appends b to the transcript (caller holds mu), cutting it back to
+// its tail when keepTail is set. The cut waits until the transcript is twice
+// keepTail, so the copy happens once per keepTail bytes, not on every read.
+func (e *expecter) record(b []byte) {
+	if e.keepTail > 0 {
+		if room := headKeep - e.head.Len(); room > 0 {
+			if len(b) < room {
+				room = len(b)
+			}
+			e.head.Write(b[:room])
+		}
+	}
+	e.transcript.Write(b)
+	if e.keepTail <= 0 || e.transcript.Len() <= 2*e.keepTail {
+		return
+	}
+	s := e.transcript.String()
+	cut := len(s) - e.keepTail
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	e.transcript.Reset()
+	e.transcript.WriteString(s[cut:])
+	e.dropped += cut
+}
+
+// KeepTail bounds the transcript to about its last n bytes from now on (see
+// keepTail). Mark and Since keep working across the cuts.
+func (e *expecter) KeepTail(n int) {
+	e.mu.Lock()
+	e.keepTail = n
+	e.mu.Unlock()
+}
+
+// Mark is the transcript's current end, for Since: what arrives from here on
+// is, say, one command's output.
+func (e *expecter) Mark() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.headMark = e.dropped + e.transcript.Len()
+	e.head.Reset()
+	return e.headMark
+}
+
+// Since returns the output that arrived after mark. When the transcript's
+// front has been cut since (KeepTail), it is the start of that output (its
+// first headKeep bytes) and the kept tail, joined by a line holding "…".
+func (e *expecter) Since(mark int) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s := e.transcript.String()
+	if off := mark - e.dropped; off >= 0 {
+		if off > len(s) {
+			return ""
+		}
+		return s[off:]
+	}
+	if mark == e.headMark && e.head.Len() > 0 {
+		return e.head.String() + "\n…\n" + s
+	}
+	return s
 }
 
 // Seen reports whether pattern is currently present in the unconsumed output,
@@ -206,6 +320,7 @@ func (e *expecter) StartRaw(sink func([]byte)) {
 func (e *expecter) StartRawShown(sink, logged func([]byte)) {
 	e.mu.Lock()
 	pending := e.transcript.String()
+	e.dropped += len(pending)
 	e.transcript.Reset()
 	e.buf.Reset()
 	e.rawSink = sink
@@ -232,6 +347,7 @@ func (e *expecter) TakeTranscript() string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	s := e.transcript.String()
+	e.dropped += len(s)
 	e.transcript.Reset()
 	return s
 }

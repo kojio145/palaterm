@@ -287,10 +287,44 @@ func expand(tmpl string, vals map[string]string) string {
 	return strings.NewReplacer(pairs...).Replace(tmpl)
 }
 
+// CleanRoot is the log folder as typed, without the spaces and quotation
+// marks around it: Explorer's 「パスのコピー」 gives "D:\logs" in quotes,
+// and pasted as it is that names no folder Windows can create.
+func CleanRoot(root string) string {
+	for {
+		s := strings.TrimSpace(root)
+		s = strings.TrimPrefix(strings.TrimSuffix(s, `"`), `"`)
+		s = strings.TrimPrefix(strings.TrimSuffix(s, `'`), `'`)
+		if s == root {
+			return s
+		}
+		root = s
+	}
+}
+
+// CheckRoot makes sure logs can be written under root: the folder exists or
+// can be created, and a file can be made in it. The settings refuse a log
+// folder that fails here, rather than every later run failing on it.
+func CheckRoot(root string) error {
+	dir := ResolveRoot(root)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("ログの保存先フォルダ「%s」を作れません: %w", dir, err)
+	}
+	f, err := os.CreateTemp(dir, ".palaterm-check-*")
+	if err != nil {
+		return fmt.Errorf("ログの保存先フォルダ「%s」に書き込めません: %w", dir, err)
+	}
+	name := f.Name()
+	f.Close()
+	_ = os.Remove(name)
+	return nil
+}
+
 // ResolveRoot makes a relative log root absolute against the executable's
 // folder (the tool is portable, so "logs" means "<exe dir>\logs" — never the
 // process working directory, which depends on how the exe was launched).
 func ResolveRoot(root string) string {
+	root = CleanRoot(root)
 	if root == "" {
 		root = "logs"
 	}
@@ -373,12 +407,18 @@ func Path(dir, tmpl string, f Fields, now time.Time) string {
 func RunDir(root, tmpl, group, stage string, tok StageTokens, now time.Time) string {
 	base := runDirBase(root, tmpl, group, stage, tok, now)
 	dir := base
-	for i := 2; ; i++ {
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
+	// Only a folder that is there moves on to the next number. Any other
+	// answer (a name Windows refuses, a share that is gone) ends the search:
+	// waiting for "not exist" from a path that can never exist looped
+	// forever, and the batch hung before its first device with no way to
+	// stop it. Whoever creates the folder then reports the real error.
+	for i := 2; i < 10000; i++ {
+		if _, err := os.Stat(dir); err != nil {
 			return dir
 		}
 		dir = fmt.Sprintf("%s_%d", base, i)
 	}
+	return dir
 }
 
 // runDirBase is the run folder's path before any "_2" is added.

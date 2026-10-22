@@ -201,6 +201,11 @@ func runMainApp() {
 	if !claimSingleInstance() {
 		return
 	}
+	// …and one per folder however it is reached (a share path, another PC,
+	// another user's session): see datalock_windows.go.
+	if !claimDataFolder() {
+		return
+	}
 	app := NewApp()
 	err := wails.Run(&options.App{
 		Title:     "PalaTerm",

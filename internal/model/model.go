@@ -730,9 +730,19 @@ func (inv *Inventory) NormalizeGroups() {
 	}
 }
 
+// InventoryVersion is the vault format this build writes (Inventory.Version).
+// Raise it in any release that adds vault data an older PalaTerm would drop
+// on its next save: an older build that finds a higher number warns and
+// opens the vault read-only instead of silently losing the newer data.
+// 1 = up to v1.9.9 (which never compared it); 2 = from v1.9.10, which does.
+const InventoryVersion = 2
+
 // Inventory is the full persisted state, stored encrypted on disk.
 type Inventory struct {
+	// Version is the format the vault was last saved in (InventoryVersion
+	// of the build that saved it), SavedBy that build's version ("1.9.10").
 	Version      int           `json:"version"`
+	SavedBy      string        `json:"savedBy,omitempty"`
 	Devices      []Device      `json:"devices"`
 	CommandSets  []CommandSet  `json:"commandSets"`
 	DeviceGroups []DeviceGroup `json:"deviceGroups,omitempty"`
@@ -800,6 +810,31 @@ type Inventory struct {
 	// device (the device editor, the table, a CSV or bundle import) need
 	// not know of them, and a copy (a new ID) starts without one.
 	ImportRecords map[string]ImportRecord `json:"importRecords,omitempty"`
+}
+
+// RekeyDuplicateProfiles gives every profile that shares its key with an
+// earlier one a key of its own, and returns their names. Before v1.9.10 a
+// copy of a copy could be keyed like a renamed earlier copy, and the two
+// then edited, deleted and ran as one. The first one keeps the key — it had
+// it first, so the devices set to it before the copy meant that one.
+func (inv *Inventory) RekeyDuplicateProfiles() []string {
+	taken := map[string]bool{}
+	for _, p := range inv.CustomProfiles {
+		taken[p.Key] = true
+	}
+	seen := map[string]bool{}
+	var fixed []string
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if !seen[p.Key] {
+			seen[p.Key] = true
+			continue
+		}
+		p.Key = profile.FreeKey(p.Name, func(k string) bool { return taken[k] })
+		taken[p.Key], seen[p.Key] = true, true
+		fixed = append(fixed, p.Name)
+	}
+	return fixed
 }
 
 // GridUngrouped is the table editor's scope for the devices in no group.

@@ -66,9 +66,34 @@ func dialSerial(name string, baud int) (Session, error) {
 	}
 	port, err := openBusyAware(name, mode)
 	if err != nil {
+		if hint := serialHint(err, name, baud); hint != "" {
+			return nil, fmt.Errorf("%s（open serial %s @ %d: %w）", hint, name, baud, err)
+		}
 		return nil, fmt.Errorf("open serial %s @ %d: %w", name, baud, err)
 	}
 	return &serialSession{port: port, name: name, baud: baud}, nil
+}
+
+// serialHint says in plain words why a COM port did not open, and what to
+// do: the library's "Serial port busy" told a first-time user nothing.
+func serialHint(err error, name string, baud int) string {
+	var pe *serial.PortError
+	if !errors.As(err, &pe) {
+		return ""
+	}
+	switch pe.Code() {
+	case serial.PortBusy:
+		return fmt.Sprintf("%s は他のプログラム（Tera Term・別の対話接続など）が使用中です。そちらで接続を閉じてから、もう一度実行してください", name)
+	case serial.PortNotFound:
+		return fmt.Sprintf("%s が見つかりません。USBシリアル変換ケーブルの接続と、機器の編集画面のCOMポートを確認してください", name)
+	case serial.PermissionDenied:
+		return fmt.Sprintf("%s を開く権限がありません。他のプログラムが使用中でないかを確認してください", name)
+	case serial.InvalidSpeed:
+		return fmt.Sprintf("%s はボーレート %d に対応していません。機器の編集画面のボーレートを確認してください", name, baud)
+	case serial.InvalidSerialPort:
+		return fmt.Sprintf("%s はシリアルポートではありません。機器の編集画面のCOMポートを確認してください", name)
+	}
+	return ""
 }
 
 // openBusyAware opens the port, waiting out a "busy" that is only the

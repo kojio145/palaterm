@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.9";
+const APP_VERSION = "1.9.10";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -23,6 +23,29 @@ function toast(msg, kind) {
   el.onclick = () => el.classList.add("hidden");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add("hidden"), kind === "err" ? 9000 : 3200);
+}
+
+// An input that keeps a form from being saved is shown at the field itself:
+// the field gets the focus and a red outline, and the reason is written
+// under it (not only in the toast at the bottom edge). Both clear as soon as
+// the field is edited.
+function fieldError(inp, msg) {
+  if (!inp) { toast(msg, "err"); return; }
+  const box = inp.closest(".field") || inp.parentElement;
+  let el = box.querySelector(":scope > .field-err");
+  if (!el) { el = document.createElement("div"); el.className = "field-err"; box.appendChild(el); }
+  el.textContent = msg;
+  inp.classList.add("field-bad");
+  if (!inp._fieldErrWired) {
+    inp._fieldErrWired = true;
+    inp.addEventListener("input", () => {
+      inp.classList.remove("field-bad");
+      const e2 = box.querySelector(":scope > .field-err");
+      if (e2) e2.remove();
+    });
+  }
+  inp.focus();
+  try { inp.scrollIntoView({ block: "nearest" }); } catch (e) { }
 }
 
 // Styled in-app confirm dialog (replaces the native "wails.localhost" confirm).
@@ -226,28 +249,47 @@ function listViewDragCell(key) {
 // caret back where it was.
 function listViewFocus() {
   const el = document.activeElement;
-  return el && el.id && el.id.startsWith("lv-text-") ? { id: el.id, pos: el.selectionStart } : null;
+  return el && el.id && el.id.startsWith("lv-text-") ? { id: el.id, sel: boxSelection(el) } : null;
 }
 // A filter box that re-renders its tab (and so itself) on every keystroke:
 // while an IME is composing, re-rendering would cut the composition off
 // (era → えrあ), so the change is applied once the text is committed.
 // The redraw waits for a pause in the typing (150 ms): a list of a thousand
 // devices takes about a second to draw, once per word instead of per key.
+// onText (optional) keeps the filter's state up to date on every key, so a
+// redraw from elsewhere meanwhile (a batch's progress, a schedule's log)
+// draws the box with what was typed rather than the text of the last redraw.
 let imeComposing = false;
-function wireFilterInput(el, onChange) {
+// A text box's selection — its start, end and direction, not just the caret —
+// kept across a redraw that rebuilds the box: Ctrl+A then typing replaces
+// the whole text even when a batch redraws the tab in between.
+function boxSelection(el) {
+  try { return [el.selectionStart, el.selectionEnd, el.selectionDirection]; } catch (e) { return null; }
+}
+function restoreBoxSelection(el, sel) {
+  if (!sel) return;
+  try { el.setSelectionRange(sel[0], sel[1], sel[2] || "none"); } catch (e) { }
+}
+function wireFilterInput(el, onChange, onText) {
   let timer = null;
-  const soon = () => { clearTimeout(timer); timer = setTimeout(onChange, 150); };
-  el.addEventListener("compositionstart", () => { imeComposing = true; clearTimeout(timer); });
+  const fire = () => { timer = null; onChange(); };
+  const soon = () => { if (onText) onText(el.value); clearTimeout(timer); timer = setTimeout(fire, 150); };
+  el.addEventListener("compositionstart", () => { imeComposing = true; clearTimeout(timer); timer = null; });
   el.addEventListener("compositionend", () => { imeComposing = false; soon(); });
   el.addEventListener("input", e => { if (!e.isComposing && !imeComposing) soon(); });
-  el.addEventListener("blur", () => { imeComposing = false; });
+  el.addEventListener("blur", () => {
+    imeComposing = false;
+    // Leaving the box draws what was typed now. A box already replaced by
+    // a redraw from elsewhere needs none: that redraw used the state.
+    if (timer) { clearTimeout(timer); timer = null; if (el.isConnected) setTimeout(onChange, 0); }
+  });
 }
 function listViewWire(key, root, rerender, focus) {
   const v = listView(key);
   const txt = root.querySelector(`#lv-text-${CSS.escape(key)}`);
   if (txt) {
-    wireFilterInput(txt, () => { v.text = txt.value; rerender(); });
-    if (focus && focus.id === txt.id) { txt.focus(); try { txt.setSelectionRange(focus.pos, focus.pos); } catch (e) { } }
+    wireFilterInput(txt, () => { v.text = txt.value; rerender(); }, val => { v.text = val; });
+    if (focus && focus.id === txt.id) { txt.focus(); restoreBoxSelection(txt, focus.sel); }
   }
   root.querySelectorAll(`.lv-sel[data-lv="${CSS.escape(key)}"]`).forEach(s => s.onchange = () => { v.sel[s.dataset.sel] = s.value; rerender(); });
   root.querySelectorAll(`.lv-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.text = ""; v.sel = {}; rerender(); });
@@ -547,6 +589,12 @@ function cellText(td) {
   if (inp) return inp.value.trim();
   const sel = td.querySelector("select");
   if (sel) return sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.trim() : "";
+  // A password a click showed (一覧の取り込み's .li-secret) copies masked.
+  if (td.querySelector(".li-secret")) {
+    const c = td.cloneNode(true);
+    c.querySelectorAll(".li-secret").forEach(s => { s.textContent = "●●●●●●"; });
+    return c.textContent.replace(/\s+/g, " ").trim();
+  }
   return td.innerText.replace(/\s+/g, " ").trim();
 }
 function headText(th) {
@@ -573,9 +621,12 @@ document.addEventListener("contextmenu", e => {
   // right-clicked (its selection is not part of the page selection).
   let picked = "";
   const el = document.activeElement;
-  if (el && el.dataset.eyed) {
+  const onEl = el && (el === e.target || el.contains(e.target) || e.target.contains(el));
+  const pw = el && (el.dataset.eyed || el.type === "password");
+  if (pw && onEl) {
     // A password field (masked or shown by its 👁): nothing to copy from it.
-  } else if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && (el === e.target || el.contains(e.target) || e.target.contains(el)) && el.selectionEnd > el.selectionStart) {
+    // Focused but right-clicked elsewhere: the page's selection, as always.
+  } else if (el && !pw && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && onEl && el.selectionEnd > el.selectionStart) {
     picked = el.value.slice(el.selectionStart, el.selectionEnd);
   } else {
     picked = String(window.getSelection() || "");
@@ -773,13 +824,17 @@ function renderLock(exists) {
     $("#unlock").onclick = doUnlock;
     $("#pw").addEventListener("keydown", e => { if (e.key === "Enter") doUnlock(); });
     wirePasswordToggles(body);
+    // Started again with schedules on: they wait for this unlock.
+    App().SchedulesWaitUnlock().then(w => {
+      if (w && $("#unlock")) $("#unlock").insertAdjacentHTML("afterend", `<div style="margin-top:12px;font-size:12px;line-height:1.7;color:var(--warn)">${esc(t("⏸ 予約はロック解除まで動きません。その間に来た回は、解除したときに「見逃し」として記録します"))}</div>`);
+    }).catch(() => {});
   } else {
     body.innerHTML = `
       <div class="muted" style="margin-bottom:16px;font-size:13px;line-height:1.7">
         ${esc(t("はじめての起動です。機器情報を暗号化して保存するためのマスターパスワードを設定してください。"))}<br>
         <span style="font-size:12px">${esc(t("以前の PalaTerm を使っていた場合は、ここで作らずに、旧フォルダの data\\palaterm_vault.enc をこの exe の隣の data\\ に置いてから起動し直してください。"))}</span></div>
-      <div class="field"><label>${esc(t("マスターパスワード"))}</label><input id="pw" type="password" autofocus /></div>
-      <div class="field"><label>${esc(t("確認のため再入力"))}</label><input id="pw2" type="password" /></div>
+      <div class="field"><label>${esc(t("マスターパスワード"))}</label><div><input id="pw" type="password" autofocus /></div></div>
+      <div class="field"><label>${esc(t("確認のため再入力"))}</label><div><input id="pw2" type="password" /></div></div>
       <button class="btn primary" id="create" style="width:100%">${esc(t("作成して開始"))}</button>
       <div class="muted" style="margin-top:12px;font-size:12px;line-height:1.7">${esc(t("機器情報は PalaTerm.exe の隣の data\\palaterm_vault.enc に暗号化して保存されます。マスターパスワードを忘れると復元できません。"))}</div>`;
     $("#pw2").addEventListener("keydown", e => { if (e.key === "Enter") doCreate(); });
@@ -793,19 +848,28 @@ async function doUnlock() {
   if (!pw) return;
   try {
     await App().Unlock(pw);
-    await enterApp();
   } catch (e) {
-    // The backend tells a wrong password from a file it could not read (a
-    // sync client holding it, a permission): say which, so the password is
-    // not retyped at a file problem.
+    // A damaged vault whose backup opens: offer to restore it (views2.js).
+    if (!(await unlockRecover(pw))) {
+      // The backend tells a wrong password from a file it could not read (a
+      // sync client holding it, a permission): say which, so the password is
+      // not retyped at a file problem.
+      toast(t("ロックを解除できません") + ": " + terr(e), "err");
+      return;
+    }
+  }
+  try {
+    await enterApp();
+    unlockNotices();
+  } catch (e) {
     toast(t("ロックを解除できません") + ": " + terr(e), "err");
   }
 }
 
 async function doCreate() {
   const pw = $("#pw").value, pw2 = $("#pw2").value;
-  if (!pw) { toast(t("パスワードを入力してください"), "err"); return; }
-  if (pw !== pw2) { toast(t("確認用パスワードが一致しません"), "err"); return; }
+  if (!pw) { fieldError($("#pw"), t("パスワードを入力してください")); return; }
+  if (pw !== pw2) { fieldError($("#pw2"), t("確認用パスワードが一致しません")); return; }
   try { await App().CreateVault(pw); await enterApp(); }
   catch (e) { toast(t("作成に失敗しました") + ": " + terr(e), "err"); }
 }
@@ -903,10 +967,16 @@ document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
 $("#btn-lock").onclick = async () => {
   // Unsaved settings edits would be lost by the reload — warn first.
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings("lock"))) return;
-  // So would an editor left open (a device, a schedule, a command set).
-  if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。ロックすると、その内容は保存されずに失われます。ロックしますか？")), t("ロックする")))) return;
-  // And a 変換ルール being edited (a page, not a dialog).
-  if (ruleEditUnsaved() && !(await uiConfirm({ title: t("ロック"), message: esc(t("変換ルールの編集内容が保存されていません。ロックすると失われます。ロックしますか？")), okLabel: t("ロックする"), danger: true }))) return;
+  // So would an editor left open (a device, a schedule, a command set),
+  // and a 変換ルール being edited (a page, not a dialog). Both at once are
+  // one question over the dialog: a second, page-level confirm would take
+  // the dialog's place and the dialog would be gone if it were declined.
+  if (modalOpen()) {
+    const msg = ruleEditUnsaved()
+      ? t("編集中のダイアログと、保存されていない変換ルールの編集内容があります。ロックすると、どちらも失われます。ロックしますか？")
+      : t("編集中のダイアログがあります。ロックすると、その内容は保存されずに失われます。ロックしますか？");
+    if (!(await subConfirm(esc(msg), t("ロックする")))) return;
+  } else if (ruleEditUnsaved() && !(await uiConfirm({ title: t("ロック"), message: esc(t("変換ルールの編集内容が保存されていません。ロックすると失われます。ロックしますか？")), okLabel: t("ロックする"), danger: true }))) return;
   // The ロック button locks the terminal windows too (they stay connected
   // behind their own lock screen); the idle auto-lock below does not, since
   // a terminal can be in use while this window sits idle.
@@ -921,8 +991,8 @@ $("#btn-chpw").onclick = () => {
   const node = h(`<div>
     <h3>${esc(t("マスターパスワード変更"))}</h3>
     <div class="field"><label>${esc(t("現在のマスターパスワード"))}</label><input id="cp-cur" type="password" autofocus></div>
-    <div class="field"><label>${esc(t("新しいマスターパスワード"))}</label><input id="cp-new" type="password"></div>
-    <div class="field"><label>${esc(t("確認のため再入力"))}</label><input id="cp-new2" type="password"></div>
+    <div class="field"><label>${esc(t("新しいマスターパスワード"))}</label><div><input id="cp-new" type="password"></div></div>
+    <div class="field"><label>${esc(t("確認のため再入力"))}</label><div><input id="cp-new2" type="password"></div></div>
     <div class="modal-actions">
       <button class="btn" id="cp-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cp-ok">${esc(t("変更"))}</button>
@@ -944,8 +1014,8 @@ $("#btn-chpw").onclick = () => {
     const cur = node.querySelector("#cp-cur").value;
     const nw = node.querySelector("#cp-new").value;
     const nw2 = node.querySelector("#cp-new2").value;
-    if (!nw) { toast(t("新しいパスワードを入力してください"), "err"); return; }
-    if (nw !== nw2) { toast(t("確認用パスワードが一致しません"), "err"); return; }
+    if (!nw) { fieldError(node.querySelector("#cp-new"), t("新しいパスワードを入力してください")); return; }
+    if (nw !== nw2) { fieldError(node.querySelector("#cp-new2"), t("確認用パスワードが一致しません")); return; }
     // One change at a time: a second press while the first is at work
     // would check the old password against the new one and say it failed.
     cpOk.disabled = true;
@@ -1032,17 +1102,40 @@ $("#btn-about").onclick = () => {
       sel.value = LANG === "ja" ? "ja" : "en";
       return;
     }
-    if (modalOpen() && !(await subConfirm(esc(t("編集中のダイアログがあります。言語を切り替えると、その内容は保存されずに失われます。切り替えますか？")), t("切り替える")))) {
-      sel.value = LANG === "ja" ? "ja" : "en";
-      return;
+    // An open dialog and an unsaved 変換ルール are asked about together (see
+    // the ロック button): two confirms in a row would close the dialog.
+    let ok = true;
+    if (modalOpen()) {
+      const msg = ruleEditUnsaved()
+        ? t("編集中のダイアログと、保存されていない変換ルールの編集内容があります。言語を切り替えると、どちらも失われます。切り替えますか？")
+        : t("編集中のダイアログがあります。言語を切り替えると、その内容は保存されずに失われます。切り替えますか？");
+      ok = await subConfirm(esc(msg), t("切り替える"));
+    } else if (ruleEditUnsaved()) {
+      ok = await uiConfirm({ title: t("言語の切り替え"), message: esc(t("変換ルールの編集内容が保存されていません。言語を切り替えると失われます。切り替えますか？")), okLabel: t("切り替える"), danger: true });
     }
-    if (ruleEditUnsaved() && !(await uiConfirm({ title: t("言語の切り替え"), message: esc(t("変換ルールの編集内容が保存されていません。言語を切り替えると失われます。切り替えますか？")), okLabel: t("切り替える"), danger: true }))) {
+    if (!ok) {
       sel.value = LANG === "ja" ? "ja" : "en";
       return;
     }
     if (typeof gridBeforeLeave === "function") await gridBeforeLeave().catch(() => {});
     saveUIState();
     try { localStorage.setItem("palaterm_lang", sel.value); } catch { }
+    location.reload();
+  };
+}
+// The same choice on the lock screen and the first-run screen: nothing is
+// open there to lose. What the last ロック kept for the next unlock (the
+// run tab's results, the tab) is kept again across this reload.
+{
+  const sel = $("#lock-lang");
+  sel.value = LANG === "ja" ? "ja" : "en";
+  sel.onchange = () => {
+    saveUIState();
+    try {
+      const v = JSON.parse(sessionStorage.getItem(UI_STATE_KEY) || "null");
+      if (v && restoredTab) { v.tab = restoredTab; sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(v)); }
+    } catch (e) { }
+    try { localStorage.setItem("palaterm_lang", sel.value); } catch (e) { }
     location.reload();
   };
 }

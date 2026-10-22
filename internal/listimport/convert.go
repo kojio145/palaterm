@@ -35,6 +35,10 @@ type Row struct {
 	// set chosen from this PalaTerm's, or none found (empty, the default
 	// then). Either way the value depends on this PalaTerm, not the file.
 	Guessed []string `json:"guessed,omitempty"`
+	// Lost are the fields whose column the file does not have (see
+	// sourceValueFrom): their value (empty, or the default) is not the
+	// source's, so an existing device keeps its own.
+	Lost []string `json:"lost,omitempty"`
 	// Key is the row's match key: the key column's text (KeyBy names the
 	// column), or the name when there is none or it is empty (KeyBy "").
 	Key      string `json:"key"`
@@ -92,7 +96,8 @@ func unitFields(base []model.ImportField, u model.ImportUnit) []model.ImportFiel
 type Converted struct {
 	Rows []Row `json:"rows"`
 	// Missing names the columns the rule refers to that the table does not
-	// have (the fields read empty, so their defaults apply).
+	// have: their fields read empty — a new device takes the default, an
+	// existing one keeps its value (Row.Lost).
 	Missing []string `json:"missing"`
 }
 
@@ -134,9 +139,12 @@ func Convert(t *Table, r *model.ImportRule, env *Env) *Converted {
 			for i := range fs {
 				f := &fs[i]
 				row.Keys = append(row.Keys, f.Key)
-				v, from, miss := t.sourceValueFrom(f, src)
+				v, from, miss, lost := t.sourceValueFrom(f, src)
 				for _, m := range miss {
 					missing[m] = true
+				}
+				if lost {
+					row.Lost = append(row.Lost, f.Key)
 				}
 				if from != "" {
 					if row.From == nil {

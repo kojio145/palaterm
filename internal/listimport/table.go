@@ -21,6 +21,9 @@ type Table struct {
 	Sheet   string   `json:"sheet"`
 	Headers []Header `json:"headers"`
 	Rows    []SrcRow `json:"-"`
+	// Warnings say what reading the table could not do as the sheet asks
+	// (merged areas too many to fill): shown with the file's own.
+	Warnings []string `json:"-"`
 }
 
 // SrcRow is one value row: its row number in the sheet (1-based) and its
@@ -66,41 +69,49 @@ func PickSheet(b *sheet.Book, r *model.ImportRule) (*sheet.Sheet, error) {
 }
 
 // cellGrid is a sheet with merged areas filled in (unless the rule asks
-// for the top-left cell only).
-func cellGrid(s *sheet.Sheet, onlyFirst bool) [][]string {
+// for the top-left cell only), and a warning when some areas were left
+// unfilled to stay within sheet.MaxCells.
+func cellGrid(s *sheet.Sheet, onlyFirst bool) ([][]string, string) {
 	if onlyFirst || len(s.Merges) == 0 {
-		return s.Rows
+		return s.Rows, ""
 	}
 	rows := make([][]string, len(s.Rows))
 	// A merged area is filled only where the sheet has cells: up to its
 	// last row and its widest row (a merge reaching column ALL of row
 	// 100,000 in a small file must not become a hundred million cells),
-	// and all the filling together within sheet.MaxCells.
+	// and all the filling together within sheet.MaxCells — counted as the
+	// cells the rows actually grow by, not the area's size.
 	width, cells := 0, 0
 	for i, r := range s.Rows {
 		rows[i] = append([]string(nil), r...)
 		width = max(width, len(r))
 		cells += len(r)
 	}
+	skipped := 0
 	for _, m := range s.Merges {
 		if m.R1 < 0 || m.C1 < 0 || m.R1 >= len(rows) || m.C1 >= width || m.R2 < m.R1 || m.C2 < m.C1 {
 			continue
 		}
 		m.R2 = min(m.R2, len(rows)-1)
 		m.C2 = min(m.C2, width-1)
-		if cells+(m.R2-m.R1+1)*(m.C2+1) > sheet.MaxCells {
-			break
+		grow := 0
+		for r := m.R1; r <= m.R2; r++ {
+			grow += max(0, m.C2+1-len(rows[r]))
 		}
-		cells += (m.R2 - m.R1 + 1) * (m.C2 + 1)
+		if cells+grow > sheet.MaxCells {
+			skipped++ // left as it is; a smaller area further on may still fit
+			continue
+		}
+		cells += grow
 		v := ""
 		if m.C1 < len(rows[m.R1]) {
 			v = rows[m.R1][m.C1]
 		}
-		for r := m.R1; r <= m.R2 && r < len(rows); r++ {
+		for r := m.R1; r <= m.R2; r++ {
+			for len(rows[r]) <= m.C2 {
+				rows[r] = append(rows[r], "")
+			}
 			for c := m.C1; c <= m.C2; c++ {
-				for len(rows[r]) <= c {
-					rows[r] = append(rows[r], "")
-				}
 				if r == m.R1 && c == m.C1 {
 					continue
 				}
@@ -108,20 +119,24 @@ func cellGrid(s *sheet.Sheet, onlyFirst bool) [][]string {
 			}
 		}
 	}
-	return rows
+	if skipped > 0 {
+		return rows, fmt.Sprintf("シート「%s」の結合セルが多すぎるため、%d 個の結合範囲は左上のセルだけに値があるものとして読みました", s.Name, skipped)
+	}
+	return rows, ""
 }
 
 // FilledRows is the sheet's grid as the rule reads it: merged areas
 // filled in unless the rule takes their top-left cell only.
 func FilledRows(s *sheet.Sheet, r *model.ImportRule) [][]string {
-	return cellGrid(s, r.MergeOnlyFirst)
+	rows, _ := cellGrid(s, r.MergeOnlyFirst)
+	return rows
 }
 
 // ReadTable cuts the rule's table out of the sheet: the header row from the
 // start column to the last filled header, and every value row with any
 // cell filled under those headers.
 func ReadTable(s *sheet.Sheet, r *model.ImportRule) (*Table, error) {
-	rows := cellGrid(s, r.MergeOnlyFirst)
+	rows, warn := cellGrid(s, r.MergeOnlyFirst)
 	hr := r.HeaderRow
 	if hr < 1 {
 		hr = 1
@@ -142,7 +157,10 @@ func ReadTable(s *sheet.Sheet, r *model.ImportRule) (*Table, error) {
 			return nil, fmt.Errorf("見出しの行（%d 行目）が空です", hr)
 		}
 	}
-	t := &Table{Sheet: s.Name}
+	t := &Table{Sheet: s.Name, Warnings: []string{}}
+	if warn != "" {
+		t.Warnings = append(t.Warnings, warn)
+	}
 	last := 0
 	for c := start; c <= len(head); c++ {
 		if strings.TrimSpace(head[c-1]) != "" {
@@ -232,6 +250,10 @@ func SecretColumns(t *Table, r *model.ImportRule) map[int]bool {
 		case "column":
 			if c := t.column(f.Column, f.ColIndex); c != 0 {
 				out[c] = true
+			} else if f.ColIndex > 0 {
+				// Not found by its header (the header row set elsewhere, the
+				// header renamed): the column it was chosen at still is one.
+				out[f.ColIndex] = true
 			}
 			for _, fb := range f.Fallback {
 				if c := t.column(fb, 0); c != 0 {
@@ -257,16 +279,129 @@ func SecretColumns(t *Table, r *model.ImportRule) map[int]bool {
 	return out
 }
 
+// secretNames are the headers a rule's password fields read (their columns,
+// fallbacks and the ones their combinations name), folded.
+func secretNames(r *model.ImportRule) []string {
+	var out []string
+	add := func(f model.ImportField) {
+		if !isSecret(f.Key) {
+			return
+		}
+		switch f.Source {
+		case "column":
+			out = append(out, foldHeader(f.Column))
+			for _, fb := range f.Fallback {
+				out = append(out, foldHeader(fb))
+			}
+		case "template":
+			for _, m := range reTemplate.FindAllStringSubmatch(f.Template, -1) {
+				out = append(out, foldHeader(m[1]))
+			}
+		}
+	}
+	for _, f := range r.Fields {
+		add(f)
+	}
+	for _, u := range r.Units {
+		for _, f := range u.Fields {
+			add(f)
+		}
+	}
+	return out
+}
+
+// secretIndexes are the column numbers a rule's password fields were chosen
+// at (ColIndex).
+func secretIndexes(r *model.ImportRule) []int {
+	var out []int
+	add := func(fs []model.ImportField) {
+		for _, f := range fs {
+			if isSecret(f.Key) && f.Source == "column" && f.ColIndex > 0 {
+				out = append(out, f.ColIndex)
+			}
+		}
+	}
+	add(r.Fields)
+	for _, u := range r.Units {
+		add(u.Fields)
+	}
+	return out
+}
+
+// MaskSample masks the password cells of the editor's picture of a sheet
+// (grid: its top rows, 0-based; t: the table the rule read, nil when it
+// could not). Masked: under the value row start, the columns the password
+// fields read (SecretColumns) — or, without a table, the columns they were
+// chosen at; and wherever the grid shows one of their header texts, the
+// cells under it (a header row set wrong must not show every password).
+func MaskSample(grid [][]string, t *Table, r *model.ImportRule) {
+	hr := max(r.HeaderRow, 1)
+	dr := r.DataRow
+	if dr == 0 {
+		dr = hr + 1
+	}
+	names := map[string]bool{}
+	for _, n := range secretNames(r) {
+		if n != "" {
+			names[strings.ToLower(n)] = true
+		}
+	}
+	isName := func(v string) bool { return names[strings.ToLower(foldHeader(v))] }
+	mask := func(from, c int) { // from: 0-based row, c: 1-based column
+		for i := max(from, 0); i < len(grid); i++ {
+			// A password header itself stays readable (the editor picks
+			// columns by it).
+			if c-1 < len(grid[i]) && grid[i][c-1] != "" && !isName(grid[i][c-1]) {
+				grid[i][c-1] = "●●●●●●"
+			}
+		}
+	}
+	if t != nil {
+		for c := range SecretColumns(t, r) {
+			mask(dr-1, c)
+		}
+	} else {
+		// No table: the header row is likely set wrong. Values start
+		// where it says — or, past the sample's end, anywhere.
+		from := dr - 1
+		if from >= len(grid) {
+			from = 0
+		}
+		for _, c := range secretIndexes(r) {
+			mask(from, c)
+		}
+	}
+	if len(names) == 0 {
+		return
+	}
+	type hit struct{ row, col int }
+	var hits []hit
+	for i, row := range grid {
+		for c, v := range row {
+			if v != "" && names[strings.ToLower(foldHeader(v))] {
+				hits = append(hits, hit{i, c + 1})
+			}
+		}
+	}
+	for _, h := range hits {
+		mask(h.row+1, h.col)
+	}
+}
+
 // sourceValueFrom is a field's value before its steps, the fallback column
-// it came from ("" for the field's own), and the columns it names that the
-// table does not have (they read empty).
-func (t *Table) sourceValueFrom(f *model.ImportField, row SrcRow) (v, from string, missing []string) {
+// it came from ("" for the field's own), the columns it names that the
+// table does not have (they read empty), and whether the value is lost:
+// nothing of it came from the file because a column it needs is missing
+// (its own column, with no fallback giving a value; any column of a
+// combination). A lost value says nothing about the device.
+func (t *Table) sourceValueFrom(f *model.ImportField, row SrcRow) (v, from string, missing []string, lost bool) {
 	switch f.Source {
 	case "column":
-		if c := t.column(f.Column, f.ColIndex); c == 0 {
+		own := t.column(f.Column, f.ColIndex)
+		if own == 0 {
 			missing = append(missing, f.Column)
 		} else {
-			v = row.Cells[c]
+			v = row.Cells[own]
 		}
 		// Empty: the next column that has the value.
 		for _, fb := range f.Fallback {
@@ -282,7 +417,7 @@ func (t *Table) sourceValueFrom(f *model.ImportField, row SrcRow) (v, from strin
 				v, from = row.Cells[c], fb
 			}
 		}
-		return v, from, missing
+		return v, from, missing, own == 0 && strings.TrimSpace(v) == ""
 	case "template":
 		out := reTemplate.ReplaceAllStringFunc(f.Template, func(m string) string {
 			name := m[1 : len(m)-1]
@@ -293,7 +428,7 @@ func (t *Table) sourceValueFrom(f *model.ImportField, row SrcRow) (v, from strin
 			}
 			return strings.TrimSpace(row.Cells[c])
 		})
-		return out, "", missing
+		return out, "", missing, len(missing) > 0
 	}
-	return "", "", nil
+	return "", "", nil, false
 }

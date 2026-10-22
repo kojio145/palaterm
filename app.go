@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -73,6 +74,84 @@ type App struct {
 	sched    schedState
 	schedInv *model.Inventory
 	trayQuit bool
+
+	// readOnly: the open vault was saved by a newer PalaTerm and is not
+	// written back (see Unlock). unlockInfo is what the last Unlock found
+	// for the page to say (GetUnlockInfo).
+	readOnly   bool
+	unlockInfo UnlockInfo
+
+	// The command-set / profile file read last, waiting for the answer to
+	// its name conflict (ResolveFileImport).
+	pendingImport *pendingImport
+}
+
+// UnlockInfo is what the lock screen asks after an Unlock: a backup that can
+// replace a damaged vault (BackupAt, after a failed unlock), a vault saved by
+// a newer PalaTerm (opened read-only), profiles given new keys.
+type UnlockInfo struct {
+	BackupAt string   `json:"backupAt,omitempty"`
+	Newer    bool     `json:"newer,omitempty"`
+	SavedBy  string   `json:"savedBy,omitempty"`
+	ReadOnly bool     `json:"readOnly,omitempty"`
+	Rekeyed  []string `json:"rekeyed,omitempty"`
+}
+
+// errReadOnly refuses a save to a vault a newer PalaTerm wrote.
+var errReadOnly = errors.New("この保管庫は新しい版の PalaTerm で保存されているため、読み取り専用で開いています（この版で保存すると新しい版の設定が消えます）。変更は保存されていません")
+
+// backupWorthTrying: the vault file is there but did not decrypt or parse —
+// the failures a damaged file gives (not a missing or locked one).
+func backupWorthTrying(err error) bool {
+	return errors.Is(err, vault.ErrWrongPassword) ||
+		strings.Contains(err.Error(), "not a PalaTerm vault file") ||
+		strings.Contains(err.Error(), "corrupted inventory json")
+}
+
+// GetUnlockInfo returns what the last Unlock found (see UnlockInfo).
+func (a *App) GetUnlockInfo() UnlockInfo {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	info := a.unlockInfo
+	info.ReadOnly = a.inv != nil && a.readOnly
+	return info
+}
+
+// RestoreVaultBackup puts the vault's previous generation back (the lock
+// screen's answer to a damaged vault) and unlocks it. The damaged file is
+// kept beside it; its file name is returned.
+func (a *App) RestoreVaultBackup(password string) (string, error) {
+	if !a.locked() {
+		return "", fmt.Errorf("保管庫は既に開いています")
+	}
+	if _, _, err := vault.LoadBackup(a.vaultPath, password); err != nil {
+		return "", fmt.Errorf("1 世代前の控えを開けません")
+	}
+	kept, err := vault.RestoreBackup(a.vaultPath, time.Now())
+	if err != nil {
+		return "", err
+	}
+	if err := a.Unlock(password); err != nil {
+		return filepath.Base(kept), err
+	}
+	return filepath.Base(kept), nil
+}
+
+// AllowOlderSave lets this PalaTerm save a vault a newer one wrote — the
+// user's choice, knowing what the newer version added is lost.
+func (a *App) AllowOlderSave() {
+	a.mu.Lock()
+	a.readOnly = false
+	a.unlockInfo.ReadOnly = false
+	a.mu.Unlock()
+}
+
+// saveVaultLocked (caller holds a.mu) writes the open vault under password.
+func (a *App) saveVaultLocked(password string) error {
+	if a.readOnly {
+		return errReadOnly
+	}
+	return vault.Save(a.vaultPath, password, a.inv)
 }
 
 // NewApp constructs the backend with the vault stored next to the executable
@@ -87,6 +166,7 @@ func NewApp() *App {
 	}
 	a.sched.kick = make(chan struct{}, 1)
 	a.runner.HostKeys = a // TOFU host key pinning backed by the vault
+	vault.Writer = appVersion
 	return a
 }
 
@@ -119,6 +199,9 @@ func (a *App) startup(ctx context.Context) {
 	// GUI windows killed before they could delete their WebView2 profile
 	// (a forced quit, a power cut) left the device's session on disk.
 	go cleanStaleGUIProfiles()
+	a.sched.mu.Lock()
+	a.sched.statePath = schedCheckedPath() // the schedules' last look, kept across a restart
+	a.sched.mu.Unlock()
 	go a.schedLoop()
 }
 
@@ -195,6 +278,10 @@ func (a *App) flushPersist() { a.writePending() }
 // shutdown runs when the main window closes.
 func (a *App) shutdown(ctx context.Context) {
 	saveMainPlacement()
+	// A batch still running is stopped like ■ 中止 and given a moment to
+	// finish: its devices log out and the run's summary is written, so the
+	// run shows in 実行履歴 as stopped instead of being cut off mid-way.
+	a.stopRunForExit(5 * time.Second)
 	closeGUIWindows()
 	a.flushPersist()
 	trayHide()
@@ -212,6 +299,30 @@ func (a *App) shutdown(ctx context.Context) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	endChildren()
+}
+
+// stopRunForExit cancels the running batch (by hand or a 予約) and waits up
+// to max for it to wind up (execBatch clears runActive after writing the
+// summary). It reports whether the batch finished in time.
+func (a *App) stopRunForExit(max time.Duration) bool {
+	a.mu.Lock()
+	active := a.runActive
+	a.mu.Unlock()
+	if !active {
+		return true
+	}
+	a.CancelRun()
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		a.mu.Lock()
+		active = a.runActive
+		a.mu.Unlock()
+		if !active {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
 }
 
 // ClearHostKeys drops the pinned host keys for one device (its own address
@@ -355,6 +466,7 @@ func (a *App) CreateVault(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	a.readOnly, a.unlockInfo = false, UnlockInfo{}
 	a.schedInv = nil    // the vault itself again
 	a.pendingPins = nil // a new vault starts with no pins from an old one
 	a.mu.Unlock()
@@ -363,8 +475,22 @@ func (a *App) CreateVault(password string) error {
 
 // Unlock decrypts the inventory with the master password.
 func (a *App) Unlock(password string) error {
+	a.mu.Lock()
+	a.unlockInfo = UnlockInfo{}
+	a.mu.Unlock()
 	inv, err := vault.Load(a.vaultPath, password)
 	if err != nil {
+		// A vault that will not open with a password its previous
+		// generation accepts is damaged, not mistyped: offer the backup
+		// (RestoreVaultBackup) instead of only "wrong password".
+		if backupWorthTrying(err) {
+			if _, at, berr := vault.LoadBackup(a.vaultPath, password); berr == nil {
+				a.mu.Lock()
+				a.unlockInfo.BackupAt = at.Format("2006-01-02 15:04")
+				a.mu.Unlock()
+				return errors.New("保管庫のファイルが壊れています（1 世代前の控えから復元できます）")
+			}
+		}
 		// Said in the UI's words (the page translates these): the raw
 		// "wrong master password or corrupted vault" reached the Japanese
 		// lock screen as it was.
@@ -379,6 +505,23 @@ func (a *App) Unlock(password string) error {
 	inv.NormalizeGroups()
 	lang := a.uiLang()
 	seed := false
+	// Saved by a newer PalaTerm in a format this one does not fully know:
+	// saving here would drop what the newer one added, so the vault opens
+	// read-only (the page asks whether to edit anyway: AllowOlderSave).
+	newer := inv.Version > model.InventoryVersion
+	info := UnlockInfo{Newer: newer, ReadOnly: newer, SavedBy: inv.SavedBy}
+	// Two profiles sharing one key (a copy of a renamed copy, before
+	// v1.9.10) get keys of their own; the first keeps the shared one.
+	if fixed := inv.RekeyDuplicateProfiles(); len(fixed) > 0 {
+		info.Rekeyed = fixed
+		seed = true
+	}
+	// A log folder saved with quotes around it ("D:\logs", from Explorer's
+	// パスのコピー) named no folder that could be made.
+	if c := logstore.CleanRoot(inv.Settings.LogDir); c != inv.Settings.LogDir {
+		inv.Settings.LogDir = c
+		seed = true
+	}
 	// v1.7.3's per-host jump-host logins become the single own jump host.
 	if inv.MigrateMyBastion() {
 		seed = true
@@ -622,7 +765,7 @@ func (a *App) Unlock(password string) error {
 		inv.Settings.LogDirTemplate = logstore.DefaultDirTemplate
 		seed = true
 	}
-	if seed {
+	if seed && !newer {
 		if err := vault.Save(a.vaultPath, password, inv); err != nil {
 			return err
 		}
@@ -630,6 +773,8 @@ func (a *App) Unlock(password string) error {
 	registerProfiles(a.profiles, inv)
 	a.mu.Lock()
 	a.password, a.inv = password, inv
+	a.readOnly = newer
+	a.unlockInfo = info
 	a.schedInv = nil // the vault itself again
 	// Keys a batch pinned while the vault was locked (see runHostKeys).
 	pins := a.pendingPins
@@ -648,7 +793,10 @@ func (a *App) Unlock(password string) error {
 	}
 	// Read the log folder once in the background, so the 実行履歴 tab opens
 	// from the cache (see history.List) instead of reading every run folder.
-	go func() { _, _ = a.ListRunHistory() }()
+	go func() {
+		defer recoverGo("ListRunHistory")
+		_, _ = a.ListRunHistory()
+	}()
 	return nil
 }
 
@@ -722,7 +870,7 @@ func (a *App) ChangeMasterPassword(current, next string) error {
 	if current != a.password {
 		return fmt.Errorf("現在のマスターパスワードが違います")
 	}
-	if err := vault.Save(a.vaultPath, next, a.inv); err != nil {
+	if err := a.saveVaultLocked(next); err != nil {
 		return err
 	}
 	// The save just kept the old file as the backup — still readable with the
@@ -752,6 +900,7 @@ func (a *App) ResetVault(current string) error {
 		return fmt.Errorf("現在のマスターパスワードが違います")
 	}
 	a.password, a.inv = "", nil
+	a.readOnly, a.unlockInfo = false, UnlockInfo{}
 	a.schedInv = nil
 	a.pendingPins = nil // nothing of the old vault goes into the next one
 	a.mu.Unlock()
@@ -774,7 +923,7 @@ func (a *App) persist() error {
 	a.inv.EnsureDeviceIDs()
 	// Whatever path deleted a device, its import record goes with it.
 	a.inv.PruneImportRecords()
-	return vault.Save(a.vaultPath, a.password, a.inv)
+	return a.saveVaultLocked(a.password)
 }
 
 // ---- Inventory reads ----
@@ -850,14 +999,7 @@ func (a *App) SaveProfile(p profile.Profile) error {
 	// since keeps its old key ("custom:X_copy" for one now called "Y"), and
 	// a new "X_copy" must not replace it.
 	if isNew {
-		taken := map[string]bool{}
-		for i := range a.inv.CustomProfiles {
-			taken[a.inv.CustomProfiles[i].Key] = true
-		}
-		p.Key = "custom:" + p.Name
-		for i := 2; taken[p.Key]; i++ {
-			p.Key = fmt.Sprintf("custom:%s#%d", p.Name, i)
-		}
+		p.Key = a.freeProfileKeyLocked(p.Name)
 	}
 	found := false
 	for i := range a.inv.CustomProfiles {
@@ -877,6 +1019,16 @@ func (a *App) SaveProfile(p profile.Profile) error {
 	a.mu.Unlock()
 	a.profiles.Add(profile.Quote(p))
 	return a.persist()
+}
+
+// freeProfileKeyLocked (caller holds a.mu) is the key a new profile called
+// name gets: one no profile has (see profile.FreeKey).
+func (a *App) freeProfileKeyLocked(name string) string {
+	taken := map[string]bool{}
+	for i := range a.inv.CustomProfiles {
+		taken[a.inv.CustomProfiles[i].Key] = true
+	}
+	return profile.FreeKey(name, func(k string) bool { return taken[k] })
 }
 
 // DeleteProfile removes an OS profile. The exported JSON files under
@@ -933,10 +1085,12 @@ func (a *App) CopyProfile(key string) (string, error) {
 	}
 	dup := *src
 	dup.Name = newName
-	dup.Key = "custom:" + newName
+	// Not "custom:"+newName: a copy renamed since may hold that key.
+	dup.Key = a.freeProfileKeyLocked(newName)
 	dup.Login = append([]profile.Step(nil), src.Login...)
 	dup.Pager = append([]profile.Step(nil), src.Pager...)
 	dup.Disconnect = append([]profile.Step(nil), src.Disconnect...)
+	dup.Answers = append([]profile.Step(nil), src.Answers...)
 	a.inv.CustomProfiles = append(a.inv.CustomProfiles, dup)
 	a.mu.Unlock()
 	a.profiles.Add(profile.Quote(dup))
@@ -994,10 +1148,14 @@ func (a *App) SaveDevice(d model.Device) error {
 			return errDeviceNameTaken(d.Group, d.Name)
 		}
 	}
+	var stopped []SchedLogEntry
 	if idx >= 0 {
 		if old := a.inv.Devices[idx]; old.Group == d.Group && old.Name != d.Name {
 			renameSchedDevice(a.inv, d.Group, old.Name, d.Name)
 		}
+		// Moved to another group (renamed or not): a schedule naming it
+		// would run on whatever takes the name in the old group.
+		stopped = stopLeaving(a.inv, a.inv.Devices[idx:idx+1], []model.Device{d})
 		// A GUI pin names the address: a device moved to another one starts
 		// over there (trust on first use), the old pin goes.
 		if old := a.inv.Devices[idx]; old.GUICertKey() != d.GUICertKey() {
@@ -1016,6 +1174,7 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.inv.Settings.LastKeyFile = d.KeyFile
 	}
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	return a.persist()
 }
 
@@ -1045,8 +1204,11 @@ func (a *App) DeleteDevice(id string) error {
 		return fmt.Errorf("機器が見つかりません")
 	}
 	delete(a.inv.KnownGUICerts, a.inv.Devices[idx].GUICertKey())
+	// A schedule naming it would run on the next device given its name.
+	stopped := stopLeaving(a.inv, a.inv.Devices[idx:idx+1], nil)
 	a.inv.Devices = append(a.inv.Devices[:idx], a.inv.Devices[idx+1:]...)
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	return a.persist()
 }
 
@@ -1072,6 +1234,11 @@ type DevicePatch struct {
 	BastionHop      *int    `json:"bastionHop,omitempty"`
 	BastionUsername *string `json:"bastionUsername,omitempty"`
 	BastionPassword *string `json:"bastionPassword,omitempty"`
+	// BastionHost narrows the hop edit to the devices whose hop is this
+	// host: hop 1 may be one jump host on some devices and another on the
+	// rest, and one password set on all of them is a mistake. nil or "" =
+	// every device with that hop.
+	BastionHost *string `json:"bastionHost,omitempty"`
 }
 
 // UpdateReport says what a bulk edit touched: how many devices, and — for a
@@ -1082,6 +1249,9 @@ type UpdateReport struct {
 	Devices    int `json:"devices"`
 	HopApplied int `json:"hopApplied"`
 	HopMissing int `json:"hopMissing"`
+	// HopOther: devices with that hop on another host than BastionHost
+	// (left as they are).
+	HopOther int `json:"hopOther"`
 }
 
 // UpdateDevices applies p to the devices with the given IDs, all or none:
@@ -1149,7 +1319,11 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 			// A fresh slice: the copy in next shares the hops with a.inv
 			// until the save goes through (all or none).
 			hops := append([]model.Bastion(nil), d.Bastions...)
-			if i := *p.BastionHop - 1; i >= 0 && i < len(hops) && hops[i].Host != "" {
+			i := *p.BastionHop - 1
+			has := i >= 0 && i < len(hops) && hops[i].Host != ""
+			if has && p.BastionHost != nil && *p.BastionHost != "" && !strings.EqualFold(hops[i].Host, strings.TrimSpace(*p.BastionHost)) {
+				rep.HopOther++
+			} else if has {
 				if p.BastionUsername != nil {
 					hops[i].Username = strings.TrimSpace(*p.BastionUsername)
 				}
@@ -1188,26 +1362,7 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 	}
 	// A schedule naming a device that leaves its group would keep the name
 	// and run on whatever gets it next: stop it, and say so in the record.
-	var stopped []SchedLogEntry
-	if p.Group != nil {
-		moved := map[string]map[string]bool{} // old group → names
-		for i, d := range a.inv.Devices {
-			if sel[d.ID] && next[i].Group != d.Group {
-				if moved[d.Group] == nil {
-					moved[d.Group] = map[string]bool{}
-				}
-				moved[d.Group][d.Name] = true
-			}
-		}
-		for g, names := range moved {
-			list := make([]string, 0, len(names))
-			for n := range names {
-				list = append(list, n)
-			}
-			sort.Strings(list)
-			stopped = append(stopped, stopSchedules(a.inv, g, names, fmt.Sprintf("機器「%s」が別のグループへ移動したため停止しました", strings.Join(list, ", ")))...)
-		}
-	}
+	stopped := stopLeaving(a.inv, a.inv.Devices, next)
 	a.inv.Devices = next
 	if p.Group != nil {
 		a.ensureGroupExists(strings.TrimSpace(*p.Group))
@@ -1231,7 +1386,7 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 	for _, id := range ids {
 		sel[id] = true
 	}
-	out := a.inv.Devices[:0]
+	out := make([]model.Device, 0, len(a.inv.Devices)) // a.inv.Devices is read below
 	n := 0
 	for _, d := range a.inv.Devices {
 		if sel[d.ID] {
@@ -1241,8 +1396,11 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 		}
 		out = append(out, d)
 	}
+	// A schedule naming one would run on the next device given its name.
+	stopped := stopLeaving(a.inv, a.inv.Devices, out)
 	a.inv.Devices = out
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	return n, a.persist()
 }
 
@@ -1428,6 +1586,7 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 	}
 	a.inv.DeviceGroups = out
 	renamed := []string{}
+	arrived := map[string]bool{} // the names the group's devices have once ungrouped
 	for i := range a.inv.Devices {
 		d := &a.inv.Devices[i]
 		if d.Group != name {
@@ -1443,11 +1602,32 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 			renamed = append(renamed, d.Name+" → "+nn)
 			d.Name = nn
 		}
+		arrived[d.Name] = true
 	}
 	// The group's table draft was read against devices that are now
 	// ungrouped (and maybe renamed): it would only come back as conflicts.
 	delete(a.inv.GridDrafts, name)
 	stopped := stopSchedules(a.inv, name, nil, fmt.Sprintf("グループ「%s」が削除されたため停止しました", name))
+	// The devices now ungrouped would silently join the 「グループ未設定」
+	// schedules — every one on the whole of it, and one naming a device
+	// (gone) whose name an arrival now has: those stop too, and say why.
+	if len(arrived) > 0 {
+		why := fmt.Sprintf("グループ「%s」の削除で機器が「グループ未設定」へ移ったため停止しました", name)
+		for i := range a.inv.Schedules {
+			sc := &a.inv.Schedules[i]
+			if !sc.Enabled || !sc.Ungrouped {
+				continue
+			}
+			hit := sc.Names == nil
+			for _, n := range sc.Names {
+				hit = hit || arrived[n]
+			}
+			if hit {
+				sc.Enabled = false
+				stopped = append(stopped, SchedLogEntry{ScheduleID: sc.ID, Schedule: sc.Name, Kind: "stopped", Message: why})
+			}
+		}
+	}
 	a.mu.Unlock()
 	a.logStopped(stopped)
 	return renamed, a.persist()
@@ -1693,6 +1873,16 @@ func (a *App) SaveMyBastions(chain []model.Bastion) error {
 }
 
 func (a *App) SaveSettings(s model.Settings) error {
+	// The log folder as it can be used: no quotes or spaces around it, and
+	// one that can be created and written now — refused here with the
+	// reason, not found out by every run afterwards.
+	s.LogDir = logstore.CleanRoot(s.LogDir)
+	if s.LogDir == "" {
+		s.LogDir = "logs"
+	}
+	if err := logstore.CheckRoot(s.LogDir); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1763,6 +1953,9 @@ type RunDone struct {
 	Results []runpkg.DeviceResult `json:"results"`
 	RunDir  string                `json:"runDir,omitempty"`
 	DryRun  bool                  `json:"dryRun,omitempty"`
+	// Error: the batch stopped on an internal error (a panic, logged in
+	// data\error.log) instead of finishing.
+	Error string `json:"error,omitempty"`
 }
 
 // RunWith runs with the full set of per-run choices (stage, dry run, group,
@@ -1924,8 +2117,25 @@ func (a *App) beginRunLocked(sched string) (context.Context, context.CancelFunc)
 //
 // dir is a 予約's own folder ("" = a new run folder): its rounds all go
 // there, and the folder's summary counts them (history.AddRound).
-func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched, dir string, emit runpkg.EmitFunc) RunDone {
+func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched, dir string, emit runpkg.EmitFunc) (done RunDone) {
 	defer cancel()
+	// A panic in the batch must not take the whole app (and with it every
+	// terminal window) down: it is logged, the batch slot is freed so the
+	// next run can start, and the page is told the batch ended in an error.
+	defer func() {
+		if r := recover(); r != nil {
+			msg := logPanic("execBatch", r)
+			a.runner.HostKeys = a
+			a.mu.Lock()
+			a.runActive = false
+			a.runSched = ""
+			done = RunDone{DryRun: req.DryRun, Error: msg}
+			if sched == "" {
+				a.lastDone = &done
+			}
+			a.mu.Unlock()
+		}
+	}()
 	// No idle sleep until the batch ends (done, 中止 or error).
 	defer keepSystemAwake()()
 	started := time.Now()
@@ -1940,7 +2150,7 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	if runDir != "" {
 		writeRunSummary(runDir, snap, req, sched, dir != "", started, results)
 	}
-	done := RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
+	done = RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
 	a.mu.Lock()
 	a.runActive = false
 	a.runSched = ""
@@ -2053,6 +2263,7 @@ func dangerOf(snap *model.Inventory) []DangerWarning {
 // ListRunHistory returns past batches (newest first) found under the log
 // folder: one row per log_<timestamp>[_<stage>] sub-folder.
 func (a *App) ListRunHistory() ([]history.Run, error) {
+	defer recoverBound(a.ctx, "ListRunHistory")
 	if a.locked() {
 		return nil, errVaultLocked
 	}
@@ -2073,6 +2284,7 @@ func (a *App) ListRunHistory() ([]history.Run, error) {
 // Both must sit under the log folder. With ignoreNoise, lines that differ
 // only in clock readings, uptimes and traffic counters count as unchanged.
 func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.DiffResult, error) {
+	defer recoverBound(a.ctx, "DiffLogFiles")
 	if a.locked() {
 		return nil, errVaultLocked
 	}
@@ -2261,6 +2473,7 @@ func (a *App) OpenLogDir() error {
 // settings of all of them are checked together. All files must lie under
 // the log folder.
 func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*history.StrictResult, error) {
+	defer recoverBound(a.ctx, "StrictVerify")
 	if a.locked() {
 		return nil, errVaultLocked
 	}
@@ -2295,6 +2508,7 @@ func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*h
 // it (rows, the first one the header), to export\compare\compare_<date>_<time>.csv
 // and returns the file.
 func (a *App) ExportCompareResult(rows [][]string) (string, error) {
+	defer recoverBound(a.ctx, "ExportCompareResult")
 	if a.locked() {
 		return "", errVaultLocked
 	}
@@ -2596,13 +2810,186 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.9"
+const appVersion = "1.9.10"
+
+// FileImport is what reading one command-set or OS-profile file did. When a
+// set / profile of that name is already there (and differs), nothing was
+// changed yet: Conflict names it and the page asks 置き換える / 別名で追加 /
+// やめる, answered by ResolveFileImport. AltName is the name 別名で追加
+// would use.
+type FileImport struct {
+	Name     string `json:"name"`
+	Imported bool   `json:"imported"`
+	Same     bool   `json:"same,omitempty"` // already there exactly so: nothing to do
+	Conflict string `json:"conflict,omitempty"`
+	AltName  string `json:"altName,omitempty"`
+}
+
+// pendingImport is a read file waiting for the answer to its conflict.
+type pendingImport struct {
+	set  *model.CommandSet
+	prof *profile.Profile
+}
+
+// Answers to a FileImport conflict.
+const (
+	importReplace = "replace" // 置き換える
+	importRename  = "rename"  // 別名で追加
+)
+
+// freeName is name, or name_2, name_3, … — the first that taken refuses.
+func freeName(name string, taken func(string) bool) string {
+	out := name
+	for i := 2; taken(out); i++ {
+		out = fmt.Sprintf("%s_%d", name, i)
+	}
+	return out
+}
+
+// importSetLocked (caller holds a.mu) puts set into the vault as choice says:
+// "" adds it only when no set has its name, importReplace replaces that
+// set's commands, importRename adds it under a free name.
+func (a *App) importSetLocked(set model.CommandSet, choice string) FileImport {
+	idx := -1
+	for i := range a.inv.CommandSets {
+		if a.inv.CommandSets[i].Name == set.Name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		a.inv.CommandSets = append(a.inv.CommandSets, set)
+		return FileImport{Name: set.Name, Imported: true}
+	}
+	cur := &a.inv.CommandSets[idx]
+	taken := func(n string) bool {
+		for i := range a.inv.CommandSets {
+			if a.inv.CommandSets[i].Name == n {
+				return true
+			}
+		}
+		return false
+	}
+	switch choice {
+	case importReplace:
+		cur.Commands, cur.PauseOff = set.Commands, set.PauseOff
+		return FileImport{Name: set.Name, Imported: true}
+	case importRename:
+		set.Name = freeName(set.Name, taken)
+		a.inv.CommandSets = append(a.inv.CommandSets, set)
+		return FileImport{Name: set.Name, Imported: true}
+	}
+	if cur.PauseOff == set.PauseOff && reflect.DeepEqual(normCommands(cur.Commands), normCommands(set.Commands)) {
+		return FileImport{Name: set.Name, Imported: true, Same: true}
+	}
+	return FileImport{Name: set.Name, Conflict: cur.Name, AltName: freeName(set.Name, taken)}
+}
+
+func normCommands(c []model.Command) []model.Command {
+	if len(c) == 0 {
+		return nil
+	}
+	return c
+}
+
+// importProfileLocked (caller holds a.mu) is importSetLocked for an OS
+// profile. The profile it would replace is the one of the same name, else
+// the one with the same key — but only if that one still is the file's
+// profile under another name: a profile keeps its key when renamed, so a key
+// alone can point at a different profile ("custom:X_copy" now called "Y"),
+// which is never replaced; the file's then comes in under a fresh key.
+// Replacing keeps the existing key, so the devices on it stay on it; a
+// deleted default comes back under its own key.
+func (a *App) importProfileLocked(p profile.Profile, choice string) (FileImport, *profile.Profile) {
+	target := -1
+	for i := range a.inv.CustomProfiles {
+		if strings.EqualFold(a.inv.CustomProfiles[i].Name, p.Name) {
+			target = i
+			break
+		}
+	}
+	keyTaken := false
+	for i := range a.inv.CustomProfiles {
+		q := a.inv.CustomProfiles[i]
+		if q.Key != p.Key {
+			continue
+		}
+		keyTaken = true
+		if target < 0 && profile.SameExceptName(q, p) {
+			target = i
+		}
+	}
+	nameTaken := func(n string) bool {
+		for i := range a.inv.CustomProfiles {
+			if strings.EqualFold(a.inv.CustomProfiles[i].Name, n) {
+				return true
+			}
+		}
+		return false
+	}
+	add := func(p profile.Profile) (FileImport, *profile.Profile) {
+		if keyTaken || p.Key == "" {
+			p.Key = a.freeProfileKeyLocked(p.Name)
+		}
+		a.inv.CustomProfiles = append(a.inv.CustomProfiles, p)
+		return FileImport{Name: p.Name, Imported: true}, &p
+	}
+	if target < 0 {
+		return add(p)
+	}
+	cur := &a.inv.CustomProfiles[target]
+	switch choice {
+	case importReplace:
+		p.Key = cur.Key
+		*cur = p
+		return FileImport{Name: p.Name, Imported: true}, &p
+	case importRename:
+		p.Name = freeName(p.Name, nameTaken)
+		keyTaken = true // the original's key is the original's
+		return add(p)
+	}
+	if cur.Name == p.Name && profile.SameExceptName(*cur, p) {
+		return FileImport{Name: cur.Name, Imported: true, Same: true}, nil
+	}
+	return FileImport{Name: p.Name, Conflict: cur.Name, AltName: freeName(p.Name, nameTaken)}, nil
+}
+
+// ResolveFileImport answers the conflict the last ImportCommandSetFile /
+// ImportOSProfileFile reported: importReplace, importRename, or anything
+// else to drop the file.
+func (a *App) ResolveFileImport(choice string) (FileImport, error) {
+	a.mu.Lock()
+	pend := a.pendingImport
+	a.pendingImport = nil
+	if a.inv == nil {
+		a.mu.Unlock()
+		return FileImport{}, errVaultLocked
+	}
+	if pend == nil || (choice != importReplace && choice != importRename) {
+		a.mu.Unlock()
+		return FileImport{}, nil
+	}
+	var res FileImport
+	var changed *profile.Profile
+	if pend.set != nil {
+		res = a.importSetLocked(*pend.set, choice)
+	} else {
+		res, changed = a.importProfileLocked(*pend.prof, choice)
+	}
+	a.mu.Unlock()
+	if changed != nil {
+		a.profiles.Add(profile.Quote(*changed))
+	}
+	return res, a.persist()
+}
 
 // ImportCommandSetFile reads one "コマンド,リモート秒,シリアル秒" file into a
-// command set named after the file (an existing set of the same name is
-// replaced). Legacy Show_Command_Pattern .list files import as-is. This is
-// the single-file path; a whole bundle goes through PickImportFile.
-func (a *App) ImportCommandSetFile() (string, error) {
+// command set named after the file; a set of that name already there is
+// only replaced once the user says so (FileImport). Legacy
+// Show_Command_Pattern .list files import as-is. This is the single-file
+// path; a whole bundle goes through PickImportFile.
+func (a *App) ImportCommandSetFile() (FileImport, error) {
+	defer recoverBound(a.ctx, "ImportCommandSetFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("コマンドセットのファイルを読み込む", "Import a command set file"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "command-sets"),
@@ -2612,44 +2999,45 @@ func (a *App) ImportCommandSetFile() (string, error) {
 		},
 	})
 	if err != nil || path == "" {
-		return "", err
+		return FileImport{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return FileImport{}, err
 	}
 	set, err := bundle.ParseCommandSet(string(data))
 	if err != nil {
-		return "", err
+		return FileImport{}, err
 	}
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	set.Name = name
+	set.Name = strings.TrimSpace(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	if set.Name == "" {
+		set.Name = "imported"
+	}
 
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return FileImport{}, errVaultLocked
 	}
-	found := false
-	for i := range a.inv.CommandSets {
-		if a.inv.CommandSets[i].Name == name {
-			a.inv.CommandSets[i].Commands, a.inv.CommandSets[i].PauseOff = set.Commands, set.PauseOff
-			found = true
-			break
-		}
-	}
-	if !found {
-		a.inv.CommandSets = append(a.inv.CommandSets, set)
+	res := a.importSetLocked(set, "")
+	a.pendingImport = nil
+	if res.Conflict != "" {
+		a.pendingImport = &pendingImport{set: &set}
 	}
 	a.mu.Unlock()
-	return name, a.persist()
+	if !res.Imported || res.Same {
+		return res, nil
+	}
+	return res, a.persist()
 }
 
-// ImportOSProfileFile reads one exported profile JSON. A profile with the
-// same key (or, failing that, the same name) is replaced — so re-importing a
-// deleted default restores it under its original key and devices that
-// referenced it work again; otherwise the file is added as a new profile.
-func (a *App) ImportOSProfileFile() (string, error) {
+// ImportOSProfileFile reads one exported profile JSON (see
+// importProfileLocked): added when nothing is in the way, else the page asks
+// before anything is replaced (FileImport). Re-importing a deleted default
+// restores it under its original key, so devices that referenced it work
+// again.
+func (a *App) ImportOSProfileFile() (FileImport, error) {
+	defer recoverBound(a.ctx, "ImportOSProfileFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("OSタイププロファイルのファイルを読み込む", "Import an OS profile file"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "os-profiles"),
@@ -2659,48 +3047,33 @@ func (a *App) ImportOSProfileFile() (string, error) {
 		},
 	})
 	if err != nil || path == "" {
-		return "", err
+		return FileImport{}, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		return FileImport{}, err
 	}
 	p, err := bundle.ParseProfileJSON(data)
 	if err != nil {
-		return "", err
+		return FileImport{}, err
 	}
 
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return FileImport{}, errVaultLocked
 	}
-	found := false
-	for i := range a.inv.CustomProfiles {
-		if a.inv.CustomProfiles[i].Key == p.Key {
-			a.inv.CustomProfiles[i] = p
-			found = true
-			break
-		}
-	}
-	if !found {
-		// Same name under a different key: replace that profile but keep its
-		// key, so devices referencing it stay valid.
-		for i := range a.inv.CustomProfiles {
-			if strings.EqualFold(a.inv.CustomProfiles[i].Name, p.Name) {
-				p.Key = a.inv.CustomProfiles[i].Key
-				a.inv.CustomProfiles[i] = p
-				found = true
-				break
-			}
-		}
-	}
-	if !found {
-		a.inv.CustomProfiles = append(a.inv.CustomProfiles, p)
+	res, changed := a.importProfileLocked(p, "")
+	a.pendingImport = nil
+	if res.Conflict != "" {
+		a.pendingImport = &pendingImport{prof: &p}
 	}
 	a.mu.Unlock()
-	a.profiles.Add(profile.Quote(p))
-	return p.Name, a.persist()
+	if changed == nil {
+		return res, nil
+	}
+	a.profiles.Add(profile.Quote(*changed))
+	return res, a.persist()
 }
 
 // ---- 一式 (bundle) export / import ----
@@ -2750,6 +3123,7 @@ func (a *App) BundleExportTarget(group string) BundleExportInfo {
 // noBastionCreds leaves the jump hosts' logins out (each person's own key;
 // the receiver's 自分の踏み台認証 fills them in).
 func (a *App) ExportBundle(group string, noBastionCreds bool) (string, error) {
+	defer recoverBound(a.ctx, "ExportBundle")
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -2784,6 +3158,7 @@ type ImportPreview struct {
 // changed yet: the UI shows the counts, then calls ApplyImport with the same
 // path and options. Returns nil when the dialog is cancelled.
 func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportPreview, error) {
+	defer recoverBound(a.ctx, "PickImportFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("一式の目録（palaterm-bundle.json）または機器CSVを読み込む", "Import a bundle (palaterm-bundle.json) or a device CSV"),
 		DefaultDirectory: filepath.Join(exeDir(), "export", "bundles"),
@@ -2802,6 +3177,7 @@ func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportP
 // options (the group to put the devices in, overwriting shared sets and
 // profiles): the import screen shows the options next to what they do.
 func (a *App) PreviewImportFile(path, targetGroup string, overwriteShared bool) (*ImportPreview, error) {
+	defer recoverBound(a.ctx, "PreviewImportFile")
 	if path == "" {
 		return nil, fmt.Errorf("ファイルが選ばれていません")
 	}
@@ -2877,6 +3253,7 @@ type RunFailure struct {
 // Excel. The UI passes what it showed; the device details come from the
 // inventory, credentials left out.
 func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (string, error) {
+	defer recoverBound(a.ctx, "ExportRunFailures")
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()

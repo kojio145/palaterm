@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/model"
@@ -222,12 +223,32 @@ func (r *Runner) RunDevice(ctx context.Context, dev *model.Device, set *model.Co
 	return r.runDevice(ctx, dev, set, s, runDir, now, emit, Options{})
 }
 
-func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.CommandSet, s model.Settings, runDir string, now time.Time, emit EmitFunc, opts Options) DeviceResult {
+func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.CommandSet, s model.Settings, runDir string, now time.Time, emit EmitFunc, opts Options) (res DeviceResult) {
 	start := time.Now()
-	res := DeviceResult{Device: dev.Name}
+	res = DeviceResult{Device: dev.Name}
 	if opts.DryRun {
 		set = nil
 	}
+	final := emit
+	// live is the device's log; logDone once finishLog has closed it.
+	var live *liveLog
+	logDone := false
+	// A bug hit while driving this device fails this device, not the batch:
+	// unrecovered, a panic in one device's goroutine ends the whole program,
+	// terminal windows included. Its log is closed with what it had read.
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		res.Success = false
+		res.Error = fmt.Sprintf("%s: %v", internalErrMsg, p)
+		if live != nil && !logDone {
+			r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
+		}
+		res.Elapsed = time.Since(start)
+		safeEmit(final, Event{Device: dev.Name, Phase: PhaseError, Message: res.Error, LogPath: res.LogPath})
+	}()
 
 	cmdTimeout := time.Duration(s.CommandTimeout) * time.Second
 	if cmdTimeout <= 0 {
@@ -243,12 +264,20 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 
 	// The log is written as the output arrives, so ログ表示 shows a device
 	// still running and a batch cut short (quit, power cut, sleep) leaves
-	// what it had read. A file that cannot be claimed falls back to writing
-	// the transcript at the end (where the error is reported).
-	final := emit
-	var live *liveLog
+	// what it had read. A file that cannot be created stops the device here,
+	// before anything is sent to it: a run whose output is lost did not do
+	// its job, and a configuration command set would have changed the
+	// device with no record of what it said.
 	if !opts.DryRun {
-		live = r.startLog(dev, s, runDir, now, opts.logStage())
+		var lerr error
+		if live, lerr = r.startLog(dev, s, runDir, now, opts.logStage()); lerr != nil {
+			res.Error = fmt.Sprintf("%s（%v）", logUnwritableMsg, lerr)
+			res.Elapsed = time.Since(start)
+			if final != nil {
+				final(Event{Device: dev.Name, Phase: PhaseError, Message: res.Error})
+			}
+			return res
+		}
 	}
 	var tee func([]byte)
 	if live != nil {
@@ -267,11 +296,12 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		res.Error = err.Error() + lastShown(ctx, exp, dev, err.Error())
 		ph := finishPhase(ctx, &res)
 		if exp != nil {
-			res.Transcript = exp.Transcript()
+			res.Transcript = resultTranscript(exp, live)
 		}
 		if opts.DryRun {
 			res.Output = dryRunOutput(exp, dev)
 		} else {
+			logDone = true
 			r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
 		}
 		res.Elapsed = time.Since(start)
@@ -282,6 +312,12 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	}
 
 	vars := profile.Vars{User: dev.Username, Password: dev.Password, Enable: dev.EnablePassword}
+
+	// The live log keeps every byte; memory keeps only the tail. Kept whole,
+	// a batch of long outputs stayed in memory until the next run.
+	if live != nil {
+		exp.KeepTail(transcriptKeep)
+	}
 
 	// Run the command set, reporting per-command progress (Done/Total feeds
 	// the UI's per-device progress bar and overall ETA).
@@ -301,7 +337,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 			if emit != nil {
 				emit(Event{Device: dev.Name, Phase: PhaseRunning, Message: cmd.Text, Done: i, Total: total})
 			}
-			before := len(exp.Transcript())
+			before := exp.Mark()
 			if err := r.sendCommand(ctx, exp, prof, profile.Expand(cmd.Text, vars), cmd.Wait, cmdTimeout); err != nil {
 				res.Error = fmt.Sprintf("command %q: %v", cmd.Text, err)
 				// A timeout says nothing by itself; what the device was showing
@@ -310,7 +346,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 					if cmd.Wait != "" {
 						res.Error += fmt.Sprintf("（待つ文字列 %q が出ませんでした）", cmd.Wait)
 					}
-					if last := lastLine(exp.Transcript()[before:]); last != "" {
+					if last := lastLine(exp.Since(before)); last != "" {
 						res.Error += fmt.Sprintf("（機器の最後の表示: %q。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）", RedactSecrets(last, dev))
 					}
 				}
@@ -320,7 +356,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 			// input", "command not found"): the run still counts as done,
 			// with a warning naming the command, so a log missing what it was
 			// supposed to show is noticed now and not at the next outage.
-			if line := rejectedLine(exp.Transcript()[before:]); line != "" {
+			if line := rejectedLine(exp.Since(before)); line != "" {
 				// The device's line may repeat a typed secret ("bash: Secr3t:
 				// command not found" after an unanswered su), and warnings go
 				// to the run table and the history file: passwords are always
@@ -347,9 +383,10 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 	// Clean logout (best effort), then unwind each bastion layer.
 	r.disconnect(ctx, exp, prof, vars, typedHops(dev))
 
-	res.Transcript = exp.Transcript()
+	res.Transcript = resultTranscript(exp, live)
 	res.Success = res.Error == ""
 	if !opts.DryRun {
+		logDone = true
 		r.finishLog(&res, live, dev, s, runDir, now, opts.logStage())
 		res.Success = res.Error == ""
 	}
@@ -475,6 +512,9 @@ func waitSeen(ctx context.Context, exp *expecter, pattern string, timeout time.D
 		if exp.Seen(pattern) {
 			return true
 		}
+		if exp.Closed() {
+			return false
+		}
 		select {
 		case <-ctx.Done():
 			return false
@@ -583,8 +623,11 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 		wakeSerial(ctx, exp, prof)
 	}
 
+	// hop is the jump to the device, typed on the last jump host's shell:
+	// the login below must not end on that shell (see landing).
+	var hop *landing
 	if len(bastions) > 0 && !dev.Tunneled() {
-		if err := r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
+		if hop, err = r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
 			return exp, prof, "", err
 		}
 	}
@@ -597,6 +640,11 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
 	skipCreds := (len(bastions) == 0 || dev.Tunneled()) && dev.Conn == model.ConnSSH
 	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
+		// A jump that failed late (a timed-out connection) is the reason,
+		// whatever step the login happened to be on.
+		if jerr := hop.failed(exp); jerr != nil {
+			return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
+		}
 		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
 			return exp, prof, "", errors.New(hint)
 		}
@@ -621,6 +669,9 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 			// which of the login steps happens to be the one that times out
 			// depends on the profile, so a diagnosis attached to only one of
 			// them disappears the moment a profile changes shape.
+			if jerr := hop.failed(exp); jerr != nil {
+				return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
+			}
 			if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
 				return exp, prof, "", errors.New(hint)
 			}
@@ -639,18 +690,23 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 			return exp, prof, "", fmt.Errorf("login: waiting for prompt: %w", err)
 		}
 	}
+	// Logged in — but into what? A prompt identical to the jump host's means
+	// the jump fell back to it, and the command set must not run there.
+	if jerr := hop.check(exp); jerr != nil {
+		return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
+	}
 
 	// Disable paging (non-fatal: some devices have none). A refusal used
 	// to flash by as a login-phase message and vanish under the first
 	// command's; it comes back as a warning on the result instead.
 	for _, st := range prof.Pager {
-		before := len(exp.Transcript())
+		before := exp.Mark()
 		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), "", cmdTimeout); err != nil {
 			r.emit(emit, dev.Name, PhaseLogin, "pager disable skipped: "+err.Error())
 			warn = fmt.Sprintf("ページャ解除コマンド「%s」が通りませんでした（%v）。出力の途中停止は --More-- への応答で続けます", st.Send, err)
 			break
 		}
-		if line := rejectedLine(exp.Transcript()[before:]); line != "" {
+		if line := rejectedLine(exp.Since(before)); line != "" {
 			warn = fmt.Sprintf("ページャ解除コマンド「%s」を機器が受け付けませんでした: %s", st.Send, RedactSecrets(line, dev))
 			break
 		}
@@ -860,6 +916,12 @@ func dialCtx(ctx context.Context, dial func() (session.Session, error)) (session
 	}
 	ch := make(chan dres, 1)
 	go func() {
+		// A panic inside a dial is that device's error, not the program's end.
+		defer func() {
+			if p := recover(); p != nil {
+				ch <- dres{nil, fmt.Errorf("%s: %v", internalErrMsg, p)}
+			}
+		}()
 		s, e := dial()
 		ch <- dres{s, e}
 	}()
@@ -1163,6 +1225,10 @@ func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof prof
 		if err := exp.Expect(ctx, more, 150*time.Millisecond); err == nil && !exp.Seen(tail) {
 			_ = exp.SendRaw(" ")
 			continue
+		} else if errors.Is(err, ErrClosed) && !exp.Seen(tail) {
+			// The far end hung up: nothing more is coming. Waiting out the
+			// timeout here spun the CPU and ended with advice to lengthen it.
+			return ErrClosed
 		}
 		// Not when the device is asking something ("…[]?", "Password:"): an
 		// Enter there answers it — and aborts a copy waiting for an address.
@@ -1426,13 +1492,13 @@ func (l *liveLog) tag(emit EmitFunc) EmitFunc {
 	}
 }
 
-// startLog claims the device's log file and starts its stream (nil when the
-// file cannot be created: saveLog then tries again at the end and reports).
+// startLog claims the device's log file and starts its stream. An error
+// (the file cannot be created) stops the device before it is connected to.
 // Masking follows the setting, as saveLog's RedactSecrets does.
-func (r *Runner) startLog(dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) *liveLog {
+func (r *Runner) startLog(dev *model.Device, s model.Settings, runDir string, now time.Time, stage model.Stage) (*liveLog, error) {
 	path, err := logstore.Claim(runDir, s.LogNameTemplate, logFields(dev, s, stage), now)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var secrets []string
 	if s.MaskLogSecrets {
@@ -1440,7 +1506,64 @@ func (r *Runner) startLog(dev *model.Device, s model.Settings, runDir string, no
 	}
 	l := &liveLog{path: path, stream: logstore.NewStream(path, secrets)}
 	r.live.Store(path, l.stream)
-	return l
+	return l, nil
+}
+
+// safeEmit sends a last event from a recovered panic: an emit that panics
+// itself is given up on rather than allowed to end the program.
+func safeEmit(emit EmitFunc, ev Event) {
+	if emit == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	emit(ev)
+}
+
+// logUnwritableMsg is a device stopped before connecting because its log
+// cannot be written (the UI translates it).
+const logUnwritableMsg = "ログを書き込めないため、機器には接続しませんでした。設定タブの「ログ保存フォルダ」が書き込める場所か（ネットワークドライブの切断・権限・空き容量）、「ログファイル名テンプレート」を確認してください"
+
+// internalErrMsg starts the error of a device stopped by a bug (a recovered
+// panic); the panic's own words follow it.
+const internalErrMsg = "内部エラーのため、この機器を中止しました"
+
+// transcriptKeep is how much of a device's output a batch keeps in memory
+// once its live log holds the whole of it (see expecter.KeepTail), and
+// resultKeep how much of that the result carries on: the logs are on disk,
+// and a large batch's results stay in memory until the next run.
+const (
+	transcriptKeep = 32 << 10
+	resultKeep     = 8 << 10
+)
+
+// resultTranscript is the transcript a result keeps: all of it without a
+// live log (saveLog writes it), otherwise only its last resultKeep bytes.
+func resultTranscript(exp *expecter, live *liveLog) string {
+	t := exp.Transcript()
+	if live == nil || len(t) <= resultKeep {
+		return t
+	}
+	cut := len(t) - resultKeep
+	for cut < len(t) && !utf8.RuneStart(t[cut]) {
+		cut++
+	}
+	return t[cut:]
+}
+
+// checkWritable makes sure dir exists and takes a new file, so a batch whose
+// log folder cannot be written stops before it connects to anything.
+func checkWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, ".palaterm-write-check-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	cerr := f.Close()
+	_ = os.Remove(name)
+	return cerr
 }
 
 // finishLog closes the device's live log (or, without one, writes the
@@ -1540,8 +1663,22 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 	if limit == 0 {
 		return nil, ""
 	}
-	sem := make(chan struct{}, limit)
 	results := make([]DeviceResult, len(targets))
+	// A log folder that cannot be written fails the batch here, before any
+	// device is connected to (see logUnwritableMsg): the folder is the same
+	// for every device, so is the answer.
+	if !opts.DryRun {
+		if err := checkWritable(runDir); err != nil {
+			_ = os.Remove(runDir) // the folder just claimed, if it is empty
+			msg := fmt.Sprintf("%s（%v）", logUnwritableMsg, err)
+			for i, d := range targets {
+				results[i] = DeviceResult{Device: d.Name, Error: msg}
+				r.emit(emit, d.Name, PhaseError, msg)
+			}
+			return results, ""
+		}
+	}
+	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
 	r.devMu.Lock()
 	r.devStop = map[string]bool{}
@@ -1558,6 +1695,15 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 		go func(idx int, d *model.Device) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			// runDevice recovers its own panics; this covers the rest of the
+			// device's turn, so no bug here ends the program.
+			defer func() {
+				if p := recover(); p != nil {
+					msg := fmt.Sprintf("%s: %v", internalErrMsg, p)
+					results[idx] = DeviceResult{Device: d.Name, Error: msg}
+					safeEmit(emit, Event{Device: d.Name, Phase: PhaseError, Message: msg})
+				}
+			}()
 			// A device whose turn comes after 中止 is reported as never run,
 			// not as an error: nothing was attempted against it.
 			if ctx.Err() != nil {

@@ -132,17 +132,17 @@ func TestStrictVerifyAlaxalaUnsavedPromptAndWrap(t *testing.T) {
 		"lab-sw01# ",
 		"lab-sw01# configure terminal",
 		"lab-sw01(config)# ",
-		"lab-sw01(config)# flow detection mode layer2-2",
+		"lab-sw01(config)# flow detection mode layer3-2",
 		"lab-sw01(config)# ",
-		"lab-sw01(config)# ip qos-flow-list VOICE_ONLY",
+		"lab-sw01(config)# ip qos-flow-list LAB_FLOW_A",
 		"lab-sw01(config-ip-qos)# ",
-		"lab-sw01(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef",
+		"lab-sw01(config-ip-qos)#   1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp af41",
 		"!lab-sw01(config-ip-qos)# ",
 		"!lab-sw01(config-ip-qos)# !",
 		"!lab-sw01(config)# ",
-		"!lab-sw01(config)# interface vlan 121",
+		"!lab-sw01(config)# interface vlan 220",
 		"!lab-sw01(config-if)# ",
-		"!lab-sw01(config-if)#   ip qos-flow-group VOICE_ONLY in",
+		"!lab-sw01(config-if)#   ip qos-flow-group LAB_FLOW_A in",
 		"!lab-sw01(config-if)# ",
 		"!lab-sw01(config-if)# !",
 		"!lab-sw01(config)# ",
@@ -154,34 +154,34 @@ func TestStrictVerifyAlaxalaUnsavedPromptAndWrap(t *testing.T) {
 	cfg := func(stamp string, extra bool) string {
 		l := []string{
 			"lab-sw01# show running-config",
-			"#Last modified by ops at " + stamp + " 2026 with version 2.8",
+			"#Last modified by ops at " + stamp + " 2026 with version 9.9",
 			"!",
 			`hostname "lab-sw01"`,
 			"!",
-			"flow detection mode layer2-2",
+			"flow detection mode layer3-2",
 			"!",
-			"interface vlan 41",
+			"interface vlan 210",
 			"  ip address 192.0.2.32 255.255.255.0",
-			"  ip qos-flow-group MGMT_ONLY in",
+			"  ip qos-flow-group LAB_FLOW_B in",
 			"!",
 		}
 		if extra {
-			l = append(l, "interface vlan 121", "  ip qos-flow-group VOICE_ONLY in", "!")
+			l = append(l, "interface vlan 220", "  ip qos-flow-group LAB_FLOW_A in", "!")
 		}
-		l = append(l, "ip qos-flow-list MGMT_ONLY", "  1 qos ip any host 192.0.2.32 action replace-dscp cs6", "!")
+		l = append(l, "ip qos-flow-list LAB_FLOW_B", "  1 qos ip any host 192.0.2.32 action replace-dscp af21", "!")
 		if extra {
-			l = append(l, "ip qos-flow-list VOICE_ONLY", "  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp ef", "!")
+			l = append(l, "ip qos-flow-list LAB_FLOW_A", "  1 qos udp 192.0.2.0 255.255.255.0 any action replace-dscp af41", "!")
 		}
 		return strings.Join(append(l, "!lab-sw01# "), "\r\n")
 	}
-	before, after := cfg("Mon Jul 13 11:40:00", false), cfg("Mon Jul 13 18:07:29", true)
+	before, after := cfg("Sat Jan 10 09:00:00", false), cfg("Sat Jan 10 10:30:00", true)
 	got, r := statuses(t, work, before, after)
 	expect(t, got, map[string]string{
-		" > flow detection mode layer2-2": "already",
-		" > ip qos-flow-list VOICE_ONLY":  "reflected",
-		"ip qos-flow-list VOICE_ONLY > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp ef": "reflected/spacing",
-		" > interface vlan 121":                                "reflected",
-		"interface vlan 121 > ip qos-flow-group VOICE_ONLY in": "reflected",
+		" > flow detection mode layer3-2": "already",
+		" > ip qos-flow-list LAB_FLOW_A":  "reflected",
+		"ip qos-flow-list LAB_FLOW_A > 1 qos udp 192.0.2.0 255.255.255.0 any ac tion replace-dscp af41": "reflected/spacing",
+		" > interface vlan 220":                                "reflected",
+		"interface vlan 220 > ip qos-flow-group LAB_FLOW_A in": "reflected",
 	})
 	if r.Missing != 0 || r.UnexpectedCount != 0 {
 		t.Errorf("missing %d, unexpected %+v", r.Missing, r.Unexpected)

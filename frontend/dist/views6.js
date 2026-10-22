@@ -163,7 +163,9 @@ function liCopyOf(r) {
   const taken = new Set(liRules().map(x => (x.name || "").trim().toLowerCase()));
   let nm = r.name + "_copy";
   for (let i = 2; taken.has(nm.toLowerCase()); i++) nm = `${r.name}_copy${i}`;
-  c.id = ""; c.name = nm; c.lastUsed = "";
+  // The sample name goes too: it picks the rule for a file at 取り込む, and
+  // the original, first in the list, would always win over the copy.
+  c.id = ""; c.name = nm; c.lastUsed = ""; c.sampleName = "";
   return c;
 }
 
@@ -235,10 +237,18 @@ function liValueInput(key, val, id) {
   return f.kind === "secret" ? `<span class="li-pwbox">${inp}</span>` : inp;
 }
 
+// liDisp is a value as the screens name it (plain text): 「SSH」, an OS
+// type's or command set's name — not the key stored ("ssh", "cisco-ios").
+function liDisp(key, v) {
+  const kind = liField(key).kind;
+  return gridOptions(kind) ? gridOptLabel(kind, v) : v;
+}
+
 function liShowValue(key, v) {
   if (v === undefined || v === null || v === "") return `<span class="muted">${esc(t("（空）"))}</span>`;
   const f = liField(key);
-  if (f.kind === "secret") return `<span class="li-secret" data-secret="${esc(v)}">●●●●●●</span>`;
+  // Not selectable: a page selection copied would carry it shown by a click.
+  if (f.kind === "secret") return `<span class="li-secret" data-secret="${esc(v)}" style="user-select:none">●●●●●●</span>`;
   const opts = gridOptions(f.kind);
   return esc(opts ? gridOptLabel(f.kind, v) : v);
 }
@@ -457,7 +467,7 @@ function liResultsHTML() {
           return html;
         }).join("")}
       </tbody></table></div>
-      ${(test.missing || []).length ? `<div class="li-warn">${esc(t("見本に無い列: {c}", { c: test.missing.join("、") }))}</div>` : ""}
+      ${(test.missing || []).length ? `<div class="li-warn">${esc(t("見本に無い列: {c}", { c: test.missing.join(t("、")) }))}</div>` : ""}
     </div>`;
 }
 
@@ -710,6 +720,8 @@ function liWireEdit(root) {
 async function liSave(thenExport) {
   // One save at a time (a second Ctrl+Enter while the vault is written).
   if (LI.saving) return;
+  // A rule with no name is a field to fill in, not a failed save.
+  if (!String(LI.rule.name || "").trim()) { fieldError(document.querySelector("#li-name"), t("ルール名を入力してください")); return; }
   LI.saving = true;
   try {
     const id = await App().SaveImportRule(liRuleOut());
@@ -888,6 +900,17 @@ async function liPreview() {
   try {
     const p = await App().PreviewListImport({ path: imp.path, ruleId: imp.ruleId, group: imp.group, newGroup: imp.newGroup, decisions: imp.decisions, deleteIds: imp.deleteIds });
     if (seq !== liPrevSeq || LI.imp !== imp) return;
+    // The choices are by row number: on a list changed since (exported
+    // again, the rule edited), row 12 may be another device — a pick made
+    // for the old row would rename and readdress it. They are dropped and
+    // the preview worked out again without them.
+    const stale = imp.stamp && p.stamp !== imp.stamp;
+    imp.stamp = p.stamp;
+    if (stale && (Object.keys(imp.decisions).length || imp.deleteIds.length)) {
+      imp.decisions = {}; imp.deleteIds = [];
+      imp.notice = t("元の一覧（ファイルまたは変換ルール）が変わったため、行ごとの選択と削除の指定を取り消しました。選び直してください");
+      return liPreview();
+    }
     imp.preview = p; imp.error = "";
     // A device linked to a row since it was ticked is no longer missing:
     // its tick goes, or the count and the warning would speak of it.
@@ -979,8 +1002,8 @@ function liRenderImport(root) {
   const nUpd = writes.filter(r => r.link !== "new" && r.changes).length;
   const cellLine = (row, c) => {
     const ch = c.choice === "file";
-    const cur = c.secret ? (c.cur ? "●●●●●●" : t("（空）")) : (c.cur || t("（空）"));
-    const fil = c.secret ? (c.file ? "●●●●●●" : t("（空）")) : (c.file || t("（空）"));
+    const cur = c.secret ? (c.cur ? "●●●●●●" : t("（空）")) : (c.cur ? liDisp(c.key, c.cur) : t("（空）"));
+    const fil = c.secret ? (c.file ? "●●●●●●" : t("（空）")) : (c.file ? liDisp(c.key, c.file) : t("（空）"));
     return `<div class="li-cell"><span class="li-ck">${esc(liFieldLabel(c.key))}</span>
       <span class="li-cv">${c.secret ? esc(t("変更あり")) : `<span class="${ch ? "li-old" : "li-new"}"><span class="li-src">PalaTerm</span> ${esc(cur)}</span> <span class="li-src">/</span> <span class="${ch ? "li-new" : "li-old"}"><span class="li-src">${esc(t("ファイル"))}</span> ${esc(fil)}</span>`}</span>
       ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""}
@@ -991,8 +1014,8 @@ function liRenderImport(root) {
   };
   const summary = row => {
     const vals = (row.cells || []).filter(c => c.key !== "name" && c.key !== "host" && c.key !== "site" && c.file).slice(0, 5)
-      .map(c => esc(liFieldLabel(c.key)) + ": " + (c.secret ? "●●●" : esc(c.file)) + (c.filled ? `<span class="li-filled">${esc(t("既定"))}</span>` : "") + (c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""));
-    return vals.join("、");
+      .map(c => esc(liFieldLabel(c.key)) + ": " + (c.secret ? "●●●" : esc(liDisp(c.key, c.file))) + (c.filled ? `<span class="li-filled">${esc(t("既定"))}</span>` : "") + (c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""));
+    return vals.join(esc(t("、")));
   };
   root.innerHTML = `
     <div class="page-head">
@@ -1019,8 +1042,9 @@ function liRenderImport(root) {
       </div>
     </div>
     ${imp.error ? `<div class="li-err">${esc(imp.error)}</div>` : ""}
+    ${imp.notice ? `<div class="li-warn">${esc(imp.notice)}</div>` : ""}
     ${pv && (pv.warnings || []).length ? `<div class="li-warn">${pv.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
-    ${pv && (pv.missing || []).length ? `<div class="li-warn">${esc(t("ファイルに無い列: {c}（その項目は既定値で埋めます）", { c: pv.missing.join("、") }))}</div>` : ""}
+    ${pv && (pv.missing || []).length ? `<div class="li-warn">${esc(t("ファイルに無い列: {c}", { c: pv.missing.join(t("、")) }))}<br>${esc(t("その列から読む項目は、既存の機器では今の値をそのまま残します（空にはしません）。新しく追加する機器では既定値になり、既定値が無ければ空です。列名が変わっただけなら、変換ルールでその列を選び直してください"))}</div>` : ""}
     ${plan ? `<div class="panel li-planbox">
       <div class="li-h" style="padding:12px 14px 0"><b>${esc(t("プレビュー（{n} 行）", { n: rows.length }))}</b>
         <div class="chips">${Object.keys(LI_STATUS).filter(k => counts[k]).map(k => `<button class="li-pill ${LI_STATUS[k][0]}" data-filt="${k}" aria-pressed="${imp.filter[k] ? "false" : "true"}">${esc(t(LI_STATUS[k][1]))} ${counts[k]}</button>`).join("")}</div></div>
@@ -1028,7 +1052,9 @@ function liRenderImport(root) {
         <th style="width:180px">${esc(t("機器名"))}</th><th style="width:130px">${esc(t("IPアドレス"))}</th><th style="width:150px">${esc(t("拠点名"))}</th><th>${esc(t("内容・変更点"))}</th><th style="width:230px">${esc(t("どの機器に"))}</th></tr></thead><tbody>
         ${visible.length ? visible.map(row => {
           const [cls, lbl] = LI_STATUS[liRowStatus(row)] || ["", row.status];
-          const diff = (row.cells || []).filter(c => c.state !== "same" && c.state !== "new");
+          // "lost": the file has no column for it — kept, as the note above
+          // the preview says (one line per device would bury the rows).
+          const diff = (row.cells || []).filter(c => c.state !== "same" && c.state !== "new" && c.state !== "lost");
           const excluded = row.ruleSkip;
           return `<tr class="li-r-${row.status}">
             <td class="muted">${row.unit > 1 ? `${row.line}-${row.unit}` : row.line}</td><td><span class="li-pill ${cls}">${esc(t(lbl))}</span></td>
@@ -1079,12 +1105,14 @@ window.addEventListener("resize", () => {
 function liWireImport(root) {
   const imp = LI.imp;
   const q = s => root.querySelector(s);
-  const again = () => { imp.preview && (imp.busy = true); liPreview(); };
+  // A choice made since the list changed: the note about the dropped
+  // choices has been read.
+  const again = () => { imp.notice = ""; imp.preview && (imp.busy = true); liPreview(); };
   const leave = () => { LI.view = "list"; LI.imp = null; App().ForgetListFile(); renderListImport(); };
   q("#li-back").onclick = leave;
   if (q("#li-icancel")) q("#li-icancel").onclick = leave;
   q("#li-repick").onclick = () => liStartImport();
-  q("#li-irule").onchange = e => { imp.ruleId = e.target.value; imp.decisions = {}; again(); };
+  q("#li-irule").onchange = e => { imp.ruleId = e.target.value; imp.decisions = {}; imp.deleteIds = []; again(); };
   root.querySelectorAll("input[name=li-tgt]").forEach(rb => rb.onchange = () => {
     imp.newGroup = rb.value === "new";
     imp.group = imp.newGroup ? (q("#li-gnew").value || imp.path.split(/[\\/]/).pop().replace(/\.[^.]+$/, "")) : (q("#li-gold").value || "");
@@ -1127,6 +1155,7 @@ function liWireImport(root) {
     again();
   });
   root.querySelectorAll("[data-mdel]").forEach(cb => cb.onchange = () => {
+    imp.notice = "";
     imp.deleteIds = imp.deleteIds.filter(id => id !== cb.dataset.mdel);
     if (cb.checked) imp.deleteIds.push(cb.dataset.mdel);
     renderListImport();
@@ -1193,7 +1222,13 @@ function liPickDevice(devs) {
 // with passwords) is not kept meanwhile; it is read again when needed.
 // The page's copy of the sample (its sheet and values, passwords among them)
 // goes too, read again when the editor is shown again.
-function liLeftTab() { App().ForgetListFile().catch(() => {}); LI.test = null; }
+// A password shown by a click is kept in its data-secret: those go from the
+// hidden tab's page too.
+function liLeftTab() {
+  App().ForgetListFile().catch(() => {});
+  LI.test = null;
+  document.querySelectorAll("#tab-import .li-secret[data-secret]").forEach(s => { s.removeAttribute("data-secret"); s.textContent = "●●●●●●"; });
+}
 
 // liExclText words why a row is left out, in the page's language: the
 // condition it met (row.exclusion), or the message (no device name).

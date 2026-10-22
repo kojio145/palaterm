@@ -703,3 +703,10 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
 .li-from { font-size: 10px; color: var(--run); font-family: "Segoe UI", "Meiryo", sans-serif; }
 .li-guess { font-size: 10px; color: #38bdf8; border: 1px solid rgba(56,189,248,.5); border-radius: 4px; padding: 0 4px; margin-left: 4px; font-family: "Segoe UI", "Meiryo", sans-serif; }
 .li-cs-guess { color: #38bdf8; border-color: rgba(56,189,248,.5); }
+
+/* v1.9.10 G5: a field that keeps a form from being saved (fieldError), the
+   master password's length hint, and the lock screen's language choice. */
+.field input.field-bad, .field select.field-bad { border-color: var(--err); box-shadow: 0 0 0 1px var(--err) inset; }
+.field-err { color: var(--err); font-size: 12px; margin-top: 5px; text-align: left; }
+.lock-screen { position: relative; }
+.lock-lang { position: absolute; top: 14px; right: 16px; margin: 0; }

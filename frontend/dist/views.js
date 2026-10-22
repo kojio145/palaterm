@@ -658,7 +658,8 @@ function bulkEditDialog(ids) {
         <div class="field"><label><input type="checkbox" id="bk-pass-on" style="width:auto"> ${esc(t("機器のパスワード"))}</label><input id="bk-pass" type="password" autocomplete="new-password"></div>
         <div class="field"><label><input type="checkbox" id="bk-enable-on" style="width:auto"> ${esc(t("enable パスワード"))}</label><input id="bk-enable" type="password" autocomplete="new-password"></div>
         <div class="field"><label>${esc(t("踏み台の段"))}</label><select id="bk-hop">${[1, 2, 3, 4, 5].map(n => `<option value="${n}">${esc(t("{n}段目", { n }))}</option>`).join("")}</select>
-          <div id="bk-hop-note" class="muted" style="font-size:12px;margin-top:4px"></div></div>
+          <div id="bk-hop-note" class="muted" style="font-size:12px;margin-top:4px"></div>
+          <select id="bk-hophost" class="hidden" style="margin-top:4px"></select></div>
         <div class="field"><label><input type="checkbox" id="bk-buser-on" style="width:auto"> ${esc(t("踏み台のユーザー名"))}</label><input id="bk-buser" autocomplete="off"></div>
         <div class="field"><label><input type="checkbox" id="bk-bpass-on" style="width:auto"> ${esc(t("踏み台のパスワード"))}</label><input id="bk-bpass" type="password" autocomplete="new-password"></div>
       </div>
@@ -673,11 +674,36 @@ function bulkEditDialog(ids) {
   const $n = id => node.querySelector(id);
   // How many of the selected devices have the chosen hop: a jump-host
   // password set on 12 of 50 is a rotation that missed 38, said here first.
-  const hopNote = () => {
+  // The hop is a position, not a jump host: hop 1 may be one host on some
+  // devices and another on the rest. Then the hosts are listed, with a
+  // choice of which one the credentials are for.
+  const hopHosts = () => {
     const n = parseInt($n("#bk-hop").value, 10) || 1;
-    const has = (INV.devices || []).filter(d => ids.includes(d.id) && (d.bastions || []).length >= n && d.bastions[n - 1].host).length;
-    $n("#bk-hop-note").textContent = t("選択中 {m} / {n} 台にこの段の踏み台があります（ない機器は変わりません）", { m: has, n: ids.length });
-    $n("#bk-hop-note").style.color = has < ids.length ? "var(--warn)" : "";
+    const m = new Map();
+    (INV.devices || []).forEach(d => {
+      const b = ids.includes(d.id) && (d.bastions || [])[n - 1];
+      if (b && b.host) m.set(b.host, (m.get(b.host) || 0) + 1);
+    });
+    return m;
+  };
+  const hopNote = () => {
+    const hosts = hopHosts();
+    const has = [...hosts.values()].reduce((a, b) => a + b, 0);
+    let note = t("選択中 {m} / {n} 台にこの段の踏み台があります（ない機器は変わりません）", { m: has, n: ids.length });
+    const sel = $n("#bk-hophost");
+    if (hosts.size > 1) {
+      note += " " + t("⚠ この段の踏み台は {k} 種類あります: {list}", { k: hosts.size, list: [...hosts].map(([h, c]) => t("{h}（{n} 台）", { h, n: c })).join(t("、")) });
+      const keepSel = sel.value;
+      sel.innerHTML = `<option value="">${esc(t("どの踏み台にも同じ値を設定する"))}</option>` +
+        [...hosts].map(([h, c]) => `<option value="${esc(h)}">${esc(t("{h} の機器（{n} 台）にだけ設定する", { h, n: c }))}</option>`).join("");
+      if (hosts.has(keepSel)) sel.value = keepSel;
+      sel.classList.remove("hidden");
+    } else {
+      sel.innerHTML = "";
+      sel.classList.add("hidden");
+    }
+    $n("#bk-hop-note").textContent = note;
+    $n("#bk-hop-note").style.color = has < ids.length || hosts.size > 1 ? "var(--warn)" : "";
   };
   $n("#bk-hop").onchange = hopNote;
   hopNote();
@@ -714,14 +740,19 @@ function bulkEditDialog(ids) {
       patch.bastionHop = parseInt($n("#bk-hop").value, 10) || 1;
       if ($n("#bk-buser-on").checked) patch.bastionUsername = $n("#bk-buser").value;
       if ($n("#bk-bpass-on").checked) patch.bastionPassword = $n("#bk-bpass").value;
+      const hosts = hopHosts(), only = $n("#bk-hophost").value;
+      if (only) patch.bastionHost = only;
+      else if (hosts.size > 1 && !(await subConfirm(esc(t("{n}段目の踏み台は機器によって違います（{list}）。すべてに同じ値を設定しますか？", { n: patch.bastionHop, list: [...hosts.keys()].join(t("、")) })),
+        t("すべてに設定する"), null, "primary"))) return;
     }
     if (!Object.keys(patch).length) { toast(t("変更する項目を選んでください"), "err"); return; }
     try {
       const rep = await App().UpdateDevices(ids, patch) || {};
       closeModal(); await refreshInventory();
-      if (patch.bastionHop && (rep.hopApplied || rep.hopMissing)) {
+      if (patch.bastionHop && (rep.hopApplied || rep.hopMissing || rep.hopOther)) {
         const msg = t("{n} 台を変更しました。踏み台の認証情報は {m} 台に設定しました", { n: ids.length, m: rep.hopApplied || 0 })
-          + (rep.hopMissing ? t("（{k} 台にはその段の踏み台がなく、変わっていません）", { k: rep.hopMissing }) : "");
+          + (rep.hopMissing ? t("（{k} 台にはその段の踏み台がなく、変わっていません）", { k: rep.hopMissing }) : "")
+          + (rep.hopOther ? t("（{k} 台はその段が別の踏み台のため、変わっていません）", { k: rep.hopOther }) : "");
         toast(msg, rep.hopMissing ? "warn" : "ok");
       } else toast(t("{n} 台を変更しました", { n: ids.length }), "ok");
     } catch (e) { toast(t("変更できません") + ": " + terr(e), "err"); }
@@ -911,7 +942,7 @@ function importSummaryLines(pv) {
   if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
   if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
   if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
-  if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join("・"), n: s.missingColumnsReset }));
+  if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join(t("・")), n: s.missingColumnsReset }));
   if (s.missingProfiles.length) lines.push(t("⚠ 見つからないOSタイプ（機器は読み込まれますが汎用プロファイルで動きます）: {g}", { g: s.missingProfiles.join(", ") }));
   if ((s.duplicate || []).length) lines.push(t("⚠ 同じグループに同じ機器名の行が重複しているため、2 行目以降は読み込みません: {g}", { g: s.duplicate.join(", ") }));
   if ((s.jumpCommands || []).length) lines.push(t("⚠ 踏み台のジャンプコマンドが設定された行があります。この文字列は踏み台でそのまま実行されるので、内容を確認してください: {g}", { g: s.jumpCommands.join(" ／ ") }));
@@ -1319,8 +1350,8 @@ function editDevice(dev, preGroup, template) {
     const chain = collectBastions().filter(b => b.host && b.method);
     if (chain.length) out.bastions = chain.slice(0, 5);
     if (chain.length || out.useMyBastion) out.bastionMode = bmode.value;
-    if (!out.name) { toast(t("機器名は必須です"), "err"); return; }
-    if ((out.guiOn || (!out.cliOff && conn !== "serial")) && !out.host) { toast(t("IPアドレスは必須です"), "err"); return; }
+    if (!out.name) { fieldError(node.querySelector("#f-name"), t("機器名は必須です")); return; }
+    if ((out.guiOn || (!out.cliOff && conn !== "serial")) && !out.host) { fieldError(node.querySelector("#f-host"), t("IPアドレスは必須です")); return; }
     // The 必須 on a hop's user was only a mark: an SSH hop without one fails
     // at the login, so it is checked here (a Telnet hop may ask for none).
     const noUser = chain.findIndex(b => b.method === "ssh" && !b.username.trim());

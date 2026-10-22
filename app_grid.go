@@ -9,7 +9,6 @@ import (
 	"github.com/kojio145/palaterm/internal/csvio"
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/schedule"
-	"github.com/kojio145/palaterm/internal/vault"
 )
 
 // The device table editor (機器一覧 → 表で編集): the devices of one scope as
@@ -226,7 +225,11 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 		a.mu.Unlock()
 		return rep, nil
 	}
-	defer a.mu.Unlock()
+	var stopped []SchedLogEntry
+	defer func() {
+		a.mu.Unlock()
+		a.logStopped(stopped) // only once the save went through (nil otherwise)
+	}()
 	// Kept to put back if the vault cannot be written: the window still
 	// shows the table as unsaved, and memory must agree with it. The write
 	// happens under the same lock, so nothing else changes in between and
@@ -240,6 +243,10 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 			prevPins[k] = v
 		}
 	}
+	// Deleted or moved to another group: a schedule naming the device would
+	// run on whatever takes its name (stopped against the names as they
+	// were, before the renames are followed).
+	stop := stopLeaving(a.inv, a.inv.Devices, next)
 	for group, m := range renames {
 		renameSchedDevices(a.inv, group, m)
 	}
@@ -251,10 +258,11 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	for _, k := range rep.dropPins {
 		delete(a.inv.KnownGUICerts, k)
 	}
-	if err := vault.Save(a.vaultPath, a.password, a.inv); err != nil {
+	if err := a.saveVaultLocked(a.password); err != nil {
 		a.inv.Devices, a.inv.DeviceGroups, a.inv.Schedules, a.inv.KnownGUICerts = prevDevices, prevGroups, prevSched, prevPins
 		return nil, err
 	}
+	stopped = stop
 	return rep, nil
 }
 

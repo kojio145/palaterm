@@ -434,7 +434,7 @@ function gridStatus() {
   if (G.busy) parts.push(`<b style="color:var(--accent)">${esc(t("保存中…"))}</b>`);
   if (gridChangeCount()) parts.push(esc(G.savedAt ? t("下書きを自動保存 {t}", { t: G.savedAt.toTimeString().slice(0, 8) }) : t("下書きは自動保存されます")));
   else parts.push(esc(t("未保存の変更はありません")));
-  el.innerHTML = parts.join(" ・ ");
+  el.innerHTML = parts.join(t(" ・ "));
   const fix = document.getElementById("g-sortfix");
   if (fix) fix.onclick = e => { e.preventDefault(); gridSortFix(); };
   const vr = document.getElementById("g-viewreset");
@@ -1223,7 +1223,7 @@ function gridApplyReport(rep) {
   G.errors = {};
   for (const [uid, list] of Object.entries(rep.errors || {})) {
     const m = {};
-    list.forEach(e => { m[e.col] = m[e.col] ? m[e.col] + " ／ " + terr(e.msg) : terr(e.msg); });
+    list.forEach(e => { m[e.col] = m[e.col] ? m[e.col] + t(" ／ ") + terr(e.msg) : terr(e.msg); });
     G.errors[uid] = m;
   }
   G.conflicts = {};
@@ -1268,7 +1268,7 @@ async function gridSaveRun() {
     const sample = Object.entries(G.errors).slice(0, 5).map(([uid, m]) => {
       const row = G.rows.find(r => r.uid === uid);
       const name = (row && row.cells.name) || t("（名前なし）");
-      return `<li><b>${esc(name)}</b>: ${esc(Object.values(m).join(" ／ "))}</li>`;
+      return `<li><b>${esc(name)}</b>: ${esc(Object.values(m).join(t(" ／ ")))}</li>`;
     }).join("");
     const c = await uiChoice({
       title: t("エラーのある行があります"),
@@ -1283,7 +1283,7 @@ async function gridSaveRun() {
     if (rep.added) parts.push(t("追加 {n} 台", { n: rep.added }));
     if (rep.changed) parts.push(t("変更 {n} 台", { n: rep.changed }));
     if (rep.deleted) parts.push(t("削除 {n} 台", { n: rep.deleted }));
-    if (!(await uiConfirm({ title: t("表の変更を保存"), message: esc(t("{list} を保存しますか？", { list: parts.join("・") })), okLabel: t("保存する"), danger: !!rep.deleted }))) return;
+    if (!(await uiConfirm({ title: t("表の変更を保存"), message: esc(t("{list} を保存しますか？", { list: parts.join(t("・")) })), okLabel: t("保存する"), danger: !!rep.deleted }))) return;
   }
   rep = await App().ApplyGrid({ scope: G.scope, rows: gridPayloadRows(), deleted: G.deleted, mode, overwrite: over });
   await gridAfterSave(rep);

@@ -70,7 +70,7 @@ func alaxalaConn(c net.Conn, record func(string)) {
 					// The real switch follows the first "#" with an access log
 					// line of its own, so the prompt is not the last thing on
 					// screen (seen on an AX2530S in the field, 2026-10-10).
-					io.WriteString(c, "\r\nAX2530S# \r\n2026/10/10 21:54:20 01S E3 ACCESS 00030001 0209:000000000000 Local authentication succeeded.\r\n")
+					io.WriteString(c, "\r\nAX2530S# \r\n2026/01/10 09:00:00 01S E3 ACCESS 00000001 0000:000000000000 Local authentication succeeded.\r\n")
 				} else if cmd == "exit" || cmd == "logout" {
 					return
 				} else {

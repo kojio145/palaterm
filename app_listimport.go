@@ -126,33 +126,6 @@ func (a *App) uniqueRuleName(name string) string {
 	return n
 }
 
-// CopyImportRule duplicates a rule and returns the copy's ID.
-func (a *App) CopyImportRule(id string) (string, error) {
-	a.mu.Lock()
-	if a.inv == nil {
-		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
-	}
-	i := a.ruleIndex(id)
-	if i < 0 {
-		a.mu.Unlock()
-		return "", fmt.Errorf("ルールが見つかりません")
-	}
-	src := a.inv.ImportRules[i]
-	c := src
-	c.Fields = append([]model.ImportField(nil), src.Fields...)
-	for j := range c.Fields {
-		c.Fields[j].Steps = append([]model.ImportStep(nil), src.Fields[j].Steps...)
-	}
-	c.Exclude = append([]model.ImportCond(nil), src.Exclude...)
-	c.ID = model.NewDeviceID()
-	c.Name = a.uniqueRuleName(a.word(src.Name+" のコピー", src.Name+" copy"))
-	c.LastUsed = ""
-	a.inv.ImportRules = append(a.inv.ImportRules[:i+1], append([]model.ImportRule{c}, a.inv.ImportRules[i+1:]...)...)
-	a.mu.Unlock()
-	return c.ID, a.persist()
-}
-
 // ExportImportRule writes a rule to export\import-rules\<名前>.json (the
 // defaults of password fields left out) and returns the file.
 func (a *App) ExportImportRule(id string) (string, error) {
@@ -187,6 +160,7 @@ func (a *App) ExportImportRule(id string) (string, error) {
 // picks it) and adds it — renamed "(2)" when the name is taken. Returns the
 // new rule's ID ("" when the dialog is cancelled).
 func (a *App) ImportImportRuleFile() (string, error) {
+	defer recoverBound(a.ctx, "ImportImportRuleFile")
 	_ = os.MkdirAll(importRulesDir(), 0o700)
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("変換ルールを読み込む", "Load an import rule"),
@@ -223,6 +197,7 @@ func (a *App) ImportImportRuleFile() (string, error) {
 
 // PickListFile asks for a device list to import or to try a rule on.
 func (a *App) PickListFile() (string, error) {
+	defer recoverBound(a.ctx, "PickListFile")
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: a.word("機器一覧のファイルを選ぶ", "Choose a device list file"),
 		Filters: []runtime.FileFilter{
@@ -244,16 +219,23 @@ var bookCache struct {
 	rule  string
 	table *listimport.Table
 	conv  *listimport.Converted
+	// gen counts the forgets: a read that began before one is not kept
+	// (the screen was left, or the vault locked, while it read).
+	gen uint64
 }
 
 // forgetBook drops the file kept: at a lock, and when the import screen is
 // left — a list read for an import often holds every password.
 func forgetBook() {
 	bookCache.Lock()
+	bookCache.gen++
 	bookCache.path, bookCache.stamp, bookCache.book = "", "", nil
 	bookCache.rule, bookCache.table, bookCache.conv = "", nil, nil
 	bookCache.Unlock()
 }
+
+// listReadHook runs between reading a list and keeping it (tests only).
+var listReadHook func()
 
 // ForgetListFile is forgetBook for the page (the import screen was left).
 func (a *App) ForgetListFile() { forgetBook() }
@@ -290,6 +272,7 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 		bookCache.Unlock()
 		return nil, "", nil, nil, fmt.Errorf("vault is locked")
 	}
+	gen := bookCache.gen
 	var b *sheet.Book
 	if bookCache.book != nil && bookCache.path == path && bookCache.stamp == stamp {
 		b = bookCache.book
@@ -323,11 +306,18 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 		}
 		conv = listimport.Convert(t, r, env)
 	}
+	if listReadHook != nil {
+		listReadHook()
+	}
 
 	bookCache.Lock()
 	defer bookCache.Unlock()
 	if a.locked() {
 		return nil, "", nil, nil, fmt.Errorf("vault is locked")
+	}
+	if bookCache.gen != gen {
+		// Forgotten while reading (the screen left): answered, not kept.
+		return b, stamp, t, conv, nil
 	}
 	if fresh || bookCache.path != path || bookCache.stamp != stamp {
 		bookCache.path, bookCache.stamp, bookCache.book = path, stamp, b
@@ -384,6 +374,7 @@ type RuleTest struct {
 
 // TestImportRule tries a rule (as edited, unsaved) on a sample file.
 func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error) {
+	defer recoverBound(a.ctx, "TestImportRule")
 	b, _, _, _, err := a.readList(path, nil, nil, "")
 	if err != nil {
 		return nil, err
@@ -394,32 +385,24 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 	}
 	sh, err := listimport.PickSheet(b, &r)
 	if err != nil {
-		out.Error = err.Error()
+		out.Error = err.Error() // no grid: nothing of the file shows
 		return out, nil
 	}
 	out.Sheet = sh.Name
 	out.Grid, out.Cols = sampleGrid(listimport.FilledRows(sh, &r), r.HeaderRow)
 	t, err := listimport.ReadTable(sh, &r)
 	if err != nil {
+		// The sample still shows: its password cells masked first.
+		listimport.MaskSample(out.Grid, nil, &r)
 		out.Error = err.Error()
 		return out, nil
 	}
 	out.Headers = t.Headers
+	out.Warnings = append(out.Warnings, t.Warnings...)
 	// The sample's password cells show masked, as everywhere else: under the
-	// header row, the columns a password field reads.
-	if sec := listimport.SecretColumns(t, &r); len(sec) > 0 {
-		dr := r.DataRow
-		if dr == 0 {
-			dr = r.HeaderRow + 1
-		}
-		for i := max(dr-1, 0); i < len(out.Grid); i++ {
-			for c := range sec {
-				if c-1 < len(out.Grid[i]) && out.Grid[i][c-1] != "" {
-					out.Grid[i][c-1] = "●●●●●●"
-				}
-			}
-		}
-	}
+	// header row, the columns a password field reads (and where the header
+	// texts it reads stand in the sample, under them).
+	listimport.MaskSample(out.Grid, t, &r)
 	if _, ok := hasName(&r); !ok {
 		return out, nil // nothing mapped yet: the headers are what the editor needs
 	}
@@ -482,6 +465,7 @@ func sampleGrid(rows [][]string, headerRow int) ([][]string, int) {
 // TraceImportSteps runs steps over a sample value, keeping each step's
 // result (the step editor shows them as the user types).
 func (a *App) TraceImportSteps(v string, steps []model.ImportStep) []string {
+	defer recoverBound(a.ctx, "TraceImportSteps")
 	env, _ := a.importEnv(listimport.HasGuess(steps))
 	return listimport.TraceSteps(v, steps, env)
 }
@@ -590,7 +574,7 @@ func (a *App) PreviewListImport(req ListImportReq) (*ListPreview, error) {
 		}
 	}
 	return &ListPreview{File: filepath.Base(req.Path), Format: b.Format, Sheet: t.Sheet, Rule: r.Name,
-		Warnings: append([]string{}, b.Warnings...), Missing: conv.Missing, Plan: p, Stamp: stamp}, nil
+		Warnings: append(append([]string{}, b.Warnings...), t.Warnings...), Missing: conv.Missing, Plan: p, Stamp: stamp}, nil
 }
 
 // ApplyListImport imports the file as previewed with the user's choices.
@@ -617,7 +601,12 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 	if req.NewGroup {
 		a.ensureGroupExists(req.Group)
 	}
+	before := append([]model.Device(nil), a.inv.Devices...) // Apply changes them in place
 	res := listimport.Apply(a.inv, p, req.Group, req.DeleteIDs)
+	// A device deleted by the import (or moved out of its group): the
+	// schedules naming it stop, against the names as they were — before
+	// the renames below are followed.
+	stopped := stopLeaving(a.inv, before, a.inv.Devices)
 	// A device renamed by the import stays in the group's schedules.
 	if len(res.Renames) > 0 {
 		renameSchedDevices(a.inv, req.Group, res.Renames)
@@ -627,6 +616,7 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 		a.inv.ImportRules[i].SampleName = filepath.Base(req.Path)
 	}
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	if err := a.persist(); err != nil {
 		return nil, err
 	}
@@ -637,6 +627,7 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 // and the usual fields' columns by their header names (the editor fills
 // them in marked 仮 for the user to check).
 func (a *App) SuggestImportRule(path string, r model.ImportRule) (*listimport.Suggestion, error) {
+	defer recoverBound(a.ctx, "SuggestImportRule")
 	b, _, _, _, err := a.readList(path, nil, nil, "")
 	if err != nil {
 		return nil, err

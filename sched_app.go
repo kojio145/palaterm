@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -74,6 +75,9 @@ type SchedLogEntry struct {
 	// Logs are this round's log files, one per device (the 実行記録 opens
 	// each with ログ表示; the folder holds every round's).
 	Logs []SchedLogFile `json:"logs,omitempty"`
+	// Missing: the devices the schedule names that were not found in its
+	// group at this round (left out; also said in Message).
+	Missing []string `json:"missing,omitempty"`
 }
 
 // SchedLogFile is one device's log of a 予約 round.
@@ -107,12 +111,141 @@ type schedState struct {
 	// round was still waiting or running — written as one line when that
 	// round ends, not one line a second.
 	skips map[string]schedule.Span
+	// statePath keeps checked across a restart (schedule-checked.json; ""
+	// = not kept, as in tests). saved is what the file held at startup,
+	// taken by each schedule at its first look; savedOn is how many
+	// schedules were enabled when it was last written (the lock screen
+	// says they wait for the unlock). stateDirty: written at the next tick.
+	statePath   string
+	stateLoaded bool
+	saved       map[string]time.Time
+	savedOn     int
+	stateDirty  bool
+	// noted: per schedule ID and kind, when a problem was last told on
+	// screen and in the tray (a 10-second repeat failing every round would
+	// otherwise pop up every 10 seconds).
+	noted map[string]time.Time
+}
+
+// schedNoteQuiet is how long the same problem of the same schedule is not
+// told again.
+const schedNoteQuiet = 10 * time.Minute
+
+// schedCheckedFile is data/schedule-checked.json: per schedule ID, up to
+// when its firings were handled — so the firings that came due while
+// PalaTerm was not running, or was running but waited for the vault to be
+// unlocked after a restart, are recorded as missed at the unlock. IDs and
+// times only, nothing secret (the file sits outside the vault).
+type schedCheckedFile struct {
+	Checked map[string]time.Time `json:"checked"`
+	Enabled int                  `json:"enabled"`
+}
+
+func schedCheckedPath() string { return filepath.Join(exeDir(), "data", "schedule-checked.json") }
+
+// loadStateLocked reads the file once (the caller holds s.mu).
+func (s *schedState) loadStateLocked() {
+	if s.stateLoaded || s.statePath == "" {
+		return
+	}
+	s.stateLoaded = true
+	var f schedCheckedFile
+	if b, err := os.ReadFile(s.statePath); err == nil && json.Unmarshal(b, &f) == nil {
+		s.saved = map[string]time.Time{}
+		for id, at := range f.Checked {
+			s.saved[id] = at.Round(0)
+		}
+		s.savedOn = f.Enabled
+	}
+}
+
+// writeSchedState writes the file (outside s.mu).
+func writeSchedState(path string, f schedCheckedFile) {
+	b, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, b, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
 }
 
 func schedLogPath() string { return filepath.Join(exeDir(), "data", "schedule-log.json") }
 
 func (a *App) schedLog(e SchedLogEntry) {
 	e.At = time.Now().Format(time.RFC3339)
+	a.writeSchedLog(e)
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "sched:changed", nil)
+	}
+	a.schedNote(e)
+}
+
+// schedProblem: a line of the 実行記録 that is not a run (missed, skipped,
+// refused, error, stopped) — the ones a user has to be told, since nothing
+// else on screen or in the tray says them.
+func schedProblem(kind string) bool {
+	switch kind {
+	case "missed", "skipped", "refused", "error", "stopped":
+		return true
+	}
+	return false
+}
+
+// schedNoteTitle is the tray balloon's title for a problem.
+func schedNoteTitle(kind string) string {
+	switch kind {
+	case "missed":
+		return winWord("予約を実行できませんでした（見逃し）", "A scheduled run was missed")
+	case "skipped":
+		return winWord("予約の回をスキップしました", "A scheduled run was skipped")
+	case "refused":
+		return winWord("予約を実行しませんでした（設定を変えるコマンド）", "A scheduled run was refused (commands that change the device)")
+	case "stopped":
+		return winWord("予約を停止しました", "A schedule was stopped")
+	}
+	return winWord("予約を実行できませんでした", "A scheduled run could not start")
+}
+
+// schedNote tells a problem line on screen (sched:problem: the page shows a
+// toast) and, while the window is in the tray, in a balloon. The same
+// problem of the same schedule is told once per schedNoteQuiet; a stop
+// always. With the vault locked the page gets no names (the lock screen is
+// showing). It reports whether it told.
+func (a *App) schedNote(e SchedLogEntry) bool {
+	if !schedProblem(e.Kind) {
+		return false
+	}
+	s := &a.sched
+	key := e.ScheduleID + "\x00" + e.Kind
+	now := time.Now()
+	s.mu.Lock()
+	if last, ok := s.noted[key]; ok && e.Kind != "stopped" && now.Sub(last) < schedNoteQuiet {
+		s.mu.Unlock()
+		return false
+	}
+	if s.noted == nil {
+		s.noted = map[string]time.Time{}
+	}
+	s.noted[key] = now
+	s.mu.Unlock()
+	if a.ctx != nil {
+		ev := e
+		if a.locked() {
+			ev.Schedule, ev.Message = "", ""
+		}
+		runtime.EventsEmit(a.ctx, "sched:problem", ev)
+	}
+	if a.windowHidden() {
+		trayBalloon(schedNoteTitle(e.Kind), winWord(fmt.Sprintf("「%s」%s", e.Schedule, e.Message),
+			fmt.Sprintf("\"%s\" — see the schedule log (予約の実行記録)", e.Schedule)))
+	}
+	return true
+}
+
+func (a *App) writeSchedLog(e SchedLogEntry) {
 	a.sched.logMu.Lock()
 	defer a.sched.logMu.Unlock()
 	var list []SchedLogEntry
@@ -130,9 +263,6 @@ func (a *App) schedLog(e SchedLogEntry) {
 	tmp := schedLogPath() + ".tmp"
 	if os.WriteFile(tmp, b, 0o600) == nil {
 		_ = os.Rename(tmp, schedLogPath())
-	}
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "sched:changed", nil)
 	}
 }
 
@@ -237,6 +367,59 @@ func stopSchedules(inv *model.Inventory, group string, names map[string]bool, wh
 	return out
 }
 
+// stopLeaving stops the schedules naming a device that is in before but not
+// in after under the same group — deleted, or moved to another group (a
+// rename within its group is followed, not stopped). Called with the
+// schedules' names as they were before the change (before following any
+// rename), under a.mu; the caller logs the lines after releasing it.
+func stopLeaving(inv *model.Inventory, before, after []model.Device) []SchedLogEntry {
+	now := map[string]string{} // ID → group after
+	for _, d := range after {
+		now[d.ID] = d.Group
+	}
+	type leave struct{ deleted, moved map[string]bool }
+	byGroup := map[string]*leave{}
+	var groups []string
+	for _, d := range before {
+		g, ok := now[d.ID]
+		if ok && g == d.Group {
+			continue
+		}
+		l := byGroup[d.Group]
+		if l == nil {
+			l = &leave{deleted: map[string]bool{}, moved: map[string]bool{}}
+			byGroup[d.Group] = l
+			groups = append(groups, d.Group)
+		}
+		if ok {
+			l.moved[d.Name] = true
+		} else {
+			l.deleted[d.Name] = true
+		}
+	}
+	sort.Strings(groups)
+	var out []SchedLogEntry
+	for _, g := range groups {
+		l := byGroup[g]
+		if len(l.deleted) > 0 {
+			out = append(out, stopSchedules(inv, g, l.deleted, fmt.Sprintf("機器「%s」が削除されたため停止しました", strings.Join(sortedKeys(l.deleted), ", ")))...)
+		}
+		if len(l.moved) > 0 {
+			out = append(out, stopSchedules(inv, g, l.moved, fmt.Sprintf("機器「%s」が別のグループへ移動したため停止しました", strings.Join(sortedKeys(l.moved), ", ")))...)
+		}
+	}
+	return out
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // logStopped writes stopSchedules' lines and wakes the scheduler.
 func (a *App) logStopped(stopped []SchedLogEntry) {
 	for _, e := range stopped {
@@ -258,6 +441,14 @@ func containsStr(list []string, s string) bool {
 
 // schedules returns the schedules in force: the vault's, or the locked copy's.
 func (a *App) schedules() []schedule.Schedule {
+	list, _ := a.schedulesIn()
+	return list
+}
+
+// schedulesIn is schedules, and whether there is anything to read them from
+// (false after a restart until the vault is unlocked: no schedules is then
+// not known to mean none).
+func (a *App) schedulesIn() ([]schedule.Schedule, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	src := a.inv
@@ -265,9 +456,27 @@ func (a *App) schedules() []schedule.Schedule {
 		src = a.schedInv
 	}
 	if src == nil {
-		return nil
+		return nil, false
 	}
-	return append([]schedule.Schedule(nil), src.Schedules...)
+	return append([]schedule.Schedule(nil), src.Schedules...), true
+}
+
+// SchedulesWaitUnlock: PalaTerm was started again and its vault not yet
+// unlocked, and schedules were enabled when it last looked — they do not
+// run until the unlock (the lock screen says so). The firings that come
+// due meanwhile are recorded as missed at the unlock.
+func (a *App) SchedulesWaitUnlock() bool {
+	a.mu.Lock()
+	idle := a.inv == nil && a.schedInv == nil
+	a.mu.Unlock()
+	if !idle {
+		return false
+	}
+	s := &a.sched
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.loadStateLocked()
+	return s.savedOn > 0
 }
 
 // schedKeepAwake is the 予約 tab's 予約がある間はスリープしない (from the
@@ -315,7 +524,12 @@ func (a *App) schedLoop() {
 	t := time.NewTicker(schedTick)
 	defer t.Stop()
 	for {
-		a.schedTick(time.Now())
+		// A panic in one tick is logged and the loop goes on: the 予約 keep
+		// running, and the app with them.
+		func() {
+			defer recoverGo("schedTick")
+			a.schedTick(time.Now())
+		}()
 		select {
 		case <-t.C:
 		case <-a.sched.kick:
@@ -324,20 +538,39 @@ func (a *App) schedLoop() {
 }
 
 func (a *App) schedTick(now time.Time) {
-	list := a.schedules()
+	// The wall clock only: times carrying Go's monotonic reading compare by
+	// it, and a clock set back (time sync) would go unseen below.
+	now = now.Round(0)
+	list, have := a.schedulesIn()
 	s := &a.sched
 	s.mu.Lock()
 	if s.checked == nil {
 		s.checked = map[string]time.Time{}
 	}
+	s.loadStateLocked()
+	dirty := s.stateDirty
 	seen := map[string]bool{}
 	var missed []SchedLogEntry
 	for _, sc := range list {
 		seen[sc.ID] = true
 		from, ok := s.checked[sc.ID]
+		restart := false
+		if !ok {
+			// Its first look since PalaTerm started: from where the last
+			// run of PalaTerm had looked (the firings in between — PalaTerm
+			// not running, or waiting for the unlock — are missed ones).
+			if from, ok = s.saved[sc.ID]; ok {
+				restart = true
+				delete(s.saved, sc.ID)
+			}
+			dirty = true
+		}
 		if ok && now.Before(from) {
 			// The clock was set back (time sync): the firings up to from
 			// were handled already, and running them again would repeat them.
+			if restart {
+				s.checked[sc.ID] = from
+			}
 			continue
 		}
 		s.checked[sc.ID] = now
@@ -345,9 +578,21 @@ func (a *App) schedTick(now time.Time) {
 			continue // first look: only firings from now on count
 		}
 		run, miss := sc.Plan(from, now)
+		if !run.IsZero() || miss.N > 0 {
+			// Written now: a firing handled must not come back as missed
+			// after a restart.
+			dirty = true
+		}
 		// One line for all the firings missed in one gap: a short interval
 		// slept through overnight would otherwise be thousands of lines.
 		switch {
+		case miss.N == 1 && restart:
+			missed = append(missed, SchedLogEntry{Due: miss.First.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+				Message: "PalaTerm の終了中・ロック解除前などで実行できなかった回です（さかのぼって実行はしません）"})
+		case miss.N > 1 && restart:
+			missed = append(missed, SchedLogEntry{Due: miss.First.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
+				Message: fmt.Sprintf("PalaTerm の終了中・ロック解除前などで %d 回分（%s〜%s）実行できませんでした（さかのぼって実行はしません）",
+					miss.N, miss.First.Format("01/02 15:04:05"), miss.Last.Format("01/02 15:04:05"))})
 		case miss.N == 1:
 			missed = append(missed, SchedLogEntry{Due: miss.First.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "missed",
 				Message: "スリープ中などで実行できなかった回です（さかのぼって実行はしません）"})
@@ -380,13 +625,41 @@ func (a *App) schedTick(now time.Time) {
 			}
 		}
 	}
-	for id := range s.checked {
-		if !seen[id] {
-			delete(s.checked, id)
+	// Nothing to read the schedules from (started again, not yet unlocked):
+	// what is known of them stays as it is, here and in the file.
+	var save *schedCheckedFile
+	if have {
+		for id := range s.checked {
+			if !seen[id] {
+				delete(s.checked, id)
+				dirty = true
+			}
 		}
+		on := 0
+		for _, sc := range list {
+			if sc.Enabled {
+				on++
+			}
+		}
+		if on != s.savedOn {
+			dirty = true
+		}
+		if dirty && s.statePath != "" {
+			f := schedCheckedFile{Checked: make(map[string]time.Time, len(s.checked)), Enabled: on}
+			for id, at := range s.checked {
+				f.Checked[id] = at
+			}
+			save = &f
+			s.savedOn = on
+		}
+		s.stateDirty = false
 	}
+	statePath := s.statePath
 	busy := len(s.queue) > 0 || s.runID != ""
 	s.mu.Unlock()
+	if save != nil {
+		writeSchedState(statePath, *save)
+	}
 	for _, e := range missed {
 		a.schedLog(e)
 	}
@@ -609,6 +882,7 @@ func (a *App) startScheduled(job schedJob) error {
 		a.mu.Unlock()
 		return fmt.Errorf("実行する機器がありません（グループ「%s」）", job.sc.Group)
 	}
+	missing := schedMissing(base, job.sc)
 	total := 0
 	for _, d := range snap.Devices {
 		if d.Enabled {
@@ -669,6 +943,20 @@ func (a *App) startScheduled(job schedJob) error {
 		if canceled {
 			e.Message = "中止しました"
 		}
+		// The batch stopped on an internal error: an error entry (told like
+		// any other), not a run of 0 OK / 0 failed.
+		if done.Error != "" {
+			e.Kind, e.Message = "error", done.Error
+		}
+		// The named devices no longer in the group were left out: said, not
+		// dropped silently.
+		if len(missing) > 0 {
+			if e.Message != "" {
+				e.Message += "。"
+			}
+			e.Message += "見つからない機器を外して実行しました: " + strings.Join(missing, ", ")
+			e.Missing = missing
+		}
 		a.schedLog(e)
 		a.schedFlushSkips(job.sc.ID, job.sc.Name)
 		a.emitSched()
@@ -684,6 +972,27 @@ func (a *App) startScheduled(job schedJob) error {
 		a.schedKick()
 	}()
 	return nil
+}
+
+// schedMissing is the names a schedule lists that no device of its group
+// has now (a GUI-only device is there: snapshotOf leaves it out on purpose).
+func schedMissing(inv *model.Inventory, sc schedule.Schedule) []string {
+	if sc.Names == nil {
+		return nil
+	}
+	have := map[string]bool{}
+	for _, d := range inv.Devices {
+		if d.Group == sc.Group {
+			have[d.Name] = true
+		}
+	}
+	var out []string
+	for _, n := range sc.Names {
+		if !have[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // schedDirsPath records, per schedule ID, the folder its rounds' logs go
@@ -762,6 +1071,30 @@ type ScheduleView struct {
 	Remaining int  `json:"remaining"`
 	Running   bool `json:"running"` // its batch is running now
 	Queued    bool `json:"queued"`  // waiting for another batch to end
+	// LastProblem is its newest 実行記録 line when that one went wrong (a
+	// run with failures or devices left out, missed, skipped, refused,
+	// error, stopped): the list marks it. nil when the newest was fine.
+	LastProblem *SchedLogEntry `json:"lastProblem,omitempty"`
+}
+
+// schedLastProblems: per schedule ID, its newest line if that is a problem
+// (log is newest first).
+func schedLastProblems(log []SchedLogEntry) map[string]*SchedLogEntry {
+	out := map[string]*SchedLogEntry{}
+	seen := map[string]bool{}
+	for i := range log {
+		e := &log[i]
+		if seen[e.ScheduleID] {
+			continue
+		}
+		seen[e.ScheduleID] = true
+		if schedProblem(e.Kind) || (e.Kind == "run" && (e.Failed > 0 || len(e.Missing) > 0)) {
+			c := *e
+			c.Logs = nil // the list only says what happened
+			out[e.ScheduleID] = &c
+		}
+	}
+	return out
 }
 
 // ScheduleStatus is the scheduler's state for the 予約 tab.
@@ -795,8 +1128,9 @@ func (a *App) ListSchedules() []ScheduleView {
 	}
 	a.sched.mu.Unlock()
 	out := []ScheduleView{}
+	last := schedLastProblems(a.readSchedLog(0))
 	for _, sc := range a.schedules() {
-		v := ScheduleView{Schedule: sc, Remaining: -1, Running: sc.ID == runID, Queued: queued[sc.ID]}
+		v := ScheduleView{Schedule: sc, Remaining: -1, Running: sc.ID == runID, Queued: queued[sc.ID], LastProblem: last[sc.ID]}
 		if n := sc.Next(now); !n.IsZero() {
 			v.Next = n.Format(time.RFC3339)
 		}
@@ -894,7 +1228,8 @@ func (a *App) SaveSchedule(sc schedule.Schedule) (string, error) {
 	if a.sched.checked == nil {
 		a.sched.checked = map[string]time.Time{}
 	}
-	a.sched.checked[sc.ID] = time.Now()
+	a.sched.checked[sc.ID] = time.Now().Round(0) // wall clock (see schedTick)
+	a.sched.stateDirty = true
 	a.sched.mu.Unlock()
 	if err := a.persist(); err != nil {
 		return "", err

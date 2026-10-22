@@ -60,7 +60,7 @@ func TestMergesStayWithinTheCells(t *testing.T) {
 	}
 	s := &sheet.Sheet{Rows: rows, Merges: merges}
 	start := time.Now()
-	g := cellGrid(s, false)
+	g, _ := cellGrid(s, false)
 	cells := 0
 	for _, r := range g {
 		cells += len(r)

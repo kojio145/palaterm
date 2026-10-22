@@ -531,7 +531,7 @@ func positive(typed []string, key string, after, before *scope, ax, bx *cfgIndex
 
 // findSpaced finds the line that is the typed one but for spaces. A long
 // line typed into a terminal is echoed with a space where it wrapped at the
-// screen edge ("… any ac tion replace-dscp ef" for "… any action …"; user
+// screen edge ("… any ac tion replace-dscp af41" for "… any action …"; user
 // report 2026-10-20, AlaxalA via another terminal's log). Only the exact
 // characters in the same order count, so no other line passes for it.
 func (s *scope) findSpaced(key string) string {
