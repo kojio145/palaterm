@@ -2616,6 +2616,9 @@ type termClosed struct {
 	// Takeover: the automatic login failed but the line is still open, and
 	// the window offers to hand it to the keyboard (Term.Takeover).
 	Takeover bool `json:"takeover,omitempty"`
+	// AtJump: that open line is on a jump host, not the device (the jump
+	// failed), and the window says so.
+	AtJump bool `json:"atJump,omitempty"`
 }
 
 // SpawnTerminal opens the interactive terminal for a device in a separate,
@@ -2810,7 +2813,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.11"
+const appVersion = "1.9.12"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

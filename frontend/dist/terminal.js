@@ -127,7 +127,7 @@ async function bootTerminalWindow() {
       </div>
     </div>
     <div id="tw-takeover" class="hidden" style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#2a2412;border-bottom:1px solid #b45309;font-family:'Segoe UI',sans-serif;font-size:12px;color:#fcd34d">
-      <span style="flex:1">${esc(t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。"))}</span>
+      <span id="tw-takeover-msg" style="flex:1">${esc(t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。"))}</span>
       <button class="btn sm warn-outline" id="tw-takeover-ok">${esc(t("手動で続ける"))}</button>
       <button class="btn sm" id="tw-takeover-close">${esc(t("切断する"))}</button>
     </div>
@@ -650,9 +650,12 @@ async function bootTerminalWindow() {
   // device is at a screen the profile could not get past, and the user can
   // read it now. Offer the keyboard instead of hanging up.
   const takeoverBar = document.getElementById("tw-takeover");
+  let takeoverAtJump = false; // the held line is on a jump host (ev.atJump)
   document.getElementById("tw-takeover-ok").onclick = () => {
     takeoverBar.classList.add("hidden"); doFit();
-    term.write("\x1b[33m" + t("[手動操作に切り替えました。以後の入力はそのまま機器へ送られます]") + "\x1b[0m\r\n");
+    term.write("\x1b[33m" + (takeoverAtJump
+      ? t("[手動操作に切り替えました。以後の入力はそのまま踏み台へ送られます]")
+      : t("[手動操作に切り替えました。以後の入力はそのまま機器へ送られます]")) + "\x1b[0m\r\n");
     Term().Takeover().then(() => term.focus()).catch(e => { term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); });
   };
   document.getElementById("tw-takeover-close").onclick = () => {
@@ -673,9 +676,12 @@ async function bootTerminalWindow() {
     connecting = false;
     showSwitch(false);
     breakBtn.classList.add("hidden");
-    stateEl.textContent = ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断");
+    // A failed jump leaves the line on the jump host's shell, not the
+    // device's screen: say so, or it passes for the device.
+    const failState = ev.takeover ? (ev.atJump ? t("踏み台で停止") : t("自動ログイン失敗")) : t("接続失敗");
+    stateEl.textContent = ev.error ? failState : t("切断");
     stateEl.className = "pill err";
-    setOSTitle("", "", ev.error ? (ev.takeover ? t("自動ログイン失敗") : t("接続失敗")) : t("切断"));
+    setOSTitle("", "", ev.error ? failState : t("切断"));
     if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
       showHk(terr(ev.error));
     }
@@ -689,7 +695,13 @@ async function bootTerminalWindow() {
       term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
     }
     if (ev.takeover) {
-      term.write("\x1b[33m" + t("[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]") + "\x1b[0m\r\n");
+      takeoverAtJump = !!ev.atJump;
+      document.getElementById("tw-takeover-msg").textContent = ev.atJump
+        ? t("機器へは入れず、踏み台のシェルに戻っています。ここから手で機器へつなぐこともできます。")
+        : t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。");
+      term.write("\x1b[33m" + (ev.atJump
+        ? t("[回線は踏み台につながったままです。上の「手動で続ける」で踏み台から操作できます]")
+        : t("[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]")) + "\x1b[0m\r\n");
       takeoverBar.classList.remove("hidden"); doFit();
     }
   });

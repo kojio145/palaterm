@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.9.11 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.9.12 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 > 日本語の概要: 複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
 > コマンドセットを並列実行してログを自動保存する Windows 用ツールです。Tera Term マクロや手作業のログ取得の置き換えを想定しています。
@@ -43,7 +43,7 @@ Windows exe — no installation required.
   keeps running from the tray and while locked, wakes the PC from sleep where Windows allows it
 - ⚠️ **Warning before configuration changes** — a command set that contains `conf t` / `write` / `reload` … is called out
   before the batch starts; "Test login only" logs in to every device without sending a command, to check credentials and reachability
-- 📥 **Import lists** — turn a device list another system exports (xls / xlsx / CSV / TSV) into a group with an import rule (column mapping, split cells, replacement tables, defaults, exclusions, two devices per row);
+- 📥 **Convert external lists** — turn a device list another system exports (xls / xlsx / CSV / TSV) into a group with an import rule (column mapping, split cells, replacement tables, defaults, exclusions, two devices per row);
   a preview shows every row first, and re-importing updates only what changed at the source, keeping values edited in PalaTerm
 - 🏢 **Group default credentials** — one shared account per group, with per-device overrides
 - 🔒 **Encrypted credential vault** — AES-256-GCM protected by a master password (nothing stored in plain text)
@@ -88,11 +88,11 @@ launch ("More info" → "Run anyway"). Code signing is planned.
 6. In the Command sets tab, press "+ Add set" and enter one command per line (e.g. `show version`); then assign the set to the device (device edit screen, the table cell, or "Edit as table" for many devices).
 7. In the Run tab, select the group, tick the devices and press "▶ Run batch" ("⚡ Test login only" logs in without sending anything and starts without a confirmation).
 8. Read the result per device in the Status / Message columns; "View log" opens the log as it is written, and a failed row's "Edit" opens the device for a fix before "↻ Re-run failed (n)".
-9. Logs are saved under `logs\` next to the exe (one folder per run; "Open log folder" opens it); the History tab lists past runs and compares before / after logs.
+9. Logs are saved under `logs\` next to the exe (one folder per run; "Open log folder" opens it); the History & compare tab lists past runs and compares before / after logs.
 
 Many devices at once: import a CSV in the Devices tab ("Import"; the file is chosen first, then the target group), or export everything with "Export bundle". [examples/devices.sample.csv](examples/devices.sample.csv) has the current column set with lab values.
 
-A device list another system exports (xls, xlsx, CSV — including the HTML ".xls" files that open in Excel's Protected View) goes in with the **Import lists** tab in the side bar (under Schedules): an import rule maps its columns to PalaTerm's fields (split `user/password` cells, replacement tables, defaults, exclusions), a preview shows every row before anything changes, and importing a newer export updates only what changed at the source, keeping values edited in PalaTerm. Choosing a file opens the preview at once, with the rule and the target group already picked (a group named after the file, or a new one). Rules can be exported and handed over.
+A device list another system exports (xls, xlsx, CSV — including the HTML ".xls" files that open in Excel's Protected View) goes in with the **Convert external lists** tab in the side bar (under Devices, in Set up; the Devices screen's "Import from another system's list…" opens it too): an import rule maps its columns to PalaTerm's fields (split `user/password` cells, replacement tables, defaults, exclusions), a preview shows every row before anything changes, and importing a newer export updates only what changed at the source, keeping values edited in PalaTerm. Choosing a file opens the preview at once, with the rule and the target group already picked (a group named after the file, or a new one). Rules can be exported and handed over.
 
 ## Documentation
 

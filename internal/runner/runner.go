@@ -347,7 +347,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 						res.Error += fmt.Sprintf("（待つ文字列 %q が出ませんでした）", cmd.Wait)
 					}
 					if last := lastLine(exp.Since(before)); last != "" {
-						res.Error += fmt.Sprintf("（機器の最後の表示: %q。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）", RedactSecrets(last, dev))
+						res.Error += fmt.Sprintf("（機器の最後の表示: %q。確認を求めているなら OSタイプ画面の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）", RedactSecrets(last, dev))
 					}
 				}
 				break
@@ -628,7 +628,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	var hop *landing
 	if len(bastions) > 0 && !dev.Tunneled() {
 		if hop, err = r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
-			return exp, prof, "", err
+			return exp, prof, "", &hopError{err}
 		}
 	}
 

@@ -53,6 +53,17 @@ html, body {
 .nav-btn:hover { background: var(--bg-3); color: var(--text); }
 .nav-btn.active { background: var(--accent); color: #fff; }
 .nav-btn.subtle { color: var(--text-dim); font-size: 13px; }
+/* Menu group headings (準備 / 作業 / 管理): a label with a rule running to
+   the right edge, not a button. */
+.nav-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 600; color: #b6c2d1; letter-spacing: .04em;
+  padding: 12px 4px 4px; user-select: none; cursor: default; flex: none;
+  white-space: nowrap;
+}
+.nav-head::after { content: ""; flex: 1; min-width: 12px; height: 1px; background: var(--border); }
+.side-brand + .nav-head { padding-top: 0; }
+.nav-btn { flex: none; }
 
 .content { flex: 1; overflow: auto; padding: 24px 28px; }
 /* A laptop screen (the window may now be 960×540): a narrower side bar and
@@ -69,11 +80,13 @@ html, body {
   .side-brand { font-size: 16px; padding: 2px 6px 8px; }
   .nav-btn { padding: 7px 8px; font-size: 12px; }
   .nav-btn.subtle { font-size: 11px; }
+  .nav-head { font-size: 10px; gap: 5px; padding: 7px 3px 2px; }
   .content { padding: 10px 10px; }
   .page-title { font-size: 17px; }
 }
 @media (max-height: 720px) {
   .nav-btn { padding: 7px 12px; }
+  .nav-head { padding-top: 7px; }
   .side-brand { padding-bottom: 10px; }
   .content { padding-top: 14px; padding-bottom: 14px; }
 }

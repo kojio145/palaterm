@@ -1,4 +1,4 @@
-// 実行履歴 tab: past batches (one row per log_ folder under the log root,
+// 実行履歴・比較 tab: past batches (one row per log_ folder under the log root,
 // read from the palaterm-run.json each batch leaves behind), and the
 // before/after comparison of two runs' logs.
 // User-visible strings are Japanese source text wrapped in t() (see i18n.js).
@@ -57,10 +57,10 @@ async function renderHistory() {
   const root = document.getElementById("tab-history");
   const seq = ++histLoading;
   if (histState.runs.length) renderHistoryView();
-  else root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
+  else root.innerHTML = `<div class="page-head"><div><div class="page-title">${esc(t("実行履歴・比較"))}</div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
   let runs = [];
   try { runs = await App().ListRunHistory() || []; }
-  catch (e) { if (seq === histLoading) root.innerHTML = pageError(t("実行履歴"), t("履歴を読めません") + ": " + terr(e)); return; }
+  catch (e) { if (seq === histLoading) root.innerHTML = pageError(t("実行履歴・比較"), t("履歴を読めません") + ": " + terr(e)); return; }
   if (seq !== histLoading) return; // a newer read is on its way
   histState.runs = runs;
   renderHistoryView();
@@ -157,7 +157,7 @@ function renderHistoryView() {
 
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(t("実行履歴"))}</div>
+      <div><div class="page-title">${esc(t("実行履歴・比較"))}</div>
         <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読み込み"))}</button>

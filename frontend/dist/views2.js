@@ -28,7 +28,7 @@ function renderCommands() {
 
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("コマンドセット一覧"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("メニュー:コマンドセット"))}</div>
         <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書き出し（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
@@ -517,7 +517,7 @@ function renderRun() {
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
         ${ungroupedCount ? `<option value="${RUN_UNGROUPED}" ${runGroupSel === RUN_UNGROUPED ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: t("（グループ未設定）"), n: ungroupedCount }))}</option>` : ""}
       </select>` : ""}
-      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます"))}">
+      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
       </select>
       ${anyBastion ? `<select id="run-route" class="btn${runDirect ? " warn-outline" : ""}" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
@@ -1271,7 +1271,7 @@ function applyRunDone(payload) {
     const v = Object.values(runState);
     toast(t("接続確認が完了しました（OK {a}・失敗 {b}）", { a: v.filter(s => s.phase === "done").length, b: v.filter(s => s.phase === "error").length }), "ok");
   } else if (runStage === "after" && runDir) {
-    toast(t("実行が完了しました。実行履歴タブで作業前のログと比較できます"), "ok");
+    toast(t("実行が完了しました。実行履歴・比較タブで作業前のログと比較できます"), "ok");
   } else toast(t("実行が完了しました"), "ok");
   // Refused commands are easy to miss in a long table: say so once more.
   const warned = Object.values(runState).filter(s => s.warnings && s.warnings.length).length;
@@ -1329,7 +1329,7 @@ function renderSettings() {
         <div class="field"><label>${esc(t("ログファイル名テンプレート"))}</label>
           <input id="set-tmpl" value="${esc(s.logNameTemplate || "{host}_{site}_{role}_{stage}_{date}_{time}.txt")}"></div>
       </div>
-      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます"))}">${esc(t("ログ名に付く作業タイミングの語 ⓘ"))}</span></label>
+      <div class="field"><label><span data-tip="${esc(t("作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴・比較タブでそのまま判別されます"))}">${esc(t("ログ名に付く作業タイミングの語 ⓘ"))}</span></label>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px">
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業前（before）"))}</span><input id="set-st-before" style="flex:1" placeholder="before" value="${esc(s.stageTokenBefore || "before")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("作業中（work）"))}</span><input id="set-st-work" style="flex:1" placeholder="work" value="${esc(s.stageTokenWork || "work")}"></div>
@@ -1529,7 +1529,7 @@ function renderMyBastion() {
   };
 }
 
-// ---- OSタイプ設定 tab ----
+// ---- OSタイプ tab ----
 
 // All profiles live in the vault and are equally editable — the seeded 14
 // defaults included. Deleting never touches the JSON files under
@@ -1545,7 +1545,7 @@ function renderOSTypes() {
     (p, k) => k === "login" ? (p.login || []).length : p[k]);
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(t("OSタイプ設定"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "OSタイプ" : t("メニュー:OSタイプ"))}</div>
         <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読み込みで戻せます。書き出しは「機器」タブの一式書き出しにまとまっています"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>

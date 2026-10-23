@@ -102,7 +102,7 @@ const I18N_EN_PATTERNS = [
   [/過去の日時です（(.*)）/, "that time has passed ($1)"],
   [/（待つ文字列 (".*?") が出ませんでした）/, " (the wait-for text $1 did not appear)"],
   [/([0-9]+) 行目の待つ文字列に制御文字（改行・タブなど）が含まれています: /, "the wait-for text on line $1 contains control characters (line breaks, tabs…): "],
-  [/（機器の最後の表示: (.+)。確認を求めているなら OSタイプ設定の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）/, " (the device last showed $1. If it is asking a question, add an auto-answer in OS types; if the output is just long, raise the command timeout in Settings)"],
+  [/（機器の最後の表示: (.+)。確認を求めているなら OSタイプ画面の「確認への自動応答」に登録、出力が長いだけなら設定の「コマンドタイムアウト」を延ばしてください）/, " (the device last showed $1. If it is asking a question, add an auto-answer in OS types; if the output is just long, raise the command timeout in Settings)"],
   [/（機器の最後の表示: (".*")）/, " (the device last showed $1)"],
   [/([0-9]+) 行目のコマンドに制御文字（改行・タブなど）が含まれています: /, "the command on line $1 contains control characters (line breaks, tabs…): "],
   [/^プロファイル「(.+?)」の送信文字に制御文字（改行・タブなど）が含まれています: /, 'Profile "$1" sends text with control characters (line breaks, tabs…): '],
@@ -247,11 +247,21 @@ const I18N_EN_PATTERNS = [
 
 const I18N_EN = {
   // ---- sidebar / navigation ----
+  // The menu's own keys (data-i18n in index.html): the same Japanese word
+  // has another English entry elsewhere (作業 = Stage, OSタイプ = OS type).
+  "メニュー見出し:準備": "Set up",
+  "メニュー見出し:作業": "Work",
+  "メニュー見出し:管理": "Manage",
+  "メニュー:コマンドセット": "Command sets",
+  "メニュー:OSタイプ": "OS types",
+  "外部一覧の変換": "Convert external lists",
+  "実行履歴・比較": "History & compare",
+  "他システムの一覧から取り込む…": "Import from another system's list…",
+  "他のシステムが出力した Excel/CSV の機器一覧を、変換ルールで PalaTerm の機器に変換して取り込みます（PalaTerm で書き出した CSV は「読み込み」）": "Converts a device list another system exported (Excel/CSV) into PalaTerm devices with an import rule and adds them (for a CSV PalaTerm wrote, use Import).",
   "機器一覧": "Devices",
   "コマンドセット": "Command set",
   "実行": "Run",
   "ログ設定": "Log settings",
-  "OSタイプ設定": "OS types",
   "パスワード変更": "Change password",
   "リセット": "Reset",
   "初期化": "Reset all data",
@@ -377,7 +387,7 @@ const I18N_EN = {
   "ログ内のパスワードをマスクする ⓘ": "Mask passwords in logs ⓘ",
   "パスワードを **** に置き換えて保存（既定: オフ）": "Replace passwords with **** when saving (default: off)",
   "オンにすると、機器のパスワード・enable パスワード・踏み台のパスワードがログ内に現れた箇所を **** に置き換えて保存します。show running-config 内のユーザー名などに同じ文字列があるとそこも置き換わり、ログが機器の設定と一致しなくなるため既定はオフです。機器は入力したパスワードをエコーしないので、オフでも入力値はログに残りません。コマンドセットの行に {password} / {enable} を書いた場合だけは機器がその行をエコーするため、オフでもそのログはマスクされます": "When on, every occurrence of the device's password, enable password and jump host passwords in a log is saved as ****. The same string inside a running-config (a username, say) is replaced too, so the log no longer matches the device — hence off by default. Devices do not echo a typed password, so the login leaves nothing in the log either way. Only a command-set line written with {password} / {enable} is echoed by the device, so that log is masked even when this is off.",
-  "作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴でそのまま判別されます": "The word {stage} expands to for each stage, used in folder and file names. Empty = default (before / work / after / reserve / Current). Folders named with the old defaults are still recognised in the History tab after a rename.",
+  "作業タイミングごとに {stage} へ入る文字列です。フォルダ名・ファイル名に付きます。空欄なら既定（before / work / after / reserve / Current）。改名しても、以前の既定語で作られたフォルダは実行履歴・比較タブでそのまま判別されます": "The word {stage} expands to for each stage, used in folder and file names. Empty = default (before / work / after / reserve / Current). Folders named with the old defaults are still recognised in the History & compare tab after a rename.",
   "必須": "required",
   "の付いた項目以外は任意です（空欄のままで保存できます）": "marks the required fields; everything else is optional (may be left blank)",
   "バージョン情報": "About",
@@ -676,7 +686,7 @@ const I18N_EN = {
   "コマンドを直接入力する（1 行に 1 コマンド）": "Type the commands (one per line)",
   "設定を変更するコマンド（conf t・write など）は予約できません（無人で動くため。取得用の show 系だけ）": "Configuration-changing commands (conf t, write, …) cannot be scheduled: schedules run unattended, so they only collect (show …).",
   "詳細設定（ふだんは変更不要）": "More settings (usually not needed)",
-  "ふだんは「指定なし」で OK。夜間作業の前と後に 1 回ずつ取って、実行履歴タブで比べたいときだけ「作業前」「作業後」を選びます": "Leave it at \"not set\" normally. Choose before / after only to capture once before and once after night work and compare them on the History tab.",
+  "ふだんは「指定なし」で OK。夜間作業の前と後に 1 回ずつ取って、実行履歴・比較タブで比べたいときだけ「作業前」「作業後」を選びます": "Leave it at \"not set\" normally. Choose before / after only to capture once before and once after night work and compare them on the History & compare tab.",
   "有効（オフにすると実行しません）": "On (when off, it does not run)",
   "開始": "Start",
   "保存したらすぐ": "As soon as saved",
@@ -1165,6 +1175,10 @@ const I18N_EN = {
   "自動ログイン失敗": "Auto-login failed",
   "自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。": "The automatic login failed, but the line is still open. You can take over from here and answer whatever the device is showing.",
   "手動で続ける": "Continue manually",
+  "踏み台で停止": "Stopped at the jump host",
+  "機器へは入れず、踏み台のシェルに戻っています。ここから手で機器へつなぐこともできます。": "The device could not be reached; the line is back on the jump host's shell. You can connect to the device by hand from here.",
+  "[回線は踏み台につながったままです。上の「手動で続ける」で踏み台から操作できます]": "[the line is still open on the jump host; use \"Continue manually\" above to carry on from there]",
+  "[手動操作に切り替えました。以後の入力はそのまま踏み台へ送られます]": "[switched to manual operation; what you type now goes straight to the jump host]",
   "切断する": "Disconnect",
   "[手動操作に切り替えました。以後の入力はそのまま機器へ送られます]": "[switched to manual operation; what you type now goes straight to the device]",
   "[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]": "[the line is still open; use \"Continue manually\" above to carry on by hand]",
@@ -1193,7 +1207,7 @@ const I18N_EN = {
   "作業後": "after",
   "接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に": "Connects and logs in only — no commands are sent and no logs are written. A rehearsal for credentials and reachability.",
   "⚡ 接続確認のみ": "⚡ Test login only",
-  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴タブで作業前と作業後を比較できます": "Mark whether this capture is before, during or after the work. It is added to the log folder and file names, and the History tab can compare before with after.",
+  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます": "Mark whether this capture is before, during or after the work. It is added to the log folder and file names, and the History & compare tab can compare before with after.",
   "作業タイミング: {s}": "Stage: {s}",
   "作業タイミング: 指定なし": "Stage: not set",
   "接続確認のみ": "Test login only",
@@ -1214,7 +1228,7 @@ const I18N_EN = {
   "端末窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます": "What a right-click does in the terminal window (the same 2 options as Tera Term's Additional settings > Copy and Paste). With both off, a right-click pastes at once (default). When \"Disable\" is on, the other is ignored. Changes apply to terminal windows opened afterwards.",
   "作業前後の比較で自動では選ばれません。必要ならキャンセルして、実行タブの「作業タイミング」を選んでください": "The before/after comparison will not pick this run automatically. If needed, cancel and choose a stage on the Run tab.",
   "接続確認が完了しました（OK {a}・失敗 {b}）": "Login test finished (OK {a}, failed {b})",
-  "実行が完了しました。実行履歴タブで作業前のログと比較できます": "Run finished. Compare with the before logs in the History tab.",
+  "実行が完了しました。実行履歴・比較タブで作業前のログと比較できます": "Run finished. Compare with the before logs in the History & compare tab.",
   "接続・ログイン OK（コマンドは送っていません）": "Connected and logged in (no commands sent)",
   "設定モードに入る": "enters configuration mode",
   "設定を保存・上書きする": "saves / overwrites configuration",
@@ -1229,7 +1243,6 @@ const I18N_EN = {
   "作業タイミング（before / during / after）。テンプレートに無いときはファイル名の末尾に _before 等が自動で付きます": "Stage (before / during / after). When the template lacks it, _before etc. is appended to the file name automatically.",
 
   // ---- v1.5: history / diff ----
-  "実行履歴": "History",
   "読み込み中…": "Loading…",
   "履歴を読めません": "Cannot read history",
   "（選択）": "(select)",
@@ -1560,7 +1573,6 @@ const I18N_EN = {
   "同じ日時・機器・コマンドで新しい予約を作ります（別のグループに同じ予約を、など）": "Makes a new schedule with the same times, devices and commands (the same schedule for another group, for example)",
   // v1.7.7 usability review (devices tab, run tab, history, OS types, terminal, viewer, diff).
   "GUI": "GUI",
-  "コマンドセット一覧": "Command sets",
   "以前の PalaTerm を使っていた場合は、ここで作らずに、旧フォルダの data\\palaterm_vault.enc をこの exe の隣の data\\ に置いてから起動し直してください。": "Used PalaTerm before? Do not create a new one here: copy data\\palaterm_vault.enc from the old folder into data\\ next to this exe and start again.",
   "踏み台 {n} 段経由": "via {n} jump host(s)",
   "あと 1 分ほどでロックします（キーかマウスを動かすと延長）": "Locking in about a minute (any key or mouse move postpones it)",
@@ -1700,7 +1712,7 @@ const I18N_EN = {
   "紫": "Purple",
 };
 
-// ---- 一覧の取り込み (views6.js, internal/listimport) ----
+// ---- 外部一覧の変換 (views6.js, internal/listimport) ----
 Object.assign(I18N_EN, {
   "踏み台{n}_": "Jump host {n} ",
   "シート「{s}」": "sheet \"{s}\"",
@@ -1708,7 +1720,6 @@ Object.assign(I18N_EN, {
   "見出し {n} 行目": "header row {n}",
   "値 {n} 行目〜": "values from row {n}",
   "{c} 列から": "from column {c}",
-  "一覧の取り込み": "Import lists",
   "他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります": "Turn a device list another system exported (Excel, CSV, …) into a group's devices with an import rule. One file becomes one group",
   "人から受け取った変換ルール（JSON）を読み込みます": "Load an import rule (JSON) someone gave you",
   "ルールを読み込む": "Load a rule",

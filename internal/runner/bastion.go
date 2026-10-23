@@ -148,6 +148,22 @@ type jumpError struct{ msg string }
 
 func (e *jumpError) Error() string { return e.msg }
 
+// hopError is any failure on the way through the jump hosts (a hop's login,
+// a jump between hops): the line, if still open, is on a jump host.
+type hopError struct{ err error }
+
+func (e *hopError) Error() string { return e.err.Error() }
+func (e *hopError) Unwrap() error { return e.err }
+
+// AtJumpHost reports whether a failed login left the line on a jump host
+// rather than the device: the terminal window must not offer that shell as
+// the device's screen.
+func AtJumpHost(err error) bool {
+	var j *jumpError
+	var h *hopError
+	return errors.As(err, &j) || errors.As(err, &h)
+}
+
 func failedJump(target, line string) error {
 	return &jumpError{fmt.Sprintf("踏み台から %s へ接続できませんでした（踏み台の表示: %q）。%s", target, line, jumpAdvice(line))}
 }

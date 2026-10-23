@@ -1,4 +1,4 @@
-// 一覧の取り込み (tab "import"): device lists another system exported
+// 外部一覧の変換 (tab "import"; was 一覧の取り込み): device lists another system exported
 // (Excel, CSV, …) turned into a group's devices by 変換ルール. Three views:
 // the rule list, the rule editor (tried live on a sample file) and the
 // import (a preview to check before anything changes). The conversion
@@ -32,7 +32,7 @@ function renderListImport() {
     }
     else if (LI.view === "import" && LI.imp) liRenderImport(root);
     else liRenderList(root);
-  }).catch(e => { root.innerHTML = pageError(t("一覧の取り込み"), t("読み込み失敗") + ": " + terr(e)); });
+  }).catch(e => { root.innerHTML = pageError(t("外部一覧の変換"), t("読み込み失敗") + ": " + terr(e)); });
 }
 
 // ---- the rule list ----
@@ -57,7 +57,7 @@ function liRenderList(root) {
     (r, k) => k === "fields" ? nFields(r) : k === "exclude" ? (r.exclude || []).length : k === "lastUsed" ? (r.lastUsed || "") : r.name);
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(t("一覧の取り込み"))}</div>
+      <div><div class="page-title">${esc(t("外部一覧の変換"))}</div>
         <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}<br>
           ${esc(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">

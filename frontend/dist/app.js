@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.11";
+const APP_VERSION = "1.9.12";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -931,10 +931,13 @@ async function boot() {
 // Translate the static sidebar texts authored in Japanese in index.html.
 function applyStaticI18n() {
   document.documentElement.lang = LANG === "ja" ? "ja" : "en";
-  document.querySelectorAll(".sidebar .nav-btn").forEach(b => {
-    // The tab lists the sets: plural in English (the same Japanese word
-    // names a device's one set elsewhere).
-    b.textContent = b.dataset.tab === "commands" && LANG !== "ja" ? t("コマンドセット一覧") : t(b.textContent.trim());
+  document.querySelectorAll(".sidebar .nav-btn, .sidebar .nav-head").forEach(b => {
+    // data-i18n: the menu's own dictionary key, where the same Japanese word
+    // means something else elsewhere and so has another English entry
+    // (コマンドセット / OSタイプ name a device's one set or type: plural
+    // here; 作業 is a run's stage). Japanese keeps the text as written.
+    const key = b.dataset.i18n;
+    b.textContent = key ? (LANG === "ja" ? b.textContent.trim() : t(key)) : t(b.textContent.trim());
   });
 }
 
