@@ -188,7 +188,7 @@ function renderHistoryView() {
         : `<table class="fixed" data-colw="history"><thead><tr><th style="width:36px"></th>${listViewTh(LV, "time", t("開始日時"), "width:170px")}${listViewTh(LV, "stage", t("作業"), "width:110px")}${listViewTh(LV, "group", t("グループ"))}${listViewTh(LV, "result", t("成功 / 失敗"), "width:130px")}<th style="width:120px"></th><th style="width:260px"></th></tr></thead>
           <tbody>${rows}</tbody></table>`}
       ${visible.length > shown.length ? `<div style="padding:10px 14px;text-align:center"><button class="btn" id="hist-more">${esc(t("さらに表示（残り {n} 件）", { n: visible.length - shown.length }))}</button></div>` : ""}
-    </div>`);
+    </div>`, [listView(LV)]);
 
   // Re-rendering for a sort / filter change must not re-read the log root:
   // the rows come from the runs already in hand.

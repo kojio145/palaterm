@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.14";
+const APP_VERSION = "1.9.15";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -332,7 +332,12 @@ function wireFilterInput(el, onChange, onText) {
 // never detached, so it keeps the focus, the selection and an IME
 // composition. When the shapes differ, the whole of root is replaced.
 function syncAttrs(o, n) {
-  [...o.attributes].forEach(a => { if (!n.hasAttribute(a.name)) o.removeAttribute(a.name); });
+  // An inline style the template does not declare was set at run time
+  // (fitPanels' max-height on a list panel) and stays: removing it let the
+  // panel grow to its full height for a moment, and the browser clamped its
+  // scroll offset to 0 — the run table jumped to the top on every redraw
+  // (a tick, a device event; 2026-10-24 user report).
+  [...o.attributes].forEach(a => { if (!n.hasAttribute(a.name) && !(a.name === "style" && o.style.length)) o.removeAttribute(a.name); });
   [...n.attributes].forEach(a => { if (o.getAttribute(a.name) !== a.value) o.setAttribute(a.name, a.value); });
 }
 // One level of the walk: which new child each kept old child stands for,
@@ -375,7 +380,13 @@ function keepApply(oParent, nParent, pairs) {
     const ps = sub.get(nc);
     syncAttrs(oc, nc);
     if (ps[0].o !== oc) keepApply(oc, nc, ps);
-    else if (ps[0].inner) oc.replaceChildren(...nc.childNodes);
+    else if (ps[0].inner) {
+      // The offset is put back after the swap as well: the new rows may be
+      // laid out before the panel's cap is measured again.
+      const [sl, st] = [oc.scrollLeft, oc.scrollTop];
+      oc.replaceChildren(...nc.childNodes);
+      if (sl || st) { oc.scrollLeft = sl; oc.scrollTop = st; }
+    }
     // A kept text box takes the new text only when the state was changed
     // from elsewhere (the clear button): never while an IME is composing,
     // nor when it shows that text already (the user is typing it).
@@ -393,15 +404,40 @@ function patchKeeping(root, html, keep) {
   else root.replaceChildren(tpl.content);
 }
 // The filter box being typed in, as a keep entry (none when the focus is
-// elsewhere: then the box is drawn anew like the rest).
+// elsewhere: then the box is drawn anew like the rest). A list box that has
+// the focus (the filter's 拠点 / 状態, a toolbar choice) is kept too: drawn
+// anew while a run redraws the tab on every device event, its open list
+// closed under the pointer before a value could be picked (2026-10-24 user
+// report).
 function keepFocusedBox(root, prefix) {
   const el = document.activeElement;
-  if (!el || el.tagName !== "INPUT" || !el.id || !el.id.startsWith(prefix) || !root.contains(el)) return null;
-  return { o: el, find: f => f.querySelector("#" + CSS.escape(el.id)) };
+  if (!el || !root.contains(el)) return null;
+  if (el.tagName === "INPUT") {
+    if (!el.id || !el.id.startsWith(prefix)) return null;
+    return { o: el, find: f => f.querySelector("#" + CSS.escape(el.id)) };
+  }
+  if (el.tagName === "SELECT") {
+    if (el.id) return { o: el, find: f => f.querySelector("#" + CSS.escape(el.id)) };
+    if (el.dataset.lv && el.dataset.sel) return { o: el, find: f => f.querySelector(`.lv-sel[data-lv="${CSS.escape(el.dataset.lv)}"][data-sel="${CSS.escape(el.dataset.sel)}"]`) };
+  }
+  return null;
 }
 // Draw a list tab: the filter box being typed in stays (see patchKeeping).
-function renderListTab(root, html) {
-  patchKeeping(root, html, [keepFocusedBox(root, "lv-text-")]);
+// With viewKey — what defines the list shown: its filter / sort state and
+// its scope — the table panel stays too while that key is unchanged, so a
+// redraw (a save, an inventory refresh, a tick) keeps where the user had
+// scrolled it; a change of key (another filter, sort or group) starts from
+// the top, as the run tab does (2026-10-24 user report: the lists jumped to
+// the top on every redraw).
+function renderListTab(root, html, viewKey) {
+  let keepPanel = null;
+  if (viewKey !== undefined) {
+    const key = JSON.stringify(viewKey);
+    const oldPanel = root.querySelector(".panel.scrollx");
+    html = html.replace('<div class="panel scrollx">', `<div class="panel scrollx" data-view="${esc(key)}">`);
+    if (oldPanel && oldPanel.dataset.view === key) keepPanel = { o: oldPanel, find: f => f.querySelector(".panel.scrollx"), inner: true };
+  }
+  patchKeeping(root, html, [keepPanel, keepFocusedBox(root, "lv-text-")]);
 }
 function listViewWire(key, root, rerender, focus) {
   const v = listView(key);
@@ -1278,6 +1314,11 @@ async function switchTab(name) {
   if (typeof canLeaveSettings === "function" && !(await canLeaveSettings(name))) return;
   // The devices tab keeps its state (chosen group / list position) across tab
   // switches; 「← 対象選択」 is the way back to the chooser.
+  // The spare command-set window (started ahead of View so it opens at once)
+  // lives while the Command sets tab is shown: leaving the tab drops it,
+  // showing the tab starts one (renderCommands).
+  const leaving = document.querySelector(".tab.active");
+  if (leaving && leaving.id === "tab-commands" && name !== "commands") App().DropSpareCommandSetWindow().catch(() => {});
   document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
     b.classList.toggle("active", b.dataset.tab === name));
   document.querySelectorAll(".tab").forEach(el =>

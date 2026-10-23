@@ -256,7 +256,7 @@ async function bootCmdsetWindow() {
 
   // A save in the main window: the set again (or the notice that it is
   // gone). Rows past the new end drop out of the selection.
-  rt().EventsOn("cmdset:update", s => {
+  function applyUpdate(s) {
     // A spare window (started hidden before the click) gets its first set
     // now: the language and the remembered settings may have changed since
     // it started, so they are read again.
@@ -276,7 +276,17 @@ async function bootCmdsetWindow() {
     lastQ = ""; hits = []; hitIdx = -1;
     render();
     if (fin.value && !bar.classList.contains("hidden")) findNext(1);
-  });
+  }
+  rt().EventsOn("cmdset:update", applyUpdate);
   render();
   body.focus();
+  // A set that arrived between Load() above and the listener just added (a
+  // spare shown within a moment of starting) was emitted to nobody: ask
+  // again now that the listener is there. The same set twice is harmless.
+  if (!(st.doc && st.doc.name)) {
+    try {
+      const again = await C().Load();
+      if (again.doc && again.doc.name) applyUpdate(again);
+    } catch (e) {}
+  }
 }

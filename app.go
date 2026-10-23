@@ -928,12 +928,12 @@ func (a *App) persist() error {
 	a.inv.PruneImportRecords()
 	err := a.saveVaultLocked(a.password)
 	// The command-set windows show what was just saved (whatever path
-	// changed a set: the editor, a rename, an import, a delete).
-	sets := a.cmdsetSetsLocked()
-	a.mu.Unlock()
-	if sets != nil {
-		syncCmdsetWindows(sets)
+	// changed a set: the editor, a rename, an import, a delete) — not what
+	// failed to save: a window the operator types from must match the vault.
+	if err == nil {
+		a.syncCmdsetWindowsLocked()
 	}
+	a.mu.Unlock()
 	return err
 }
 
@@ -2628,9 +2628,12 @@ type termClosed struct {
 	// Takeover: the automatic login failed but the line is still open, and
 	// the window offers to hand it to the keyboard (Term.Takeover).
 	Takeover bool `json:"takeover,omitempty"`
-	// AtJump: that open line is on a jump host, not the device (the jump
-	// failed), and the window says so.
+	// AtJump: that open line is on a jump host's shell, not the device (the
+	// jump failed), and the window says so.
 	AtJump bool `json:"atJump,omitempty"`
+	// AtJumpLogin: that open line is at a jump host's own login or password
+	// prompt (the hop's login failed): neither the device nor a shell.
+	AtJumpLogin bool `json:"atJumpLogin,omitempty"`
 }
 
 // SpawnTerminal opens the interactive terminal for a device in a separate,
@@ -2825,7 +2828,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.14"
+const appVersion = "1.9.15"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

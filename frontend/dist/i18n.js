@@ -1177,6 +1177,7 @@ const I18N_EN = {
   "手動で続ける": "Continue manually",
   "踏み台で停止": "Stopped at the jump host",
   "機器へは入れず、踏み台のシェルに戻っています。ここから手で機器へつなぐこともできます。": "The device could not be reached; the line is back on the jump host's shell. You can connect to the device by hand from here.",
+  "踏み台のログインに失敗し、踏み台のログイン画面（ユーザー名・パスワード）で止まっています。機器へはまだ入っていません。ここから手で踏み台にログインすることもできます。": "The jump host's login failed; the line is at the jump host's login screen (user name / password). The device has not been reached. You can log in to the jump host by hand from here.",
   "[回線は踏み台につながったままです。上の「手動で続ける」で踏み台から操作できます]": "[the line is still open on the jump host; use \"Continue manually\" above to carry on from there]",
   "[手動操作に切り替えました。以後の入力はそのまま踏み台へ送られます]": "[switched to manual operation; what you type now goes straight to the jump host]",
   "切断する": "Disconnect",

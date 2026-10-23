@@ -387,7 +387,7 @@ function renderDeviceList() {
             ${listViewTh(LV, "name", t("機器名"), "width:130px")}${allView ? listViewTh(LV, "group", t("グループ"), "width:110px") : ""}${listViewTh(LV, "host", t("IPアドレス"), "width:106px")}${listViewTh(LV, "site", t("拠点名"), "width:76px")}${listViewTh(LV, "role", t("役割"), "width:76px")}${listViewTh(LV, "conn", t("接続"), "width:80px")}
             ${listViewTh(LV, "os", "OS", "width:112px")}${listViewTh(LV, "commandSet", t("コマンドセット"), "width:112px")}<th style="width:242px"></th></tr></thead>
             <tbody id="dev-body">${rows}</tbody></table>`}
-    </div>`);
+    </div>`, [lv, scopeGroup ? scopeGroup.name : "", ungroupedView]);
   listViewWire(LV, root, renderDeviceList, focus);
   if (cellFocus) {
     const el = root.querySelector(`.${cellFocus.cls}[data-id="${CSS.escape(cellFocus.id)}"]`);

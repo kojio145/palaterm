@@ -138,8 +138,14 @@ func keepForegroundWhileHidden(prev uintptr, hidden func() bool) {
 	if prev == 0 {
 		return
 	}
+	// The frame is looked up (a walk over every top-level window) until it
+	// exists, then kept: it does not change.
+	var own uintptr
 	for i := 0; i < 200 && hidden(); i++ {
-		if own := ownFrame(); own != 0 && foregroundWindow() == own {
+		if own == 0 {
+			own = ownFrame()
+		}
+		if own != 0 && foregroundWindow() == own {
 			pSetForegroundWindow.Call(prev)
 		}
 		time.Sleep(50 * time.Millisecond)

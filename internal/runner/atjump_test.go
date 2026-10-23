@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,9 @@ func TestAtJumpHost(t *testing.T) {
 	}{
 		{"jump refused, wrapped like connect", fmt.Errorf("機器へのジャンプに失敗: %w", failedJump("192.0.2.21", "% Connection refused by remote host")), true},
 		{"back at the hop's prompt after login", fmt.Errorf("機器へのジャンプに失敗: %w", &jumpError{"back at jump1#"}), true},
-		{"a hop's own login failed", &hopError{fmt.Errorf("踏み台1段目のログインに失敗: %w", errors.New("timeout"))}, true},
+		// At the hop's login or password prompt, not its shell: AtJumpLogin.
+		{"a hop's own login failed", &hopError{&hopLoginError{fmt.Errorf("踏み台1段目のログインに失敗: %w", errors.New("timeout"))}}, false},
+		{"a later hop's login failed", &hopError{&hopLoginError{errors.New("踏み台2段目のログインに失敗")}}, false},
 		{"device login failed", fmt.Errorf("login: %w", errors.New("timeout")), false},
 		{"plain error", errors.New(errAuthRefused), false},
 		{"nil", nil, false},
@@ -29,6 +32,38 @@ func TestAtJumpHost(t *testing.T) {
 		if got := AtJumpHost(c.err); got != c.want {
 			t.Errorf("%s: AtJumpHost = %v, want %v", c.name, got, c.want)
 		}
+		var l *hopLoginError
+		if got := AtJumpLogin(c.err); got != errors.As(c.err, &l) {
+			t.Errorf("%s: AtJumpLogin = %v", c.name, got)
+		}
+	}
+}
+
+// A hop whose login fails leaves the line at its login prompt: the terminal
+// window must say that, not "back on the jump host's shell".
+func TestAtJumpLoginFromRejectedHop(t *testing.T) {
+	dev, sess := newScriptedDevice()
+	exp := newExpecter(sess)
+	defer exp.Close()
+	go func() {
+		dev.say("login: ")
+		<-dev.sent // username
+		dev.say("\r\nPassword: ")
+		<-dev.sent // password
+		dev.say("\r\nLogin incorrect\r\nlogin: ")
+	}()
+	bastions := []model.Bastion{{Host: "192.0.2.10", Method: model.BastionTelnet, Username: "ops", Password: "wrong"}}
+	target := &model.Device{Name: "lab-sw1", Host: "192.0.2.21", Conn: model.ConnTelnet, Username: "ops"}
+	_, err := (&Runner{}).traverseBastions(context.Background(), exp, bastions, target, 500*time.Millisecond)
+	if err == nil {
+		t.Fatal("a rejected hop login passed")
+	}
+	wrapped := &hopError{err} // as connect returns it
+	if !AtJumpLogin(wrapped) || AtJumpHost(wrapped) {
+		t.Fatalf("a hop's rejected login: AtJumpLogin=%v AtJumpHost=%v (%v)", AtJumpLogin(wrapped), AtJumpHost(wrapped), err)
+	}
+	if !strings.Contains(err.Error(), "踏み台1段目のログインに失敗") {
+		t.Errorf("error %q does not name the hop", err)
 	}
 }
 

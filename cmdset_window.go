@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -78,10 +79,11 @@ func cmdsetTitle(name string) string {
 	return "PalaTerm - " + winWord("コマンドセット", "Command set") + ": " + name
 }
 
-// cmdsetShowLine is the "show" line for cs.
-func cmdsetShowLine(cs model.CommandSet) []byte {
+// cmdsetShowLine is the "show" line for cs; parent is the main window's
+// rectangle on the first line to a spare window, "" otherwise.
+func cmdsetShowLine(cs model.CommandSet, parent string) []byte {
 	d := cmdsetDocOf(cs)
-	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &d})
+	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &d, Parent: parent})
 	return append(b, '\n')
 }
 
@@ -92,17 +94,100 @@ func cmdsetKindLine(kind string) []byte {
 
 // ---- main-window side ----
 
-// cmdsetWinRef is an open set window, known by the name of its set.
+// cmdsetWinRef is an open set window, known by the name of its set. Its
+// lines are written by a goroutine of its own (writer): a pipe write blocks
+// while the child is still starting its WebView2 (or has hung), and a save
+// in the main window must not wait on that — persist() only queues the line.
+// Until the process is started (in == nil) the entry marks the name as being
+// opened, so a second click in that moment opens nothing more.
 type cmdsetWinRef struct {
 	in   io.WriteCloser
 	pid  int
 	name string
-	last []byte // the last line sent (nothing is resent unchanged)
+	last []byte // the last line queued (nothing is resent unchanged)
+
+	qmu  sync.Mutex
+	q    []cmdsetOut
+	kick chan struct{}
+	stop chan struct{}
+	once sync.Once
+	dead atomic.Bool // the pipe broke: the window is gone or going
+}
+
+// cmdsetOut is a line waiting to be written to a window.
+type cmdsetOut struct {
+	kind string
+	line []byte
+}
+
+func newCmdsetWinRef(name string) *cmdsetWinRef {
+	return &cmdsetWinRef{name: name, kick: make(chan struct{}, 1), stop: make(chan struct{})}
+}
+
+// send queues one line. A newer set (or a delete) replaces one still waiting
+// — only the latest content matters — so a child that does not read keeps at
+// most one set and the focus requests in memory.
+func (w *cmdsetWinRef) send(kind string, line []byte) {
+	w.qmu.Lock()
+	if kind != "focus" {
+		kept := w.q[:0]
+		for _, o := range w.q {
+			if o.kind == "focus" {
+				kept = append(kept, o)
+			}
+		}
+		w.q = kept
+	}
+	w.q = append(w.q, cmdsetOut{kind, line})
+	w.qmu.Unlock()
+	select {
+	case w.kick <- struct{}{}:
+	default:
+	}
+}
+
+// writer writes the queued lines in order until the pipe breaks or the
+// window is closed from this side.
+func (w *cmdsetWinRef) writer() {
+	for {
+		select {
+		case <-w.stop:
+			return
+		case <-w.kick:
+		}
+		for {
+			w.qmu.Lock()
+			if len(w.q) == 0 {
+				w.qmu.Unlock()
+				break
+			}
+			o := w.q[0]
+			w.q = w.q[1:]
+			w.qmu.Unlock()
+			if _, err := w.in.Write(o.line); err != nil {
+				w.dead.Store(true)
+				_ = w.in.Close()
+				return
+			}
+		}
+	}
+}
+
+// close ends the window from this side: the pipe closes (the child quits on
+// it) and the writer stops.
+func (w *cmdsetWinRef) close() {
+	w.once.Do(func() {
+		w.dead.Store(true)
+		close(w.stop)
+		if w.in != nil {
+			_ = w.in.Close()
+		}
+	})
 }
 
 // cmdsetSpareRef is a set window started hidden ahead of the click: a new
 // window costs a process and a WebView2 start (a second or two), so one is
-// kept ready while the Command sets tab is open, and View only hands it the
+// kept ready while the Command sets tab is shown, and View only hands it the
 // set and shows it.
 type cmdsetSpareRef struct {
 	in   io.WriteCloser
@@ -114,6 +199,10 @@ var (
 	cmdsetMu    sync.Mutex
 	cmdsetWins  = map[string]*cmdsetWinRef{}
 	cmdsetSpare *cmdsetSpareRef
+	// cmdsetSpareWanted: the Command sets tab is shown, so a spare is kept
+	// (Prewarm sets it, DropSpare clears it; the respare after View checks
+	// it, so leaving the tab leaves no idle process behind).
+	cmdsetSpareWanted bool
 	// cmdsetPrewarmOn turns the spare window on (off in tests that count the
 	// windows started).
 	cmdsetPrewarmOn = true
@@ -174,28 +263,31 @@ func (a *App) OpenCommandSetWindow(name string) error {
 	if cs == nil {
 		return fmt.Errorf("command set %q not found", name)
 	}
-	line := cmdsetShowLine(*cs)
+	line := cmdsetShowLine(*cs, "")
 	cmdsetMu.Lock()
-	if w := cmdsetWins[name]; w != nil {
-		var err error
-		if !bytes.Equal(w.last, line) {
-			_, err = w.in.Write(line)
-			w.last = line
-		}
-		if err == nil {
-			_, err = w.in.Write(cmdsetKindLine("focus"))
-		}
-		if err == nil {
-			pid := w.pid
+	if w := cmdsetWins[name]; w != nil && !w.dead.Load() {
+		if w.in == nil {
+			// Being opened by a click a moment ago (a double click on the
+			// preview): that window shows this set and comes to the front.
 			cmdsetMu.Unlock()
-			bringProcessToFront(pid)
 			return nil
 		}
-		// Closed by hand a moment ago: open a new one.
-		delete(cmdsetWins, name)
+		if !bytes.Equal(w.last, line) {
+			w.send("show", line)
+			w.last = line
+		}
+		w.send("focus", cmdsetKindLine("focus"))
+		pid := w.pid
+		cmdsetMu.Unlock()
+		bringProcessToFront(pid)
+		return nil
 	}
-	// The spare window when there is one (it shows at once), a new one
-	// otherwise; either way the next spare starts behind it.
+	// The name is taken while the window starts (a second click in that
+	// moment, above, opens nothing). The spare window when there is one (it
+	// shows at once), a new one otherwise; either way the next spare starts
+	// behind it.
+	w := newCmdsetWinRef(name)
+	cmdsetWins[name] = w
 	var in io.WriteCloser
 	var pid int
 	var done <-chan struct{}
@@ -203,29 +295,37 @@ func (a *App) OpenCommandSetWindow(name string) error {
 	if sp := cmdsetSpare; sp != nil {
 		cmdsetSpare = nil
 		in, pid, done = sp.in, sp.pid, sp.done
-		first = cmdsetSpareShowLine(*cs, parentRectString())
+		first = cmdsetShowLine(*cs, parentRectString())
 	}
 	cmdsetMu.Unlock()
 	defer func() {
 		if cmdsetRespareAfter == 0 {
-			a.PrewarmCommandSetWindow()
+			a.respareCommandSetWindow()
 			return
 		}
-		time.AfterFunc(cmdsetRespareAfter, a.PrewarmCommandSetWindow)
+		time.AfterFunc(cmdsetRespareAfter, a.respareCommandSetWindow)
 	}()
+	var err error
 	if in == nil {
-		var err error
-		if in, pid, done, err = startCmdsetProc(false); err != nil {
-			return err
-		}
+		in, pid, done, err = startCmdsetProc(false)
 	}
-	if _, err := in.Write(first); err != nil {
-		_ = in.Close()
+	cmdsetMu.Lock()
+	if err != nil {
+		if cmdsetWins[name] == w {
+			delete(cmdsetWins, name)
+		}
+		cmdsetMu.Unlock()
 		return err
 	}
-	w := &cmdsetWinRef{in: in, pid: pid, name: name, last: line}
-	cmdsetMu.Lock()
-	cmdsetWins[name] = w
+	if cmdsetWins[name] != w {
+		// Closed (ロック) while the process was starting.
+		cmdsetMu.Unlock()
+		_ = in.Close()
+		return nil
+	}
+	w.in, w.pid, w.last = in, pid, line
+	go w.writer()
+	w.send("show", first)
 	cmdsetMu.Unlock()
 	go func() {
 		<-done
@@ -234,14 +334,37 @@ func (a *App) OpenCommandSetWindow(name string) error {
 			delete(cmdsetWins, w.name)
 		}
 		cmdsetMu.Unlock()
+		w.close()
 	}()
 	return nil
 }
 
-// PrewarmCommandSetWindow starts the spare set window if there is none (the
-// Command sets tab calls it when it is shown; View starts the next one).
-// Nothing while the vault is locked.
+// PrewarmCommandSetWindow starts the spare set window if there is none, and
+// keeps one while the Command sets tab is shown (the tab calls it when it is
+// shown; View starts the next one). Nothing while the vault is locked.
 func (a *App) PrewarmCommandSetWindow() {
+	cmdsetMu.Lock()
+	cmdsetSpareWanted = true
+	cmdsetMu.Unlock()
+	a.respareCommandSetWindow()
+}
+
+// DropSpareCommandSetWindow closes the spare and stops keeping one (the
+// Command sets tab was left): an idle process is not kept for hours for a
+// click that may not come.
+func (a *App) DropSpareCommandSetWindow() {
+	cmdsetMu.Lock()
+	defer cmdsetMu.Unlock()
+	cmdsetSpareWanted = false
+	if cmdsetSpare != nil {
+		_ = cmdsetSpare.in.Close()
+		cmdsetSpare = nil
+	}
+}
+
+// respareCommandSetWindow starts the spare when one is wanted and there is
+// none.
+func (a *App) respareCommandSetWindow() {
 	if !cmdsetPrewarmOn {
 		return
 	}
@@ -253,7 +376,7 @@ func (a *App) PrewarmCommandSetWindow() {
 	}
 	cmdsetMu.Lock()
 	defer cmdsetMu.Unlock()
-	if cmdsetSpare != nil {
+	if cmdsetSpare != nil || !cmdsetSpareWanted {
 		return
 	}
 	in, pid, done, err := startCmdsetProc(true)
@@ -272,14 +395,6 @@ func (a *App) PrewarmCommandSetWindow() {
 	}()
 }
 
-// cmdsetSpareShowLine is the first line to a spare window: the set, and
-// where the main window is now.
-func cmdsetSpareShowLine(cs model.CommandSet, parent string) []byte {
-	doc := cmdsetDocOf(cs)
-	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &doc, Parent: parent})
-	return append(b, '\n')
-}
-
 // renameCmdsetWindow moves the window of a renamed set to its new name (the
 // next sync sends the set, and so the new title). A window still on the
 // new name — its set was deleted, or it would not be free — is closed.
@@ -291,60 +406,48 @@ func renameCmdsetWindow(oldName, newName string) {
 		return
 	}
 	if o := cmdsetWins[newName]; o != nil {
-		_ = o.in.Close()
+		o.close()
 	}
 	delete(cmdsetWins, oldName)
 	w.name = newName
 	cmdsetWins[newName] = w
 }
 
-// syncCmdsetWindows brings every open set window up to date with sets (the
-// vault after a save): the set again when it changed, a notice when it is
-// gone. Called with nothing held.
-func syncCmdsetWindows(sets []model.CommandSet) {
+// syncCmdsetWindowsLocked brings every open set window up to date with the
+// vault just saved: the set again when it changed, a notice when it is gone.
+// Called under a.mu, right after the save, so two saves cannot reach the
+// windows in the wrong order; it only queues the lines (see cmdsetWinRef).
+func (a *App) syncCmdsetWindowsLocked() {
 	cmdsetMu.Lock()
 	defer cmdsetMu.Unlock()
-	if len(cmdsetWins) == 0 {
+	if len(cmdsetWins) == 0 || a.inv == nil {
 		return
 	}
-	byName := make(map[string]*model.CommandSet, len(sets))
-	for i := range sets {
-		byName[sets[i].Name] = &sets[i]
+	byName := make(map[string]*model.CommandSet, len(a.inv.CommandSets))
+	for i := range a.inv.CommandSets {
+		byName[a.inv.CommandSets[i].Name] = &a.inv.CommandSets[i]
 	}
 	for name, w := range cmdsetWins {
-		var line []byte
+		if w.in == nil {
+			continue // still opening: it gets the set as it is now
+		}
+		kind, line := "show", []byte(nil)
 		if cs := byName[name]; cs != nil {
-			line = cmdsetShowLine(*cs)
+			line = cmdsetShowLine(*cs, "")
 		} else {
-			line = cmdsetKindLine("deleted")
+			kind, line = "deleted", cmdsetKindLine("deleted")
 		}
 		if bytes.Equal(w.last, line) {
 			continue
 		}
-		_, _ = w.in.Write(line)
+		w.send(kind, line)
 		w.last = line
 	}
 }
 
-// cmdsetSetsLocked is a copy of the vault's sets for syncCmdsetWindows, or
-// nil when no set window is open (the common case costs nothing). a.mu held.
-func (a *App) cmdsetSetsLocked() []model.CommandSet {
-	cmdsetMu.Lock()
-	n := len(cmdsetWins)
-	cmdsetMu.Unlock()
-	if n == 0 || a.inv == nil {
-		return nil
-	}
-	out := make([]model.CommandSet, len(a.inv.CommandSets))
-	for i, cs := range a.inv.CommandSets {
-		cs.Commands = append([]model.Command(nil), cs.Commands...)
-		out[i] = cs
-	}
-	return out
-}
-
 // closeCmdsetWindows closes every set window and the spare (ロック, exit,
-// 全データ削除).
+// 全データ削除). A window still starting is dropped from the map; its opener
+// closes the pipe when the process is there.
 func closeCmdsetWindows() {
 	cmdsetMu.Lock()
 	defer cmdsetMu.Unlock()
@@ -353,7 +456,7 @@ func closeCmdsetWindows() {
 		cmdsetSpare = nil
 	}
 	for name, w := range cmdsetWins {
-		_ = w.in.Close()
+		w.close()
 		delete(cmdsetWins, name)
 	}
 }
@@ -426,7 +529,9 @@ func (c *CmdsetWin) domReady(ctx context.Context) {
 	}
 }
 
-// Load is the set as last sent.
+// Load is the set as last sent. The page calls it when it starts and again
+// once it listens for updates: a spare's first set may have arrived in
+// between, and an event emitted before the page listened is lost.
 func (c *CmdsetWin) Load() cmdsetState {
 	c.mu.Lock()
 	defer c.mu.Unlock()

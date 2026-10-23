@@ -88,7 +88,7 @@ function liRenderList(root) {
               <button class="btn sm" data-rexp="${esc(r.id)}" data-tip="${esc(t("export\\import-rules\\ に書き出します。パスワード欄の既定値・置き換えの値は含めません"))}">${esc(t("書き出し"))}</button>
               <button class="btn sm act-del" data-rdel="${esc(r.id)}">${esc(t("削除"))}</button>
             </div></td></tr>`).join("")}</tbody></table>`}
-    </div>`);
+    </div>`, [listView(LV)]);
   listViewWire(LV, root, renderListImport, focus);
   wireColResize(root);
   if (!listViewActive(LV)) wireRowReorder(root.querySelector("#li-rbody"), async order => {

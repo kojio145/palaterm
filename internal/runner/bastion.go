@@ -35,7 +35,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	// Log into the first hop if it was reached by Telnet (SSH already authed).
 	if bastions[0].Method == model.BastionTelnet {
 		if err := loginHop(ctx, exp, bastions[0], timeout); err != nil {
-			return nil, fmt.Errorf("踏み台1段目のログインに失敗: %w", err)
+			return nil, &hopLoginError{fmt.Errorf("踏み台1段目のログインに失敗: %w", err)}
 		}
 	} else {
 		// Wait until the first SSH bastion's shell prompt appears.
@@ -57,7 +57,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 				return nil, fmt.Errorf("踏み台%d段目（%s）のログイン後にプロンプトが出ませんでした: %w", i+1, next.Host, err)
 			}
 		} else if err := loginHopFrom(ctx, exp, next, from, timeout); err != nil {
-			return nil, fmt.Errorf("踏み台%d段目のログインに失敗: %w", i+1, err)
+			return nil, &hopLoginError{fmt.Errorf("踏み台%d段目のログインに失敗: %w", i+1, err)}
 		}
 		// The shell reached must not be the one the jump was typed on.
 		if err := from.check(exp); err != nil {
@@ -155,13 +155,29 @@ type hopError struct{ err error }
 func (e *hopError) Error() string { return e.err.Error() }
 func (e *hopError) Unwrap() error { return e.err }
 
-// AtJumpHost reports whether a failed login left the line on a jump host
-// rather than the device: the terminal window must not offer that shell as
-// the device's screen.
+// hopLoginError is a jump host's own login that failed: the line is at that
+// hop's login or password prompt, not at a shell (review 2026-10-23: the
+// terminal window said "back on the jump host's shell" there, and an ssh
+// command typed on that advice went into a password prompt).
+type hopLoginError struct{ err error }
+
+func (e *hopLoginError) Error() string { return e.err.Error() }
+func (e *hopLoginError) Unwrap() error { return e.err }
+
+// AtJumpHost reports whether a failed login left the line on a jump host's
+// shell rather than the device: the terminal window must not offer that
+// shell as the device's screen. A hop's failed login is AtJumpLogin instead.
 func AtJumpHost(err error) bool {
 	var j *jumpError
 	var h *hopError
-	return errors.As(err, &j) || errors.As(err, &h)
+	return (errors.As(err, &j) || errors.As(err, &h)) && !AtJumpLogin(err)
+}
+
+// AtJumpLogin reports whether a failed login left the line at a jump host's
+// own login or password prompt.
+func AtJumpLogin(err error) bool {
+	var l *hopLoginError
+	return errors.As(err, &l)
 }
 
 func failedJump(target, line string) error {

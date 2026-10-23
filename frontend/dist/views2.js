@@ -11,7 +11,9 @@ function renderCommands() {
   const focus = listViewFocus();
   const sets = INV.commandSets || [];
   // A set window started hidden ahead of View, so it opens at once (the
-  // backend keeps just one; nothing while there are no sets).
+  // backend keeps just one while this tab is shown, and this is a no-op
+  // while it has one; nothing while there are no sets). switchTab drops it
+  // on leaving the tab; a redraw after that (unlock, a save) asks again.
   if (sets.length) App().PrewarmCommandSetWindow().catch(() => {});
   const visible = listViewApply(LV, sets,
     s => [s.name, ...(s.commands || []).map(c => c.text)],
@@ -46,7 +48,7 @@ function renderCommands() {
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
         : `<table class="fixed" data-colw="commands"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:260px")}${listViewTh(LV, "count", t("コマンド数"), "width:120px")}<th>${esc(t("プレビュー"))}</th><th style="width:250px"></th></tr></thead>
            <tbody id="cs-body">${rows}</tbody></table>`}
-    </div>`);
+    </div>`, [listView(LV)]);
   listViewWire(LV, root, renderCommands, focus);
   wireColResize(root);
 
@@ -1576,7 +1578,7 @@ function renderOSTypes() {
             <button class="btn sm act-copy" data-pcopy="${esc(p.key)}">${esc(t("複製"))}</button>
             <button class="btn sm act-del" data-pdel="${esc(p.key)}">${esc(t("削除"))}</button>
           </div></td></tr>`).join("")}</tbody></table>`}
-    </div>`);
+    </div>`, [listView(LV)]);
   listViewWire(LV, root, renderOSTypes, focus);
   wireColResize(root);
   if (!listViewActive(LV)) wireRowReorder(root.querySelector("#prof-body"), async order => {

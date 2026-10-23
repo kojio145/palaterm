@@ -445,7 +445,7 @@ func (t *Term) connect(pw string) {
 		}
 		t.pending, t.pendingDev, t.pendingSet = exp, dev, inv.Settings
 		t.mu.Unlock()
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Takeover: true, AtJump: runpkg.AtJumpHost(err)})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Takeover: true, AtJump: runpkg.AtJumpHost(err), AtJumpLogin: runpkg.AtJumpLogin(err)})
 		return
 	}
 	t.attach(exp, dev, inv.Settings, true)

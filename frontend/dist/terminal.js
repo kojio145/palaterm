@@ -650,7 +650,7 @@ async function bootTerminalWindow() {
   // device is at a screen the profile could not get past, and the user can
   // read it now. Offer the keyboard instead of hanging up.
   const takeoverBar = document.getElementById("tw-takeover");
-  let takeoverAtJump = false; // the held line is on a jump host (ev.atJump)
+  let takeoverAtJump = false; // the held line is on a jump host (ev.atJump / ev.atJumpLogin)
   document.getElementById("tw-takeover-ok").onclick = () => {
     takeoverBar.classList.add("hidden"); doFit();
     term.write("\x1b[33m" + (takeoverAtJump
@@ -677,8 +677,10 @@ async function bootTerminalWindow() {
     showSwitch(false);
     breakBtn.classList.add("hidden");
     // A failed jump leaves the line on the jump host's shell, not the
-    // device's screen: say so, or it passes for the device.
-    const failState = ev.takeover ? (ev.atJump ? t("踏み台で停止") : t("自動ログイン失敗")) : t("接続失敗");
+    // device's screen: say so, or it passes for the device. A jump host
+    // whose own login failed leaves it at that hop's login prompt (atJumpLogin).
+    const atHop = ev.atJump || ev.atJumpLogin;
+    const failState = ev.takeover ? (atHop ? t("踏み台で停止") : t("自動ログイン失敗")) : t("接続失敗");
     stateEl.textContent = ev.error ? failState : t("切断");
     stateEl.className = "pill err";
     setOSTitle("", "", ev.error ? failState : t("切断"));
@@ -695,11 +697,13 @@ async function bootTerminalWindow() {
       term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
     }
     if (ev.takeover) {
-      takeoverAtJump = !!ev.atJump;
-      document.getElementById("tw-takeover-msg").textContent = ev.atJump
+      takeoverAtJump = atHop;
+      document.getElementById("tw-takeover-msg").textContent = ev.atJumpLogin
+        ? t("踏み台のログインに失敗し、踏み台のログイン画面（ユーザー名・パスワード）で止まっています。機器へはまだ入っていません。ここから手で踏み台にログインすることもできます。")
+        : ev.atJump
         ? t("機器へは入れず、踏み台のシェルに戻っています。ここから手で機器へつなぐこともできます。")
         : t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。");
-      term.write("\x1b[33m" + (ev.atJump
+      term.write("\x1b[33m" + (atHop
         ? t("[回線は踏み台につながったままです。上の「手動で続ける」で踏み台から操作できます]")
         : t("[回線はつながったままです。上の「手動で続ける」でこのまま操作できます]")) + "\x1b[0m\r\n");
       takeoverBar.classList.remove("hidden"); doFit();
