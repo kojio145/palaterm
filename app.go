@@ -283,6 +283,7 @@ func (a *App) shutdown(ctx context.Context) {
 	// run shows in 実行履歴 as stopped instead of being cut off mid-way.
 	a.stopRunForExit(5 * time.Second)
 	closeGUIWindows()
+	closeCmdsetWindows()
 	a.flushPersist()
 	trayHide()
 	armWake(time.Time{})
@@ -826,6 +827,7 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 func (a *App) Lock() {
 	// The GUI windows are logged-in sessions: they close with the vault.
 	closeGUIWindows()
+	closeCmdsetWindows()
 	a.flushPersist()
 	a.mu.Lock()
 	if a.inv != nil {
@@ -904,6 +906,7 @@ func (a *App) ResetVault(current string) error {
 	a.schedInv = nil
 	a.pendingPins = nil // nothing of the old vault goes into the next one
 	a.mu.Unlock()
+	closeCmdsetWindows()
 	if err := os.Remove(a.vaultPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -915,15 +918,23 @@ func (a *App) ResetVault(current string) error {
 
 func (a *App) persist() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.inv == nil {
+		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
 	// Safety net: whatever path added a device, it is saved with an ID.
 	a.inv.EnsureDeviceIDs()
 	// Whatever path deleted a device, its import record goes with it.
 	a.inv.PruneImportRecords()
-	return a.saveVaultLocked(a.password)
+	err := a.saveVaultLocked(a.password)
+	// The command-set windows show what was just saved (whatever path
+	// changed a set: the editor, a rename, an import, a delete).
+	sets := a.cmdsetSetsLocked()
+	a.mu.Unlock()
+	if sets != nil {
+		syncCmdsetWindows(sets)
+	}
+	return err
 }
 
 // ---- Inventory reads ----
@@ -1756,6 +1767,7 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 	}
 	a.inv.CommandSets[idx].Name = newName
 	renameSchedSet(a.inv, oldName, newName)
+	renameCmdsetWindow(oldName, newName)
 	for i := range a.inv.Devices {
 		if a.inv.Devices[i].CommandSet == oldName {
 			a.inv.Devices[i].CommandSet = newName
@@ -2813,7 +2825,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.12"
+const appVersion = "1.9.13"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

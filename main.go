@@ -6,7 +6,10 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"embed"
+	"encoding/json"
 	"os"
 	"path/filepath"
 
@@ -68,6 +71,12 @@ func main() {
 			label = os.Args[4]
 		}
 		runDiffWindow(os.Args[2], os.Args[3], label)
+		return
+	}
+	// Command-set window: "--cmdset" (one set, read-only; the set arrives on
+	// stdin from the main window — see cmdsetMsg).
+	if len(os.Args) >= 2 && os.Args[1] == "--cmdset" {
+		runCmdsetWindow()
 		return
 	}
 	// Paste-confirmation window opened by a terminal window: "--paste <device>".
@@ -153,6 +162,43 @@ func runDiffWindow(a, b, label string) {
 		OnStartup:        d.startup,
 		OnDomReady:       d.domReady,
 		Bind:             []interface{}{d},
+		Windows: &windows.Options{
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+		},
+	})
+	if err != nil {
+		println("error:", err.Error())
+	}
+}
+
+func runCmdsetWindow() {
+	in := bufio.NewReader(os.Stdin)
+	line, err := in.ReadBytes('\n')
+	var m cmdsetMsg
+	if err != nil || json.Unmarshal(line, &m) != nil || m.Kind != "show" || m.Doc == nil {
+		return
+	}
+	c := &CmdsetWin{}
+	c.apply(m)
+	ready := make(chan struct{})
+	go c.follow(in, ready)
+	err = wails.Run(&options.App{
+		Title:     m.Title,
+		Width:     cmdsetWinSize.W,
+		Height:    cmdsetWinSize.H,
+		MinWidth:  cmdsetWinSize.MinW,
+		MinHeight: cmdsetWinSize.MinH,
+		AssetServer: &assetserver.Options{
+			Assets: assets,
+		},
+		BackgroundColour: &options.RGBA{R: 17, G: 21, B: 28, A: 1},
+		OnStartup: func(ctx context.Context) {
+			c.startup(ctx)
+			close(ready)
+		},
+		OnDomReady: c.domReady,
+		Bind:       []interface{}{c},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,

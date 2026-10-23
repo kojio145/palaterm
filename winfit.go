@@ -25,6 +25,8 @@ var (
 	pasteWin  = winSize{W: 980, H: 640, MinW: 480, MinH: 320}
 	viewerWin = winSize{W: 1080, H: 700, MinW: 480, MinH: 320}
 	diffWin   = winSize{W: 1320, H: 760, MinW: 720, MinH: 400}
+	// コマンドセットの表示: narrow enough to sit beside a terminal window.
+	cmdsetWinSize = winSize{W: 760, H: 680, MinW: 420, MinH: 300}
 )
 
 // Room left for the taskbar and the window frame: Wails reports the whole

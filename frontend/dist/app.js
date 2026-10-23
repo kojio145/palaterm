@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.12";
+const APP_VERSION = "1.9.13";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -884,6 +884,11 @@ async function boot() {
   // Diff window (binds DiffWin).
   if (window.go && window.go.main && window.go.main.DiffWin) {
     bootDiffWindow();
+    return;
+  }
+  // Command-set window (binds CmdsetWin).
+  if (window.go && window.go.main && window.go.main.CmdsetWin) {
+    bootCmdsetWindow();
     return;
   }
   // Screen window (binds Watcher).

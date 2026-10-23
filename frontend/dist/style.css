@@ -723,3 +723,17 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
 .field-err { color: var(--err); font-size: 12px; margin-top: 5px; text-align: left; }
 .lock-screen { position: relative; }
 .lock-lang { position: absolute; top: 14px; right: 16px; margin: 0; }
+/* Command-set window (cmdset.js): one row per command, numbered; picked
+   rows blue, commands that change a device orange with their reason. */
+.cw-body { font-family: "Consolas", monospace; padding: 4px 0; }
+.cw-row { display: flex; align-items: baseline; gap: 10px; padding: 2px 12px; cursor: default; border-left: 3px solid transparent; }
+.cw-row:hover { background: rgba(148,163,184,.08); }
+.cw-row.sel { background: rgba(56,189,248,.22); }
+.cw-row.danger { color: var(--warn); border-left-color: var(--warn); }
+.cw-row.hit { background: rgba(250,204,21,.14); }
+.cw-row.sel.hit { background: rgba(56,189,248,.30); }
+.cw-row.cur { outline: 1px solid #facc15; outline-offset: -1px; }
+.cw-no { color: #64748b; text-align: right; flex: none; }
+.cw-text { white-space: pre-wrap; word-break: break-all; }
+.cw-tag { font-family: "Segoe UI", sans-serif; font-size: 10px; line-height: 1.5; padding: 0 7px; border: 1px solid rgba(245,158,11,.6); border-radius: 999px; color: var(--warn); background: rgba(245,158,11,.1); white-space: nowrap; flex: none; }
+.cw-meta { font-family: "Segoe UI", sans-serif; font-size: .82em; color: #8b97a8; white-space: nowrap; flex: none; }

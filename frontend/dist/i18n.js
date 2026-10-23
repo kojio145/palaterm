@@ -2268,3 +2268,28 @@ Object.assign(I18N_EN, {
   " ・ ": " · ",
   " ／ ": " / ",
 });
+
+// v1.9.13: the command-set window (cmdset.js) and its 表示 button.
+Object.assign(I18N_EN, {
+  "コマンドセット:表示": "View",
+  "読み取り専用の別窓で開きます（端末窓の横に置いて見ながら打てます）": "Opens the set read-only in a window of its own (keep it beside a terminal window while you type)",
+  "開けませんでした": "Could not open",
+  "選択した行のコマンドだけをコピーします（Ctrl+C）": "Copies the commands of the selected rows only (Ctrl+C)",
+  "選択行をコピー": "Copy selected",
+  "全コマンドを 1 行 1 コマンドでコピーします（行番号・待つ文字列は含めません）": "Copies every command, one per line (without line numbers or wait strings)",
+  "コマンドをすべてコピー": "Copy all commands",
+  "待つ文字列・待機秒も表示": "Show wait strings and pauses",
+  "ほかの窓（端末窓など）の上に、この窓を常に表示します": "Keeps this window above the others (terminal windows and so on)",
+  "常に手前に表示": "Always on top",
+  "この窓では編集できません — 編集はメイン画面の「編集」から": "This window cannot edit the set. To edit it, use Edit in the main window",
+  "このコマンドセットは削除されました": "This command set has been deleted",
+  "待つ: {w}": "wait for: {w}",
+  "待機 {n} 秒": "pause {n} s",
+  "待機 {n} 秒（シリアル {s} 秒）": "pause {n} s (serial {s} s)",
+  "⚠ 設定を変えるコマンドが {n} 行あります（橙色）": "⚠ {n} line(s) change the device's configuration (in orange)",
+  "コマンドがありません": "No commands",
+  "{n} 行を選択中（Ctrl+C でコピー）": "{n} row(s) selected (Ctrl+C to copy)",
+  "行をクリックで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）": "Click a row to select it (Shift: a range, Ctrl: add / remove, Ctrl+A: all)",
+  "コピーする行を選択してください": "Select the rows to copy",
+  "{n} 行のコマンドをコピーしました": "Copied {n} command(s)",
+});

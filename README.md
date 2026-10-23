@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.9.12 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.9.13 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 > 日本語の概要: 複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
 > コマンドセットを並列実行してログを自動保存する Windows 用ツールです。Tera Term マクロや手作業のログ取得の置き換えを想定しています。
@@ -35,7 +35,7 @@ Windows exe — no installation required.
 - 🤖 **Login automation** — 17 built-in OS profiles (Cisco IOS/ASA, JUNOS, FortiGate,
   HPE, NEC IX, ALAXALA AX, Yamaha RTX, Linux servers, …) handling enable escalation and pager disabling; all
   profiles are editable and you can add your own
-- 📋 **Batch command execution** — assign named command sets per device and run them in one go
+- 📋 **Batch command execution** — assign named command sets per device and run them in one go (View opens a set read-only in its own window, to keep beside a terminal)
 - 📁 **Automatic log saving** — `{host}_{site}_{role}_{stage}_{date}_{time}.txt` style, customizable with placeholders
 - 🕘 **Run history & before/after diff** — tag a run as before / during / after the work, then compare
   the before and after logs per device (clock and counter noise ignored)

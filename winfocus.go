@@ -25,6 +25,8 @@ var (
 	pGetCurrentProcessId    = kernel32.NewProc("GetCurrentProcessId")
 	pSetActiveWindow        = user32.NewProc("SetActiveWindow")
 	pBringWindowToTop       = user32.NewProc("BringWindowToTop")
+	pIsIconic               = user32.NewProc("IsIconic")
+	pAllowSetForeground     = user32.NewProc("AllowSetForegroundWindow")
 )
 
 // focusMu serialises the focus attempts of one process: the page asks at
@@ -141,6 +143,38 @@ func ownTopLevelWindow() uintptr {
 	enumFound = 0
 	pEnumWindows.Call(enumTopCB, 0)
 	return enumFound
+}
+
+// topLevelWindowOf is ownTopLevelWindow for another process (a child
+// window), or 0.
+func topLevelWindowOf(pid int) uintptr {
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumPID = uintptr(pid)
+	enumFound = 0
+	pEnumWindows.Call(enumTopCB, 0)
+	return enumFound
+}
+
+// bringProcessToFront raises a child window process's window (restored if
+// minimised) from this, the foreground process — the one the user just
+// clicked in — and lets it take the foreground itself (it then puts the
+// keyboard on its page: focusOwnWindow).
+func bringProcessToFront(pid int) {
+	if pid <= 0 {
+		return
+	}
+	pAllowSetForeground.Call(uintptr(pid))
+	hwnd := topLevelWindowOf(pid)
+	if hwnd == 0 {
+		return
+	}
+	const swRestore = 9
+	if ic, _, _ := pIsIconic.Call(hwnd); ic != 0 {
+		pShowWindow.Call(hwnd, swRestore)
+	}
+	pBringWindowToTop.Call(hwnd)
+	pSetForegroundWindow.Call(hwnd)
 }
 
 // webviewInputChild finds the WebView2 child HWND that receives keyboard

@@ -18,8 +18,9 @@ function renderCommands() {
       ${listViewDragCell(LV)}
       <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
-      <td class="mono muted"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
+      <td class="mono muted cs-preview" data-view="${esc(s.name)}" style="cursor:pointer"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
       <td class="ops"><div class="ops-btns">
+        <button class="btn sm act-view" data-view="${esc(s.name)}" data-tip="${esc(t("読み取り専用の別窓で開きます（端末窓の横に置いて見ながら打てます）"))}">${esc(LANG === "ja" ? "表示" : t("コマンドセット:表示"))}</button>
         <button class="btn sm act-edit" data-edit="${esc(s.name)}">${esc(t("編集"))}</button>
         <button class="btn sm act-copy" data-copy="${esc(s.name)}">${esc(t("複製"))}</button>
         <button class="btn sm act-del" data-del="${esc(s.name)}">${esc(t("削除"))}</button>
@@ -40,7 +41,7 @@ function renderCommands() {
       ${sets.length === 0
         ? `<div class="empty">${esc(t("コマンドセットがありません。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
-        : `<table class="fixed" data-colw="commands"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:260px")}${listViewTh(LV, "count", t("コマンド数"), "width:120px")}<th>${esc(t("プレビュー"))}</th><th style="width:200px"></th></tr></thead>
+        : `<table class="fixed" data-colw="commands"><thead><tr><th style="width:30px"></th>${listViewTh(LV, "name", t("名前"), "width:260px")}${listViewTh(LV, "count", t("コマンド数"), "width:120px")}<th>${esc(t("プレビュー"))}</th><th style="width:250px"></th></tr></thead>
            <tbody id="cs-body">${rows}</tbody></table>`}
     </div>`);
   listViewWire(LV, root, renderCommands, focus);
@@ -57,6 +58,10 @@ function renderCommands() {
       if (res) { await refreshInventory(); toast(res.same ? t("「{n}」は同じ内容で登録済みです", { n: res.name }) : t("「{n}」を読み込みました", { n: res.name }), "ok"); }
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
+  // 表示 (and a click on the preview): the set in a read-only window of its
+  // own; the same set again brings that window to the front.
+  root.querySelectorAll("[data-view]").forEach(b => b.onclick = () =>
+    App().OpenCommandSetWindow(b.dataset.view).catch(e => toast(t("開けませんでした") + ": " + terr(e), "err")));
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editCommandSet(INV.commandSets.find(s => s.name === b.dataset.edit)));
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
