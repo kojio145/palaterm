@@ -1,6 +1,7 @@
 // Command-set window (child process: PalaTerm.exe --cmdset). One command set,
 // read-only, beside a terminal window: line numbers, what each command waits
-// for, the commands that change a device in orange (guard.Check), rows
+// for (shown on request), the commands that change a device in orange
+// (guard.Check), rows
 // picked with the mouse (Shift / Ctrl like a file list) and copied as the
 // commands alone. The main window sends the set on the window's stdin and
 // again whenever it is saved (CmdsetWin; a rename retitles the window, a
@@ -51,18 +52,20 @@ async function bootCmdsetWindow() {
   let hits = [], hitIdx = -1, lastQ = "";
   const cmds = () => (st.doc && st.doc.commands) || [];
 
-  // 待つ文字列・待機秒も表示 (on by default) and 常に手前に表示 (off by
-  // default): remembered per PC.
+  // 待つ文字列・待機秒も表示 and 常に手前に表示: both off by default (the
+  // window is mostly for reading and copying the commands — 2026-10-23 user
+  // request), remembered per PC.
   const metaBox = document.getElementById("cw-meta"), topBox = document.getElementById("cw-ontop");
-  metaBox.checked = true;
-  try { metaBox.checked = localStorage.getItem("palaterm_cmdset_meta") !== "0"; } catch (e) {}
+  try { metaBox.checked = localStorage.getItem("palaterm_cmdset_meta") === "1"; } catch (e) {}
   try { topBox.checked = localStorage.getItem("palaterm_cmdset_ontop") === "1"; } catch (e) {}
   metaBox.onchange = () => { try { localStorage.setItem("palaterm_cmdset_meta", metaBox.checked ? "1" : "0"); } catch (e) {} render(); };
   topBox.onchange = () => {
     try { localStorage.setItem("palaterm_cmdset_ontop", topBox.checked ? "1" : "0"); } catch (e) {}
     C().SetOnTop(topBox.checked).catch(() => {});
   };
-  if (topBox.checked) C().SetOnTop(true).catch(() => {});
+  // (A spare window — nothing in it yet — applies it when it is shown: on a
+  // hidden frame it would take the foreground.)
+  if (topBox.checked && st.doc && st.doc.name) C().SetOnTop(true).catch(() => {});
 
   function metaOf(c) {
     const parts = [];
@@ -79,7 +82,7 @@ async function bootCmdsetWindow() {
     document.getElementById("cw-name").textContent = st.doc.name;
     document.getElementById("cw-name").dataset.tip = st.doc.name;
     document.getElementById("cw-count").textContent = t("{n} コマンド", { n: list.length });
-    document.getElementById("cw-pauseoff").classList.toggle("hidden", !st.doc.pauseOff);
+    document.getElementById("cw-pauseoff").classList.toggle("hidden", !metaBox.checked || !st.doc.pauseOff);
     document.getElementById("cw-deleted").classList.toggle("hidden", !st.deleted);
     const nd = list.filter(c => c.danger).length;
     const dg = document.getElementById("cw-danger");
@@ -101,32 +104,78 @@ async function bootCmdsetWindow() {
   function showStatus() {
     status.textContent = sel.size
       ? t("{n} 行を選択中（Ctrl+C でコピー）", { n: sel.size })
-      : t("行をクリックで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）");
+      : t("行をクリック・ドラッグで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）");
   }
   function paintSel() {
     body.querySelectorAll(".cw-row").forEach(r => r.classList.toggle("sel", sel.has(+r.dataset.i)));
     showStatus();
   }
 
-  // Row selection, as in a file list.
-  body.addEventListener("mousedown", e => { if (e.shiftKey) e.preventDefault(); });
-  body.addEventListener("click", e => {
+  // Row selection, as in a file list: click, Shift+click for a range,
+  // Ctrl+click to add or remove — and a drag over the lines selects every
+  // line from where it started (Ctrl+drag adds them to the selection). A drag
+  // past the top or bottom edge scrolls the list.
+  let drag = null; // {base, y, timer} while the left button is held
+  function rowAt(y) {
+    const rows = body.querySelectorAll(".cw-row");
+    if (!rows.length) return -1;
+    const r = body.getBoundingClientRect();
+    const el = document.elementFromPoint(r.left + 8, Math.min(Math.max(y, r.top + 1), r.bottom - 2));
+    const row = el && el.closest(".cw-row");
+    if (row) return +row.dataset.i;
+    return y < rows[0].getBoundingClientRect().top ? +rows[0].dataset.i : +rows[rows.length - 1].dataset.i;
+  }
+  function dragTo(y) {
+    const j = rowAt(y);
+    if (j < 0 || anchor < 0) return;
+    sel = new Set(drag.base);
+    for (let k = Math.min(anchor, j); k <= Math.max(anchor, j); k++) sel.add(k);
+    paintSel();
+  }
+  function endDrag() {
+    if (!drag) return;
+    clearInterval(drag.timer);
+    drag = null;
+  }
+  body.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
     const row = e.target.closest(".cw-row");
     if (!row) return;
+    e.preventDefault(); // no text selection; the lines are selected instead
     const i = +row.dataset.i;
+    let base;
     if (e.shiftKey && anchor >= 0) {
-      if (!e.ctrlKey) sel = new Set();
-      for (let k = Math.min(anchor, i); k <= Math.max(anchor, i); k++) sel.add(k);
+      base = e.ctrlKey ? new Set(sel) : new Set();
     } else if (e.ctrlKey) {
-      if (sel.has(i)) sel.delete(i); else sel.add(i);
+      if (sel.has(i)) { sel.delete(i); anchor = i; paintSel(); body.focus(); return; }
+      base = new Set(sel);
       anchor = i;
     } else {
-      sel = new Set([i]);
+      base = new Set();
       anchor = i;
     }
-    paintSel();
+    endDrag();
+    drag = { base, y: e.clientY, timer: 0 };
+    dragTo(e.clientY);
     body.focus();
+    // Past an edge the list scrolls on its own while the button is held.
+    drag.timer = setInterval(() => {
+      if (!drag) return;
+      const r = body.getBoundingClientRect();
+      if (drag.y < r.top) body.scrollTop -= Math.min(40, r.top - drag.y);
+      else if (drag.y > r.bottom) body.scrollTop += Math.min(40, drag.y - r.bottom);
+      else return;
+      dragTo(drag.y);
+    }, 50);
   });
+  document.addEventListener("mousemove", e => {
+    if (!drag) return;
+    if (!(e.buttons & 1)) { endDrag(); return; }
+    drag.y = e.clientY;
+    dragTo(e.clientY);
+  });
+  window.addEventListener("mouseup", endDrag);
+  window.addEventListener("blur", endDrag);
 
   // Copy: the commands only (no numbers, tags or waits), one per line.
   const textOf = idx => idx.map(i => cmds()[i].text).join("\r\n");
@@ -208,6 +257,19 @@ async function bootCmdsetWindow() {
   // A save in the main window: the set again (or the notice that it is
   // gone). Rows past the new end drop out of the selection.
   rt().EventsOn("cmdset:update", s => {
+    // A spare window (started hidden before the click) gets its first set
+    // now: the language and the remembered settings may have changed since
+    // it started, so they are read again.
+    if (!(st.doc && st.doc.name)) {
+      let lang = null;
+      try { lang = localStorage.getItem("palaterm_lang"); } catch (e) {}
+      if (lang && lang !== LANG) { location.reload(); return; }
+      try { metaBox.checked = localStorage.getItem("palaterm_cmdset_meta") === "1"; } catch (e) {}
+      try { topBox.checked = localStorage.getItem("palaterm_cmdset_ontop") === "1"; } catch (e) {}
+      C().SetOnTop(topBox.checked).catch(() => {});
+      try { setFont(parseInt(localStorage.getItem("palaterm_cmdset_font"), 10) || FONT_DEF); } catch (e) {}
+      setTimeout(() => body.focus(), 0);
+    }
     st = s;
     sel = new Set([...sel].filter(i => i < cmds().length));
     if (anchor >= cmds().length) anchor = -1;

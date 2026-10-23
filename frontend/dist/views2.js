@@ -10,6 +10,9 @@ function renderCommands() {
   const LV = "commands";
   const focus = listViewFocus();
   const sets = INV.commandSets || [];
+  // A set window started hidden ahead of View, so it opens at once (the
+  // backend keeps just one; nothing while there are no sets).
+  if (sets.length) App().PrewarmCommandSetWindow().catch(() => {});
   const visible = listViewApply(LV, sets,
     s => [s.name, ...(s.commands || []).map(c => c.text)],
     (s, k) => k === "count" ? (s.commands || []).length : s.name);

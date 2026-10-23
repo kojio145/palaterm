@@ -2289,7 +2289,7 @@ Object.assign(I18N_EN, {
   "⚠ 設定を変えるコマンドが {n} 行あります（橙色）": "⚠ {n} line(s) change the device's configuration (in orange)",
   "コマンドがありません": "No commands",
   "{n} 行を選択中（Ctrl+C でコピー）": "{n} row(s) selected (Ctrl+C to copy)",
-  "行をクリックで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）": "Click a row to select it (Shift: a range, Ctrl: add / remove, Ctrl+A: all)",
+  "行をクリック・ドラッグで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）": "Click or drag over rows to select them (Shift: a range, Ctrl: add / remove, Ctrl+A: all)",
   "コピーする行を選択してください": "Select the rows to copy",
   "{n} 行のコマンドをコピーしました": "Copied {n} command(s)",
 });

@@ -64,17 +64,87 @@ func (f *fakeCmdsetPipe) isClosed() bool {
 func withFakeCmdsetProcs(t *testing.T) *[]*fakeCmdsetPipe {
 	t.Helper()
 	var started []*fakeCmdsetPipe
-	old := startCmdsetProc
-	startCmdsetProc = func() (io.WriteCloser, int, <-chan struct{}, error) {
+	old, oldPrewarm := startCmdsetProc, cmdsetPrewarmOn
+	cmdsetPrewarmOn = false
+	startCmdsetProc = func(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
+		if spare {
+			t.Error("a spare window was started with the spare turned off")
+		}
 		p := &fakeCmdsetPipe{}
 		started = append(started, p)
 		return p, 0, make(chan struct{}), nil
 	}
 	t.Cleanup(func() {
-		startCmdsetProc = old
+		startCmdsetProc, cmdsetPrewarmOn = old, oldPrewarm
 		closeCmdsetWindows()
 	})
 	return &started
+}
+
+// The spare window: started hidden ahead of the click (only while the vault
+// is open), handed the set — with where the main window is — by View, which
+// starts the next spare; closed with the windows on ロック.
+func TestCmdsetSpareWindow(t *testing.T) {
+	type proc struct {
+		p     *fakeCmdsetPipe
+		spare bool
+	}
+	var procs []proc
+	old, oldPrewarm, oldAfter := startCmdsetProc, cmdsetPrewarmOn, cmdsetRespareAfter
+	cmdsetPrewarmOn, cmdsetRespareAfter = true, 0
+	startCmdsetProc = func(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
+		p := &fakeCmdsetPipe{}
+		procs = append(procs, proc{p, spare})
+		return p, 0, make(chan struct{}), nil
+	}
+	t.Cleanup(func() {
+		startCmdsetProc, cmdsetPrewarmOn, cmdsetRespareAfter = old, oldPrewarm, oldAfter
+		closeCmdsetWindows()
+	})
+	a := newTestApp(t)
+	a.PrewarmCommandSetWindow()
+	if len(procs) != 0 {
+		t.Fatal("a spare window was started while the vault is locked")
+	}
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	a.PrewarmCommandSetWindow()
+	a.PrewarmCommandSetWindow()
+	if len(procs) != 1 || !procs[0].spare {
+		t.Fatalf("want one spare after two calls, got %+v", procs)
+	}
+	if m := procs[0].p.msgs(t); len(m) != 0 {
+		t.Fatalf("the spare got lines before View: %+v", m)
+	}
+	if err := a.OpenCommandSetWindow("health-check"); err != nil {
+		t.Fatal(err)
+	}
+	// View used the spare (no visible window started) and started the next.
+	if len(procs) != 2 || !procs[1].spare {
+		t.Fatalf("View should use the spare and start the next one: %+v", procs)
+	}
+	m := procs[0].p.msgs(t)
+	if len(m) != 1 || m[0].Kind != "show" || m[0].Doc == nil || m[0].Doc.Name != "health-check" || !strings.Contains(m[0].Title, "health-check") {
+		t.Fatalf("the spare's first line = %+v", m)
+	}
+	// Same set again: the window that was the spare comes to the front.
+	if err := a.OpenCommandSetWindow("health-check"); err != nil {
+		t.Fatal(err)
+	}
+	if len(procs) != 2 {
+		t.Fatalf("the same set started another window: %d", len(procs))
+	}
+	if m := procs[0].p.msgs(t); m[len(m)-1].Kind != "focus" {
+		t.Fatalf("want focus, got %+v", m)
+	}
+	a.Lock()
+	if !procs[0].p.isClosed() || !procs[1].p.isClosed() {
+		t.Fatal("ロック must close the set window and the spare")
+	}
 }
 
 func TestCmdsetDocOfMarksChanges(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -53,6 +54,10 @@ type cmdsetMsg struct {
 	Kind  string     `json:"kind"`
 	Title string     `json:"title,omitempty"`
 	Doc   *cmdsetDoc `json:"doc,omitempty"`
+	// Parent is the main window's rectangle ("l,t,r,b") on the first show
+	// sent to a spare window, which was started hidden before the click and
+	// is placed over the main window as it is now.
+	Parent string `json:"parent,omitempty"`
 }
 
 // cmdsetDocOf is what a window shows for cs.
@@ -95,20 +100,44 @@ type cmdsetWinRef struct {
 	last []byte // the last line sent (nothing is resent unchanged)
 }
 
+// cmdsetSpareRef is a set window started hidden ahead of the click: a new
+// window costs a process and a WebView2 start (a second or two), so one is
+// kept ready while the Command sets tab is open, and View only hands it the
+// set and shows it.
+type cmdsetSpareRef struct {
+	in   io.WriteCloser
+	pid  int
+	done <-chan struct{}
+}
+
 var (
-	cmdsetMu   sync.Mutex
-	cmdsetWins = map[string]*cmdsetWinRef{}
-	// startCmdsetProc starts a set window and returns its stdin and pid,
-	// and a channel closed when it has exited (replaced in tests).
+	cmdsetMu    sync.Mutex
+	cmdsetWins  = map[string]*cmdsetWinRef{}
+	cmdsetSpare *cmdsetSpareRef
+	// cmdsetPrewarmOn turns the spare window on (off in tests that count the
+	// windows started).
+	cmdsetPrewarmOn = true
+	// cmdsetRespareAfter is how long after View the next spare starts: once
+	// the window just shown holds the foreground, so the spare hands it
+	// back to that window (keepForegroundWhileHidden). 0 starts it at once
+	// (tests).
+	cmdsetRespareAfter = 1500 * time.Millisecond
+	// startCmdsetProc starts a set window (spare: hidden, waiting for its
+	// set) and returns its stdin and pid, and a channel closed when it has
+	// exited (replaced in tests).
 	startCmdsetProc = spawnCmdsetProc
 )
 
-func spawnCmdsetProc() (io.WriteCloser, int, <-chan struct{}, error) {
+func spawnCmdsetProc(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, 0, nil, err
 	}
-	cmd := exec.Command(exe, "--cmdset")
+	args := []string{"--cmdset"}
+	if spare {
+		args = append(args, "--spare")
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Env = childEnv()
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -165,12 +194,32 @@ func (a *App) OpenCommandSetWindow(name string) error {
 		// Closed by hand a moment ago: open a new one.
 		delete(cmdsetWins, name)
 	}
-	cmdsetMu.Unlock()
-	in, pid, done, err := startCmdsetProc()
-	if err != nil {
-		return err
+	// The spare window when there is one (it shows at once), a new one
+	// otherwise; either way the next spare starts behind it.
+	var in io.WriteCloser
+	var pid int
+	var done <-chan struct{}
+	first := line
+	if sp := cmdsetSpare; sp != nil {
+		cmdsetSpare = nil
+		in, pid, done = sp.in, sp.pid, sp.done
+		first = cmdsetSpareShowLine(*cs, parentRectString())
 	}
-	if _, err := in.Write(line); err != nil {
+	cmdsetMu.Unlock()
+	defer func() {
+		if cmdsetRespareAfter == 0 {
+			a.PrewarmCommandSetWindow()
+			return
+		}
+		time.AfterFunc(cmdsetRespareAfter, a.PrewarmCommandSetWindow)
+	}()
+	if in == nil {
+		var err error
+		if in, pid, done, err = startCmdsetProc(false); err != nil {
+			return err
+		}
+	}
+	if _, err := in.Write(first); err != nil {
 		_ = in.Close()
 		return err
 	}
@@ -187,6 +236,48 @@ func (a *App) OpenCommandSetWindow(name string) error {
 		cmdsetMu.Unlock()
 	}()
 	return nil
+}
+
+// PrewarmCommandSetWindow starts the spare set window if there is none (the
+// Command sets tab calls it when it is shown; View starts the next one).
+// Nothing while the vault is locked.
+func (a *App) PrewarmCommandSetWindow() {
+	if !cmdsetPrewarmOn {
+		return
+	}
+	a.mu.Lock()
+	open := a.inv != nil
+	a.mu.Unlock()
+	if !open {
+		return
+	}
+	cmdsetMu.Lock()
+	defer cmdsetMu.Unlock()
+	if cmdsetSpare != nil {
+		return
+	}
+	in, pid, done, err := startCmdsetProc(true)
+	if err != nil {
+		return
+	}
+	sp := &cmdsetSpareRef{in: in, pid: pid, done: done}
+	cmdsetSpare = sp
+	go func() {
+		<-done
+		cmdsetMu.Lock()
+		if cmdsetSpare == sp {
+			cmdsetSpare = nil
+		}
+		cmdsetMu.Unlock()
+	}()
+}
+
+// cmdsetSpareShowLine is the first line to a spare window: the set, and
+// where the main window is now.
+func cmdsetSpareShowLine(cs model.CommandSet, parent string) []byte {
+	doc := cmdsetDocOf(cs)
+	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &doc, Parent: parent})
+	return append(b, '\n')
 }
 
 // renameCmdsetWindow moves the window of a renamed set to its new name (the
@@ -252,10 +343,15 @@ func (a *App) cmdsetSetsLocked() []model.CommandSet {
 	return out
 }
 
-// closeCmdsetWindows closes every set window (ロック, exit, 全データ削除).
+// closeCmdsetWindows closes every set window and the spare (ロック, exit,
+// 全データ削除).
 func closeCmdsetWindows() {
 	cmdsetMu.Lock()
 	defer cmdsetMu.Unlock()
+	if cmdsetSpare != nil {
+		_ = cmdsetSpare.in.Close()
+		cmdsetSpare = nil
+	}
 	for name, w := range cmdsetWins {
 		_ = w.in.Close()
 		delete(cmdsetWins, name)
@@ -273,6 +369,8 @@ type CmdsetWin struct {
 	doc     cmdsetDoc
 	title   string
 	deleted bool
+	// hidden: a spare window not shown yet (its first set shows it).
+	hidden bool
 }
 
 // cmdsetState is what the page shows.
@@ -307,11 +405,26 @@ func (c *CmdsetWin) apply(m cmdsetMsg) (redraw, focus bool) {
 
 func (c *CmdsetWin) startup(ctx context.Context) {
 	c.ctx = ctx
-	cmdsetWinSize.fit(ctx)
-	placeNearParent(ctx, cmdsetWinSize)
+	c.mu.Lock()
+	hidden := c.hidden
+	c.mu.Unlock()
+	// A spare is sized and placed when it is shown: sizing a hidden frame
+	// through the runtime made it the (invisible) foreground window, and the
+	// keyboard went to it.
+	if !hidden {
+		cmdsetWinSize.fit(ctx)
+		placeNearParent(ctx, cmdsetWinSize)
+	}
 }
 
-func (c *CmdsetWin) domReady(ctx context.Context) { go focusOwnWindow() }
+func (c *CmdsetWin) domReady(ctx context.Context) {
+	c.mu.Lock()
+	hidden := c.hidden
+	c.mu.Unlock()
+	if !hidden {
+		go focusOwnWindow()
+	}
+}
 
 // Load is the set as last sent.
 func (c *CmdsetWin) Load() cmdsetState {
@@ -340,6 +453,19 @@ func (c *CmdsetWin) follow(in *bufio.Reader, ready <-chan struct{}) {
 			if json.Unmarshal(line, &m) == nil {
 				redraw, focus := c.apply(m)
 				<-ready
+				// A spare's first set: placed over the main window as it is
+				// now, then shown with the set already drawn.
+				c.mu.Lock()
+				first := c.hidden && m.Kind == "show" && m.Doc != nil
+				if first {
+					c.hidden = false
+				}
+				c.mu.Unlock()
+				if first {
+					cmdsetWinSize.fit(c.ctx)
+					placeHiddenOver(c.ctx, cmdsetWinSize, m.Parent)
+					focus = true
+				}
 				if redraw {
 					c.mu.Lock()
 					st, title := cmdsetState{Doc: c.doc, Deleted: c.deleted}, c.title

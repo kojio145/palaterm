@@ -174,21 +174,39 @@ func runDiffWindow(a, b, label string) {
 
 func runCmdsetWindow() {
 	in := bufio.NewReader(os.Stdin)
-	line, err := in.ReadBytes('\n')
-	var m cmdsetMsg
-	if err != nil || json.Unmarshal(line, &m) != nil || m.Kind != "show" || m.Doc == nil {
-		return
-	}
 	c := &CmdsetWin{}
-	c.apply(m)
+	title := cmdsetTitle("")
+	// A spare starts hidden with nothing in it, ahead of the click; its
+	// first set shows it (see CmdsetWin.follow). Any other window starts
+	// with its set.
+	spare := len(os.Args) >= 3 && os.Args[2] == "--spare"
+	if spare {
+		c.hidden = true
+		// The window the user is in now gets the foreground back if the
+		// hidden frame takes it.
+		go keepForegroundWhileHidden(foregroundWindow(), func() bool {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			return c.hidden
+		})
+	} else {
+		line, err := in.ReadBytes('\n')
+		var m cmdsetMsg
+		if err != nil || json.Unmarshal(line, &m) != nil || m.Kind != "show" || m.Doc == nil {
+			return
+		}
+		c.apply(m)
+		title = m.Title
+	}
 	ready := make(chan struct{})
 	go c.follow(in, ready)
-	err = wails.Run(&options.App{
-		Title:     m.Title,
-		Width:     cmdsetWinSize.W,
-		Height:    cmdsetWinSize.H,
-		MinWidth:  cmdsetWinSize.MinW,
-		MinHeight: cmdsetWinSize.MinH,
+	err := wails.Run(&options.App{
+		StartHidden: spare,
+		Title:       title,
+		Width:       cmdsetWinSize.W,
+		Height:      cmdsetWinSize.H,
+		MinWidth:    cmdsetWinSize.MinW,
+		MinHeight:   cmdsetWinSize.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

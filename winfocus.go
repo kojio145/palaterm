@@ -12,7 +12,8 @@ var (
 	user32                  = syscall.NewLazyDLL("user32.dll")
 	kernel32                = syscall.NewLazyDLL("kernel32.dll")
 	pSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
-	pSetFocus               = user32.NewProc("SetFocus")
+	pGetForegroundWindow    = user32.NewProc("GetForegroundWindow")
+	pSetFocus              = user32.NewProc("SetFocus")
 	pShowWindow             = user32.NewProc("ShowWindow")
 	pEnumWindows            = user32.NewProc("EnumWindows")
 	pEnumChildWindows       = user32.NewProc("EnumChildWindows")
@@ -103,7 +104,58 @@ var (
 	enumWin0    uintptr
 	enumTopCB   = syscall.NewCallback(enumTopProc)
 	enumChildCB = syscall.NewCallback(enumChildProc)
+	enumFrameCB = syscall.NewCallback(enumFrameProc)
 )
+
+// enumFrameProc finds this process's Wails frame by its class, shown or not.
+func enumFrameProc(h uintptr, _ uintptr) uintptr {
+	var wpid uint32
+	pGetWindowThreadProcess.Call(h, uintptr(unsafe.Pointer(&wpid)))
+	if uintptr(wpid) != enumPID {
+		return 1
+	}
+	buf := make([]uint16, 64)
+	n, _, _ := pGetClassName.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if syscall.UTF16ToString(buf[:n]) != "wailsWindow" {
+		return 1
+	}
+	enumFound = h
+	return 0
+}
+
+// foregroundWindow is the window the user is in (any process), or 0.
+func foregroundWindow() uintptr {
+	h, _, _ := pGetForegroundWindow.Call()
+	return h
+}
+
+// keepForegroundWhileHidden hands the foreground back to prev for as long as
+// hidden() says this window has not been shown (up to 10 s): Windows lets a
+// process started by the foreground one take the foreground, and a frame
+// created hidden did — the keyboard went to an invisible window. Being the
+// foreground process then, it may give it back.
+func keepForegroundWhileHidden(prev uintptr, hidden func() bool) {
+	if prev == 0 {
+		return
+	}
+	for i := 0; i < 200 && hidden(); i++ {
+		if own := ownFrame(); own != 0 && foregroundWindow() == own {
+			pSetForegroundWindow.Call(prev)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// ownFrame is this process's Wails frame even while it is hidden (a window
+// started hidden is placed before it appears), or 0.
+func ownFrame() uintptr {
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumPID, _, _ = pGetCurrentProcessId.Call()
+	enumFound = 0
+	pEnumWindows.Call(enumFrameCB, 0)
+	return enumFound
+}
 
 func enumTopProc(h uintptr, _ uintptr) uintptr {
 	const gwOwner = 4

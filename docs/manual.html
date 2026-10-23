@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.13</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.14</div>
   </header>
 
   <nav class="toc">
@@ -354,9 +354,9 @@
     <h3>「表示」：読み取り専用の別窓で見る</h3>
     <p>一覧の各行の<strong>「表示」</strong>（「編集」の左。プレビュー欄のクリックでも同じ）で、そのセットを別の窓に開きます。端末窓の横に置いて、見ながら手で打つときに使います。この窓では<strong>編集できません</strong>（入力欄・貼り付けはなく、編集はメイン画面の「編集」から）。</p>
     <ul>
-      <li>行番号付きで 1 行 1 コマンド。<strong>「待つ文字列・待機秒も表示」</strong>（既定オン）で「待つ: (config)#」「待機 1 秒」（リモートとシリアルが違えば「待機 1 秒（シリアル 3 秒）」。「待機秒を使う」がオフのセットでは出しません）も並べます。</li>
+      <li>行番号付きで 1 行 1 コマンド。<strong>「待つ文字列・待機秒も表示」</strong>（既定オフ。チェックを入れると表示・この PC で記憶）で「待つ: (config)#」「待機 1 秒」（リモートとシリアルが違えば「待機 1 秒（シリアル 3 秒）」。「待機秒を使う」がオフのセットでは出しません）も並べます。</li>
       <li><strong>設定を変えるコマンド</strong>（実行前の警告と同じ判定）は<strong>橙色</strong>で、理由（「設定モードに入る」など）を小さな札で示し、上に「⚠ 設定を変えるコマンドが N 行あります（橙色）」と出ます。</li>
-      <li>行をクリックで選択（<kbd>Shift</kbd>+クリックで範囲・<kbd>Ctrl</kbd>+クリックで追加/解除・<kbd>Ctrl</kbd>+<kbd>A</kbd> ですべて）し、<kbd>Ctrl</kbd>+<kbd>C</kbd>（または「選択行をコピー」）で<strong>コマンドの文字だけ</strong>をコピーします（行番号・札・待つ文字列は含めません）。「コマンドをすべてコピー」は選択に関係なく全コマンドです。</li>
+      <li>行をクリック・ドラッグで選択（<kbd>Shift</kbd>+クリックで範囲・<kbd>Ctrl</kbd>+クリックで追加/解除・<kbd>Ctrl</kbd>+<kbd>A</kbd> ですべて）し、<kbd>Ctrl</kbd>+<kbd>C</kbd>（または「選択行をコピー」）で<strong>コマンドの文字だけ</strong>をコピーします（行番号・札・待つ文字列は含めません）。「コマンドをすべてコピー」は選択に関係なく全コマンドです。</li>
       <li><kbd>Ctrl</kbd>+<kbd>F</kbd> で検索、A− / A+（<kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd>）で文字サイズ、<kbd>Esc</kbd> で閉じます（検索バーが開いていれば先に検索バーを閉じます）。<strong>「常に手前に表示」</strong>にすると、ほかの窓の上に出たままになります。文字サイズと 2 つのチェックはこの PC に記憶されます。</li>
       <li>同じセットの「表示」をもう一度押すと、開いている窓が前に出ます（窓は増えません）。別のセットは別の窓で開くので、並べて見比べられます。</li>
       <li>メイン画面でそのセットを保存し直すと、開いている窓も<strong>自動で最新</strong>になります（名前を変えれば窓の題名も変わり、削除すると「このコマンドセットは削除されました」と出ます。窓は閉じません）。ロックと PalaTerm の終了で閉じます。</li>
@@ -947,7 +947,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.13 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.14 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

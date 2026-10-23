@@ -83,13 +83,22 @@ func childEnv(extra ...string) []string {
 	if lang != "" {
 		env = append(env, "PALATERM_LANG="+lang)
 	}
+	if r := parentRectString(); r != "" {
+		env = append(env, parentRectEnv+"="+r)
+	}
+	return append(env, extra...)
+}
+
+// parentRectString is this process's window rectangle as "l,t,r,b" (what a
+// child window is placed over), or "" when it has none on screen.
+func parentRectString() string {
 	if hwnd := ownTopLevelWindow(); hwnd != 0 {
 		var r rect
 		if ok, _, _ := pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok != 0 {
-			env = append(env, fmt.Sprintf("%s=%d,%d,%d,%d", parentRectEnv, r.L, r.T, r.R, r.B))
+			return fmt.Sprintf("%d,%d,%d,%d", r.L, r.T, r.R, r.B)
 		}
 	}
-	return append(env, extra...)
+	return ""
 }
 
 // parseRect reads "l,t,r,b"; ok is false for anything else or an empty box.
@@ -226,35 +235,53 @@ func placeNearParent(ctx context.Context, ws winSize) {
 		cascade = cascadeOffset(n)
 	}
 	go func() {
-		hwnd := waitOwnWindow()
-		if hwnd == 0 {
-			return
+		if hwnd := waitOwnWindow(); hwnd != 0 {
+			placeOver(ctx, ws, hwnd, parent, cascade)
 		}
-		const monitorDefaultToNearest = 2
-		mon, _, _ := pMonitorFromRect.Call(uintptr(unsafe.Pointer(&parent)), monitorDefaultToNearest)
-		mi, ok := monitorWork(mon)
-		if !ok {
-			return
-		}
-		const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
-		move := func() {
-			var r rect
-			if ok, _, _ := pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
-				return
-			}
-			x, y := centreIn(parent, mi.Work, r.R-r.L, r.B-r.T)
-			// The cascade offset, kept inside the work area the way the
-			// centre is.
-			if cascade > 0 {
-				x, y = centreIn(rect{L: parent.L + cascade, T: parent.T + cascade, R: parent.R + cascade, B: parent.B + cascade}, mi.Work, r.R-r.L, r.B-r.T)
-			}
-			pSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
-		}
-		if cur, _, _ := pMonitorFromWindw.Call(hwnd, monitorDefaultToNearest); cur != mon {
-			move()
-			time.Sleep(150 * time.Millisecond) // a scaling change resizes the frame
-			ws.fit(ctx)
-		}
-		move()
 	}()
+}
+
+// placeHiddenOver is placeNearParent for a window started hidden (the spare
+// command-set window), with the parent's rectangle as it is now ("l,t,r,b"
+// from parentRectString): done before the window is shown, so it appears
+// in place.
+func placeHiddenOver(ctx context.Context, ws winSize, parentRect string) {
+	parent, ok := parseRect(parentRect)
+	if !ok {
+		return
+	}
+	if hwnd := ownFrame(); hwnd != 0 {
+		placeOver(ctx, ws, hwnd, parent, 0)
+	}
+}
+
+// placeOver centres hwnd over parent (shifted by cascade) inside parent's
+// monitor's work area.
+func placeOver(ctx context.Context, ws winSize, hwnd uintptr, parent rect, cascade int32) {
+	const monitorDefaultToNearest = 2
+	mon, _, _ := pMonitorFromRect.Call(uintptr(unsafe.Pointer(&parent)), monitorDefaultToNearest)
+	mi, ok := monitorWork(mon)
+	if !ok {
+		return
+	}
+	const swpNoSize, swpNoZOrder, swpNoActivate = 0x0001, 0x0004, 0x0010
+	move := func() {
+		var r rect
+		if ok, _, _ := pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r))); ok == 0 {
+			return
+		}
+		x, y := centreIn(parent, mi.Work, r.R-r.L, r.B-r.T)
+		// The cascade offset, kept inside the work area the way the
+		// centre is.
+		if cascade > 0 {
+			x, y = centreIn(rect{L: parent.L + cascade, T: parent.T + cascade, R: parent.R + cascade, B: parent.B + cascade}, mi.Work, r.R-r.L, r.B-r.T)
+		}
+		pSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, swpNoSize|swpNoZOrder|swpNoActivate)
+	}
+	if cur, _, _ := pMonitorFromWindw.Call(hwnd, monitorDefaultToNearest); cur != mon {
+		move()
+		time.Sleep(150 * time.Millisecond) // a scaling change resizes the frame
+		ws.fit(ctx)
+	}
+	move()
 }
