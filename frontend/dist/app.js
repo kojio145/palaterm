@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.16";
+const APP_VERSION = "1.9.17";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -469,67 +469,92 @@ function listViewWire(key, root, rerender, focus) {
 // on the page and nothing happens. The title bar gives the top corners a
 // tolerant band of their own; the bottom corners had none (2026-10-24 user
 // report: the command set window would not grow from its bottom left; an
-// Explorer window measured the same). Thin zones along the page's edges and
-// corners resize the window through the runtime, as browsers do.
-function wireEdgeResize(min) {
-  const R = rt();
-  if (!R || !R.WindowGetSize || !R.WindowSetSize || !R.WindowGetPosition || !R.WindowSetPosition) return;
+// Explorer window measured the same). A primary press within a few pixels of
+// the page's edges or corners hands the drag to Windows' own sizing through
+// Wails' "resize:" message (the one its frameless windows use: ReleaseCapture
+// on the UI thread, then WM_NCLBUTTONDOWN with the edge), so the drag itself
+// — capture, floor, DPI, snapping — is the system's, exactly as a grab on the
+// frame. (Driving it from here through the runtime lost the pointer release
+// now and then, and the window shrank to its floor. Posting SC_SIZE from a Go
+// binding did nothing: the WebView2 kept the capture, which only its own
+// thread can release.)
+//
+// The press is read at the document, not on overlay elements (review
+// 2026-10-24): overlays sat on the scrollbars' arrow buttons, swallowed
+// right clicks and every press at the edge of a maximised window, and stood
+// above the dialogs' overlays. Here a press on a scrollbar, with another
+// button, or in a maximised window is left to the page as it was; the cursor
+// hint comes from a class on <html> while the mouse rests at an edge.
+function wireEdgeResize() {
+  if (typeof window.WailsInvoke !== "function") return;
   const E = 5, C = 14; // the edge band, the corner square
-  const zones = [
-    ["n", `top:0;left:${C}px;right:${C}px;height:${E}px;cursor:ns-resize`],
-    ["s", `bottom:0;left:${C}px;right:${C}px;height:${E}px;cursor:ns-resize`],
-    ["w", `left:0;top:${C}px;bottom:${C}px;width:${E}px;cursor:ew-resize`],
-    ["e", `right:0;top:${C}px;bottom:${C}px;width:${E}px;cursor:ew-resize`],
-    ["nw", `top:0;left:0;width:${C}px;height:${C}px;cursor:nwse-resize`],
-    ["se", `bottom:0;right:0;width:${C}px;height:${C}px;cursor:nwse-resize`],
-    ["ne", `top:0;right:0;width:${C}px;height:${C}px;cursor:nesw-resize`],
-    ["sw", `bottom:0;left:0;width:${C}px;height:${C}px;cursor:nesw-resize`],
-  ];
-  for (const [dir, css] of zones) {
-    const z = document.createElement("div");
-    z.className = "edge-resize";
-    z.dataset.dir = dir;
-    z.style.cssText = "position:fixed;z-index:10000;" + css;
-    z.addEventListener("pointerdown", async e => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      if (R.WindowIsMaximised && await R.WindowIsMaximised()) return;
-      z.setPointerCapture(e.pointerId);
-      const [pos, size] = await Promise.all([R.WindowGetPosition(), R.WindowGetSize()]);
-      const sx = e.screenX, sy = e.screenY;
-      // One runtime call in flight at a time; the newest pointer position
-      // wins (pointermove comes faster than the window can be sized).
-      let busy = false, last = null;
-      const apply = async () => {
-        if (busy || !last) return;
-        busy = true;
-        const [dx, dy] = last;
-        last = null;
-        let x = pos.x, y = pos.y, w = size.w, h = size.h;
-        if (dir.includes("e")) w = Math.max(min.w, size.w + dx);
-        if (dir.includes("s")) h = Math.max(min.h, size.h + dy);
-        if (dir.includes("w")) { w = Math.max(min.w, size.w - dx); x = pos.x + (size.w - w); }
-        if (dir.includes("n")) { h = Math.max(min.h, size.h - dy); y = pos.y + (size.h - h); }
-        try {
-          if (x !== pos.x || y !== pos.y || dir.includes("w") || dir.includes("n")) R.WindowSetPosition(x, y);
-          R.WindowSetSize(w, h);
-        } catch (err) { }
-        await new Promise(r => setTimeout(r, 16));
-        busy = false;
-        if (last) apply();
-      };
-      const move = ev => { last = [ev.screenX - sx, ev.screenY - sy]; apply(); };
-      const up = () => {
-        z.removeEventListener("pointermove", move);
-        z.removeEventListener("pointerup", up);
-        z.removeEventListener("pointercancel", up);
-      };
-      z.addEventListener("pointermove", move);
-      z.addEventListener("pointerup", up);
-      z.addEventListener("pointercancel", up);
-    });
-    document.body.appendChild(z);
-  }
+  const style = document.createElement("style");
+  style.textContent = ["n", "s"].map(d => `html.edge-${d} * { cursor: ns-resize !important; }`).join("\n") + "\n" +
+    ["e", "w"].map(d => `html.edge-${d} * { cursor: ew-resize !important; }`).join("\n") + "\n" +
+    ["nw", "se"].map(d => `html.edge-${d} * { cursor: nwse-resize !important; }`).join("\n") + "\n" +
+    ["ne", "sw"].map(d => `html.edge-${d} * { cursor: nesw-resize !important; }`).join("\n");
+  document.head.appendChild(style);
+  // A maximised (or full-screen) window has no frame to drag; the system
+  // would ignore the request, so the press stays with the page. Asked at
+  // start and whenever the window's size changes (maximise is one).
+  let maximised = false;
+  const R = rt();
+  const ask = () => {
+    if (!R || !R.WindowIsMaximised) return;
+    R.WindowIsMaximised().then(v => { maximised = !!v; }).catch(() => {});
+    if (R.WindowIsFullscreen) R.WindowIsFullscreen().then(v => { if (v) maximised = true; }).catch(() => {});
+  };
+  ask();
+  window.addEventListener("resize", ask);
+  // The edge or corner at (x, y) in the viewport, "" elsewhere.
+  const edgeDir = (x, y) => {
+    const W = innerWidth, H = innerHeight;
+    const nearL = x < C, nearR = x > W - C, nearT = y < C, nearB = y > H - C;
+    const v = y < E ? "n" : y > H - E ? "s" : nearT && (nearL || nearR) ? "n" : nearB && (nearL || nearR) ? "s" : "";
+    const h = x < E ? "w" : x > W - E ? "e" : nearL && (nearT || nearB) ? "w" : nearR && (nearT || nearB) ? "e" : "";
+    return v + h;
+  };
+  // A press on el's own scrollbar (its arrow buttons sit in the corner):
+  // the scrollbar is the part of the box outside the client area.
+  const onScrollbar = (el, x, y) => {
+    if (!(el instanceof Element)) return false;
+    if (el === document.documentElement || el === document.body) {
+      return x >= document.documentElement.clientWidth || y >= document.documentElement.clientHeight;
+    }
+    const r = el.getBoundingClientRect();
+    const vsb = el.offsetWidth - el.clientWidth - 2 * el.clientLeft;
+    const hsb = el.offsetHeight - el.clientHeight - 2 * el.clientTop;
+    return (vsb > 0 && x >= r.right - el.clientLeft - vsb) || (hsb > 0 && y >= r.bottom - el.clientTop - hsb);
+  };
+  let hint = "";
+  const setHint = dir => {
+    if (dir === hint) return;
+    if (hint) document.documentElement.classList.remove("edge-" + hint);
+    if (dir) document.documentElement.classList.add("edge-" + dir);
+    hint = dir;
+  };
+  document.addEventListener("pointermove", e => {
+    if (e.pointerType !== "mouse" || maximised || e.buttons) { setHint(""); return; }
+    const dir = edgeDir(e.clientX, e.clientY);
+    setHint(dir && !onScrollbar(e.target, e.clientX, e.clientY) ? dir : "");
+  }, true);
+  document.addEventListener("pointerleave", () => setHint(""), true);
+  document.addEventListener("pointerdown", e => {
+    if (e.button !== 0 || e.pointerType !== "mouse" || maximised) return;
+    const dir = edgeDir(e.clientX, e.clientY);
+    if (!dir || onScrollbar(e.target, e.clientX, e.clientY)) return;
+    // Not prevented: the page's mousedown still runs (a context menu or a
+    // popover closes on it, as on any press). The system takes the mouse
+    // from here, so the release never reaches the page: one is dispatched
+    // for whatever latched on the press (a held-button check, a selection).
+    try { window.WailsInvoke("resize:" + dir + "-resize"); } catch (err) { return; }
+    setHint("");
+    const target = e.target;
+    setTimeout(() => {
+      try { target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, button: 0, clientX: e.clientX, clientY: e.clientY })); } catch (err) { }
+      try { document.getSelection().removeAllRanges(); } catch (err) { }
+    }, 60);
+  }, true);
 }
 
 // ---- Excel-like column resizing ----
@@ -984,12 +1009,8 @@ async function boot() {
   applyStaticI18n();
   // Every window — main, terminal, screen, log viewer, diff, paste, command
   // set — resizes from an edge or corner grabbed just inside its frame (see
-  // wireEdgeResize). The floors are winfit.go's, per window kind.
-  {
-    const g = (window.go && window.go.main) || {};
-    const min = g.Term || g.Watcher ? { w: 640, h: 400 } : g.DiffWin ? { w: 720, h: 400 } : g.CmdsetWin ? { w: 420, h: 300 } : { w: 480, h: 320 };
-    wireEdgeResize(min);
-  }
+  // wireEdgeResize).
+  wireEdgeResize();
   // Standalone terminal window? (child process binds Term, not App)
   if (window.go && window.go.main && window.go.main.Term) {
     bootTerminalWindow();
