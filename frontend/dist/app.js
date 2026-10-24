@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.15";
+const APP_VERSION = "1.9.16";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -462,6 +462,76 @@ function listViewWire(key, root, rerender, focus) {
   });
 }
 
+// ---- resizing the window from inside the page ----
+// Windows keeps a window's resize band in the invisible frame just outside
+// its visible edge; the WebView2 fills the client area right up to that
+// edge, so a grab a few pixels inside a corner — where the eye aims — lands
+// on the page and nothing happens. The title bar gives the top corners a
+// tolerant band of their own; the bottom corners had none (2026-10-24 user
+// report: the command set window would not grow from its bottom left; an
+// Explorer window measured the same). Thin zones along the page's edges and
+// corners resize the window through the runtime, as browsers do.
+function wireEdgeResize(min) {
+  const R = rt();
+  if (!R || !R.WindowGetSize || !R.WindowSetSize || !R.WindowGetPosition || !R.WindowSetPosition) return;
+  const E = 5, C = 14; // the edge band, the corner square
+  const zones = [
+    ["n", `top:0;left:${C}px;right:${C}px;height:${E}px;cursor:ns-resize`],
+    ["s", `bottom:0;left:${C}px;right:${C}px;height:${E}px;cursor:ns-resize`],
+    ["w", `left:0;top:${C}px;bottom:${C}px;width:${E}px;cursor:ew-resize`],
+    ["e", `right:0;top:${C}px;bottom:${C}px;width:${E}px;cursor:ew-resize`],
+    ["nw", `top:0;left:0;width:${C}px;height:${C}px;cursor:nwse-resize`],
+    ["se", `bottom:0;right:0;width:${C}px;height:${C}px;cursor:nwse-resize`],
+    ["ne", `top:0;right:0;width:${C}px;height:${C}px;cursor:nesw-resize`],
+    ["sw", `bottom:0;left:0;width:${C}px;height:${C}px;cursor:nesw-resize`],
+  ];
+  for (const [dir, css] of zones) {
+    const z = document.createElement("div");
+    z.className = "edge-resize";
+    z.dataset.dir = dir;
+    z.style.cssText = "position:fixed;z-index:10000;" + css;
+    z.addEventListener("pointerdown", async e => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      if (R.WindowIsMaximised && await R.WindowIsMaximised()) return;
+      z.setPointerCapture(e.pointerId);
+      const [pos, size] = await Promise.all([R.WindowGetPosition(), R.WindowGetSize()]);
+      const sx = e.screenX, sy = e.screenY;
+      // One runtime call in flight at a time; the newest pointer position
+      // wins (pointermove comes faster than the window can be sized).
+      let busy = false, last = null;
+      const apply = async () => {
+        if (busy || !last) return;
+        busy = true;
+        const [dx, dy] = last;
+        last = null;
+        let x = pos.x, y = pos.y, w = size.w, h = size.h;
+        if (dir.includes("e")) w = Math.max(min.w, size.w + dx);
+        if (dir.includes("s")) h = Math.max(min.h, size.h + dy);
+        if (dir.includes("w")) { w = Math.max(min.w, size.w - dx); x = pos.x + (size.w - w); }
+        if (dir.includes("n")) { h = Math.max(min.h, size.h - dy); y = pos.y + (size.h - h); }
+        try {
+          if (x !== pos.x || y !== pos.y || dir.includes("w") || dir.includes("n")) R.WindowSetPosition(x, y);
+          R.WindowSetSize(w, h);
+        } catch (err) { }
+        await new Promise(r => setTimeout(r, 16));
+        busy = false;
+        if (last) apply();
+      };
+      const move = ev => { last = [ev.screenX - sx, ev.screenY - sy]; apply(); };
+      const up = () => {
+        z.removeEventListener("pointermove", move);
+        z.removeEventListener("pointerup", up);
+        z.removeEventListener("pointercancel", up);
+      };
+      z.addEventListener("pointermove", move);
+      z.addEventListener("pointerup", up);
+      z.addEventListener("pointercancel", up);
+    });
+    document.body.appendChild(z);
+  }
+}
+
 // ---- Excel-like column resizing ----
 // A table marked data-colw="<key>" gets a drag handle on the right edge of
 // every header cell but the last: drag to resize that column, double-click
@@ -912,6 +982,14 @@ const runState = {};  // name -> {phase, message, done, total, logPath}
 // ---- boot ----
 async function boot() {
   applyStaticI18n();
+  // Every window — main, terminal, screen, log viewer, diff, paste, command
+  // set — resizes from an edge or corner grabbed just inside its frame (see
+  // wireEdgeResize). The floors are winfit.go's, per window kind.
+  {
+    const g = (window.go && window.go.main) || {};
+    const min = g.Term || g.Watcher ? { w: 640, h: 400 } : g.DiffWin ? { w: 720, h: 400 } : g.CmdsetWin ? { w: 420, h: 300 } : { w: 480, h: 320 };
+    wireEdgeResize(min);
+  }
   // Standalone terminal window? (child process binds Term, not App)
   if (window.go && window.go.main && window.go.main.Term) {
     bootTerminalWindow();
