@@ -24,6 +24,9 @@ func TestAtJumpHost(t *testing.T) {
 		// At the hop's login or password prompt, not its shell: AtJumpLogin.
 		{"a hop's own login failed", &hopError{&hopLoginError{fmt.Errorf("踏み台1段目のログインに失敗: %w", errors.New("timeout"))}}, false},
 		{"a later hop's login failed", &hopError{&hopLoginError{errors.New("踏み台2段目のログインに失敗")}}, false},
+		{"a later hop's login refused, as traverseBastions wraps it", &hopError{hopFailure(2, errors.New("192.0.2.11 がログインを拒否しました"))}, false},
+		// The jump failing while that login was awaited: back on the previous hop's shell.
+		{"a jump failing late, as traverseBastions wraps it", &hopError{hopFailure(2, failedJump("192.0.2.11", "ssh: connect to host 192.0.2.11 port 22: Connection timed out"))}, true},
 		{"device login failed", fmt.Errorf("login: %w", errors.New("timeout")), false},
 		{"plain error", errors.New(errAuthRefused), false},
 		{"nil", nil, false},

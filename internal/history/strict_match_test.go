@@ -139,6 +139,29 @@ func TestStrictVerifyStillCatchesMissing(t *testing.T) {
 	}
 }
 
+// A one-word "not stored" pattern takes only that word: "mac address-table
+// static …" is not "macro", and when the after log lacks it, it is missing.
+// The multi-word patterns still accept abbreviations.
+func TestStrictVerifyNotStoredWholeWord(t *testing.T) {
+	work := strings.Join([]string{
+		"sw1(config)#mac address-table static 0000.5e00.5301 vlan 10 interface gi0/1",
+		"sw1(config)#macro apply lab-access",
+		"sw1(config)#int ra gi0/1-2",
+		"sw1(config-if-range)#exit",
+		"sw1(config)#end",
+	}, "\n")
+	cfg := "sw1#show run\nhostname sw1\ninterface GigabitEthernet0/1\ninterface GigabitEthernet0/2\n"
+	got, r := statuses(t, work, cfg, cfg)
+	expect(t, got, map[string]string{
+		" > mac address-table static 0000.5e00.5301 vlan 10 interface gi0/1": "missing",
+		" > macro apply lab-access": "unverified/notStored",
+		" > int ra gi0/1-2":         "unverified/notStored",
+	})
+	if r.Missing != 1 || r.Unverified != 2 {
+		t.Errorf("missing %d unverified %d", r.Missing, r.Unverified)
+	}
+}
+
 // What the logs cannot tell is "unverified", not missing.
 func TestStrictVerifyUnverified(t *testing.T) {
 	work := strings.Join([]string{

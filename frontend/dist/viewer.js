@@ -78,20 +78,19 @@ async function bootViewerWindow() {
   follow.checked = !!doc.live;
   setInterval(() => { if (follow.checked) reload(true); }, 2000);
   document.getElementById("lv-folder").onclick = () => V().OpenFolder().catch(e => flash(t("フォルダを開けません") + ": " + terr(e), "err"));
-  const copyAll = () => { ta.select(); document.execCommand("copy"); flash(t("コピーしました")); ta.setSelectionRange(0, 0); };
+  // The whole text through the clipboard (copyText, app.js), not a select
+  // of the textarea: selecting it scrolled the log to its top, and the place
+  // being read was lost.
+  const copyAll = () => copyText(ta.value, t("コピーしました"));
   document.getElementById("lv-copy").onclick = copyAll;
   // Right-click: 選択した文字をコピー (app.js) plus 全文コピー.
   ctxExtraItems = () => [[t("全文コピー"), copyAll]];
 
-  // Font size (shared key with the terminal window's setting).
-  const FONT_DEF = 12, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_viewer_font"), 10) || FONT_DEF)); } catch (e) {}
-  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); ta.style.fontSize = fontSize + "px"; try { localStorage.setItem("palaterm_viewer_font", String(fontSize)); } catch (e) {} }
-  setFont(fontSize);
-  document.getElementById("lv-font-inc").onclick = () => setFont(fontSize + 1);
-  document.getElementById("lv-font-dec").onclick = () => setFont(fontSize - 1);
-  ta.addEventListener("wheel", e => { if (!e.ctrlKey) return; e.preventDefault(); setFont(fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+  // Font size (its own key; wireFontZoom, app.js).
+  const zoom = wireFontZoom("palaterm_viewer_font", px => { ta.style.fontSize = px + "px"; }, { def: 12 });
+  zoom.set(zoom.size);
+  zoom.buttons(document.getElementById("lv-font-inc"), document.getElementById("lv-font-dec"));
+  zoom.wheel(ta);
 
   // Find: case-insensitive, selects the match in the textarea and scrolls to it.
   const bar = document.getElementById("lv-findbar"), fin = document.getElementById("lv-find-in"), fn = document.getElementById("lv-find-n");
@@ -103,7 +102,7 @@ async function bootViewerWindow() {
     ta.focus(); ta.setSelectionRange(m, m + lastQ.length);
     // Scroll the selection into view: estimate the line from the text before it.
     const line = ta.value.slice(0, m).split(/\r\n|\r|\n/).length - 1;
-    const lh = parseFloat(getComputedStyle(ta).lineHeight) || fontSize * 1.4;
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || zoom.size * 1.4;
     ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
     fn.textContent = `${idx + 1} / ${matches.length}`;
   }
@@ -118,9 +117,7 @@ async function bootViewerWindow() {
   fin.addEventListener("input", () => { lastQ = ""; fn.textContent = ""; });
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (zoom.key(e)) { e.preventDefault(); return; }
     // Esc closes an open find bar first, the window only after that (as the diff window).
     if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!bar.classList.contains("hidden")) closeFind(); else V().Close(); }
   });
@@ -152,13 +149,12 @@ async function bootWatchWindow() {
   </div>`);
   document.body.appendChild(wrap);
 
-  const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  // Its own size (palaterm_watch_font); until one is chosen here, the terminal window's.
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_watch_font") || localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
+  // Its own size (palaterm_watch_font); until one is chosen here, the
+  // terminal window's (wireFontZoom, app.js).
+  const zoom = wireFontZoom("palaterm_watch_font", px => { term.options.fontSize = px; refit(); }, { def: 13, fallbackKey: "palaterm_term_font" });
   const term = new Terminal({
     convertEol: false, cursorBlink: false, disableStdin: true, scrollback: 10000,
-    fontFamily: '"Consolas", monospace', fontSize,
+    fontFamily: '"Consolas", monospace', fontSize: zoom.size,
     theme: xtermTheme(screenColors("watch")),
   });
   const fit = new (window.FitAddon.FitAddon)();
@@ -172,9 +168,7 @@ async function bootWatchWindow() {
   const refit = () => { try { fit.fit(); } catch (e) {} };
   refit();
   window.addEventListener("resize", refit);
-  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); term.options.fontSize = fontSize; try { localStorage.setItem("palaterm_watch_font", String(fontSize)); } catch (e) {} refit(); }
-  document.getElementById("wv-font-inc").onclick = () => setFont(fontSize + 1);
-  document.getElementById("wv-font-dec").onclick = () => setFont(fontSize - 1);
+  zoom.buttons(document.getElementById("wv-font-inc"), document.getElementById("wv-font-dec"));
   document.getElementById("wv-log").onclick = () => W().OpenLog().catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
 
   // Selection → Ctrl+C / right-click copies it (the terminal sends nothing).
@@ -184,9 +178,7 @@ async function bootWatchWindow() {
   });
   ctxExtraItems = () => term.hasSelection() ? [[t("選択した文字をコピー"), () => copyText(term.getSelection(), t("コピーしました"))]] : [];
   document.addEventListener("keydown", e => {
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (zoom.key(e)) { e.preventDefault(); return; }
     if (e.key === "Escape" && !document.getElementById("sc-pop")) W().Close();
   }, true); // capture: the terminal's own textarea would swallow the keys
 

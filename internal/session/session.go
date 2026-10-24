@@ -74,18 +74,10 @@ func effectiveBastionLegacy(b *model.Bastion, devOpts DialOpts) bool {
 func DialBastionHead(b *model.Bastion, connectTimeout time.Duration, opts DialOpts) (Session, error) {
 	switch b.Method {
 	case model.BastionSSH:
-		port := b.Port
-		if port == 0 {
-			port = 22
-		}
 		opts.Legacy = effectiveBastionLegacy(b, opts)
-		return dialSSH(b.Host, port, b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, connectTimeout, opts)
+		return dialSSH(b.Host, b.EffectivePort(), b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, connectTimeout, opts)
 	case model.BastionTelnet:
-		port := b.Port
-		if port == 0 {
-			port = 23
-		}
-		return dialTelnet(b.Host, port, connectTimeout)
+		return dialTelnet(b.Host, b.EffectivePort(), connectTimeout)
 	default:
 		return nil, fmt.Errorf("unknown bastion method %q", b.Method)
 	}

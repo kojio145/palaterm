@@ -1,6 +1,7 @@
 package listimport
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -91,6 +92,13 @@ func normWord(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(norm.NFKC.String(s)), ""))
 }
 
+// reRepeated is the mark ReadTable gives the second and later columns of a
+// repeated header ("Router (2)") — only that: "ポート (TCP)" is a header of
+// its own.
+var reRepeated = regexp.MustCompile(` \(\d+\)$`)
+
+func isRepeated(name string) bool { return reRepeated.MatchString(name) }
+
 // Suggest guesses a rule for the sheet: the header row (when the rule
 // still has the first row, as a new rule does) and the columns of the
 // usual fields by their header names.
@@ -112,7 +120,7 @@ func Suggest(s *sheet.Sheet, r model.ImportRule) Suggestion {
 	used := map[int]bool{}
 	for _, fw := range fieldWords {
 		for _, h := range t.Headers {
-			if used[h.Col] || h.Name == "" || strings.HasSuffix(h.Name, ")") && strings.Contains(h.Name, " (") {
+			if used[h.Col] || h.Name == "" || isRepeated(h.Name) {
 				continue // a repeated header is the second device's
 			}
 			w := normWord(h.Name)
@@ -134,7 +142,7 @@ func Suggest(s *sheet.Sheet, r model.ImportRule) Suggestion {
 model:
 	for _, mw := range modelWords {
 		for _, h := range t.Headers {
-			if used[h.Col] || h.Name == "" || strings.HasSuffix(h.Name, ")") && strings.Contains(h.Name, " (") {
+			if used[h.Col] || h.Name == "" || isRepeated(h.Name) {
 				continue
 			}
 			if w := normWord(h.Name); strings.Contains(w, normWord(mw)) && !hasAny(w, []string{"コード", "code", "数", "種別", "区分"}) {

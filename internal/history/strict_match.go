@@ -440,13 +440,23 @@ func startsWith(typed []string, pat ...string) bool {
 }
 
 // notStored: commands that act once and are not kept in the configuration
-// as typed.
+// as typed. A one-word pattern must be the whole typed word: by prefix,
+// "macro" took "mac address-table static …" too, and a missing MAC entry
+// was reported "unverified" instead of missing. The multi-word patterns
+// keep the abbreviation rule ("int ra gi0/1-2", "cry key gen"), as the
+// rest of the matching does: two words together name the command.
 func notStored(typed []string) bool {
 	for _, p := range [][]string{
 		{"interface", "range"}, {"crypto", "key", "generate"}, {"crypto", "key", "zeroize"},
 		{"crypto", "pki", "authenticate"}, {"crypto", "pki", "enroll"}, {"clock", "set"},
 		{"banner"}, {"license"}, {"macro"}, {"default", "interface"}, {"request"},
 	} {
+		if len(p) == 1 {
+			if len(typed) >= 1 && typed[0] == p[0] {
+				return true
+			}
+			continue
+		}
 		if startsWith(typed, p...) {
 			return true
 		}

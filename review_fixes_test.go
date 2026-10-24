@@ -114,9 +114,10 @@ func TestGroupChangesStopSchedules(t *testing.T) {
 	if by("s1").Enabled || by("s3").Enabled {
 		t.Errorf("after deleting lab: s1=%v s3=%v (want both off)", by("s1").Enabled, by("s3").Enabled)
 	}
+	// The 実行記録 file is shared between tests: count this test's own.
 	found := 0
 	for _, e := range a.readSchedLog(0) {
-		if e.Kind == "stopped" {
+		if e.Kind == "stopped" && (e.ScheduleID == "s1" || e.ScheduleID == "s2" || e.ScheduleID == "s3") {
 			found++
 		}
 	}

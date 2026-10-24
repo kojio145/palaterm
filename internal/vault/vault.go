@@ -20,9 +20,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/scrypt"
@@ -47,8 +47,8 @@ const (
 // GCM is indistinguishable from a corrupted file or a wrong key.
 var ErrWrongPassword = errors.New("wrong master password or corrupted vault")
 
-func deriveKey(password string, salt []byte, n int) ([]byte, error) {
-	return scrypt.Key([]byte(password), salt, n, scryptR, scryptP, keyLen)
+func deriveKey(password string, salt []byte) ([]byte, error) {
+	return scrypt.Key([]byte(password), salt, scryptN, scryptR, scryptP, keyLen)
 }
 
 // Writer is the version of the PalaTerm saving (set once at start-up),
@@ -75,7 +75,7 @@ func Save(path, password string, inv *model.Inventory) error {
 	if _, err := rand.Read(salt); err != nil {
 		return err
 	}
-	key, err := deriveKey(password, salt, scryptN)
+	key, err := deriveKey(password, salt)
 	if err != nil {
 		return err
 	}
@@ -121,7 +121,7 @@ func Load(path, password string) (*model.Inventory, error) {
 	off += nonceLen
 	ciphertext := data[off:]
 
-	key, err := deriveKey(password, salt, scryptN)
+	key, err := deriveKey(password, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -254,13 +254,25 @@ func RestoreBackup(path string, now time.Time) (string, error) {
 	return kept, nil
 }
 
-// RemoveBackups deletes the vault's backup (<path>.bak) and any temporary
-// file a failed save left next to it.
+// RemoveBackups deletes every other copy of the vault beside it: the backup
+// (<path>.bak), the damaged files RestoreBackup set aside
+// (<path>.broken-<time>, still readable with the password of their day) and
+// any temporary file a failed save left. Called when the master password
+// changes or the vault is reset, so no file encrypted under the old password
+// stays behind. The directory is listed rather than globbed: a folder name
+// with [ ] in it is no pattern.
 func RemoveBackups(path string) {
 	_ = os.Remove(path + ".bak")
-	if tmps, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".palaterm-*.tmp")); err == nil {
-		for _, t := range tmps {
-			_ = os.Remove(t)
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, base+".broken-") ||
+			(strings.HasPrefix(name, ".palaterm-") && strings.HasSuffix(name, ".tmp")) {
+			_ = os.Remove(filepath.Join(dir, name))
 		}
 	}
 }
@@ -281,5 +293,3 @@ func writeSynced(path string, data []byte) error {
 	}
 	return f.Close()
 }
-
-var _ = io.Discard // reserved for future streaming API

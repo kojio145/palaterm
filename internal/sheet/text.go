@@ -72,7 +72,10 @@ var (
 const sniffLen = 64 << 10
 
 // sniffMarkup returns "xml2003", "html" or "" (delimited text) from the
-// start of the (ASCII-compatible) text.
+// start of the (ASCII-compatible) text. HTML is told by how the text
+// begins: a tag ("<html", a doctype, or a bare "<table" fragment as a
+// system writes "list.xls"); a CSV with an HTML snippet in a 備考 column
+// still is a CSV.
 func sniffMarkup(head string) string {
 	if len(head) > sniffLen {
 		head = head[:sniffLen]
@@ -82,7 +85,8 @@ func sniffMarkup(head string) string {
 		(strings.HasPrefix(h, "<?xml") || strings.Contains(h, "workbook")) && !strings.HasPrefix(h, "<html") {
 		return "xml2003"
 	}
-	if strings.HasPrefix(h, "<html") || strings.HasPrefix(h, "<!doctype html") || strings.Contains(h, "<table") {
+	if strings.HasPrefix(h, "<html") || strings.HasPrefix(h, "<!doctype html") ||
+		(strings.HasPrefix(h, "<") && strings.Contains(h, "<table")) {
 		return "html"
 	}
 	return ""

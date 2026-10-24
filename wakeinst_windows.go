@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // Two pieces of Win32 the 予約 need: a wake-up timer that brings the PC out
@@ -19,7 +21,6 @@ var (
 	pSetWaitableTimer    = kernel32.NewProc("SetWaitableTimer")
 	pCancelWaitableTimer = kernel32.NewProc("CancelWaitableTimer")
 	pCreateMutex         = kernel32.NewProc("CreateMutexW")
-	pFindWindow          = user32.NewProc("FindWindowW")
 )
 
 // wakeTimer is the process's waitable timer with "resume" set: when it comes
@@ -30,6 +31,7 @@ var wakeTimer struct {
 	mu     sync.Mutex
 	h      uintptr
 	at     time.Time
+	armed  bool   // the timer holds at (set, or cancelled for a zero at)
 	status string // "" / "ok" / the reason it could not be set
 }
 
@@ -38,14 +40,18 @@ func fileTimeOf(t time.Time) int64 {
 	return t.UnixNano()/100 + 116444736000000000
 }
 
-// armWake sets the wake-up for at (zero: cancel it). Unchanged times are
-// not re-set. Returns the status shown in the 予約 tab.
+// armWake sets the wake-up for at (zero: cancel it). A time the timer
+// already holds is not re-set; one it failed to take is tried again at the
+// next call (the scheduler asks every second), so a passing failure does not
+// leave the PC unable to wake for that firing. Returns the status shown in
+// the 予約 tab.
 func armWake(at time.Time) string {
 	wakeTimer.mu.Lock()
 	defer wakeTimer.mu.Unlock()
-	if at.Equal(wakeTimer.at) && wakeTimer.status != "" {
+	if wakeTimer.armed && at.Equal(wakeTimer.at) {
 		return wakeTimer.status
 	}
+	wakeTimer.armed = false
 	if wakeTimer.h == 0 {
 		h, _, err := pCreateWaitableTimer.Call(0, 1, 0)
 		if h == 0 {
@@ -54,10 +60,9 @@ func armWake(at time.Time) string {
 		}
 		wakeTimer.h = h
 	}
-	wakeTimer.at = at
 	if at.IsZero() {
 		pCancelWaitableTimer.Call(wakeTimer.h)
-		wakeTimer.status = "none"
+		wakeTimer.at, wakeTimer.armed, wakeTimer.status = at, true, "none"
 		return wakeTimer.status
 	}
 	due := fileTimeOf(at) // positive = absolute time
@@ -66,11 +71,13 @@ func armWake(at time.Time) string {
 	switch {
 	case r == 0:
 		wakeTimer.status = "SetWaitableTimer: " + err.Error()
+		return wakeTimer.status
 	case err == syscall.Errno(50): // ERROR_NOT_SUPPORTED: set, but cannot wake this PC
 		wakeTimer.status = "unsupported"
 	default:
 		wakeTimer.status = "ok"
 	}
+	wakeTimer.at, wakeTimer.armed = at, true
 	return wakeTimer.status
 }
 
@@ -149,6 +156,27 @@ func readPowerInfo() PowerInfo {
 	return pi
 }
 
+// powerInfoCache keeps readPowerInfo's answer for powerInfoTTL: the 予約
+// tab polls the status every few seconds, and each read is six Win32 power
+// queries that answer the same thing for hours.
+var powerInfoCache struct {
+	mu sync.Mutex
+	at time.Time
+	pi PowerInfo
+}
+
+const powerInfoTTL = 10 * time.Second
+
+// cachedPowerInfo is readPowerInfo, at most once per powerInfoTTL.
+func cachedPowerInfo() PowerInfo {
+	powerInfoCache.mu.Lock()
+	defer powerInfoCache.mu.Unlock()
+	if now := time.Now(); powerInfoCache.at.IsZero() || now.Sub(powerInfoCache.at) > powerInfoTTL {
+		powerInfoCache.pi, powerInfoCache.at = readPowerInfo(), now
+	}
+	return powerInfoCache.pi
+}
+
 // instanceMutex is held for the life of the main window's process.
 var instanceMutex uintptr
 
@@ -163,8 +191,7 @@ func claimSingleInstance() bool {
 	name, _ := syscall.UTF16PtrFromString(`Local\PalaTerm-` + hex.EncodeToString(sum[:8]))
 	h, _, err := pCreateMutex.Call(0, 0, uintptr(unsafe.Pointer(name)))
 	if h != 0 && err == syscall.Errno(183) { // ERROR_ALREADY_EXISTS
-		title, _ := syscall.UTF16PtrFromString("PalaTerm")
-		if w, _, _ := pFindWindow.Call(0, uintptr(unsafe.Pointer(title))); w != 0 {
+		if w := mainWindowOfFolder(exeDir()); w != 0 {
 			const swShow, swRestore = 5, 9
 			pShowWindow.Call(w, swShow)
 			pShowWindow.Call(w, swRestore)
@@ -174,4 +201,65 @@ func claimSingleInstance() bool {
 	}
 	instanceMutex = h
 	return true
+}
+
+// mainWindowOfFolder finds the main window of the PalaTerm running from dir
+// (shown or hidden in the tray), or 0: a Wails frame titled "PalaTerm" — the
+// child windows say "PalaTerm - …" — whose process runs an exe in that
+// folder. Looking the title up alone (FindWindow) raised another folder's
+// copy, or any window that happened to be titled PalaTerm.
+func mainWindowOfFolder(dir string) uintptr {
+	enumMu.Lock()
+	defer enumMu.Unlock()
+	enumMainDir = strings.ToLower(filepath.Clean(dir))
+	enumMainSelf, _, _ = pGetCurrentProcessId.Call()
+	enumFound = 0
+	pEnumWindows.Call(enumMainCB, 0)
+	return enumFound
+}
+
+// The callback is made once (see winfocus.go: Go never frees one); it reads
+// its arguments from these, held by enumMu for the length of one walk.
+var (
+	enumMainDir    string
+	enumMainSelf   uintptr
+	enumMainCB     = syscall.NewCallback(enumMainProc)
+	pGetWindowText = user32.NewProc("GetWindowTextW")
+)
+
+func enumMainProc(h uintptr, _ uintptr) uintptr {
+	var wpid uint32
+	pGetWindowThreadProcess.Call(h, uintptr(unsafe.Pointer(&wpid)))
+	if wpid == 0 || uintptr(wpid) == enumMainSelf {
+		return 1
+	}
+	buf := make([]uint16, 64)
+	n, _, _ := pGetClassName.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if syscall.UTF16ToString(buf[:n]) != "wailsWindow" {
+		return 1
+	}
+	n, _, _ = pGetWindowText.Call(h, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if syscall.UTF16ToString(buf[:n]) != "PalaTerm" {
+		return 1
+	}
+	if strings.ToLower(filepath.Dir(processImage(wpid))) != enumMainDir {
+		return 1
+	}
+	enumFound = h
+	return 0
+}
+
+// processImage is the full path of a process's exe, or "".
+func processImage(pid uint32) string {
+	p, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return ""
+	}
+	defer windows.CloseHandle(p)
+	buf := make([]uint16, syscall.MAX_LONG_PATH)
+	size := uint32(len(buf))
+	if windows.QueryFullProcessImageName(p, 0, &buf[0], &size) != nil {
+		return ""
+	}
+	return filepath.Clean(syscall.UTF16ToString(buf[:size]))
 }

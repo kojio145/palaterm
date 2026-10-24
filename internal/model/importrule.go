@@ -199,27 +199,11 @@ func (r *ImportRule) Validate() error {
 			return fmt.Errorf("項目「%s」が 2 回設定されています", f.Key)
 		}
 		seen[f.Key] = true
-		if err := f.checkSize(); err != nil {
-			return fmt.Errorf("項目「%s」: %v", f.Key, err)
-		}
-		switch f.Source {
-		case "", "column", "template":
-		default:
-			return fmt.Errorf("項目「%s」の元の値の種類が不正です", f.Key)
-		}
-		if f.Source == "column" && strings.TrimSpace(f.Column) == "" && f.ColIndex < 1 {
-			return fmt.Errorf("項目「%s」の元の列を選んでください", f.Key)
-		}
-		if f.Source == "template" && strings.TrimSpace(f.Template) == "" {
-			return fmt.Errorf("項目「%s」の組み立てを入力してください", f.Key)
+		if err := f.check("", false); err != nil {
+			return err
 		}
 		if f.Key == "name" && (f.Source != "" || strings.TrimSpace(f.Default) != "") {
 			hasName = true
-		}
-		for j := range f.Steps {
-			if err := f.Steps[j].Validate(); err != nil {
-				return fmt.Errorf("項目「%s」の加工手順 %d: %v", f.Key, j+1, err)
-			}
 		}
 	}
 	if !hasName {
@@ -234,36 +218,20 @@ func (r *ImportRule) Validate() error {
 		if len([]rune(unit.Label)) > 40 {
 			return fmt.Errorf("%d 台目の名前は 40 文字までです", u+2)
 		}
+		where := fmt.Sprintf("%d 台目の", u+2)
 		seen := map[string]bool{}
 		named := false
 		for i := range unit.Fields {
 			f := &unit.Fields[i]
 			if seen[f.Key] {
-				return fmt.Errorf("%d 台目の項目「%s」が 2 回設定されています", u+2, f.Key)
+				return fmt.Errorf("%s項目「%s」が 2 回設定されています", where, f.Key)
 			}
 			seen[f.Key] = true
-			if err := f.checkSize(); err != nil {
-				return fmt.Errorf("%d 台目の項目「%s」: %v", u+2, f.Key, err)
-			}
-			switch f.Source {
-			case "column":
-				if strings.TrimSpace(f.Column) == "" && f.ColIndex < 1 {
-					return fmt.Errorf("%d 台目の項目「%s」の元の列を選んでください", u+2, f.Key)
-				}
-			case "template":
-				if strings.TrimSpace(f.Template) == "" {
-					return fmt.Errorf("%d 台目の項目「%s」の組み立てを入力してください", u+2, f.Key)
-				}
-			default:
-				return fmt.Errorf("%d 台目の項目「%s」の元の値を選んでください", u+2, f.Key)
+			if err := f.check(where, true); err != nil {
+				return err
 			}
 			if f.Key == "name" {
 				named = true
-			}
-			for j := range f.Steps {
-				if err := f.Steps[j].Validate(); err != nil {
-					return fmt.Errorf("%d 台目の項目「%s」の加工手順 %d: %v", u+2, f.Key, j+1, err)
-				}
 			}
 		}
 		if !named {
@@ -314,6 +282,39 @@ func (f *ImportField) checkSize() error {
 	}
 	if len(f.Fallback) > maxRuleFallbacks {
 		return fmt.Errorf("「空のときは別の列」は %d 個までです", maxRuleFallbacks)
+	}
+	return nil
+}
+
+// check validates one field's size, source and steps. where prefixes the
+// messages ("" for the first device, "2 台目の" for a unit); needSource
+// refuses a field with no source — a unit's fields are all overrides, while
+// the first device's may hold just a default.
+func (f *ImportField) check(where string, needSource bool) error {
+	if err := f.checkSize(); err != nil {
+		return fmt.Errorf("%s項目「%s」: %v", where, f.Key, err)
+	}
+	switch f.Source {
+	case "column":
+		if strings.TrimSpace(f.Column) == "" && f.ColIndex < 1 {
+			return fmt.Errorf("%s項目「%s」の元の列を選んでください", where, f.Key)
+		}
+	case "template":
+		if strings.TrimSpace(f.Template) == "" {
+			return fmt.Errorf("%s項目「%s」の組み立てを入力してください", where, f.Key)
+		}
+	default:
+		if needSource {
+			return fmt.Errorf("%s項目「%s」の元の値を選んでください", where, f.Key)
+		}
+		if f.Source != "" {
+			return fmt.Errorf("%s項目「%s」の元の値の種類が不正です", where, f.Key)
+		}
+	}
+	for j := range f.Steps {
+		if err := f.Steps[j].Validate(); err != nil {
+			return fmt.Errorf("%s項目「%s」の加工手順 %d: %v", where, f.Key, j+1, err)
+		}
 	}
 	return nil
 }

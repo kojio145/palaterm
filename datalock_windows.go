@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -26,16 +27,28 @@ const dataLockName = "palaterm.lock"
 // errDataLocked: another main PalaTerm holds the folder's lock.
 var errDataLocked = errors.New("data folder in use")
 
+// errLockHeldElsewhere: something that is not a PalaTerm (an indexer, a
+// backup or sync tool) holds the lock file open — the holder line names a
+// process of this PC that no longer runs.
+var errLockHeldElsewhere = errors.New("lock file held by another program")
+
 var pCreateFileW = kernel32.NewProc("CreateFileW")
 
 // dataLock is the open lock file, held until the process ends.
 var dataLock syscall.Handle
 
+// A sharing violation is tried again for about a second before it counts:
+// an indexer or a backup tool opens the file for an instant.
+const (
+	lockRetries   = 5
+	lockRetryWait = 200 * time.Millisecond
+)
+
 // acquireDataLock opens dir\palaterm.lock for writing with no write sharing
 // and records who holds it. errDataLocked (with the holder's line, when it
 // can be read) means another main window has it; any other error (a
-// read-only folder) is no reason to refuse to start, and is returned for
-// the caller to ignore.
+// read-only folder, errLockHeldElsewhere) is no reason to refuse to start,
+// and is returned for the caller to ignore.
 func acquireDataLock(dir string) (syscall.Handle, string, error) {
 	_ = os.MkdirAll(dir, 0o755)
 	path := filepath.Join(dir, dataLockName)
@@ -49,12 +62,25 @@ func acquireDataLock(dir string) (syscall.Handle, string, error) {
 		openAlways                = 4
 		attrNormal                = 0x80
 	)
-	h, _, callErr := pCreateFileW.Call(uintptr(unsafe.Pointer(p)), genericRead|genericWrite, fileShareRead, 0, openAlways, attrNormal, 0)
-	if syscall.Handle(h) == syscall.InvalidHandle {
-		if errno, ok := callErr.(syscall.Errno); ok && (errno == 32 || errno == 33) { // sharing / lock violation
-			return 0, readLockHolder(path), errDataLocked
+	var h uintptr
+	for attempt := 0; ; attempt++ {
+		var callErr error
+		h, _, callErr = pCreateFileW.Call(uintptr(unsafe.Pointer(p)), genericRead|genericWrite, fileShareRead, 0, openAlways, attrNormal, 0)
+		if syscall.Handle(h) != syscall.InvalidHandle {
+			break
 		}
-		return 0, "", callErr
+		if errno, ok := callErr.(syscall.Errno); !ok || (errno != 32 && errno != 33) { // sharing / lock violation
+			return 0, "", callErr
+		}
+		if attempt < lockRetries {
+			time.Sleep(lockRetryWait)
+			continue
+		}
+		holder := readLockHolder(path)
+		if lockHolderGone(holder) {
+			return 0, "", errLockHeldElsewhere
+		}
+		return 0, holder, errDataLocked
 	}
 	hd := syscall.Handle(h)
 	host, _ := os.Hostname()
@@ -73,6 +99,34 @@ func readLockHolder(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// lockHolderGone reports that the holder line names a process of this PC
+// that is not running: whoever holds the file open then is not the
+// PalaTerm that wrote the line (a holder writes its own line the moment it
+// opens the file), and the line is last time's, not to be shown as today's
+// holder. A line from another PC cannot be checked and is trusted.
+func lockHolderGone(line string) bool {
+	return lockHolderGoneOn(line, hostName(), processAlive)
+}
+
+// lockHolderGoneOn is lockHolderGone for host, with alive telling whether a
+// process of this PC runs. Pure, for the tests.
+func lockHolderGoneOn(line, host string, alive func(uint32) bool) bool {
+	f := strings.Split(line, "|")
+	if len(f) < 4 || host == "" || !strings.EqualFold(f[0], host) {
+		return false
+	}
+	pid, err := strconv.ParseUint(f[2], 10, 32)
+	if err != nil {
+		return false
+	}
+	return !alive(uint32(pid))
+}
+
+func hostName() string {
+	h, _ := os.Hostname()
+	return h
 }
 
 // lockHolderText turns "PC|user|pid|time" into the words of the refusal.

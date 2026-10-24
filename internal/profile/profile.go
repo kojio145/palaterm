@@ -47,15 +47,24 @@ func (s Step) Sends() bool {
 // Credential reports whether the step sends the login user or password —
 // prompts the device never shows when the transport itself authenticated
 // (direct SSH), and that some devices skip (password-only Telnet logins).
+// Send and SendRaw are both looked at: a profile that types the password
+// verbatim (SendRaw "{password}\r") is a credential step as much as one
+// that uses Send, and skipping only the latter typed the password at the
+// operational prompt — into the command line and the log.
 func (s Step) Credential() bool {
-	return strings.Contains(s.Send, "{user}") || strings.Contains(s.Send, "{password}")
+	return s.sends("{user}") || s.sends("{password}")
 }
 
 // Auth reports whether the step belongs to authentication (credentials or the
 // enable/昇格 password). An auth step whose prompt never appears is skipped
 // after a short wait instead of failing the login.
 func (s Step) Auth() bool {
-	return s.Credential() || strings.Contains(s.Send, "{enable}")
+	return s.Credential() || s.sends("{enable}")
+}
+
+// sends reports whether the step's Send or SendRaw carries the placeholder.
+func (s Step) sends(placeholder string) bool {
+	return strings.Contains(s.Send, placeholder) || strings.Contains(s.SendRaw, placeholder)
 }
 
 // Profile describes how to log into and operate one OS family.

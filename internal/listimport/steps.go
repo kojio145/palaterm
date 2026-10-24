@@ -162,14 +162,17 @@ func applyStep(v string, s model.ImportStep) string {
 	case "map":
 		t := strings.TrimSpace(v)
 		for _, r := range s.Rows {
-			if r.From == "" {
+			// A row's From is trimmed in either mode: stray spaces around a
+			// word in the 置き換え表 must not keep it from matching.
+			from := strings.TrimSpace(r.From)
+			if from == "" {
 				continue
 			}
 			if r.Match == "contains" {
-				if strings.Contains(strings.ToLower(t), strings.ToLower(r.From)) {
+				if strings.Contains(strings.ToLower(t), strings.ToLower(from)) {
 					return r.To
 				}
-			} else if strings.EqualFold(t, strings.TrimSpace(r.From)) {
+			} else if strings.EqualFold(t, from) {
 				return r.To
 			}
 		}

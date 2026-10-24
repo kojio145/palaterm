@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -27,7 +30,48 @@ var (
 	diffWin   = winSize{W: 1320, H: 760, MinW: 720, MinH: 400}
 	// コマンドセットの表示: narrow enough to sit beside a terminal window.
 	cmdsetWinSize = winSize{W: 760, H: 680, MinW: 420, MinH: 300}
+	// The GUI window (a device's web GUI, gui_window_windows.go): not a Wails
+	// window, so the floor only bounds the remembered size.
+	guiWinSize = winSize{W: 1280, H: 860, MinW: 400, MinH: 300}
 )
+
+// A window kind's last size is kept in %LOCALAPPDATA%\PalaTerm\<name>.json
+// (a width and a height, nothing else): every terminal used to open at the
+// same 1080×680, and a 132-column user resized each one by hand. Logical
+// (96-dpi) pixels.
+func winStateFile(name string) string {
+	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", name+".json")
+}
+
+type winSizeState struct {
+	W int `json:"w"`
+	H int `json:"h"`
+}
+
+// loadWinSize is the size the last window of this kind was closed at, within
+// sane bounds (at least want's floor, at most 10000 either way).
+func loadWinSize(name string, want winSize) (int, int, bool) {
+	b, err := os.ReadFile(winStateFile(name))
+	if err != nil {
+		return 0, 0, false
+	}
+	var st winSizeState
+	if json.Unmarshal(b, &st) != nil || st.W < want.MinW || st.H < want.MinH || st.W > 10000 || st.H > 10000 {
+		return 0, 0, false
+	}
+	return st.W, st.H, true
+}
+
+// saveWinSize stores w×h for the next window of this kind; a size under
+// want's floor is not one to open at and is dropped.
+func saveWinSize(name string, want winSize, w, h int) {
+	if w < want.MinW || h < want.MinH {
+		return
+	}
+	b, _ := json.Marshal(winSizeState{W: w, H: h})
+	_ = os.MkdirAll(filepath.Dir(winStateFile(name)), 0o755)
+	_ = os.WriteFile(winStateFile(name), b, 0o644)
+}
 
 // Room left for the taskbar and the window frame: Wails reports the whole
 // screen, not the work area, and a window that exactly fills it still hides

@@ -367,3 +367,244 @@ func TestUpdateDevicesHopByHost(t *testing.T) {
 		t.Errorf("hops: %+v / %+v", a.inv.Devices[0].Bastions, a.inv.Devices[1].Bastions)
 	}
 }
+
+// 2026-10-24 review (領域 5): what leaves the process while locked, saves
+// that fail, and the scheduler's files.
+
+// A locked vault shows no schedule or device name anywhere outside the
+// vault: the tray text, the status binding and the events' lines carry the
+// counts and the times only.
+func TestSchedLockedHidesNames(t *testing.T) {
+	inv := schedInventory()
+	inv.Schedules = []schedule.Schedule{{ID: "1", Name: "nightly-lab", Enabled: true, Group: "A社",
+		Slots: []schedule.Slot{{Kind: schedule.KindOnce, Date: "2099-01-01", Time: "03:00:00"}}}}
+	a := NewApp()
+	a.schedInv, a.inv = schedCopy(inv), nil
+	now := time.Now()
+	list := a.schedules()
+	for _, c := range []struct {
+		running string
+		locked  bool
+		hide    bool
+	}{{"nightly-lab", false, false}, {"nightly-lab", true, true}, {"", false, false}, {"", true, true}} {
+		got := a.trayStatusText(list, now, c.running, 1, 3, c.locked)
+		if strings.Contains(got, "nightly-lab") == c.hide {
+			t.Errorf("tray (running=%q locked=%v): %q", c.running, c.locked, got)
+		}
+		if c.running != "" && !strings.Contains(got, "1 / 3") {
+			t.Errorf("tray lost the progress: %q", got)
+		}
+		if c.running == "" && !strings.Contains(got, "01/01 03:00") {
+			t.Errorf("tray lost the time: %q", got)
+		}
+	}
+	a.sched.runName, a.sched.runDone, a.sched.runTotal = "nightly-lab", 1, 3
+	st := a.GetScheduleStatus()
+	if !st.Locked || st.Running != "" || st.NextName != "" || st.Next == "" || st.Done != 1 || st.Total != 3 {
+		t.Errorf("locked status: %+v", st)
+	}
+	a.inv, a.schedInv = inv, nil
+	st = a.GetScheduleStatus()
+	if st.Locked || st.Running != "nightly-lab" || st.NextName != "nightly-lab" {
+		t.Errorf("unlocked status: %+v", st)
+	}
+	e := SchedLogEntry{At: "a", Due: "d", ScheduleID: "1", Schedule: "nightly-lab", Kind: "run", OK: 2, Failed: 1,
+		RunDir: `C:\logs\x`, Message: "見つからない機器を外して実行しました: sw9", Manual: true, Repeat: true, Last: true,
+		Logs: []SchedLogFile{{Device: "sw1", Path: `C:\logs\x\sw1.log`}}, Missing: []string{"sw9"}}
+	p := schedPublic(e)
+	if p.Schedule != "" || p.Message != "" || p.RunDir != "" || p.Logs != nil || p.Missing != nil {
+		t.Errorf("public line still names things: %+v", p)
+	}
+	if p.At != "a" || p.Due != "d" || p.ScheduleID != "1" || p.Kind != "run" || p.OK != 2 || p.Failed != 1 || !p.Manual || !p.Repeat || !p.Last {
+		t.Errorf("public line lost its counts: %+v", p)
+	}
+}
+
+// The locked copy is built from a list of what a firing needs; the rest of
+// the vault — and whatever is added to it later — stays out.
+func TestSchedCopyIsAnAllowlist(t *testing.T) {
+	inv := schedInventory()
+	inv.Devices[0].UseMyBastion = true
+	inv.MyBastions = []model.Bastion{{Host: "192.0.2.254", Method: model.BastionSSH, Username: "ops", Password: "jumppw"}}
+	inv.KnownHostKeys = map[string]string{"192.0.2.1:22": "SHA256:abc"}
+	inv.ImportRules = []model.ImportRule{{Name: "r"}}
+	inv.ImportRecords = map[string]model.ImportRecord{"d1": {}}
+	inv.GridDrafts = map[string]model.GridDraft{"A社": {}}
+	inv.Schedules = []schedule.Schedule{{ID: "1", Name: "n", Enabled: true, Group: "A社", Names: []string{"a1"}}}
+	c := schedCopy(inv)
+	if len(c.Devices) != 1 || c.Devices[0].Name != "a1" || c.Devices[0].Password != "gpa" {
+		t.Fatalf("devices: %+v", c.Devices)
+	}
+	if b := c.Devices[0].ActiveBastions(); len(b) != 1 || b[0].Password != "jumppw" || !b[0].Mine {
+		t.Errorf("the own jump host should be in front of the kept device: %+v", b)
+	}
+	if c.MyBastions != nil || c.ImportRules != nil || c.ImportRecords != nil || c.GridDrafts != nil || c.KnownGUICerts != nil || c.CustomProfiles != nil {
+		t.Errorf("more than the list was copied: %+v", c)
+	}
+	if c.KnownHostKeys["192.0.2.1:22"] != "SHA256:abc" || len(c.CommandSets) != 2 || len(c.Schedules) != 1 || len(c.DeviceGroups) != 2 {
+		t.Errorf("the list was not all copied: %+v", c)
+	}
+	for _, g := range c.DeviceGroups {
+		if g.Username != "" || g.Password != "" || g.EnablePassword != "" {
+			t.Errorf("group credentials kept: %+v", g)
+		}
+	}
+	// The vault's own maps and slices are not shared with the copy.
+	c.KnownHostKeys["x"] = "y"
+	c.CommandSets[0].Name = "changed"
+	if _, ok := inv.KnownHostKeys["x"]; ok || inv.CommandSets[0].Name == "changed" {
+		t.Error("the copy shares the vault's data")
+	}
+}
+
+// A save the vault refuses (read-only: saved by a newer PalaTerm) leaves
+// the schedules as they were, in memory as on disk: the schedule the user
+// was told was not saved never fires, and a stop or delete that failed is
+// not done by halves.
+func TestScheduleSaveRefusedChangesNothing(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.inv.DeviceGroups = append(a.inv.DeviceGroups, model.DeviceGroup{Name: "lab"})
+	a.inv.Devices = append(a.inv.Devices, model.Device{ID: "dsw1", Name: "sw1", Group: "lab", Host: "192.0.2.1", Conn: model.ConnSSH, OSType: "cisco-ios", Username: "ops", Enabled: true})
+	a.mu.Unlock()
+	sc := schedule.Schedule{Name: "lab nightly", Enabled: true, Group: "lab", Slots: []schedule.Slot{{Kind: schedule.KindDaily, Time: "03:00:00"}}}
+
+	a.readOnly = true
+	if _, err := a.SaveSchedule(sc); err == nil {
+		t.Fatal("a read-only vault accepted a schedule")
+	}
+	if len(a.inv.Schedules) != 0 || len(a.sched.checked) != 0 || len(a.sched.queue) != 0 {
+		t.Errorf("refused schedule left behind: %+v checked=%v queue=%v", a.inv.Schedules, a.sched.checked, a.sched.queue)
+	}
+	if err := a.SetScheduleKeepAwake(true); err == nil || a.inv.Settings.ScheduleKeepAwake {
+		t.Errorf("keep-awake on a read-only vault: err=%v on=%v", err, a.inv.Settings.ScheduleKeepAwake)
+	}
+
+	a.readOnly = false
+	id, err := a.SaveSchedule(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.sched.checked[id]; !ok {
+		t.Error("a saved schedule is not armed")
+	}
+	a.readOnly = true
+	if err := a.SetScheduleEnabled(id, false); err == nil || !schedByID(t, a, id).Enabled {
+		t.Errorf("stop on a read-only vault: err=%v enabled=%v", err, schedByID(t, a, id).Enabled)
+	}
+	if err := a.DeleteSchedule(id); err == nil {
+		t.Error("delete on a read-only vault succeeded")
+	}
+	schedByID(t, a, id) // still there
+	a.readOnly = false
+	if err := a.DeleteSchedule(id); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.inv.Schedules) != 0 {
+		t.Error("not deleted once the vault could be written")
+	}
+}
+
+// Deleting the finished schedules writes the firings they passed over while
+// a round of theirs ran (the entry used to outlive the schedule unwritten).
+func TestDeleteFinishedWritesSkips(t *testing.T) {
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	id := "f" + schedule.NewID()
+	a.mu.Lock()
+	a.inv.Schedules = append(a.inv.Schedules, schedule.Schedule{ID: id, Name: "once lab", Enabled: true, Group: "lab",
+		Slots: []schedule.Slot{{Kind: schedule.KindOnce, Date: "2020-01-01", Time: "03:00:00"}}})
+	a.mu.Unlock()
+	first := time.Date(2020, 1, 1, 3, 0, 0, 0, time.Local)
+	a.sched.skips = map[string]schedule.Span{id: {N: 2, First: first, Last: first.Add(time.Minute)}}
+	a.sched.queue = []schedJob{{sc: schedule.Schedule{ID: id}, due: first}}
+	n, err := a.DeleteFinishedSchedules()
+	if err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if _, ok := a.sched.skips[id]; ok || len(a.sched.queue) != 0 {
+		t.Errorf("skips=%v queue=%v", a.sched.skips, a.sched.queue)
+	}
+	found := false
+	for _, e := range a.readSchedLog(0) {
+		if e.ScheduleID == id && e.Kind == "skipped" && e.Schedule == "once lab" && strings.Contains(e.Message, "2 回分") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the passed-over firings were not written")
+	}
+}
+
+// ResetVault takes the scheduler's files in data\ with the vault: the next
+// vault starts without the old one's names, messages and paths, and
+// without its last look.
+func TestResetSchedFiles(t *testing.T) {
+	a := NewApp()
+	a.writeSchedLog(SchedLogEntry{ScheduleID: "x", Schedule: "old vault's", Kind: "run"})
+	writeSchedState(schedCheckedPath(), schedCheckedFile{Checked: map[string]time.Time{"x": time.Now()}, Enabled: 1})
+	a.sched.checked = map[string]time.Time{"x": time.Now()}
+	a.sched.skips = map[string]schedule.Span{"x": {N: 1}}
+	a.sched.queue = []schedJob{{sc: schedule.Schedule{ID: "x"}}}
+	a.sched.statePath = schedCheckedPath()
+	a.sched.loadStateLocked()
+	if a.sched.savedOn != 1 {
+		t.Fatal("state file not read back")
+	}
+	a.resetSchedFiles()
+	for _, p := range schedFiles() {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s still there", filepath.Base(p))
+		}
+	}
+	if len(a.readSchedLog(0)) != 0 || len(a.sched.checked) != 0 || a.sched.savedOn != 0 || a.sched.saved != nil || a.sched.skips != nil || a.sched.queue != nil {
+		t.Errorf("state kept: log=%d sched=%+v", len(a.readSchedLog(0)), a.sched.checked)
+	}
+	if NewApp().SchedulesWaitUnlock() {
+		t.Error("a fresh start still says schedules wait for the unlock")
+	}
+}
+
+// The 実行記録 is kept in memory once read: a line appends to it and
+// writes the file, a read does not touch the file again.
+func TestSchedLogCached(t *testing.T) {
+	a := NewApp()
+	u := "c" + schedule.NewID()
+	a.writeSchedLog(SchedLogEntry{ScheduleID: u, Kind: "run"})
+	if err := os.Remove(schedLogPath()); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.readSchedLog(1); len(got) != 1 || got[0].ScheduleID != u {
+		t.Errorf("read from memory: %+v", got)
+	}
+	a.writeSchedLog(SchedLogEntry{ScheduleID: u, Kind: "missed"})
+	if got := NewApp().readSchedLog(2); len(got) != 2 || got[0].Kind != "missed" || got[1].ScheduleID != u {
+		t.Errorf("the file holds both lines: %+v", got)
+	}
+}
+
+// The exit waits for the scheduled round's goroutine, for a while.
+func TestWaitSchedRuns(t *testing.T) {
+	a := NewApp()
+	if !a.waitSchedRuns(time.Second) {
+		t.Error("nothing running: should not wait")
+	}
+	a.sched.runs.Add(1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		a.sched.runs.Done()
+	}()
+	if !a.waitSchedRuns(5 * time.Second) {
+		t.Error("a round that ends in time was not waited for")
+	}
+	a.sched.runs.Add(1)
+	defer a.sched.runs.Done()
+	if a.waitSchedRuns(50 * time.Millisecond) {
+		t.Error("a round that does not end should time out")
+	}
+}

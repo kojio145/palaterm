@@ -13,15 +13,25 @@ import (
 )
 
 // Prompts commonly seen while logging into / hopping through jump hosts.
+// A login or password prompt is the line the hop is on now (the tail of the
+// output), not the words anywhere in it: a hop entered with a key greets
+// with "Last login: …", which read as a login prompt had the user name
+// typed into that hop's shell, and "command not found" then failed the run
+// (review 2026-10-24).
 const (
-	reLogin    = `(?i)login:|username:`
-	rePassword = `(?i)password:`
-	reYesNo    = `(?i)\(yes/no`
+	reLogin    = `(?i)(login|username):[ \t]*\z`
+	rePassword = `(?i)password:[ \t]*\z`
+	// reCredPrompt is either: a hop waiting for a credential.
+	reCredPrompt = `(?i)(login|username|password):[ \t]*\z`
+	reYesNo      = `(?i)\(yes/no`
 	// OpenSSH on a hop asking for the passphrase of a key kept on that hop
 	// ("Enter passphrase for key '/home/u/.ssh/id_rsa':"): the next hop or
 	// the device takes the key that lives on the jump host, not one on this PC.
 	rePassphrase = `(?i)passphrase for key`
 	reShellDone  = `[>#$%\]]\s*$` // a generic shell prompt after landing on a hop
+	// reShellTail is a shell prompt as the line the hop is on now: with the
+	// far end silent on it for a while, the hop is in (see expectHop).
+	reShellTail = `[>#$%\]][ \t]*\z`
 )
 
 // traverseBastions walks the jump-host chain and then jumps to the device,
@@ -35,7 +45,7 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 	// Log into the first hop if it was reached by Telnet (SSH already authed).
 	if bastions[0].Method == model.BastionTelnet {
 		if err := loginHop(ctx, exp, bastions[0], timeout); err != nil {
-			return nil, &hopLoginError{fmt.Errorf("踏み台1段目のログインに失敗: %w", err)}
+			return nil, hopFailure(1, err)
 		}
 	} else {
 		// Wait until the first SSH bastion's shell prompt appears.
@@ -52,12 +62,12 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 			return nil, fmt.Errorf("踏み台%d段目へのジャンプに失敗: %w", i+1, err)
 		}
 		if keyed {
-			// In with the hop's key: no login or password prompt is coming.
-			if err := exp.Expect(ctx, reShellDone, timeout); err != nil {
-				return nil, fmt.Errorf("踏み台%d段目（%s）のログイン後にプロンプトが出ませんでした: %w", i+1, next.Host, err)
-			}
-		} else if err := loginHopFrom(ctx, exp, next, from, timeout); err != nil {
-			return nil, &hopLoginError{fmt.Errorf("踏み台%d段目のログインに失敗: %w", i+1, err)}
+			err = settleHop(ctx, exp, next, from, timeout)
+		} else {
+			err = loginHopFrom(ctx, exp, next, from, timeout)
+		}
+		if err != nil {
+			return nil, hopFailure(i+1, err)
 		}
 		// The shell reached must not be the one the jump was typed on.
 		if err := from.check(exp); err != nil {
@@ -164,6 +174,20 @@ type hopLoginError struct{ err error }
 func (e *hopLoginError) Error() string { return e.err.Error() }
 func (e *hopLoginError) Unwrap() error { return e.err }
 
+// hopFailure is what a login into hop n that did not reach its shell
+// returns. The jump itself failing while the login was awaited — the hop's
+// ssh giving up late, the previous hop's prompt back — is a jumpError: the
+// line is on the previous hop's shell, and the terminal window must say so
+// (wrapped as a login failure it said "at the hop's login prompt", review
+// 2026-10-24). Anything else stopped at the hop's own prompts.
+func hopFailure(n int, err error) error {
+	var je *jumpError
+	if errors.As(err, &je) {
+		return fmt.Errorf("踏み台%d段目へのジャンプに失敗: %w", n, err)
+	}
+	return &hopLoginError{fmt.Errorf("踏み台%d段目のログインに失敗: %w", n, err)}
+}
+
 // AtJumpHost reports whether a failed login left the line on a jump host's
 // shell rather than the device: the terminal window must not offer that
 // shell as the device's screen. A hop's failed login is AtJumpLogin instead.
@@ -266,7 +290,10 @@ func (l *landing) failed(exp *expecter) error {
 	return jumpFailure(since, l.target, l.prompt)
 }
 
-var reLoginOrPassword = regexp.MustCompile(reLogin + `|` + rePassword)
+// reLoginOrPassword is a login or password prompt's words wherever they
+// stand in a transcript (not only at its tail, as reLogin and rePassword
+// want them): where the far end's first prompt began.
+var reLoginOrPassword = regexp.MustCompile(`(?i)login:|username:|password:`)
 
 // OpenSSH on a jump host refuses an old device's algorithms by default and
 // says so in one line, naming what the device offered:
@@ -359,6 +386,9 @@ func jumpToKey(ctx context.Context, exp *expecter, template string, method model
 			}
 			return true, answerPassphrase(ctx, exp, host, passphrase)
 		}
+		if seen == "shell" {
+			return true, nil // in without a prompt: none is coming
+		}
 		if seen != "negotiate" {
 			return false, nil
 		}
@@ -379,10 +409,12 @@ func jumpToKey(ctx context.Context, exp *expecter, template string, method model
 
 // jumpSeen watches the moments after a jump command (or the "yes" to a host
 // key) for what the hop's ssh says: "negotiate", "yesno", "passphrase",
-// "login" (the far end's own login or password prompt), or "" (nothing yet:
-// the far end is on its way). A prompt is left unconsumed for whoever
-// answers it. A jump the hop reports as failed — its failure words, or its
-// own prompt (from) back — is an error naming target (see reJumpFailed).
+// "login" (the far end's own login or password prompt), "shell" (the far
+// end's shell prompt, with no login asked: a key on the hop, or an agent,
+// let it straight in), or "" (nothing yet: the far end is on its way). A
+// prompt is left unconsumed for whoever answers it. A jump the hop reports
+// as failed — its failure words, or its own prompt (from) back — is an error
+// naming target (see reJumpFailed).
 func jumpSeen(ctx context.Context, exp *expecter, target, from string) (string, error) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -393,11 +425,14 @@ func jumpSeen(ctx context.Context, exp *expecter, target, from string) (string, 
 			return "yesno", nil
 		case exp.Seen(rePassphrase):
 			return "passphrase", nil
-		case exp.Seen(reLogin) || exp.Seen(rePassword):
+		case exp.Seen(reCredPrompt):
 			return "login", nil
 		}
 		if err := jumpFailure(exp.Pending(), target, from); err != nil {
 			return "", err
+		}
+		if atShell(exp) {
+			return "shell", nil
 		}
 		if exp.Closed() {
 			return "", ErrClosed
@@ -433,7 +468,7 @@ func answerPassphrase(ctx context.Context, exp *expecter, host, passphrase strin
 		if line := jumpFailLine(exp.Pending()); line != "" {
 			return failedJump(host, line)
 		}
-		if exp.Seen(reShellDone) || exp.Seen(reLogin) || exp.Seen(rePassword) {
+		if exp.Seen(reShellDone) || exp.Seen(reCredPrompt) {
 			return nil
 		}
 		if exp.Closed() {
@@ -548,10 +583,24 @@ func buildJumpCommand(template string, method model.BastionMethod, host, user st
 	return fmt.Sprintf("telnet %s", host)
 }
 
+// errAtShell is expectHop finding the hop at a shell prompt while a login
+// prompt was awaited: the hop is in, and no prompt is coming.
+var errAtShell = errors.New("at the hop's shell")
+
+// atShell reports that the line is on a shell prompt the far end has left
+// standing for a while — a prompt character ending the output, silence
+// since. The silence tells it from a banner line that happens to end in
+// one ("# Authorized use only #") with more to come.
+func atShell(exp *expecter) bool {
+	return exp.Seen(reShellTail) && exp.Idle() >= promptNudgeAfter
+}
+
 // expectHop is Expect for a login prompt of a hop just jumped to. It gives
 // up early, with ErrExpectTimeout, once skip is showing (the prompt is not
-// coming), and with a jumpError once what arrived since the jump says the
-// jump failed (the hop's failure words, or its prompt back).
+// coming), with errAtShell once the hop is at a shell prompt instead (in
+// with a key, no prompt is coming either), and with a jumpError once what
+// arrived since the jump says the jump failed (the hop's failure words, or
+// its prompt back).
 func expectHop(ctx context.Context, exp *expecter, pattern, skip string, from landing, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -575,7 +624,26 @@ func expectHop(ctx context.Context, exp *expecter, pattern, skip string, from la
 		if skip != "" && exp.Seen(skip) {
 			return ErrExpectTimeout
 		}
+		if atShell(exp) {
+			return errAtShell
+		}
 	}
+}
+
+// settleHop waits for the shell prompt of a hop entered with a key (see
+// jumpToKey's keyed): no login prompt is due. One showing all the same is
+// the key refused and the hop's ssh falling back to a password — the line
+// is at that prompt, which the error says (the plain timeout had the
+// terminal window call it the previous hop's shell, review 2026-10-24).
+func settleHop(ctx context.Context, exp *expecter, b model.Bastion, from landing, timeout time.Duration) error {
+	err := expectHop(ctx, exp, reShellDone, reCredPrompt, from, timeout)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrExpectTimeout) && exp.Seen(reCredPrompt):
+		return fmt.Errorf("%s が鍵でのログインを受け付けず、ユーザー名・パスワードの入力待ちになっています（踏み台の上の鍵と、この踏み台の SSH 認証方式を確認してください）", b.Host)
+	}
+	return fmt.Errorf("%s のログイン後にプロンプトが出ませんでした: %w", b.Host, err)
 }
 
 // loginHop answers the login/password prompts for a bastion we just reached.
@@ -593,33 +661,44 @@ func loginHop(ctx context.Context, exp *expecter, b model.Bastion, timeout time.
 // while its login prompts are awaited, the jump failing — late, as a timed
 // out connection does — ends the wait with that reason (see reJumpFailed).
 func loginHopFrom(ctx context.Context, exp *expecter, b model.Bastion, from landing, timeout time.Duration) error {
+	// A jump that failed ends the login with that reason; a hop already at
+	// its shell (a key on the previous hop let it in) needs none.
+	stop := func(err error) (done bool, result error) {
+		var je *jumpError
+		if errors.As(err, &je) {
+			return true, err
+		}
+		return errors.Is(err, errAtShell), nil
+	}
 	if b.Username != "" {
 		// An ssh hop asks for the password only: once that is showing, there
 		// is no login prompt to wait for.
 		err := expectHop(ctx, exp, reLogin, rePassword, from, timeout)
-		var je *jumpError
-		if errors.As(err, &je) {
-			return err
+		if done, result := stop(err); done {
+			return result
 		}
 		if err == nil {
 			_ = exp.Send(b.Username)
 		}
 	}
 	err := expectHop(ctx, exp, rePassword, "", from, timeout)
-	var je *jumpError
-	if errors.As(err, &je) {
-		return err
+	if done, result := stop(err); done {
+		return result
 	}
 	if err == nil {
 		_ = exp.Send(b.Password)
 	}
-	// Settle on the bastion's shell prompt before continuing. A login prompt
-	// coming back instead is the hop saying no.
-	if err := exp.Expect(ctx, reShellDone, timeout); err != nil {
-		if exp.Seen(reLogin) {
-			return fmt.Errorf("%s がログインを拒否しました（ユーザー名・パスワードを確認してください）", b.Host)
-		}
-		return fmt.Errorf("%s のログイン後にプロンプトが出ませんでした: %w", b.Host, err)
+	// Settle on the bastion's shell prompt before continuing. A login or
+	// password prompt coming back instead is the hop saying no — an ssh hop
+	// asks for the password again ("Permission denied, please try again."),
+	// a Telnet hop shows its login prompt again — and says so as soon as it
+	// shows, not after the timeout with no word about the password.
+	err = expectHop(ctx, exp, reShellDone, reCredPrompt, from, timeout)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrExpectTimeout) && exp.Seen(reCredPrompt):
+		return fmt.Errorf("%s がログインを拒否しました（ユーザー名・パスワードを確認してください）", b.Host)
 	}
-	return nil
+	return fmt.Errorf("%s のログイン後にプロンプトが出ませんでした: %w", b.Host, err)
 }

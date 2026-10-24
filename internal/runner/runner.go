@@ -549,27 +549,40 @@ func typedHops(dev *model.Device) int {
 }
 
 func (r *Runner) disconnect(ctx context.Context, exp *expecter, prof profile.Profile, vars profile.Vars, hops int) {
-	sends := make([]string, 0, len(prof.Disconnect)+hops)
+	// A step's SendRaw goes out as it is, no line ending (a Ctrl+D, the
+	// telnet escape): with one added, the device back at its login prompt
+	// got an empty Enter, an empty user name in its authentication log.
+	type logout struct {
+		text string
+		raw  bool
+	}
+	sends := make([]logout, 0, len(prof.Disconnect)+hops)
 	for _, st := range prof.Disconnect {
 		if !st.Sends() {
 			continue
 		}
 		if st.SendRaw != "" {
-			sends = append(sends, profile.Expand(st.SendRaw, vars))
+			sends = append(sends, logout{profile.Expand(st.SendRaw, vars), true})
 			continue
 		}
-		sends = append(sends, profile.Expand(st.Send, vars))
+		sends = append(sends, logout{profile.Expand(st.Send, vars), false})
 	}
 	// One "exit" per jump host, to leave the shell we typed the jump command on.
 	for i := 0; i < hops; i++ {
-		sends = append(sends, "exit")
+		sends = append(sends, logout{"exit", false})
 	}
 
 	for i, s := range sends {
 		if i > 0 {
 			_ = r.waitPrompt(ctx, exp, prof, disconnectSettle)
 		}
-		if err := exp.Send(s); err != nil {
+		var err error
+		if s.raw {
+			err = exp.SendRaw(s.text)
+		} else {
+			err = exp.Send(s.text)
+		}
+		if err != nil {
 			return // the far end is already gone; nothing left to unwind
 		}
 	}
@@ -640,24 +653,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
 	skipCreds := (len(bastions) == 0 || dev.Tunneled()) && dev.Conn == model.ConnSSH
 	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
-		// A jump that failed late (a timed-out connection) is the reason,
-		// whatever step the login happened to be on.
-		if jerr := hop.failed(exp); jerr != nil {
-			return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
-		}
-		if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
-			return exp, prof, "", errors.New(hint)
-		}
-		if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
-			return exp, prof, "", errors.New(hint)
-		}
-		if backAtLogin(exp.Transcript()) {
-			return exp, prof, "", errors.New(errAuthRefused)
-		}
-		if hint := enableRefusedHint(prof, exp.Transcript()); hint != "" {
-			return exp, prof, "", errors.New(hint)
-		}
-		return exp, prof, "", fmt.Errorf("login: %w", err)
+		return exp, prof, "", loginFailure(err, "login", hop, dev, prof, exp)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
 	// sent something (or the list is empty), wait for the operational prompt
@@ -665,29 +661,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// behavior — no second wait that would hang.
 	if n := len(prof.Login); n == 0 || prof.Login[n-1].Sends() {
 		if err := r.waitPrompt(ctx, exp, prof, cmdTimeout); err != nil {
-			// The same three explanations as above, and for the same reason:
-			// which of the login steps happens to be the one that times out
-			// depends on the profile, so a diagnosis attached to only one of
-			// them disappears the moment a profile changes shape.
-			if jerr := hop.failed(exp); jerr != nil {
-				return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
-			}
-			if hint := wrongPortHint(dev, exp.Transcript()); hint != "" {
-				return exp, prof, "", errors.New(hint)
-			}
-			if hint := silentDeviceHint(dev, exp.Transcript()); hint != "" {
-				return exp, prof, "", errors.New(hint)
-			}
-			if backAtLogin(exp.Transcript()) {
-				return exp, prof, "", errors.New(errAuthRefused)
-			}
-			if hint := enableRefusedHint(prof, exp.Transcript()); hint != "" {
-				return exp, prof, "", errors.New(hint)
-			}
-			if hint := promptMismatchHint(prof, exp.Transcript()); hint != "" {
-				return exp, prof, "", errors.New(hint)
-			}
-			return exp, prof, "", fmt.Errorf("login: waiting for prompt: %w", err)
+			return exp, prof, "", loginFailure(err, "login: waiting for prompt", hop, dev, prof, exp)
 		}
 	}
 	// Logged in — but into what? A prompt identical to the jump host's means
@@ -696,22 +670,60 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 		return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
 	}
 
-	// Disable paging (non-fatal: some devices have none). A refusal used
-	// to flash by as a login-phase message and vanish under the first
-	// command's; it comes back as a warning on the result instead.
+	warn, err = r.disablePager(ctx, exp, prof, vars, dev, emit, cmdTimeout)
+	return exp, prof, warn, err
+}
+
+// disablePager sends the profile's pager-off commands (non-fatal: some
+// devices have none). A refusal used to flash by as a login-phase message
+// and vanish under the first command's; it comes back as warn instead. A
+// line that dropped, or a run stopped, is not the device refusing the
+// command: that is err, and the first command must not be typed into it.
+func (r *Runner) disablePager(ctx context.Context, exp *expecter, prof profile.Profile, vars profile.Vars, dev *model.Device, emit EmitFunc, timeout time.Duration) (warn string, err error) {
 	for _, st := range prof.Pager {
 		before := exp.Mark()
-		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), "", cmdTimeout); err != nil {
+		if err := r.sendCommand(ctx, exp, prof, profile.Expand(st.Send, vars), "", timeout); err != nil {
+			if errors.Is(err, ErrClosed) || ctx.Err() != nil {
+				return "", err
+			}
 			r.emit(emit, dev.Name, PhaseLogin, "pager disable skipped: "+err.Error())
-			warn = fmt.Sprintf("ページャ解除コマンド「%s」が通りませんでした（%v）。出力の途中停止は --More-- への応答で続けます", st.Send, err)
-			break
+			return fmt.Sprintf("ページャ解除コマンド「%s」が通りませんでした（%v）。出力の途中停止は --More-- への応答で続けます", st.Send, err), nil
 		}
 		if line := rejectedLine(exp.Since(before)); line != "" {
-			warn = fmt.Sprintf("ページャ解除コマンド「%s」を機器が受け付けませんでした: %s", st.Send, RedactSecrets(line, dev))
-			break
+			return fmt.Sprintf("ページャ解除コマンド「%s」を機器が受け付けませんでした: %s", st.Send, RedactSecrets(line, dev)), nil
 		}
 	}
-	return exp, prof, warn, nil
+	return "", nil
+}
+
+// loginFailure explains a login that did not reach the operational prompt,
+// whichever step it stopped on: which of them happens to be the one that
+// times out depends on the profile, so a diagnosis attached to only one of
+// them disappears the moment a profile changes shape. what names the step
+// in the plain error when no explanation fits.
+func loginFailure(err error, what string, hop *landing, dev *model.Device, prof profile.Profile, exp *expecter) error {
+	// A jump that failed late (a timed-out connection) is the reason,
+	// whatever step the login happened to be on.
+	if jerr := hop.failed(exp); jerr != nil {
+		return fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
+	}
+	transcript := exp.Transcript()
+	if hint := wrongPortHint(dev, transcript); hint != "" {
+		return errors.New(hint)
+	}
+	if hint := silentDeviceHint(dev, transcript); hint != "" {
+		return errors.New(hint)
+	}
+	if backAtLogin(transcript) {
+		return errors.New(errAuthRefused)
+	}
+	if hint := enableRefusedHint(prof, transcript); hint != "" {
+		return errors.New(hint)
+	}
+	if hint := promptMismatchHint(prof, transcript); hint != "" {
+		return errors.New(hint)
+	}
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // enableRefusedHint names the commonest login failure after a wrong
@@ -882,12 +894,12 @@ func (r *Runner) Open(ctx context.Context, dev *model.Device, s model.Settings) 
 // StartInteractive hands a connected expecter over to raw pass-through mode:
 // the login transcript is flushed to sink, and subsequent device output is
 // streamed to sink. Returns a writer function for sending keystrokes and a
-// closer. The caller must call the closer to release the session.
+// closer. The caller must call the closer to release the session. onClose is
+// called once the session ends — at once when it already has (see
+// expecter.setOnClose), after the transcript has reached sink.
 func (r *Runner) StartInteractive(exp *expecter, sink func([]byte), onClose func()) (send func(string) error, resize func(cols, rows int) error, closeFn func() error) {
-	exp.mu.Lock()
-	exp.onClose = onClose
-	exp.mu.Unlock()
 	exp.StartRaw(sink)
+	exp.setOnClose(onClose)
 	return func(data string) error { return exp.SendRaw(data) },
 		func(cols, rows int) error { return exp.Resize(cols, rows) },
 		exp.Close
@@ -897,10 +909,8 @@ func (r *Runner) StartInteractive(exp *expecter, sink func([]byte), onClose func
 // far is already on screen (ConnectTee, or a failed login being taken
 // over): that part goes to logged only (see expecter.StartRawShown).
 func (r *Runner) StartInteractiveShown(exp *expecter, sink, logged func([]byte), onClose func()) (send func(string) error, resize func(cols, rows int) error, closeFn func() error) {
-	exp.mu.Lock()
-	exp.onClose = onClose
-	exp.mu.Unlock()
 	exp.StartRawShown(sink, logged)
+	exp.setOnClose(onClose)
 	return func(data string) error { return exp.SendRaw(data) },
 		func(cols, rows int) error { return exp.Resize(cols, rows) },
 		exp.Close
@@ -1320,8 +1330,18 @@ const promptNudgeAfter = time.Second
 // The first step gets only the first rule: the buffer still holds the login
 // banner then, and banners are full of "#". Each skipped wait was three
 // seconds; a jump-host login to an ALAXALA had two of them.
+//
+// Otherwise the wait is short (authWait) only once the device is idle at
+// some line of its own — a prompt the pattern does not name, a question. A
+// device whose output ends on a line break, or that has said nothing since
+// the last answer, is still working on it: a RADIUS or TACACS+ server takes
+// its time over "Password:" (longer still on a failover), and the step
+// skipped at three seconds left the password unsent and the prompt, when it
+// came, mistaken for a refused enable password. Such a device gets the full
+// timeout.
 func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, ready string, pastFirst bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	giveUp := time.Now().Add(min(timeout, authWait))
 	tail := ""
 	if ready != "" {
 		tail = "(?:" + ready + `)[ \t]*\z`
@@ -1341,6 +1361,9 @@ func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, r
 		if next != "" && exp.Seen(next) {
 			return ErrExpectTimeout
 		}
+		if time.Now().After(giveUp) && exp.Seen(reIdleLine) && exp.Idle() >= promptSettle {
+			return ErrExpectTimeout
+		}
 		if !pastFirst || tail == "" {
 			continue
 		}
@@ -1356,6 +1379,14 @@ func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, r
 		}
 	}
 }
+
+// authWait is how long an auth step waits for its prompt while the device
+// sits idle at some other line (see expectAuth).
+const authWait = 3 * time.Second
+
+// reIdleLine is output that ends on a line the device left open — a prompt
+// or a question of some kind, not a line break: where a device waits.
+const reIdleLine = `\S[ \t]*\z`
 
 // expectOrReady waits for pattern, reporting ready=true instead if the device
 // reaches its operational prompt first. Both are polled in short slices so a
@@ -1412,13 +1443,14 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 				err   error
 			)
 			if st.Auth() {
-				// Auth steps keep a short wait, cut shorter still once the
-				// device has visibly moved past the prompt — see expectAuth.
+				// Auth steps wait only while the prompt may still be coming,
+				// and give up early once the device has visibly moved past
+				// it — see expectAuth.
 				next := ""
 				if i+1 < len(steps) && steps[i+1].Auth() {
 					next = steps[i+1].Expect
 				}
-				err = r.expectAuth(ctx, exp, st.Expect, next, readyPrompt, i > 0, min(timeout, 3*time.Second))
+				err = r.expectAuth(ctx, exp, st.Expect, next, readyPrompt, i > 0, timeout)
 			} else {
 				ready, err = r.expectOrReady(ctx, exp, st.Expect, readyPrompt, timeout)
 			}
@@ -1635,16 +1667,6 @@ func (r *Runner) RunBatch(ctx context.Context, inv *model.Inventory, emit EmitFu
 // folder the logs went to ("" for a dry run, which writes nothing).
 func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Options, emit EmitFunc) ([]DeviceResult, string) {
 	now := time.Now()
-	// A real run claims its folder now (created, so a concurrent run or
-	// terminal cannot take the same name); a dry run writes nothing.
-	runDir := logstore.RunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
-	switch {
-	case opts.Dir != "" && !opts.DryRun:
-		runDir = opts.Dir
-		_ = os.MkdirAll(runDir, 0o755) // a failure shows as each device's log error
-	case !opts.DryRun:
-		runDir = logstore.ClaimRunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
-	}
 	sets := indexSets(inv.CommandSets)
 
 	var targets []*model.Device
@@ -1656,12 +1678,24 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 		}
 	}
 
+	if len(targets) == 0 {
+		return nil, "" // nothing to run: no folder either (it showed in 実行履歴 as a run of no devices)
+	}
 	limit := inv.Settings.MaxParallel
 	if limit <= 0 {
 		limit = len(targets)
 	}
-	if limit == 0 {
-		return nil, ""
+	// A real run claims its folder now (created, so a concurrent run or
+	// terminal cannot take the same name); a dry run writes nothing and
+	// needs none.
+	runDir := ""
+	switch {
+	case opts.DryRun:
+	case opts.Dir != "":
+		runDir = opts.Dir
+		_ = os.MkdirAll(runDir, 0o755) // a failure shows as each device's log error
+	default:
+		runDir = logstore.ClaimRunDir(inv.Settings.LogDir, inv.Settings.LogDirTemplate, opts.Group, string(opts.Stage), inv.Settings.StageTokens(), now)
 	}
 	results := make([]DeviceResult, len(targets))
 	// A log folder that cannot be written fails the batch here, before any
@@ -1760,11 +1794,4 @@ func pauseFor(cmd model.Command, conn model.ConnMethod) int {
 		return cmd.SerialSec
 	}
 	return cmd.PauseSec
-}
-
-func min(a, b time.Duration) time.Duration {
-	if a < b {
-		return a
-	}
-	return b
 }

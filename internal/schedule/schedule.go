@@ -79,25 +79,30 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// parseClock reads "HH:MM" or "HH:MM:SS" (each field one or two digits) and
+// nothing else: no sign, no space inside, nothing after the seconds — a
+// pasted "09:30 JST" is refused, not stored as typed and read as 09:30.
 func parseClock(s string) (h, m, sec int, err error) {
-	s = strings.TrimSpace(s)
-	var n int
-	switch strings.Count(s, ":") {
-	case 1:
-		n, err = fmt.Sscanf(s, "%d:%d", &h, &m)
-		if n != 2 {
-			err = fmt.Errorf("bad time")
-		}
-	case 2:
-		n, err = fmt.Sscanf(s, "%d:%d:%d", &h, &m, &sec)
-		if n != 3 {
-			err = fmt.Errorf("bad time")
-		}
-	default:
-		err = fmt.Errorf("bad time")
+	bad := fmt.Errorf("時刻の形式が不正です: %q（例 03:00:00）", s)
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return 0, 0, 0, bad
 	}
-	if err != nil || h < 0 || h > 23 || m < 0 || m > 59 || sec < 0 || sec > 59 {
-		return 0, 0, 0, fmt.Errorf("時刻の形式が不正です: %q（例 03:00:00）", s)
+	var v [3]int
+	for i, p := range parts {
+		if len(p) == 0 || len(p) > 2 {
+			return 0, 0, 0, bad
+		}
+		for _, c := range p {
+			if c < '0' || c > '9' {
+				return 0, 0, 0, bad
+			}
+			v[i] = v[i]*10 + int(c-'0')
+		}
+	}
+	h, m, sec = v[0], v[1], v[2]
+	if h > 23 || m > 59 || sec > 59 {
+		return 0, 0, 0, bad
 	}
 	return h, m, sec, nil
 }
@@ -390,13 +395,21 @@ func (sc Schedule) Plan(from, to time.Time) (run time.Time, missed Span) {
 
 // NextOf is the earliest Next over schedules (zero: nothing scheduled).
 func NextOf(list []Schedule, after time.Time) time.Time {
+	t, _ := NextOfNamed(list, after)
+	return t
+}
+
+// NextOfNamed is NextOf with the name of the schedule it belongs to (the
+// first in list when two fire at the same time).
+func NextOfNamed(list []Schedule, after time.Time) (time.Time, string) {
 	var best time.Time
+	name := ""
 	for _, sc := range list {
 		if t := sc.Next(after); !t.IsZero() && (best.IsZero() || t.Before(best)) {
-			best = t
+			best, name = t, sc.Name
 		}
 	}
-	return best
+	return best, name
 }
 
 // SortedWeekdays returns ws sorted without duplicates (for storage).

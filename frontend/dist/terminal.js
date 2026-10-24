@@ -48,19 +48,12 @@ async function bootPasteWindow() {
   // unless Alt+V asked for it, as without 同時入力.
   cr.checked = req.single ? !!req.cr : (!!req.cr || pasteCrPref());
   cr.addEventListener("change", () => setPasteCrPref(cr.checked));
-  // Font size: same controls as the terminal window, remembered separately.
-  const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_paste_font"), 10) || FONT_DEF)); } catch (e) {}
-  function setFont(n) {
-    fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n));
-    ta.style.fontSize = fontSize + "px";
-    try { localStorage.setItem("palaterm_paste_font", String(fontSize)); } catch (e) {}
-  }
-  setFont(fontSize);
-  document.getElementById("pw-font-inc").onclick = () => { setFont(fontSize + 1); ta.focus(); };
-  document.getElementById("pw-font-dec").onclick = () => { setFont(fontSize - 1); ta.focus(); };
-  ta.addEventListener("wheel", e => { if (!e.ctrlKey) return; e.preventDefault(); setFont(fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+  // Font size: same controls as the terminal window, remembered separately
+  // (wireFontZoom, app.js).
+  const zoom = wireFontZoom("palaterm_paste_font", px => { ta.style.fontSize = px + "px"; }, { def: 13 });
+  zoom.set(zoom.size);
+  zoom.buttons(document.getElementById("pw-font-inc"), document.getElementById("pw-font-dec"), () => ta.focus());
+  zoom.wheel(ta);
   const info = () => { document.getElementById("pw-info").textContent = t("{n} 行。各行の末尾は Enter として機器へ送られます。内容はここで編集できます。", { n: ta.value.split(/\r\n|\r|\n/).length }); };
   info();
   ta.addEventListener("input", info);
@@ -71,14 +64,17 @@ async function bootPasteWindow() {
   // Keys work wherever the focus happens to be: Enter pastes the moment the
   // window appears, before any click into the textarea.
   document.addEventListener("keydown", e => {
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (zoom.key(e)) { e.preventDefault(); return; }
     if (e.key === "Escape") { e.preventDefault(); cancel(); return; }
     // Enter or Ctrl+Enter (the primary button, as in the main window's
     // dialogs) pastes; Shift+Enter is left to the textarea (a new line), and
-    // an Enter that confirms an IME conversion is not a paste.
-    if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submit(); }
+    // an Enter that confirms an IME conversion is not a paste. On a button
+    // (Tab to キャンセル, then Enter) it is that button's own click, as
+    // anywhere else — it used to paste from the キャンセル button too.
+    if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) {
+      if (e.target && e.target.tagName === "BUTTON") return;
+      e.preventDefault(); submit();
+    }
   });
   const grab = () => { ta.focus(); ta.setSelectionRange(0, 0); };
   grab();
@@ -200,15 +196,20 @@ async function bootTerminalWindow() {
   wirePasswordToggles(document.getElementById("tw-lock-field"));
 
   // Font size: remembered per machine (localStorage), changed with the A−/A+
-  // buttons, Ctrl+wheel, Ctrl+plus/minus; Ctrl+0 restores the default.
-  const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_term_font"), 10) || FONT_DEF)); } catch (e) {}
+  // buttons, Ctrl+wheel, Ctrl+plus/minus; Ctrl+0 restores the default
+  // (wireFontZoom, app.js). The same size again changes nothing: a refit
+  // and a focus for nothing.
+  const zoom = wireFontZoom("palaterm_term_font", px => {
+    if (term.options.fontSize === px) return;
+    term.options.fontSize = px;
+    doFit();
+    term.focus();
+  }, { def: 13 });
   // Scrollback: 10,000 lines like Tera Term's default (xterm.js keeps 1,000,
   // and a core switch's show running-config scrolled out of reach of Ctrl+F).
   const term = new Terminal({
     convertEol: false, cursorBlink: true, scrollback: 10000,
-    fontFamily: '"Consolas", monospace', fontSize,
+    fontFamily: '"Consolas", monospace', fontSize: zoom.size,
     theme: xtermTheme(screenColors("term")),
   });
   const fit = new (window.FitAddon.FitAddon)();
@@ -267,9 +268,7 @@ async function bootTerminalWindow() {
     // Ctrl+Shift+F finds in the scrollback; plain Ctrl+F reaches the device
     // (^F: page down in less / vi, cursor right on IOS) as in Tera Term.
     if (e.ctrlKey && e.shiftKey && (e.code === "KeyF" || e.key === "f" || e.key === "F")) { openFind(); return false; }
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { setFont(fontSize + 1); return false; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { setFont(fontSize - 1); return false; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { setFont(FONT_DEF); return false; }
+    if (zoom.key(e)) return false;
     if (e.ctrlKey && !e.shiftKey && isV) return false;
     if (e.shiftKey && !e.ctrlKey && isIns) return false;
     return true;
@@ -395,22 +394,8 @@ async function bootTerminalWindow() {
   };
 
   // ---- フォントサイズ ----
-  function setFont(n) {
-    n = Math.min(FONT_MAX, Math.max(FONT_MIN, n));
-    if (n === fontSize) return;
-    fontSize = n;
-    term.options.fontSize = n;
-    try { localStorage.setItem("palaterm_term_font", String(n)); } catch (e) {}
-    doFit();
-    term.focus();
-  }
-  document.getElementById("tw-font-inc").onclick = () => setFont(fontSize + 1);
-  document.getElementById("tw-font-dec").onclick = () => setFont(fontSize - 1);
-  document.getElementById("tw-host").addEventListener("wheel", e => {
-    if (!e.ctrlKey) return;
-    e.preventDefault();
-    setFont(fontSize + (e.deltaY < 0 ? 1 : -1));
-  }, { passive: false });
+  zoom.buttons(document.getElementById("tw-font-inc"), document.getElementById("tw-font-dec"));
+  zoom.wheel(document.getElementById("tw-host"));
 
   // ---- 検索（画面バッファ内・大文字小文字を区別しない）----
   // Walks the whole scrollback, selects the match and scrolls it into view.
@@ -419,6 +404,26 @@ async function bootTerminalWindow() {
   const findIn = document.getElementById("tw-find-in");
   const findN = document.getElementById("tw-find-n");
   let matches = [], matchIdx = -1, lastQuery = "", suppressCopy = false;
+  // One buffer line as text, with the cell each character starts in (col)
+  // and the cell after it (end): a wide character (全角) is one character
+  // in two cells, so the index of a match in the text is not its column —
+  // the selection landed left of the match on a line with Japanese in it.
+  // Cells past the text (trailing blanks) are left out, as
+  // translateToString(true) leaves them out.
+  function lineText(line) {
+    let str = "";
+    const col = [], end = [];
+    for (let x = 0; x < line.length; x++) {
+      const c = line.getCell(x);
+      if (!c) continue;
+      const w = c.getWidth();
+      if (w === 0) continue; // the second cell of a wide character
+      const ch = c.getChars() || " ";
+      for (let k = 0; k < ch.length; k++) { col.push(x); end.push(x + w); }
+      str += ch;
+    }
+    return { str: str.replace(/\s+$/, ""), col, end };
+  }
   function collectMatches(q) {
     const res = [];
     if (!q) return res;
@@ -426,9 +431,13 @@ async function bootTerminalWindow() {
     for (let y = 0; y < buf.length; y++) {
       const line = buf.getLine(y);
       if (!line) continue;
-      const str = line.translateToString(true), ls = str.toLowerCase();
+      const { str, col, end } = lineText(line), ls = str.toLowerCase();
       let i = 0;
-      while ((i = ls.indexOf(lq, i)) >= 0) { res.push({ y, x: i }); i += lq.length; }
+      while ((i = ls.indexOf(lq, i)) >= 0) {
+        const last = Math.min(i + lq.length, col.length) - 1;
+        res.push({ y, x: col[i], w: Math.max(1, end[last] - col[i]) });
+        i += lq.length;
+      }
     }
     return res;
   }
@@ -436,7 +445,7 @@ async function bootTerminalWindow() {
     if (!matches.length) { findN.textContent = lastQuery ? t("該当なし") : ""; return; }
     const m = matches[matchIdx];
     suppressCopy = true;
-    term.select(m.x, m.y, lastQuery.length);
+    term.select(m.x, m.y, m.w);
     term.scrollToLine(Math.max(0, m.y - Math.floor(term.rows / 2)));
     setTimeout(() => { suppressCopy = false; }, 50);
     findN.textContent = `${matchIdx + 1} / ${matches.length}`;
@@ -644,7 +653,7 @@ async function bootTerminalWindow() {
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[ホストキーを更新して再接続します]") + "\x1b[0m\r\n");
-    Term().AllowHostKeyChange().catch(e => { closed = true; term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); });
+    Term().AllowHostKeyChange().catch(connectFailed);
   };
   // A failed automatic login whose line is still open (ev.takeover): the
   // device is at a screen the profile could not get past, and the user can
@@ -723,8 +732,22 @@ async function bootTerminalWindow() {
     stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[再接続します]") + "\x1b[0m\r\n");
-    Term().Reconnect().catch(e => { closed = true; term.write("\r\n\x1b[31m" + terr(e) + "\x1b[0m\r\n"); })
+    Term().Reconnect().catch(connectFailed)
       .finally(() => { reconnecting = false; });
+  }
+  // Reconnect() / AllowHostKeyChange() refused (the window locked
+  // meanwhile, the vault's password gone): no term:closed follows, so the
+  // window is put back as after a failed connection here — it used to stay
+  // at 接続中… with the 再接続 button hidden, and nothing could be done
+  // with it.
+  function connectFailed(e) {
+    closed = true; connecting = false;
+    showSwitch(false);
+    stateEl.textContent = t("接続失敗"); stateEl.className = "pill err";
+    setOSTitle("", "", t("接続失敗"));
+    term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(e) + "\x1b[0m\r\n");
+    reconnectBtn.classList.remove("hidden");
+    term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
   }
   reconnectBtn.onclick = () => { reconnect(); term.focus(); };
   function sendBreak() {

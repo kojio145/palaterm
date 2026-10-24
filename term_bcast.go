@@ -90,11 +90,12 @@ func (t *Term) bcastReport() {
 	changed := st != t.bc.reported
 	t.bc.reported = st
 	ev := t.bcEventLocked()
+	ctx := t.ctx // set by startup under t.mu
 	t.mu.Unlock()
 	if changed {
 		childLine(termEventBcState + " " + st)
-		if t.ctx != nil {
-			runtime.EventsEmit(t.ctx, "term:bcast", ev)
+		if ctx != nil {
+			runtime.EventsEmit(ctx, "term:bcast", ev)
 		}
 	}
 }
@@ -179,9 +180,10 @@ func (t *Term) bcastCounts(arg string) {
 	t.mu.Lock()
 	t.bc.joined, t.bc.readyN = j, r
 	ev := t.bcEventLocked()
+	ctx := t.ctx
 	t.mu.Unlock()
-	if t.ctx != nil {
-		runtime.EventsEmit(t.ctx, "term:bcast", ev)
+	if ctx != nil {
+		runtime.EventsEmit(ctx, "term:bcast", ev)
 	}
 }
 

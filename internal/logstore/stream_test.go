@@ -129,6 +129,93 @@ func TestStreamLogPauseResume(t *testing.T) {
 	}
 }
 
+// Flush (the log viewer opening, the idle timer) must not write the start
+// of a secret that has only half arrived: the file would hold it in clear,
+// with its other half appended later, unmasked.
+func TestStreamFlushHoldsSecretStart(t *testing.T) {
+	const secret = "s3cretPW"
+	path := filepath.Join(t.TempDir(), "x.txt")
+	l := NewStream(path, []string{secret, "otherlongpw"})
+	l.Write([]byte("Password: s3cr"))
+	if p, err := l.Flush(); err != nil || p != path {
+		t.Fatalf("flush: %q %v", p, err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "Password: " {
+		t.Fatalf("flush wrote a possible secret start: %q", got)
+	}
+	l.Write([]byte("etPW\r\nR1#"))
+	l.Flush()
+	got, _ = os.ReadFile(path)
+	// "R1#" starts no secret, so Flush writes it all.
+	if string(got) != "Password: ****\r\nR1#" {
+		t.Fatalf("after the rest arrived: %q", got)
+	}
+	l.Close()
+
+	// Flushing after every chunk, whatever the chunking, never leaks and
+	// loses nothing.
+	transcript := "login: ops\r\nPassword: \r\nR1#show run\r\nusername ops password s3cretPW\r\nenable secret otherlongpw\r\nR1#"
+	want := strings.ReplaceAll(strings.ReplaceAll(transcript, secret, "****"), "otherlongpw", "****")
+	for size := 1; size <= len(transcript); size++ {
+		path := filepath.Join(t.TempDir(), "x.txt")
+		l := NewStream(path, []string{secret, "otherlongpw"})
+		for i := 0; i < len(transcript); i += size {
+			end := min(i+size, len(transcript))
+			l.Write([]byte(transcript[i:end]))
+			l.Flush()
+			if got, _ := os.ReadFile(path); bytes.Contains(got, []byte(secret)) || bytes.Contains(got, []byte("otherlongpw")) {
+				t.Fatalf("chunk %d: secret leaked by Flush: %q", size, got)
+			}
+		}
+		l.Close()
+		if got, _ := os.ReadFile(path); string(got) != want {
+			t.Fatalf("chunk %d: file = %q, want %q", size, got, want)
+		}
+	}
+}
+
+// A closed log stays closed: a pause after Close must not append a marker
+// and reopen the file (the handle leaked).
+func TestStreamSetPausedAfterCloseIsNoop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "x.txt")
+	l := NewStream(path, nil)
+	l.Write([]byte("hello\r\n"))
+	l.Close()
+	if p, err := l.SetPaused(true); err != nil || p != path {
+		t.Fatalf("pause after close: %q %v", p, err)
+	}
+	if l.f != nil || l.paused {
+		t.Fatalf("pause after close reopened the file or took effect")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "hello\r\n" {
+		t.Fatalf("file changed after close: %q", got)
+	}
+}
+
+// Once a write has failed, what arrives afterwards is not held in memory
+// for the rest of the session.
+func TestStreamDropsBufferAfterWriteError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The log's folder is a regular file: it cannot be created.
+	l := NewStream(filepath.Join(blocker, "x.txt"), nil)
+	l.Write([]byte("first\r\n"))
+	if _, err := l.Flush(); err == nil {
+		t.Fatal("write into a file-as-folder succeeded")
+	}
+	for i := 0; i < 100; i++ {
+		l.Write([]byte("more output that must not pile up\r\n"))
+	}
+	if len(l.buf) != 0 {
+		t.Fatalf("buffer kept %d bytes after the write error", len(l.buf))
+	}
+	l.Close()
+}
+
 // With no secrets (masking off, the default since v1.5.3) the capture is
 // written byte for byte.
 func TestStreamLogNoSecrets(t *testing.T) {

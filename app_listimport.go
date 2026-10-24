@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,12 +173,9 @@ func (a *App) ImportImportRuleFile() (string, error) {
 	if err != nil || path == "" {
 		return "", err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readRuleFile(path)
 	if err != nil {
 		return "", err
-	}
-	if len(data) > 4<<20 {
-		return "", fmt.Errorf("変換ルールのファイルではありません")
 	}
 	r, err := listimport.ParseRule(data)
 	if err != nil {
@@ -193,6 +191,31 @@ func (a *App) ImportImportRuleFile() (string, error) {
 	a.inv.ImportRules = append(a.inv.ImportRules, r)
 	a.mu.Unlock()
 	return r.ID, a.persist()
+}
+
+// maxRuleFile is as big as a rule file can be; a rule is a few KB.
+const maxRuleFile = 4 << 20
+
+// readRuleFile reads a picked rule file, refusing a bigger one before
+// reading it (by its size, and by a limit on the read for a file whose
+// size is not told).
+func readRuleFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() > maxRuleFile {
+		return nil, fmt.Errorf("変換ルールのファイルではありません")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxRuleFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxRuleFile {
+		return nil, fmt.Errorf("変換ルールのファイルではありません")
+	}
+	return data, nil
 }
 
 // PickListFile asks for a device list to import or to try a rule on.
@@ -330,10 +353,11 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 }
 
 // ruleSig names a rule's content (what the import reads by), for telling
-// whether the rule changed since a preview.
+// whether the rule changed since a preview. Its name and ID are not that:
+// a rule renamed between the preview and the import reads the same rows.
 func ruleSig(r *model.ImportRule) string {
 	c := *r
-	c.LastUsed, c.SampleName = "", ""
+	c.ID, c.Name, c.LastUsed, c.SampleName = "", "", "", ""
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
@@ -434,12 +458,18 @@ func hasName(r *model.ImportRule) (model.ImportField, bool) {
 	return model.ImportField{}, false
 }
 
+// maxSampleRows is as far down a sheet as the editor's picture goes: a
+// header row set below it cannot be shown (the picture starts at row 1, as
+// the editor's row numbers do).
+const maxSampleRows = 200
+
 // sampleGrid is the sheet's top-left corner for the editor's picture of
-// it: enough rows to show the header and a few values, long cells cut —
-// and how many columns those rows reach (the editor says when it cut some).
+// it: enough rows to show the header row — wherever it is set — and a few
+// values, long cells cut; and how many columns those rows reach (the
+// editor says when it cut some).
 func sampleGrid(rows [][]string, headerRow int) ([][]string, int) {
 	nr := max(12, headerRow+6)
-	nr = min(nr, 40, len(rows))
+	nr = min(nr, maxSampleRows, len(rows))
 	nc := 0
 	for r := 0; r < nr; r++ {
 		nc = max(nc, len(rows[r]))
@@ -598,11 +628,13 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 		return nil, err
 	}
 	p := listimport.BuildPlan(a.inv, conv, r, listimport.Options{Group: req.Group, Decisions: req.Decisions})
-	if req.NewGroup {
-		a.ensureGroupExists(req.Group)
-	}
 	before := append([]model.Device(nil), a.inv.Devices...) // Apply changes them in place
 	res := listimport.Apply(a.inv, p, req.Group, req.DeleteIDs)
+	// A new group only once a device is in it: an import whose every row
+	// failed or was left out leaves no empty group to delete by hand.
+	if req.NewGroup && res.Added > 0 {
+		a.ensureGroupExists(req.Group)
+	}
 	// A device deleted by the import (or moved out of its group): the
 	// schedules naming it stop, against the names as they were — before
 	// the renames below are followed.

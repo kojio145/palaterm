@@ -367,8 +367,10 @@ func Write(dir string, c Contents, app string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The manifest carries the groups' default credentials in clear text:
+	// as private as devices.csv.
 	mp := filepath.Join(dir, ManifestName)
-	return mp, os.WriteFile(mp, append(data, '\r', '\n'), 0o644)
+	return mp, os.WriteFile(mp, append(data, '\r', '\n'), 0o600)
 }
 
 // Read loads a bundle from its manifest path. Every file the manifest names

@@ -148,6 +148,10 @@ function liOpenEditor(id, copyOf) {
   LI.rule.fields = LI.rule.fields || [];
   LI.rule.exclude = LI.rule.exclude || [];
   LI.rule.match = LI.rule.match || {};
+  // units too (liRenderEdit fills it in otherwise): a rule without a 2台目
+  // read as changed the moment it opened, and キャンセル asked about edits
+  // that were never made.
+  LI.rule.units = LI.rule.units || [];
   LI.ruleStart = JSON.stringify(LI.rule);
   LI.test = null; LI.more = false;
   LI.tent = new Set(); LI.tentUndo = null; LI.tentN = 0;
@@ -862,8 +866,11 @@ function liStepEditor(key, unit = 0) {
       if (s.type === "split" && !s.sep) { toast(t("区切り文字を入力してください"), "err"); return; }
       if (s.type === "replace" && !s.from) { toast(t("置き換える文字を入力してください"), "err"); return; }
       if (s.type === "regex" && !s.pattern) { toast(t("正規表現を入力してください"), "err"); return; }
-      if (s.type === "map") s.rows = (s.rows || []).filter(r => r.from);
     }
+    // The empty rows of a 置き換え表 go only once every step has passed: a
+    // step refused after the rows were dropped left the dialog's rows and
+    // steps out of step, and the next edit failed on a row that was gone.
+    for (const s of steps) if (s.type === "map") s.rows = (s.rows || []).filter(r => r.from);
     f.steps = steps;
     closeModal();
     if (LI.sample) liRunTest(true); else renderListImport();
@@ -925,22 +932,11 @@ async function liPreview() {
 }
 
 // liRedrawImport redraws the import screen after a preview. The group name
-// being typed keeps its focus and caret, and a redraw waits for an IME
-// conversion in progress (it would cut it off).
-let liComposing = false, liRedrawLater = false;
-// liGroupTimer: the wait after the last key in the group name — one for
-// every redraw of the field, so a redraw never leaves an old one running.
-let liGroupTimer = null;
+// being typed stays as it is — focus, caret and an IME conversion in
+// progress — through patchKeeping (see liRenderImport).
 function liRedrawImport() {
   if (LI.view !== "import" || !LI.imp) return;
-  const root = document.getElementById("tab-import");
-  const a = document.activeElement;
-  const typing = a && a.id === "li-gnew" && root.contains(a);
-  if (typing && liComposing) { liRedrawLater = true; return; }
-  const sel = typing ? [a.selectionStart, a.selectionEnd] : null;
-  liRenderImport(root);
-  const g = sel && root.querySelector("#li-gnew");
-  if (g) { g.focus(); g.setSelectionRange(sel[0], sel[1]); }
+  liRenderImport(document.getElementById("tab-import"));
 }
 
 const LI_STATUS = {
@@ -1017,7 +1013,9 @@ function liRenderImport(root) {
       .map(c => esc(liFieldLabel(c.key)) + ": " + (c.secret ? "●●●" : esc(liDisp(c.key, c.file))) + (c.filled ? `<span class="li-filled">${esc(t("既定"))}</span>` : "") + (c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""));
     return vals.join(esc(t("、")));
   };
-  root.innerHTML = `
+  // The group name box being typed in is kept in place (patchKeeping,
+  // app.js): drawn anew, it lost the caret and cut an IME conversion off.
+  patchKeeping(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("取り込み: {f}", { f: imp.path.split(/[\\/]/).pop() }))}</div>
         <div class="page-sub">${esc(t("内容を確かめてから「取り込む」を押してください。この時点では何も変わっていません"))}</div></div>
@@ -1078,7 +1076,7 @@ function liRenderImport(root) {
         <div class="row-inline" style="gap:6px"><button class="btn" id="li-icancel">${esc(t("キャンセル"))}</button>
         <button class="btn primary" id="li-apply" ${writes.length || imp.deleteIds.length ? "" : "disabled"}>${esc(t("取り込む"))}</button></div>
       </div>
-    </div>` : imp.busy ? `<div class="empty">${esc(t("読み込み中…"))}</div>` : ""}`;
+    </div>` : imp.busy ? `<div class="empty">${esc(t("読み込み中…"))}</div>` : ""}`, [keepFocusedBox(root, "li-gnew")]);
   liWireImport(root);
   liFitPreview(root);
   const nb = root.querySelector(".li-prevbox");
@@ -1119,22 +1117,19 @@ function liWireImport(root) {
     imp.decisions = {}; imp.deleteIds = [];
     again();
   });
-  // Typing the new group's name: the preview follows a moment after the
-  // last key (not during an IME conversion), the field keeping its focus.
+  // Typing the new group's name: the preview follows a pause in the typing
+  // (not during an IME conversion; wireFilterInput, app.js), the box
+  // keeping its focus across the redraw. A box kept from the last draw is
+  // wired already; the callbacks read LI.imp as it is then, not the import
+  // this draw was for.
   const gn = q("#li-gnew");
-  liComposing = false; liRedrawLater = false;
-  const typed = () => {
-    if (!imp.newGroup) return;
-    imp.group = gn.value;
-    clearTimeout(liGroupTimer);
-    if (!liComposing) liGroupTimer = setTimeout(again, 400);
-  };
-  gn.oninput = typed;
-  gn.addEventListener("compositionstart", () => { liComposing = true; clearTimeout(liGroupTimer); });
-  // The redraw held back during the conversion comes with the next preview,
-  // a moment later: redrawn at once, a click that ended the conversion (on
-  // 取り込む, say) would land on a button already replaced.
-  gn.addEventListener("compositionend", () => { liComposing = false; liRedrawLater = false; typed(); });
+  if (!gn._liWired) {
+    gn._liWired = true;
+    const cur = () => LI.view === "import" && LI.imp && LI.imp.newGroup ? LI.imp : null;
+    wireFilterInput(gn,
+      () => { const im = cur(); if (!im) return; im.notice = ""; im.preview && (im.busy = true); liPreview(); },
+      val => { const im = cur(); if (im) im.group = val; });
+  }
   q("#li-gold").onchange = e => { if (!imp.newGroup) { imp.group = e.target.value; imp.decisions = {}; imp.deleteIds = []; again(); } };
   root.querySelectorAll("[data-filt]").forEach(b => b.onclick = () => { imp.filter[b.dataset.filt] = !imp.filter[b.dataset.filt]; renderListImport(); });
   root.querySelectorAll("[data-link]").forEach(sel => sel.onchange = async () => {

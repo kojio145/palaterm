@@ -173,8 +173,12 @@ func looksLikeAddress(s string) bool {
 
 // fileRow is one row being planned.
 type fileRow struct {
-	row    *Row
-	cells  map[string]string // canonical file values of the mapped fields
+	row *Row
+	// cells are the file's values of the mapped fields, canonicalised — but
+	// an invalid value as the file has it: canonicalising replaces it with a
+	// fallback that may equal the device's, and the cell would read "same"
+	// with its error never shown.
+	cells  map[string]string
 	errs   map[string]string // cell errors of the file's values
 	dev    model.Device      // the file's values as a device (new rows)
 	pr     *PlanRow
@@ -220,6 +224,9 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		}
 		for _, e := range errs {
 			fr.errs[e.Col] = e.Msg
+			if _, ok := fr.cells[e.Col]; ok {
+				fr.cells[e.Col] = row.Values[e.Col]
+			}
 		}
 		pr.Name, pr.Host, pr.Site = dev.Name, dev.Host, dev.Site
 		p.Rows = append(p.Rows, pr)
@@ -405,10 +412,11 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		}
 	}
 	// Missing: the group's devices the file does not have. A device a row
-	// of the file stands for is not one, whatever becomes of that row
-	// (excluded, set to 取り込まない or to a new device, undecided between
-	// candidates, failing): offering it for deletion would delete a device
-	// the list still has — and the row would not replace it.
+	// of the file stands for — by key, name or address, as the passes match
+	// — is not one, whatever becomes of that row (excluded, set to
+	// 取り込まない or to a new device, undecided between candidates,
+	// failing): offering it for deletion would delete a device the list
+	// still has — and the row would not replace it.
 	inFile := map[int]bool{}
 	for _, fr := range rows {
 		for _, c := range fr.pr.Candidates {
@@ -424,6 +432,17 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		}
 		if n := strings.TrimSpace(row.Values["name"]); n != "" {
 			for _, j := range byNorm[normName(n, r.Match)] {
+				inFile[j] = true
+			}
+		}
+		// By the address alone the match is only a proposal: a row the user
+		// declared another device (新規) frees the device at its address —
+		// the list, by the user's word, no longer has it.
+		if opt.Decisions[row.ID].Link == "new" {
+			continue
+		}
+		if h := strings.ToLower(strings.TrimSpace(row.Values["host"])); h != "" {
+			for _, j := range byHost[h] {
 				inFile[j] = true
 			}
 		}

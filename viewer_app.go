@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/kojio145/palaterm/internal/history"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -21,6 +26,15 @@ type Viewer struct {
 	path  string
 	title string
 	live  bool
+
+	// What Load read so far (see read): the file's bytes, their cleaned
+	// text, and the size and time the file had, so the follow timer reads
+	// only what was added.
+	mu     sync.Mutex
+	raw    []byte
+	text   string
+	mod    time.Time
+	loaded bool
 }
 
 // viewerDoc is what the page shows.
@@ -46,6 +60,23 @@ func openInExplorer(path string) error {
 	return startExplorer("/select,", path)
 }
 
+// windowEnv is childEnv for a window opened by a window that may itself be
+// a child: a terminal window's own place (PALATERM_TILE, PALATERM_CASCADE
+// — its grid cell, its step in the cascade) and its 同時入力 (PALATERM_BCAST)
+// are left out, or its paste window would open up to 224 px off its centre
+// and its log viewer in its grid cell.
+func windowEnv(extra ...string) []string {
+	all := childEnv(extra...)
+	env := all[:0]
+	for _, kv := range all {
+		if strings.HasPrefix(kv, tileEnv+"=") || strings.HasPrefix(kv, cascadeEnv+"=") || strings.HasPrefix(kv, bcastEnv+"=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
 // spawnWindow starts another PalaTerm window process detached from this one.
 func spawnWindow(env []string, args ...string) error {
 	exe, err := os.Executable()
@@ -53,7 +84,7 @@ func spawnWindow(env []string, args ...string) error {
 		return err
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Env = childEnv(env...)
+	cmd.Env = windowEnv(env...)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -75,17 +106,63 @@ func (v *Viewer) domReady(ctx context.Context) { go focusOwnWindow() }
 // log that is still being written — an interactive session — stays current).
 func (v *Viewer) Load() viewerDoc {
 	d := viewerDoc{Path: v.path, Name: filepath.Base(v.path)}
-	b, err := os.ReadFile(v.path)
+	text, err := v.read()
 	if err != nil {
 		d.Err = err.Error()
 		return d
 	}
-	// Shown as it was on screen: an interactive capture keeps the device's
-	// line editing ("\b \b" from tab completion) and colour escapes, which
-	// read as garbage in a text view. The file itself is left as captured.
-	d.Text = history.CleanTranscript(string(b))
+	d.Text = text
 	d.Live = v.live
 	return d
+}
+
+// read is the file's text as it was on screen: an interactive capture keeps
+// the device's line editing ("\b \b" from tab completion) and colour
+// escapes, which read as garbage in a text view (history.CleanTranscript;
+// the file itself is left as captured). The follow timer calls it every
+// two seconds: a file that has not changed costs a Stat, one that grew is
+// read from where the last read ended, and one that shrank or was rewritten
+// (replaced) is read from the start again.
+func (v *Viewer) read() (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	f, err := os.Open(v.path)
+	if err != nil {
+		v.loaded = false // whatever comes back is read whole
+		return "", err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		v.loaded = false
+		return "", err
+	}
+	size, have := st.Size(), int64(len(v.raw))
+	if v.loaded && size == have && st.ModTime().Equal(v.mod) {
+		return v.text, nil
+	}
+	// Appended to, or another file in its place? The end of what was read
+	// must still be there (a replacement larger than the old file would
+	// otherwise show as the old text plus its tail).
+	if v.loaded && size > have && have > 0 {
+		k := min(have, int64(4096))
+		tail := make([]byte, k)
+		if n, err := f.ReadAt(tail, have-k); err != nil || !bytes.Equal(tail[:n], v.raw[have-k:]) {
+			v.loaded = false
+		}
+	}
+	if !v.loaded || size <= have {
+		v.raw, have = v.raw[:0], 0
+	}
+	buf := make([]byte, size-have)
+	n, err := f.ReadAt(buf, have)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	v.raw = append(v.raw, buf[:n]...)
+	v.text = history.CleanTranscript(string(v.raw))
+	v.mod, v.loaded = st.ModTime(), true
+	return v.text, nil
 }
 
 // OpenFolder shows the file in Explorer.

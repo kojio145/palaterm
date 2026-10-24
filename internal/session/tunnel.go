@@ -22,6 +22,13 @@ import (
 // opts.Legacy is the device's setting; each hop uses its own. Host keys are
 // pinned under model.TunnelName, the chain that leads to the endpoint.
 func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, opts DialOpts) (Session, error) {
+	// Settled before anything is dialed: a device that cannot be reached
+	// this way gets no hop logged into and no stray connection in its log.
+	switch dev.Conn {
+	case model.ConnTelnet, model.ConnSSH:
+	default:
+		return nil, fmt.Errorf("SSH トンネルで接続できるのは SSH と Telnet の機器だけです（%s）", dev.Conn)
+	}
 	clients, via, err := dialChain(hops, timeout, opts)
 	if err != nil {
 		return nil, err
@@ -36,41 +43,36 @@ func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, 
 	if err != nil {
 		return fail(fmt.Errorf("機器（%s）: %w", dev.Host, err))
 	}
-	switch dev.Conn {
-	case model.ConnTelnet:
+	if dev.Conn == model.ConnTelnet {
 		return &telnetSession{conn: conn, hops: clients}, nil
-	case model.ConnSSH:
-		cfg, err := sshConfig(dev.Username, dev.Password, dev.AuthMethod, dev.KeyFile, dev.KeyPassphrase, timeout, opts)
-		if err != nil {
-			conn.Close()
-			return fail(err)
-		}
-		name := model.TunnelName(via, addr)
-		var s *sshSession
-		err = withTimeout(conn, name, timeout, func() error {
-			c, err := sshHandshakeNoTimer(conn, name, cfg)
-			if err != nil {
-				return sshDialError(name, err, dev.Username, dev.AuthMethod, opts)
-			}
-			if s, err = startShell(c); err != nil {
-				c.Close()
-				return err
-			}
-			return nil
-		})
-		if err != nil {
-			if s != nil {
-				s.client.Close()
-			}
-			return fail(err)
-		}
-		startKeepalive(s.client)
-		s.hops = clients
-		return s, nil
-	default:
-		conn.Close()
-		return fail(fmt.Errorf("SSH トンネルで接続できるのは SSH と Telnet の機器だけです（%s）", dev.Conn))
 	}
+	cfg, err := sshConfig(dev.Username, dev.Password, dev.AuthMethod, dev.KeyFile, dev.KeyPassphrase, timeout, opts)
+	if err != nil {
+		conn.Close()
+		return fail(err)
+	}
+	name := model.TunnelName(via, addr)
+	var s *sshSession
+	err = withTimeout(conn, name, timeout, func() error {
+		c, err := sshHandshakeNoTimer(conn, name, cfg)
+		if err != nil {
+			return sshDialError(name, err, dev.Username, dev.AuthMethod, opts)
+		}
+		if s, err = startShell(c); err != nil {
+			c.Close()
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		if s != nil {
+			s.client.Close()
+		}
+		return fail(err)
+	}
+	startKeepalive(s.client)
+	s.hops = clients
+	return s, nil
 }
 
 // dialChain logs into each jump host in turn from this PC, every next one
@@ -91,11 +93,7 @@ func dialChain(hops []model.Bastion, timeout time.Duration, opts DialOpts) ([]*s
 		if b.Method != model.BastionSSH {
 			return fail(fmt.Errorf("SSH トンネルで通る踏み台はすべて SSH にしてください（%d段目が %s）", i+1, b.Method))
 		}
-		port := b.Port
-		if port == 0 {
-			port = 22
-		}
-		addr := model.HopAddr(b.Host, port)
+		addr := model.HopAddr(b.Host, b.EffectivePort())
 		hopOpts := opts
 		hopOpts.Legacy = effectiveBastionLegacy(b, opts)
 		cfg, err := sshConfig(b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, timeout, hopOpts)

@@ -88,10 +88,52 @@ func VerifyHostKey(store HostKeyStore) ssh.HostKeyCallback {
 			return nil
 		}
 		if prev != fp {
-			return fmt.Errorf("ホストキーが前回接続時と異なります（%s、今回: %s / 記録: %s）。中間者攻撃または機器交換の可能性があります。機器を交換した場合は、接続時の確認で「機器を交換したので許可して再接続」を選んでください", hostname, fp, prev)
+			return &HostKeyMismatchError{Name: hostname, Got: fp, Stored: prev}
 		}
 		return nil
 	}
+}
+
+// HostKeyMismatchError is VerifyHostKey's refusal: the endpoint pinned as
+// Name (the device's own address, or a jump host's — see model.HostKeyNames)
+// presented Got where Stored was recorded.
+type HostKeyMismatchError struct {
+	Name, Got, Stored string
+}
+
+// mismatchPrefix opens the message; MismatchedHostKeyIn reads the name back
+// from it, and the UI recognises the message by it.
+const mismatchPrefix = "ホストキーが前回接続時と異なります（"
+
+func (e *HostKeyMismatchError) Error() string {
+	return fmt.Sprintf("%s%s、今回: %s / 記録: %s）。中間者攻撃または機器交換の可能性があります。機器を交換した場合は、接続時の確認で「機器を交換したので許可して再接続」を選んでください", mismatchPrefix, e.Name, e.Got, e.Stored)
+}
+
+// MismatchedHostKey names the endpoint whose host key err refused, or "" when
+// err is not (or does not wrap) that refusal. An error that was flattened to
+// text on the way — a batch result's message — still yields the name.
+func MismatchedHostKey(err error) string {
+	if err == nil {
+		return ""
+	}
+	var m *HostKeyMismatchError
+	if errors.As(err, &m) {
+		return m.Name
+	}
+	return MismatchedHostKeyIn(err.Error())
+}
+
+// MismatchedHostKeyIn is MismatchedHostKey for the error's text.
+func MismatchedHostKeyIn(msg string) string {
+	_, rest, ok := strings.Cut(msg, mismatchPrefix)
+	if !ok {
+		return ""
+	}
+	name, _, ok := strings.Cut(rest, "、今回: ")
+	if !ok {
+		return ""
+	}
+	return name
 }
 
 // DialOpts carries the security-relevant connection options.
@@ -142,21 +184,41 @@ var keepaliveEvery = 30 * time.Second
 
 // startKeepalive sends OpenSSH's keepalive request until the client closes,
 // and closes it after three unanswered in a row (the line is gone — better
-// to say so than to sit there).
-func startKeepalive(c *ssh.Client) {
+// to say so than to sit there). The returned channel closes when the sender
+// has stopped (tests).
+//
+// The connection's own end (c.Wait) is what stops the sender: a client we
+// closed answers SendRequest with net.ErrClosed, not io.EOF, and judging by
+// the error alone kept the goroutine and its ticker alive for three more
+// misses — 90 s per device after every batch.
+func startKeepalive(c *ssh.Client) <-chan struct{} {
+	closed := make(chan struct{})
 	go func() {
+		_ = c.Wait()
+		close(closed)
+	}()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
 		t := time.NewTicker(keepaliveEvery)
 		defer t.Stop()
 		misses := 0
-		for range t.C {
+		for {
+			select {
+			case <-closed:
+				return
+			case <-t.C:
+			}
 			done := make(chan error, 1)
 			go func() {
 				_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
 				done <- err
 			}()
 			select {
+			case <-closed:
+				return
 			case err := <-done:
-				if err != nil && errors.Is(err, io.EOF) {
+				if err != nil && (errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed)) {
 					return // closed
 				}
 				if err != nil {
@@ -173,6 +235,7 @@ func startKeepalive(c *ssh.Client) {
 			}
 		}
 	}()
+	return stopped
 }
 
 func dialSSH(host string, port int, user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (Session, error) {
@@ -256,13 +319,34 @@ func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphr
 // sshDialError adds what the user can do about a failed handshake: allow
 // the old algorithms, or fix the credentials.
 func sshDialError(addr string, err error, user string, auth model.AuthMethod, opts DialOpts) error {
-	if !opts.Legacy && strings.Contains(err.Error(), "no common algorithm") {
-		return fmt.Errorf("ssh dial %s: %w — 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください", addr, err)
+	if hint := algorithmHint(err, opts); hint != "" {
+		return fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
 	}
 	if hint := authFailureHint(err, user, auth); hint != "" {
 		return fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
 	}
 	return fmt.Errorf("ssh dial %s: %w", addr, err)
+}
+
+// algorithmHint says what to do about x/crypto's "no common algorithm for
+// <what>; ...". The レガシー暗号 toggle adds old key-exchange and cipher
+// algorithms and nothing else, so it is offered for those two alone: a device
+// that insists on an old MAC or host-key algorithm would fail the same way
+// with it on, and the hint would send the user round in a circle.
+func algorithmHint(err error, opts DialOpts) string {
+	msg := err.Error()
+	i := strings.Index(msg, "no common algorithm for ")
+	if i < 0 {
+		return ""
+	}
+	what, _, _ := strings.Cut(msg[i+len("no common algorithm for "):], ";")
+	if strings.Contains(what, "key exchange") || strings.Contains(what, "cipher") {
+		if opts.Legacy {
+			return ""
+		}
+		return "機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください"
+	}
+	return "機器と共通のアルゴリズムがありません（「レガシー暗号を許可」が足すのは鍵交換と暗号だけで、この不一致には効きません）"
 }
 
 // startShell opens the interactive shell on an authenticated client. The
@@ -376,6 +460,11 @@ func loadPrivateKey(keyFile, passphrase string) (ssh.Signer, error) {
 	// the library signs ssh-dss when the server offers nothing else.
 	if passphrase != "" {
 		signer, err := parseKey(data, passphrase)
+		if err != nil && isUnencryptedKeyError(err) {
+			// The passphrase is left over from the protected key this file
+			// replaced (the device's field kept it): the file needs none.
+			signer, err = parseKey(data, "")
+		}
 		if err != nil {
 			if errors.Is(err, x509.IncorrectPasswordError) || strings.Contains(err.Error(), "incorrect passphrase") || strings.Contains(err.Error(), "decryption password incorrect") {
 				return nil, fmt.Errorf("秘密鍵のパスフレーズが違います: %s", keyFile)
@@ -393,6 +482,14 @@ func loadPrivateKey(keyFile, passphrase string) (ssh.Signer, error) {
 		return nil, fmt.Errorf("parse private key (Ed25519/RSA/ECDSA/DSA expected): %w", err)
 	}
 	return signer, nil
+}
+
+// isUnencryptedKeyError recognises x/crypto's two refusals of a passphrase
+// for a key that has none: PEM ("not an encrypted key") and OpenSSH
+// container ("key is not password protected").
+func isUnencryptedKeyError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "not an encrypted key") || strings.Contains(msg, "not password protected")
 }
 
 // parseKey hands the file to x/crypto and, for the one shape it declines —

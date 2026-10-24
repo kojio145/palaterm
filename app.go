@@ -84,6 +84,10 @@ type App struct {
 	// The command-set / profile file read last, waiting for the answer to
 	// its name conflict (ResolveFileImport).
 	pendingImport *pendingImport
+
+	// The file PickImportFile's dialog chose last: the only one
+	// PreviewImportFile / ApplyImport read (the page hands the path back).
+	importPath string
 }
 
 // UnlockInfo is what the lock screen asks after an Unlock: a backup that can
@@ -282,6 +286,7 @@ func (a *App) shutdown(ctx context.Context) {
 	// finish: its devices log out and the run's summary is written, so the
 	// run shows in 実行履歴 as stopped instead of being cut off mid-way.
 	a.stopRunForExit(5 * time.Second)
+	a.waitSchedRuns(5 * time.Second) // the stopped 予約 round writes its line after execBatch returns
 	closeGUIWindows()
 	closeCmdsetWindows()
 	a.flushPersist()
@@ -326,9 +331,9 @@ func (a *App) stopRunForExit(max time.Duration) bool {
 	return false
 }
 
-// ClearHostKeys drops the pinned host keys for one device (its own address
-// and its bastions'), so a legitimately replaced device can be re-pinned on
-// the next connection.
+// ClearHostKeys drops the pinned host key of one device — its own, never a
+// jump host's, which other devices share — so a legitimately replaced device
+// can be re-pinned on the next connection.
 func (a *App) ClearHostKeys(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
@@ -340,14 +345,13 @@ func (a *App) ClearHostKeys(id string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("機器が見つかりません")
 	}
-	// The keys are pinned under the chain as connected: the own jump host
-	// in front when the device goes through it. The names without it go too
+	// The key is pinned under the chain as connected: the own jump host
+	// in front when the device goes through it. The name without it goes too
 	// (pinned before the device used the own jump host).
 	dev := a.inv.Devices[idx]
 	resolved := a.inv.ResolveCredentials(dev)
 	direct := dev.WithoutBastions() // 踏み台を使わない: pinned under the bare address
-	names := append(dev.HostKeyNames(), resolved.HostKeyNames()...)
-	for _, addr := range append(names, direct.HostKeyNames()...) {
+	for _, addr := range []string{dev.OwnHostKeyName(), resolved.OwnHostKeyName(), direct.OwnHostKeyName()} {
 		delete(a.inv.KnownHostKeys, addr)
 	}
 	a.mu.Unlock()
@@ -834,6 +838,10 @@ func (a *App) Lock() {
 		a.schedInv = schedCopy(a.inv)
 	}
 	a.password, a.inv = "", nil
+	// A file read before the lock is not applied after it: the answer to
+	// its name conflict, and the bundle the import screen was showing, go
+	// with the vault they were read for.
+	a.pendingImport, a.importPath = nil, ""
 	a.mu.Unlock()
 	// So does the device list last read for 一覧の取り込み (passwords in
 	// it) — after the vault is closed: a read in progress keeps its file
@@ -905,8 +913,14 @@ func (a *App) ResetVault(current string) error {
 	a.readOnly, a.unlockInfo = false, UnlockInfo{}
 	a.schedInv = nil
 	a.pendingPins = nil // nothing of the old vault goes into the next one
+	a.pendingImport, a.importPath = nil, ""
 	a.mu.Unlock()
+	// The GUI windows are logged into the devices just deleted: they close
+	// with the vault, as at Lock.
+	closeGUIWindows()
 	closeCmdsetWindows()
+	forgetBook()
+	a.resetSchedFiles() // the old vault's schedule names, device names and log paths in data\
 	if err := os.Remove(a.vaultPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -986,19 +1000,10 @@ func (a *App) SaveProfile(p profile.Profile) error {
 	if strings.TrimSpace(p.Prompt) == "" {
 		return fmt.Errorf("「showコマンド完了の目印」は必須です")
 	}
+	// Control characters and credential variables in the answers are refused
+	// there, for every path a profile comes in by (file imports too).
 	if err := model.CheckProfileSends(p); err != nil {
 		return err
-	}
-	// Answers go to whatever question matches, mid-command: a credential
-	// there would be typed to any prompt that happens to look alike. So the
-	// variables are not expanded in them, and refused rather than sent as
-	// literal text.
-	for _, ans := range p.Answers {
-		for _, v := range []string{"{user}", "{password}", "{enable}"} {
-			if strings.Contains(ans.Send, v) {
-				return fmt.Errorf("確認への自動応答の「送る文字」に %s は使えません（パスワード等を想定外の質問へ送らないため）", v)
-			}
-		}
 	}
 	isNew := p.Key == ""
 	a.mu.Lock()
@@ -1415,23 +1420,27 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 	return n, a.persist()
 }
 
-// SetAllDevicesEnabled enables or disables every device in one shot (bulk
-// check / uncheck). If ids is non-empty, only those devices are affected.
+// SetAllDevicesEnabled checks or unchecks the devices with the given IDs in
+// one shot (the run tab's header check, a Shift-click range). An empty list
+// changes nothing: the header check is drawn with no rows under it too (a
+// filter matching none, an empty group), and it used to mean "every device
+// of every group".
 func (a *App) SetAllDevicesEnabled(enabled bool, ids []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	var only map[string]bool
-	if len(ids) > 0 {
-		only = make(map[string]bool, len(ids))
-		for _, id := range ids {
-			only[id] = true
-		}
+	if len(ids) == 0 {
+		a.mu.Unlock()
+		return nil
+	}
+	only := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		only[id] = true
 	}
 	for i := range a.inv.Devices {
-		if only == nil || only[a.inv.Devices[i].ID] {
+		if only[a.inv.Devices[i].ID] {
 			a.inv.Devices[i].Enabled = enabled
 		}
 	}
@@ -1603,7 +1612,9 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 		if d.Group != name {
 			continue
 		}
-		d.Group = ""
+		// Ungrouped, it has no group defaults to log in with (as UpdateDevices
+		// does when a device is moved out of every group).
+		d.Group, d.UseGroupCreds = "", false
 		if a.inv.DeviceNameTaken("", d.Name, d.ID) {
 			n := 2
 			for a.inv.DeviceNameTaken("", fmt.Sprintf("%s_%d", d.Name, n), d.ID) {
@@ -1679,9 +1690,20 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 
 // ---- Command sets ----
 
+// checkCommandSet trims the set's name and refuses an empty one or a command
+// with control characters — the same for a set saved and one created, so no
+// "" or "bk " set is made by either.
+func checkCommandSet(cs *model.CommandSet) error {
+	cs.Name = strings.TrimSpace(cs.Name)
+	if cs.Name == "" {
+		return fmt.Errorf("セット名は必須です")
+	}
+	return model.CheckCommands(cs.Commands)
+}
+
 // SaveCommandSet inserts or updates a command set by name.
 func (a *App) SaveCommandSet(cs model.CommandSet) error {
-	if err := model.CheckCommands(cs.Commands); err != nil {
+	if err := checkCommandSet(&cs); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -1709,11 +1731,7 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 // replaces by name, so a typo of an existing name silently overwrote that
 // set's commands on every device that used it.
 func (a *App) CreateCommandSet(cs model.CommandSet) error {
-	cs.Name = strings.TrimSpace(cs.Name)
-	if cs.Name == "" {
-		return fmt.Errorf("セット名は必須です")
-	}
-	if err := model.CheckCommands(cs.Commands); err != nil {
+	if err := checkCommandSet(&cs); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -1810,7 +1828,9 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	return newName, a.persist()
 }
 
-// DeleteCommandSet removes a command set by name.
+// DeleteCommandSet removes a command set by name. A schedule set to run it
+// would fail every time from then on ("command set not found"): it stops,
+// and the 実行記録 says why (a rename is followed instead, RenameCommandSet).
 func (a *App) DeleteCommandSet(name string) error {
 	a.mu.Lock()
 	if a.inv == nil {
@@ -1824,7 +1844,9 @@ func (a *App) DeleteCommandSet(name string) error {
 		}
 	}
 	a.inv.CommandSets = out
+	stopped := stopSchedSet(a.inv, name)
 	a.mu.Unlock()
+	a.logStopped(stopped)
 	return a.persist()
 }
 
@@ -2345,7 +2367,14 @@ func (a *App) logRoot() string {
 // underLogRoot refuses a path outside the configured log folder, so the
 // history tab's file arguments cannot be pointed at arbitrary files.
 func (a *App) underLogRoot(p string) error {
-	root, err := filepath.Abs(a.logRoot())
+	return underRoot(a.logRoot(), p, "ログフォルダの外は開けません")
+}
+
+// underRoot is the error msg when p does not lie under root (both made
+// absolute), nil when it does: the one check behind every path the page
+// hands back to be opened.
+func underRoot(root, p, msg string) error {
+	root, err := filepath.Abs(root)
 	if err != nil {
 		return err
 	}
@@ -2355,7 +2384,7 @@ func (a *App) underLogRoot(p string) error {
 	}
 	rel, err := filepath.Rel(root, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("ログフォルダの外は開けません")
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }
@@ -2467,13 +2496,7 @@ func (a *App) OpenLogDir() error {
 	if a.locked() {
 		return errVaultLocked
 	}
-	a.mu.Lock()
-	dir := "logs"
-	if a.inv != nil && a.inv.Settings.LogDir != "" {
-		dir = a.inv.Settings.LogDir
-	}
-	a.mu.Unlock()
-	abs := logstore.ResolveRoot(dir)
+	abs := a.logRoot()
 	_ = os.MkdirAll(abs, 0o755)
 	return startExplorer(abs)
 }
@@ -2535,10 +2558,15 @@ func (a *App) ExportCompareResult(rows [][]string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	// Two exports within the same second get _2, _3 … rather than one
-	// overwriting the other.
-	base := "compare_" + time.Now().Format("20060102_150405")
-	path := filepath.Join(dir, base+".csv")
+	return writeNewFile(dir, "compare_"+time.Now().Format("20060102_150405"), ".csv", text)
+}
+
+// writeNewFile writes text to dir\<base><ext> and returns the path. Two
+// exports within the same second get _2, _3 … rather than one overwriting
+// the other (the file is created O_EXCL, so a name that appears in between
+// is never taken either).
+func writeNewFile(dir, base, ext, text string) (string, error) {
+	path := filepath.Join(dir, base+ext)
 	for n := 2; ; n++ {
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
@@ -2555,13 +2583,16 @@ func (a *App) ExportCompareResult(rows [][]string) (string, error) {
 		if !os.IsExist(err) || n > 100 {
 			return "", err
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s_%d.csv", base, n))
+		path = filepath.Join(dir, fmt.Sprintf("%s_%d%s", base, n, ext))
 	}
 }
 
 // OpenDiffWindow compares two saved logs in their own window (PalaTerm.exe
 // --diff). Both files must lie under the log folder.
 func (a *App) OpenDiffWindow(pathA, pathB, label string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	for _, p := range []string{pathA, pathB} {
 		if err := a.underLogRoot(p); err != nil {
 			return err
@@ -2721,6 +2752,10 @@ func (a *App) spawnTerminal(id string, manual, direct bool, extra []string) (*te
 		for sc.Scan() {
 			a.termLine(cmd, sc.Text())
 		}
+		// Scan stops short of EOF on a line over its buffer (ErrTooLong):
+		// read on to the end regardless, or the child blocks on a full
+		// pipe, Wait never returns and the window stays counted as open.
+		_, _ = io.Copy(io.Discard, stdout)
 		_ = cmd.Wait()
 		a.termsMu.Lock()
 		delete(a.terms, cmd)
@@ -2828,7 +2863,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.17"
+const appVersion = "1.9.18"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
@@ -3188,7 +3223,14 @@ func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportP
 	if err != nil || path == "" {
 		return nil, err
 	}
-	return a.previewImport(path, targetGroup, overwriteShared)
+	pv, err := a.previewImport(path, targetGroup, overwriteShared)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	a.importPath = path
+	a.mu.Unlock()
+	return pv, nil
 }
 
 // PreviewImportFile previews the file PickImportFile chose again with other
@@ -3196,10 +3238,22 @@ func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportP
 // profiles): the import screen shows the options next to what they do.
 func (a *App) PreviewImportFile(path, targetGroup string, overwriteShared bool) (*ImportPreview, error) {
 	defer recoverBound(a.ctx, "PreviewImportFile")
-	if path == "" {
-		return nil, fmt.Errorf("ファイルが選ばれていません")
+	if err := a.pickedImport(path); err != nil {
+		return nil, err
 	}
 	return a.previewImport(path, targetGroup, overwriteShared)
+}
+
+// pickedImport refuses a path other than the one PickImportFile's dialog
+// chose (the page hands it back for the preview and the apply): the only
+// file these read is one the user picked, not any path the page names.
+func (a *App) pickedImport(path string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if path == "" || a.importPath == "" || path != a.importPath {
+		return fmt.Errorf("ファイルが選ばれていません（「読込」からファイルを選び直してください）")
+	}
+	return nil
 }
 
 func (a *App) previewImport(path, targetGroup string, overwriteShared bool) (*ImportPreview, error) {
@@ -3238,6 +3292,10 @@ func readImportFile(path string) (bundle.Contents, string, error) {
 // ApplyImport merges the previewed file into the vault (rules: bundle.Apply)
 // and returns what happened.
 func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bundle.Summary, error) {
+	defer recoverBound(a.ctx, "ApplyImport")
+	if err := a.pickedImport(path); err != nil {
+		return nil, err
+	}
 	c, _, err := readImportFile(path)
 	if err != nil {
 		return nil, err
@@ -3308,31 +3366,22 @@ func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (s
 	if dryRun {
 		kind = "connect-failed"
 	}
-	name := kind + "_" + time.Now().Format("20060102_150405") + ".csv"
+	base := kind + "_" + time.Now().Format("20060102_150405")
 	if group != "" {
-		name = bundle.FileNameSafe(group) + "_" + name
+		base = bundle.FileNameSafe(group) + "_" + base
 	}
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
-		return "", err
-	}
-	return path, nil
+	return writeNewFile(dir, base, ".csv", text)
 }
 
 // OpenExportFolder opens a folder under export\ in Explorer (offered after
 // 一式書出). Anything outside export\ is refused.
 func (a *App) OpenExportFolder(dir string) error {
-	root, err := filepath.Abs(filepath.Join(exeDir(), "export"))
-	if err != nil {
-		return err
-	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("export フォルダの外は開けません")
+	if err := underRoot(filepath.Join(exeDir(), "export"), abs, "export フォルダの外は開けません"); err != nil {
+		return err
 	}
 	return startExplorer(abs)
 }

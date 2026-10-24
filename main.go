@@ -91,22 +91,45 @@ func main() {
 	runMainApp()
 }
 
-func runViewerWindow(path string) {
-	title := "PalaTerm - " + winWord("ログ", "Log") + " - " + filepath.Base(path)
-	v := NewViewer(path, title)
+// childWindow is what differs between the child windows (log viewer,
+// screen, diff, command set, paste); runChildWindow runs one with what they
+// share.
+type childWindow struct {
+	title    string
+	size     winSize
+	bg       options.RGBA
+	bind     interface{}
+	startup  func(context.Context)
+	domReady func(context.Context)
+	hidden   bool // StartHidden: the spare command-set window
+	onTop    bool // AlwaysOnTop: the paste window
+}
+
+// Background colours: the panel windows (viewer, diff, command set), the
+// terminal-like screen window, and the paste window.
+var (
+	panelBG  = options.RGBA{R: 17, G: 21, B: 28, A: 1}
+	screenBG = options.RGBA{R: 0, G: 0, B: 0, A: 1}
+	pasteBG  = options.RGBA{R: 26, G: 33, B: 43, A: 1}
+)
+
+func runChildWindow(w childWindow) {
+	bg := w.bg
 	err := wails.Run(&options.App{
-		Title:     title,
-		Width:     viewerWin.W,
-		Height:    viewerWin.H,
-		MinWidth:  viewerWin.MinW,
-		MinHeight: viewerWin.MinH,
+		StartHidden: w.hidden,
+		AlwaysOnTop: w.onTop,
+		Title:       w.title,
+		Width:       w.size.W,
+		Height:      w.size.H,
+		MinWidth:    w.size.MinW,
+		MinHeight:   w.size.MinH,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 17, G: 21, B: 28, A: 1},
-		OnStartup:        v.startup,
-		OnDomReady:       v.domReady,
-		Bind:             []interface{}{v},
+		BackgroundColour: &bg,
+		OnStartup:        w.startup,
+		OnDomReady:       w.domReady,
+		Bind:             []interface{}{w.bind},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
@@ -117,30 +140,16 @@ func runViewerWindow(path string) {
 	}
 }
 
+func runViewerWindow(path string) {
+	title := "PalaTerm - " + winWord("ログ", "Log") + " - " + filepath.Base(path)
+	v := NewViewer(path, title)
+	runChildWindow(childWindow{title: title, size: viewerWin, bg: panelBG, bind: v, startup: v.startup, domReady: v.domReady})
+}
+
 func runWatchWindow(path string) {
 	title := "PalaTerm - " + winWord("画面", "Screen") + " - " + filepath.Base(path)
 	w := NewWatcher(path, title)
-	err := wails.Run(&options.App{
-		Title:     title,
-		Width:     termWin.W,
-		Height:    termWin.H,
-		MinWidth:  termWin.MinW,
-		MinHeight: termWin.MinH,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 1},
-		OnStartup:        w.startup,
-		OnDomReady:       w.domReady,
-		Bind:             []interface{}{w},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-		},
-	})
-	if err != nil {
-		println("error:", err.Error())
-	}
+	runChildWindow(childWindow{title: title, size: termWin, bg: screenBG, bind: w, startup: w.startup, domReady: w.domReady})
 }
 
 func runDiffWindow(a, b, label string) {
@@ -149,27 +158,7 @@ func runDiffWindow(a, b, label string) {
 		title += " - " + label
 	}
 	d := NewDiffWin(a, b, label, title)
-	err := wails.Run(&options.App{
-		Title:     title,
-		Width:     diffWin.W,
-		Height:    diffWin.H,
-		MinWidth:  diffWin.MinW,
-		MinHeight: diffWin.MinH,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 17, G: 21, B: 28, A: 1},
-		OnStartup:        d.startup,
-		OnDomReady:       d.domReady,
-		Bind:             []interface{}{d},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-		},
-	})
-	if err != nil {
-		println("error:", err.Error())
-	}
+	runChildWindow(childWindow{title: title, size: diffWin, bg: panelBG, bind: d, startup: d.startup, domReady: d.domReady})
 }
 
 func runCmdsetWindow() {
@@ -200,31 +189,13 @@ func runCmdsetWindow() {
 	}
 	ready := make(chan struct{})
 	go c.follow(in, ready)
-	err := wails.Run(&options.App{
-		StartHidden: spare,
-		Title:       title,
-		Width:       cmdsetWinSize.W,
-		Height:      cmdsetWinSize.H,
-		MinWidth:    cmdsetWinSize.MinW,
-		MinHeight:   cmdsetWinSize.MinH,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 17, G: 21, B: 28, A: 1},
-		OnStartup: func(ctx context.Context) {
+	runChildWindow(childWindow{title: title, size: cmdsetWinSize, bg: panelBG, bind: c, hidden: spare,
+		startup: func(ctx context.Context) {
 			c.startup(ctx)
 			close(ready)
 		},
-		OnDomReady: c.domReady,
-		Bind:       []interface{}{c},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-		},
+		domReady: c.domReady,
 	})
-	if err != nil {
-		println("error:", err.Error())
-	}
 }
 
 func runPasteWindow(device string) {
@@ -233,30 +204,9 @@ func runPasteWindow(device string) {
 		title += " - " + device
 	}
 	p := NewPaste(title)
-	err := wails.Run(&options.App{
-		Title:     title,
-		Width:     pasteWin.W,
-		Height:    pasteWin.H,
-		MinWidth:  pasteWin.MinW,
-		MinHeight: pasteWin.MinH,
-		// Stays above the terminal it belongs to, like Tera Term's dialog;
-		// it can still be moved aside to read the terminal underneath.
-		AlwaysOnTop: true,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		BackgroundColour: &options.RGBA{R: 26, G: 33, B: 43, A: 1},
-		OnStartup:        p.startup,
-		OnDomReady:       p.domReady,
-		Bind:             []interface{}{p},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-		},
-	})
-	if err != nil {
-		println("error:", err.Error())
-	}
+	// Stays above the terminal it belongs to, like Tera Term's dialog; it
+	// can still be moved aside to read the terminal underneath.
+	runChildWindow(childWindow{title: title, size: pasteWin, bg: pasteBG, bind: p, onTop: true, startup: p.startup, domReady: p.domReady})
 }
 
 func runMainApp() {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,25 +30,19 @@ import (
 // closes when the pipe does (ロック, exit). A certificate seen for the first
 // time is reported on stdout (guiEventCert) for the vault.
 
+// The window, message-loop and menu procedures (RegisterClassEx, CreateWindowEx,
+// GetMessage, PostMessage, AppendMenu …) are the p* ones of tray_windows.go,
+// winfocus.go and winplace.go; only what no other window needs is here.
 var (
-	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
-	procShowWindow                    = user32.NewProc("ShowWindow")
 	procUpdateWindow                  = user32.NewProc("UpdateWindow")
-	procGetMessageW                   = user32.NewProc("GetMessageW")
-	procTranslateMessage              = user32.NewProc("TranslateMessage")
-	procDispatchMessageW              = user32.NewProc("DispatchMessageW")
-	procPostQuitMessage               = user32.NewProc("PostQuitMessage")
-	procPostMessageW                  = user32.NewProc("PostMessageW")
 	procCreateMenu                    = user32.NewProc("CreateMenu")
-	procAppendMenuW                   = user32.NewProc("AppendMenuW")
-	procSetMenu                       = user32.NewProc("SetMenu")
+	procGetMenu                       = user32.NewProc("GetMenu")
+	procDeleteMenu                    = user32.NewProc("DeleteMenu")
+	procDrawMenuBar                   = user32.NewProc("DrawMenuBar")
 	procSetWindowTextW                = user32.NewProc("SetWindowTextW")
 	procLoadCursorW                   = user32.NewProc("LoadCursorW")
 	procLoadIconW                     = user32.NewProc("LoadIconW")
 	procMessageBoxW                   = user32.NewProc("MessageBoxW")
-	procDestroyWindow                 = user32.NewProc("DestroyWindow")
 	procSetProcessDpiAwarenessContext = user32.NewProc("SetProcessDpiAwarenessContext")
 )
 
@@ -123,30 +118,6 @@ func setClipboardText(hwnd windows.HWND, s string) {
 	procSetClipboardData.Call(cfUnicodeText, h) // the system owns h from here
 }
 
-type guiWndClass struct {
-	Size       uint32
-	Style      uint32
-	WndProc    uintptr
-	ClsExtra   int32
-	WndExtra   int32
-	Instance   windows.Handle
-	Icon       windows.Handle
-	Cursor     windows.Handle
-	Background windows.Handle
-	MenuName   *uint16
-	ClassName  *uint16
-	IconSm     windows.Handle
-}
-
-type guiMsg struct {
-	Hwnd    windows.HWND
-	Message uint32
-	WParam  uintptr
-	LParam  uintptr
-	Time    uint32
-	Pt      struct{ X, Y int32 }
-}
-
 func u16(s string) *uint16 { p, _ := windows.UTF16PtrFromString(s); return p }
 
 // guiProbeArgs is set only by the GUI-test build (gui_probe_hook.go).
@@ -164,9 +135,14 @@ type guiWin struct {
 	// the menu's ログインし直す (a wrong password must not be retried into
 	// a lockout).
 	autoSent bool
+	// formSeen: a login form was found and filled in (sent or not) since the
+	// window opened or the last ログインし直す.
+	formSeen bool
 	// loggedIn: a page of the device without a login form came after the
-	// login: from then on nothing is filled in or clicked (a password field
-	// on a settings page is not a login).
+	// login form: from then on nothing is filled in or clicked (a password
+	// field on a settings page is not a login). Only after a form was seen:
+	// a slow login page that is still empty when the script looks is not a
+	// logged-in session.
 	loggedIn bool
 	// tofuNow: the certificate was seen for the first time in this window
 	// and recorded: the login is filled in but not sent. swappedNow: the
@@ -179,8 +155,11 @@ type guiWin struct {
 	certErr bool
 	// badCert is the fingerprint refused as different from the pin; the
 	// menu's 証明書の変更を許可 accepts it. badShown: its page is up.
-	badCert   string
-	badShown  bool
+	badCert  string
+	badShown bool
+	// noCert: the device's certificate could not be read (no fingerprint to
+	// check), so the page was refused; said so instead of a blank window.
+	noCert    bool
 	allowMenu bool    // 証明書の変更を許可 is on the menu
 	c14       uintptr // ICoreWebView2_14 (certificate errors), 0 if the runtime is older
 	ready     bool
@@ -206,7 +185,11 @@ func runGUIWindow() {
 		os.Setenv("PALATERM_LANG", "en")
 	}
 	_ = windows.CoInitializeEx(0, windows.COINIT_APARTMENTTHREADED)
-	procSetProcessDpiAwarenessContext.Call(^uintptr(3)) // PER_MONITOR_AWARE_V2 (-4)
+	// PER_MONITOR_AWARE_V2 (-4); the export is Windows 10 1703+, and calling
+	// a missing one panics.
+	if procSetProcessDpiAwarenessContext.Find() == nil {
+		procSetProcessDpiAwarenessContext.Call(^uintptr(3))
+	}
 	if err := w.create(); err != nil {
 		w.alert(err.Error())
 		return
@@ -214,16 +197,16 @@ func runGUIWindow() {
 	// The main window closing the pipe (ロック, exit) closes this window.
 	go func() {
 		_, _ = in.ReadString('\n')
-		procPostMessageW.Call(uintptr(w.hwnd), wmClose, 0, 0)
+		pPostMessage.Call(uintptr(w.hwnd), wmClose, 0, 0)
 	}()
-	var m guiMsg
+	var m winMsg
 	for {
-		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		r, _, _ := pGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			break
 		}
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
+		pTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
+		pDispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	w.removeProfile()
 }
@@ -287,45 +270,10 @@ func processAlive(pid uint32) bool {
 	return code == 259 // STILL_ACTIVE
 }
 
-// The GUI window's default size in logical (96-dpi) pixels, and where its
-// last size is kept: %LOCALAPPDATA%\PalaTerm\gui-window.json (no device
-// data in it, only a width and a height).
-const (
-	guiWinDefW = 1280
-	guiWinDefH = 860
-)
-
-func guiWinStateFile() string {
-	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "gui-window.json")
-}
-
-// loadGUIWinSize is the logical size the last GUI window was closed at.
-func loadGUIWinSize() (int32, int32, bool) {
-	b, err := os.ReadFile(guiWinStateFile())
-	if err != nil {
-		return 0, 0, false
-	}
-	var st struct {
-		W int32 `json:"w"`
-		H int32 `json:"h"`
-	}
-	if json.Unmarshal(b, &st) != nil || st.W < 400 || st.H < 300 || st.W > 10000 || st.H > 10000 {
-		return 0, 0, false
-	}
-	return st.W, st.H, true
-}
-
-func saveGUIWinSize(w, h int32) {
-	if w < 400 || h < 300 {
-		return
-	}
-	b, _ := json.Marshal(struct {
-		W int32 `json:"w"`
-		H int32 `json:"h"`
-	}{w, h})
-	_ = os.MkdirAll(filepath.Dir(guiWinStateFile()), 0o755)
-	_ = os.WriteFile(guiWinStateFile(), b, 0o644)
-}
+// guiWinState names the GUI window's remembered size
+// (%LOCALAPPDATA%\PalaTerm\gui-window.json, see loadWinSize); its default
+// is guiWinSize (winfit.go), in logical (96-dpi) pixels.
+const guiWinState = "gui-window"
 
 // dpi is the window's DPI (96 = 100 %).
 func (w *guiWin) dpi() int32 { return windowDPI(uintptr(w.hwnd)) }
@@ -334,9 +282,9 @@ func (w *guiWin) dpi() int32 { return windowDPI(uintptr(w.hwnd)) }
 // else the default) and centres it over the main window, on the main
 // window's monitor, like the terminal windows (see winplace.go).
 func (w *guiWin) place() {
-	lw, lh, ok := loadGUIWinSize()
+	lw, lh, ok := loadWinSize(guiWinState, guiWinSize)
 	if !ok {
-		lw, lh = guiWinDefW, guiWinDefH
+		lw, lh = guiWinSize.W, guiWinSize.H
 	}
 	parent, hasParent := parseRect(os.Getenv(parentRectEnv))
 	const monitorDefaultToNearest = 2
@@ -370,14 +318,23 @@ func (w *guiWin) place() {
 	pSetWindowPos.Call(uintptr(w.hwnd), 0, uintptr(x), uintptr(y), uintptr(pw), uintptr(ph), swpNoZOrder|swpNoActivate)
 }
 
-// rememberSize stores the window's logical size for the next GUI window.
+// rememberSize stores the window's logical size for the next GUI window —
+// not while it is maximised or minimised: the frame then measures the whole
+// work area (or nothing), and every later GUI window opened that large.
 func (w *guiWin) rememberSize() {
+	wp := windowPlacement{Length: uint32(unsafe.Sizeof(windowPlacement{}))}
+	if ok, _, _ := pGetWindowPlacement.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&wp))); ok == 0 {
+		return
+	}
+	if wp.ShowCmd == swShowMaximized || wp.ShowCmd == swShowMinimized {
+		return
+	}
 	var r rect
 	if ok, _, _ := pGetWindowRect.Call(uintptr(w.hwnd), uintptr(unsafe.Pointer(&r))); ok == 0 {
 		return
 	}
 	scale := float64(w.dpi()) / 96
-	saveGUIWinSize(int32(float64(r.R-r.L)/scale), int32(float64(r.B-r.T)/scale))
+	saveWinSize(guiWinState, guiWinSize, int(float64(r.R-r.L)/scale), int(float64(r.B-r.T)/scale))
 }
 
 func (w *guiWin) alert(msg string) {
@@ -398,20 +355,20 @@ func (w *guiWin) create() error {
 	cls := u16("PalaTermGUI")
 	cur, _, _ := procLoadCursorW.Call(0, idcArrow)
 	icon, _, _ := procLoadIconW.Call(uintptr(inst), 1) // the exe's icon (winres RT_GROUP_ICON #1)
-	wc := guiWndClass{
-		WndProc:   windows.NewCallback(w.wndProc),
-		Instance:  inst,
-		Cursor:    windows.Handle(cur),
-		Icon:      windows.Handle(icon),
-		ClassName: cls,
+	wc := wndClassEx{
+		LpfnWndProc:   windows.NewCallback(w.wndProc),
+		HInstance:     uintptr(inst),
+		HCursor:       cur,
+		HIcon:         icon,
+		LpszClassName: cls,
 	}
-	wc.Size = uint32(unsafe.Sizeof(wc))
-	if r, _, err := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
+	wc.CbSize = uint32(unsafe.Sizeof(wc))
+	if r, _, err := pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
 		return fmt.Errorf("RegisterClassEx: %v", err)
 	}
 	menu, _, _ := procCreateMenu.Call()
 	add := func(id int, ja, en string) {
-		procAppendMenuW.Call(menu, mfString, uintptr(id), uintptr(unsafe.Pointer(u16(winWord(ja, en)))))
+		pAppendMenu.Call(menu, mfString, uintptr(id), uintptr(unsafe.Pointer(u16(winWord(ja, en)))))
 	}
 	add(menuBack, "← 戻る", "← Back")
 	add(menuForward, "進む →", "Forward →")
@@ -423,15 +380,15 @@ func (w *guiWin) create() error {
 	// the main window (the other child windows do the same; this one used
 	// to open at Windows' default spot on the primary monitor, 1280×860
 	// physical pixels — a 640×430 window on a 4K screen at 200 %).
-	hwnd, _, err := procCreateWindowExW.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16("PalaTerm"))),
-		wsOverlappedWindow, cwUseDefault, cwUseDefault, guiWinDefW, guiWinDefH, 0, menu, uintptr(inst), 0)
+	hwnd, _, err := pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(u16("PalaTerm"))),
+		wsOverlappedWindow, cwUseDefault, cwUseDefault, uintptr(guiWinSize.W), uintptr(guiWinSize.H), 0, menu, uintptr(inst), 0)
 	if hwnd == 0 {
 		return fmt.Errorf("CreateWindowEx: %v", err)
 	}
 	w.hwnd = windows.HWND(hwnd)
 	w.title("")
 	w.place()
-	procShowWindow.Call(hwnd, swShow)
+	pShowWindow.Call(hwnd, swShow)
 	procUpdateWindow.Call(hwnd)
 
 	c := edge.NewChromium()
@@ -456,7 +413,7 @@ func (w *guiWin) create() error {
 		}
 	}
 	w.hook()
-	c.Init(guiPageScript(strings.ToLower(w.base.Scheme + "://" + w.base.Host)))
+	c.Init(guiPageScript(jsOrigin(w.base)))
 	w.mu.Lock()
 	w.ready = true
 	w.mu.Unlock()
@@ -509,32 +466,63 @@ func comString(this uintptr, slot int) string {
 }
 
 // comHandler is an event handler object WebView2 can hold: IUnknown plus
-// Invoke(sender, args).
+// Invoke(sender, args). Every handler shares one vtable: Windows callbacks
+// are never freed and a process may make about 2000 (see winfocus.go), so
+// the four are made once, and Invoke finds its handler by the object's
+// address.
 type comHandler struct {
 	vtbl   *[4]uintptr
 	invoke func(sender, args uintptr)
 }
 
-var comHandlers []*comHandler // kept reachable: WebView2 holds raw pointers
+var (
+	comHandlerMu   sync.Mutex
+	comHandlers    = map[uintptr]*comHandler{} // this → handler; kept reachable: WebView2 holds raw pointers
+	comHandlerVtbl [4]uintptr
+	comHandlerOnce sync.Once
+)
+
+// comHandlerInit makes the shared vtable (in the GUI window process only:
+// the main window never needs these callback slots).
+func comHandlerInit() {
+	comHandlerVtbl = [4]uintptr{
+		windows.NewCallback(comQueryInterface),
+		windows.NewCallback(comAddRef),
+		windows.NewCallback(comRelease),
+		windows.NewCallback(comInvoke),
+	}
+}
+
+// comQueryInterface: the object is what WebView2 asks for (it only asks for
+// IUnknown or the handler interface it registered).
+func comQueryInterface(this, riid, out uintptr) uintptr {
+	if out == 0 {
+		return 0x80004003 // E_POINTER
+	}
+	dst := *(*unsafe.Pointer)(unsafe.Pointer(&out))
+	*(*uintptr)(dst) = this
+	return 0
+}
+
+func comAddRef(this uintptr) uintptr  { return 1 }
+func comRelease(this uintptr) uintptr { return 1 }
+
+func comInvoke(this, sender, args uintptr) uintptr {
+	comHandlerMu.Lock()
+	h := comHandlers[this]
+	comHandlerMu.Unlock()
+	if h != nil {
+		h.invoke(sender, args)
+	}
+	return 0
+}
 
 func newComHandler(invoke func(sender, args uintptr)) *comHandler {
-	h := &comHandler{invoke: invoke}
-	h.vtbl = &[4]uintptr{
-		// QueryInterface: the object is what WebView2 asks for (it only asks
-		// for IUnknown or the handler interface it registered).
-		windows.NewCallback(func(this, riid, out uintptr) uintptr {
-			if out == 0 {
-				return 0x80004003 // E_POINTER
-			}
-			dst := *(*unsafe.Pointer)(unsafe.Pointer(&out))
-			*(*uintptr)(dst) = this
-			return 0
-		}),
-		windows.NewCallback(func(this uintptr) uintptr { return 1 }),
-		windows.NewCallback(func(this uintptr) uintptr { return 1 }),
-		windows.NewCallback(func(this, sender, args uintptr) uintptr { h.invoke(sender, args); return 0 }),
-	}
-	comHandlers = append(comHandlers, h)
+	comHandlerOnce.Do(comHandlerInit)
+	h := &comHandler{vtbl: &comHandlerVtbl, invoke: invoke}
+	comHandlerMu.Lock()
+	comHandlers[uintptr(unsafe.Pointer(h))] = h
+	comHandlerMu.Unlock()
 	return h
 }
 
@@ -578,7 +566,7 @@ func (w *guiWin) hook() {
 // to report certificate errors gets no https GUI at all (no pin check).
 func (w *guiWin) open() {
 	w.mu.Lock()
-	w.badShown = false
+	w.badShown, w.noCert = false, false
 	w.mu.Unlock()
 	if w.c14 == 0 {
 		if w.base.Scheme == "https" {
@@ -600,7 +588,57 @@ func (w *guiWin) open() {
 // the window was opened at).
 func (w *guiWin) sameOrigin(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && u.Scheme == w.base.Scheme && strings.EqualFold(u.Host, w.base.Host)
+	return err == nil && originKey(u) == originKey(w.base)
+}
+
+// originKey is u's origin in one spelling — "scheme://host:port", the host
+// lower-cased and an IP literal in its canonical form, the port written
+// out even when it is the scheme's default — so the device's address
+// compares equal to the browser's spelling of it. A device registered as
+// 2001:db8:0:0:0:0:0:1 is navigated as [2001:db8::1] by the browser;
+// comparing the raw strings refused its certificate and never logged in.
+func originKey(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host, port := normalHost(u.Hostname()), u.Port()
+	if port == "" {
+		switch scheme {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		}
+	}
+	return scheme + "://" + host + ":" + port
+}
+
+// jsOrigin is u's origin as the page's location.origin spells it: scheme and
+// host (an IPv6 literal in brackets, canonical), the port only when it is
+// not the scheme's default.
+func jsOrigin(u *url.URL) string {
+	scheme := strings.ToLower(u.Scheme)
+	host, port := normalHost(u.Hostname()), u.Port()
+	if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+		port = ""
+	}
+	if port != "" {
+		return scheme + "://" + host + ":" + port
+	}
+	return scheme + "://" + host
+}
+
+// normalHost is a host name lower-cased, or an IP literal in its canonical
+// form (IPv6 compressed, in brackets).
+func normalHost(h string) string {
+	if ip := net.ParseIP(h); ip != nil {
+		if ip.To4() != nil {
+			return ip.String()
+		}
+		return "[" + ip.String() + "]"
+	}
+	return strings.ToLower(h)
 }
 
 // certificateError decides a certificate error against the device's pin —
@@ -628,6 +666,9 @@ func (w *guiWin) certificateError(_, args uintptr) {
 	action := uintptr(certActionCancel)
 	switch {
 	case fp == "":
+		// No certificate to check against the pin: refused, and said so
+		// (onNavigated) rather than a blank window.
+		w.noCert = true
 	case w.cfg.Pin == "":
 		// First sight (trust on first use): recorded, opened — but nothing
 		// is sent automatically on a certificate nobody has seen before.
@@ -650,10 +691,16 @@ func (w *guiWin) certificateError(_, args uintptr) {
 // certificate check nor the page script.
 func (w *guiWin) newWindow(_, args uintptr) {
 	uri := comString(args, slotNewWinArgsGetUri)
+	// A window opened empty (about:blank) and written into by the page's
+	// script has no address to judge; handling it would make it vanish, so
+	// WebView2 opens it as it would on its own.
+	if uri == "" || strings.HasPrefix(strings.ToLower(uri), "about:blank") {
+		return
+	}
 	comCall(args, slotNewWinArgsPutHandled, 1)
 	if w.sameOrigin(uri) {
 		guiNavigate.Store(uri)
-		procPostMessageW.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
+		pPostMessage.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
 		return
 	}
 	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
@@ -723,11 +770,16 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		case menuReload:
 			w.chromium.Eval("location.reload()")
 		case menuRelogin:
+			// A fresh start at the login page: the login may be sent once
+			// more, and a certificate refused before is judged again (its
+			// page comes back if it is still refused; open clears the
+			// remembered refusal, as 証明書の変更を許可 does).
 			w.mu.Lock()
-			w.autoSent, w.loggedIn = false, false
+			w.autoSent, w.formSeen, w.loggedIn = false, false, false
+			w.badCert, w.badShown = "", false
 			w.mu.Unlock()
 			w.title("")
-			w.chromium.Navigate(w.cfg.URL)
+			w.open()
 		case menuAllow:
 			w.mu.Lock()
 			fp := w.badCert
@@ -739,9 +791,9 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			if fp != "" {
 				fmt.Printf("%s %s\n", guiEventCert, fp)
 				w.title("")
-				if menu, _, _ := user32.NewProc("GetMenu").Call(uintptr(w.hwnd)); menu != 0 && w.allowMenu {
-					user32.NewProc("DeleteMenu").Call(menu, menuAllow, 0) // MF_BYCOMMAND
-					user32.NewProc("DrawMenuBar").Call(uintptr(w.hwnd))
+				if menu, _, _ := procGetMenu.Call(uintptr(w.hwnd)); menu != 0 && w.allowMenu {
+					procDeleteMenu.Call(menu, menuAllow, 0) // MF_BYCOMMAND
+					procDrawMenuBar.Call(uintptr(w.hwnd))
 					w.allowMenu = false
 				}
 				w.open() // the refusal is remembered too: cleared first
@@ -750,13 +802,13 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		return 0
 	case wmClose:
 		w.rememberSize()
-		procDestroyWindow.Call(hwnd)
+		pDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
-		procPostQuitMessage.Call(0)
+		pPostQuitMessage.Call(0)
 		return 0
 	}
-	r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(msg), wp, lp)
+	r, _, _ := pDefWindowProc.Call(hwnd, uintptr(msg), wp, lp)
 	return r
 }
 
@@ -764,14 +816,24 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 // notice page completes a navigation of its own).
 func (w *guiWin) onNavigated() {
 	w.mu.Lock()
-	bad, shown := w.badCert, w.badShown
-	if bad != "" {
+	bad, shown, nocert := w.badCert, w.badShown, w.noCert
+	if bad != "" || nocert {
 		w.badShown = true
 	}
 	w.mu.Unlock()
+	if shown {
+		return
+	}
+	if nocert {
+		w.title(winWord("証明書を読み取れませんでした", "certificate could not be read"))
+		w.chromium.NavigateToString(guiNotice(winWord(
+			`<h2 style="color:#c00">証明書を読み取れませんでした</h2><p>この機器の GUI の証明書を読み取れなかったため、記録と照合できず、開くのを止めました。メニューの「ログインし直す」でもう一度試すか、「既定のブラウザで開く」を使ってください。</p>`,
+			`<h2 style="color:#c00">The certificate could not be read</h2><p>This device's GUI certificate could not be read, so it could not be checked against the record and the page was not opened. Try "Log in again" in the menu, or use "Open in default browser".</p>`)))
+		return
+	}
 	// "ca": the page loaded fine with a trusted certificate; the notice is
 	// in the title and the menu, the page stays.
-	if bad == "" || bad == "ca" || shown {
+	if bad == "" || bad == "ca" {
 		return
 	}
 	w.title(winWord("証明書が前回と異なります", "certificate changed"))
@@ -784,11 +846,11 @@ func (w *guiWin) onNavigated() {
 
 // showAllowMenu adds 証明書の変更を許可 to the menu bar (once).
 func (w *guiWin) showAllowMenu() {
-	menu, _, _ := user32.NewProc("GetMenu").Call(uintptr(w.hwnd))
+	menu, _, _ := procGetMenu.Call(uintptr(w.hwnd))
 	if menu != 0 && !w.allowMenu {
 		w.allowMenu = true
-		procAppendMenuW.Call(menu, mfString, menuAllow, uintptr(unsafe.Pointer(u16(winWord("証明書の変更を許可", "Allow the new certificate")))))
-		user32.NewProc("DrawMenuBar").Call(uintptr(w.hwnd))
+		pAppendMenu.Call(menu, mfString, menuAllow, uintptr(unsafe.Pointer(u16(winWord("証明書の変更を許可", "Allow the new certificate")))))
+		procDrawMenuBar.Call(uintptr(w.hwnd))
 	}
 }
 
@@ -832,11 +894,12 @@ func (w *guiWin) onMessage(msg string) {
 		// Filled in, not sent; the user decides (and 証明書の変更を許可
 		// records the new state).
 		swapped := w.base.Scheme == "https" && !w.certErr && w.cfg.Pin != "" && w.cfg.Pin != "ca"
-		submit := !w.autoSent && !w.tofuNow && !swapped
+		submit := w.loginSubmit(swapped)
 		if submit {
 			w.autoSent = true
 		}
-		tofu := w.tofuNow
+		w.formSeen = true
+		tofu, noCred := w.tofuNow, !w.hasCredentials()
 		if swapped {
 			w.badCert, w.swappedNow = "ca", true
 		}
@@ -850,17 +913,21 @@ func (w *guiWin) onMessage(msg string) {
 			w.showAllowMenu()
 		case tofu:
 			w.title(winWord("初めて開く機器です。証明書を記録しました。内容を確かめて「ログイン」を押してください", "first time: certificate recorded; check and log in"))
+		case noCred:
+			w.title(winWord("ユーザー名かパスワードが登録されていないため自動ログインしません。手で入力してください", "no username or password recorded: log in by hand"))
 		case !submit:
 			w.title(winWord("自動ログインは1回だけです。内容を確かめてログインしてください", "auto login runs once; check and log in"))
 		}
 		return
 	case "pt:nologin":
-		// A page of the device without a login form after the login was
-		// sent: logged in. Nothing more is filled in or clicked.
-		if w.autoSent || w.tofuNow || w.swappedNow {
+		// A page of the device without a login form after one was filled
+		// in: logged in. Nothing more is filled in or clicked. (Before any
+		// form was seen it is a login page still loading, or one the script
+		// does not recognise — the next pt:login must still be answered.)
+		if w.formSeen {
 			w.loggedIn = true
 		}
-		noForm := !w.autoSent && !w.tofuNow && !w.swappedNow && !w.loggedIn
+		noForm := !w.formSeen
 		w.mu.Unlock()
 		if noForm {
 			// The first page of the device, and no login form the script
@@ -887,9 +954,19 @@ func (w *guiWin) onMessage(msg string) {
 
 // onDevicePage reports that the window shows the device's GUI, not some
 // other site a link led to: the password goes nowhere else.
-func (w *guiWin) onDevicePage() bool {
-	u, err := url.Parse(w.source())
-	return err == nil && u.Scheme == w.base.Scheme && strings.EqualFold(u.Host, w.base.Host)
+func (w *guiWin) onDevicePage() bool { return w.sameOrigin(w.source()) }
+
+// hasCredentials: a username and a password to log in with.
+func (w *guiWin) hasCredentials() bool { return w.cfg.User != "" && w.cfg.Password != "" }
+
+// loginSubmit decides (under w.mu) whether the login form found now is
+// pressed: once per window, not on a certificate seen for the first time
+// or one that swapped to a trusted one, and never without both a username
+// and a password — an empty one sent is a failed login the device counts
+// towards locking that user out, and a GUI window opened a few times would
+// have done just that.
+func (w *guiWin) loginSubmit(swapped bool) bool {
+	return !w.autoSent && !w.tofuNow && !swapped && w.hasCredentials()
 }
 
 // guiFillScript fills the login form the page script found (and presses

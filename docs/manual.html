@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.17</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.18</div>
   </header>
 
   <nav class="toc">
@@ -911,6 +911,24 @@
   </section>
 
   <section id="trouble">
+    <h2 class="step"><span class="num">9+</span>v1.9.18 での挙動の変更</h2>
+    <p>全パッケージのコードレビューに伴う変更のうち、使い方が変わる点です。</p>
+    <ul>
+      <li><strong>ホストキー変更時の「機器を交換したので許可」</strong>は、その機器のピンだけを消します。踏み台の鍵が変わっていた場合はどの踏み台かを示して許可せず止まります（踏み台の交換は管理者に確認のうえ対応。「踏み台のホストキーを忘れる」操作は次版で追加予定）。</li>
+      <li><strong>シリアル接続の機器に踏み台は付けられません</strong>（編集・CSV・一式のどの経路でも）。</li>
+      <li><strong>ロック中</strong>は予約名・機器名がロック画面やトレイに出ません。<strong>全データ削除</strong>で予約の実行記録も消えます。</li>
+      <li><strong>予約の時刻</strong>は <code>09:30</code> / <code>09:30:00</code> の形だけ受け付けます。「1回だけ」で過ぎた日時は保存前に止まります。</li>
+      <li><strong>設定変更コマンドの警告</strong>に、素の <code>config</code>・単独の <code>shut</code>/<code>shutdown</code>・FortiGate の <code>exe</code>/<code>exec reboot</code> 等を追加。<code>copy running-config tftp:</code> のようなバックアップは警告しません。</li>
+      <li><strong>貼り付け確認の窓</strong>: 「キャンセル」にフォーカスを移して <kbd>Enter</kbd> を押すと貼り付けずに閉じます。本文が空なら何も送りません。</li>
+      <li><strong>GUI を開く</strong>: ユーザー名かパスワードが未登録なら自動ログインを送らず、入力だけして題名で知らせます。</li>
+      <li><strong>外部一覧の変換</strong>: 副機器の機器名が空の行は 2 台目を作りません。除外条件が参照する列が無いときは判定せず警告だけ。IP だけで一致した機器は「取り込まない」でも削除候補に出ません。見本は見出し行まで表示（上限 200 行）。</li>
+      <li><strong>ログ比較</strong>: 大きすぎる 2 つのログは「概算」と表示したうえで数百ミリ秒で終わります。MAC・IPv6 アドレスの変化は「同じ」扱いになりません。</li>
+      <li><strong>ログ設定</strong>: 作業区分の文字列に <code>_</code> は使えません。<code>C:logs</code> のようなドライブ相対パスは拒否します。</li>
+      <li><strong>表で編集</strong>: 並べ替え後の複数行選択は 1 行に畳まれ、列を隠すと並べ替えも解除。セル編集中に <kbd>Alt</kbd>+<kbd>Tab</kbd> しても入力は確定されません。</li>
+      <li><strong>コマンドセットの削除</strong>でそれを使う予約は停止、<strong>グループの削除</strong>で外れた機器の「グループの認証情報を使う」はオフになります。</li>
+      <li><strong>OS プロファイル</strong>: 切断手順の <code>SendRaw</code> に改行が付きません（必要なら <code>Send</code> に）。</li>
+    </ul>
+
     <h2 class="step"><span class="num">10</span>困ったとき</h2>
     <p class="lead">よくあるつまずきと対処です。</p>
 
@@ -948,7 +966,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.17 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.18 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

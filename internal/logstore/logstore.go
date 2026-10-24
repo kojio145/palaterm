@@ -132,6 +132,12 @@ func (t StageTokens) Validate() error {
 		if strings.HasSuffix(x.w, ".") {
 			return fmt.Errorf("%sの付与文字列の末尾にドットは使えません: %q", x.label, x.w)
 		}
+		// "_" separates the fields of a folder name, and the stage is read
+		// back as the last of them (parseDirName): "pre_work" would come back
+		// as "work".
+		if strings.Contains(x.w, "_") {
+			return fmt.Errorf("%sの付与文字列にアンダースコア（_）は使えません（フォルダ名の区切りに使うため）: %q", x.label, x.w)
+		}
 		if reservedName(x.w) {
 			return fmt.Errorf("%sの付与文字列 %q は Windows の予約名のため使えません", x.label, x.w)
 		}
@@ -340,6 +346,15 @@ func RootNameProblem(root string) string {
 	// The drive (C:) or share (\\server\share) in front.
 	if len(rest) >= 2 && rest[1] == ':' && (rest[0]|0x20) >= 'a' && (rest[0]|0x20) <= 'z' {
 		rest = rest[2:]
+		// "C:logs" and "C:" name a folder relative to that drive's current
+		// directory, which this tool has no say over; ResolveRoot would join
+		// it under the exe folder and Windows then refuses the path.
+		if rest == "" {
+			return fmt.Sprintf("ドライブ名だけでは指定できません（例: %s\\logs）", root[:2])
+		}
+		if rest[0] != '\\' && rest[0] != '/' {
+			return fmt.Sprintf("「%s」はドライブ名の直後に \\ がありません（例: %s\\%s）", root, root[:2], rest)
+		}
 	} else if strings.HasPrefix(rest, `\\`) || strings.HasPrefix(rest, `//`) {
 		parts := strings.FieldsFunc(rest, func(r rune) bool { return r == '\\' || r == '/' })
 		if len(parts) < 2 {

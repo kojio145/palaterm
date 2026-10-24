@@ -22,6 +22,7 @@ import (
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
 	runpkg "github.com/kojio145/palaterm/internal/runner"
+	"github.com/kojio145/palaterm/internal/session"
 	"github.com/kojio145/palaterm/internal/vault"
 )
 
@@ -64,9 +65,15 @@ type Term struct {
 	pendingDev *model.Device
 	// cancelLogin stops an automatic login in progress (SwitchToManual);
 	// switched records that it was asked for, so connect hands the line over
-	// instead of reporting the cancellation as a failure.
+	// instead of reporting the cancellation as a failure. connecting is true
+	// while connect runs: a switch asked for outside that (right after the
+	// login finished) is not kept for the next Reconnect.
 	cancelLogin context.CancelFunc
 	switched    bool
+	connecting  bool
+	// closeDone is closed when the live session's onClose has run (log
+	// closed, summary written): what closeSession waits for.
+	closeDone chan struct{}
 	// locked covers the window until the master password is typed (the main
 	// window's ロック, or this window's own idle time); keys are not sent
 	// meanwhile. autoLockMin is the vault's idle setting (0 = off).
@@ -90,6 +97,17 @@ type Term struct {
 	// but connect reads the vault again right away; until the vault stops
 	// holding these exact fingerprints, connect leaves them out again.
 	replacedKeys map[string]string
+	// hkMismatch names the endpoint whose host key the last connection
+	// attempt refused ("" when it failed for another reason): what
+	// AllowHostKeyChange is allowed to drop depends on it.
+	hkMismatch string
+}
+
+// noteMismatch records which host key, if any, err refused (see hkMismatch).
+func (t *Term) noteMismatch(err error) {
+	t.mu.Lock()
+	t.hkMismatch = session.MismatchedHostKey(err)
+	t.mu.Unlock()
 }
 
 // errLocked refuses what a locked window must not do.
@@ -143,17 +161,22 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 					t.mu.Unlock()
 				}
 			case line == termCloseLine:
-				t.quitForParent()
+				// The main window is closing and already asked: no
+				// "disconnect?" question here.
+				t.closeAndQuit()
 			case strings.HasPrefix(line, termLineInput+" "):
 				t.bcastIn(strings.TrimPrefix(line, termLineInput+" "))
 			case strings.HasPrefix(line, termLineBcN+" "):
 				t.bcastCounts(strings.TrimPrefix(line, termLineBcN+" "))
 			case strings.HasPrefix(line, termLinePlace+" "):
 				if r, ok := parseRect(strings.TrimPrefix(line, termLinePlace+" ")); ok {
+					// Flagged and queued under one lock, as startup reads
+					// the flag and queues its own place under it: a place
+					// of startup's queued after this one would stand.
 					t.mu.Lock()
 					t.placed = true
-					t.mu.Unlock()
 					t.placeAt(r)
+					t.mu.Unlock()
 				}
 			}
 		}
@@ -162,17 +185,19 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 }
 
 func (t *Term) startup(ctx context.Context) {
+	cell, ok := parseRect(os.Getenv(tileEnv))
+	// The flag and the queue under one lock (see PLACE in NewTerm): a
+	// 並べ直す that reached the window while it was starting keeps its
+	// place, queued already, over the grid cell.
 	t.mu.Lock()
 	t.ctx = ctx
 	placed := t.placed
-	t.mu.Unlock()
-	switch cell, ok := parseRect(os.Getenv(tileEnv)); {
-	case placed:
-		// 並べ直す reached the window while it was starting: that place
-		// stands (it is queued already).
-	case ok:
+	if !placed && ok {
 		t.placeAt(cell) // 並べて接続: its grid cell
-	default:
+		placed = true
+	}
+	t.mu.Unlock()
+	if !placed {
 		termWin.fit(ctx)
 		placeNearParent(ctx, termWin)
 	}
@@ -234,31 +259,13 @@ type termReady struct {
 	Hops   int    `json:"hops"`   // jump hosts on the way (0 = direct)
 }
 
-// termWinStateFile keeps the terminal window's last size
-// (%LOCALAPPDATA%\PalaTerm\term-window.json): every session used to open at
-// the same 1080×680, and a 132-column user resized each one by hand.
-func termWinStateFile() string {
-	return filepath.Join(os.Getenv("LOCALAPPDATA"), "PalaTerm", "term-window.json")
-}
-
-type termWinState struct {
-	W int `json:"w"`
-	H int `json:"h"`
-}
+// termWinState names the terminal window's remembered size
+// (%LOCALAPPDATA%\PalaTerm\term-window.json, see loadWinSize).
+const termWinState = "term-window"
 
 // loadTermWinSize is the size the last terminal window was closed at
 // (logical pixels), within sane bounds.
-func loadTermWinSize() (int, int, bool) {
-	b, err := os.ReadFile(termWinStateFile())
-	if err != nil {
-		return 0, 0, false
-	}
-	var st termWinState
-	if json.Unmarshal(b, &st) != nil || st.W < termWin.MinW || st.H < termWin.MinH || st.W > 10000 || st.H > 10000 {
-		return 0, 0, false
-	}
-	return st.W, st.H, true
-}
+func loadTermWinSize() (int, int, bool) { return loadWinSize(termWinState, termWin) }
 
 // rememberSize stores the window's current size for the next one.
 func (t *Term) rememberSize() {
@@ -272,19 +279,21 @@ func (t *Term) rememberSize() {
 		return // a grid cell's size is no size for the next window
 	}
 	w, h := runtime.WindowGetSize(t.ctx)
-	if w < termWin.MinW || h < termWin.MinH {
-		return
-	}
-	b, _ := json.Marshal(termWinState{W: w, H: h})
-	_ = os.MkdirAll(filepath.Dir(termWinStateFile()), 0o755)
-	_ = os.WriteFile(termWinStateFile(), b, 0o644)
+	saveWinSize(termWinState, termWin, w, h)
 }
 
 func (t *Term) connect(pw string) {
+	t.mu.Lock()
+	t.connecting = true
+	t.mu.Unlock()
 	// A panic while connecting closes this window's session with the
 	// reason, instead of killing the window outright (logged in
-	// data\error.log).
+	// data\error.log). Whatever way it ends, no switch to manual is left
+	// over for the next connect.
 	defer func() {
+		t.mu.Lock()
+		t.connecting, t.switched, t.cancelLogin = false, false, nil
+		t.mu.Unlock()
 		if r := recover(); r != nil {
 			msg := logPanic("terminal connect", r)
 			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: msg})
@@ -349,6 +358,9 @@ func (t *Term) connect(pw string) {
 		total += 30
 	}
 	progressDone := make(chan struct{})
+	var progressOnce sync.Once
+	stopProgress := func() { progressOnce.Do(func() { close(progressDone) }) }
+	defer stopProgress() // a panic below must not leave the ticker running
 	go func() {
 		tick := time.NewTicker(time.Second)
 		defer tick.Stop()
@@ -367,7 +379,8 @@ func (t *Term) connect(pw string) {
 
 	if t.manual {
 		exp, err := t.runner.Open(context.Background(), dev, inv.Settings)
-		close(progressDone)
+		stopProgress()
+		t.noteMismatch(err)
 		if err != nil {
 			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
 			return
@@ -398,7 +411,8 @@ func (t *Term) connect(pw string) {
 			Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(string(b), dev)))})
 	}
 	exp, _, err := t.runner.ConnectTee(ctx, dev, inv.Settings, tee)
-	close(progressDone)
+	stopProgress()
+	t.noteMismatch(err)
 	t.mu.Lock()
 	t.cancelLogin = nil
 	switched := t.switched
@@ -418,6 +432,7 @@ func (t *Term) connect(pw string) {
 				return
 			}
 			exp, err = t.runner.Open(context.Background(), dev, inv.Settings)
+			t.noteMismatch(err)
 			if err != nil {
 				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
 				return
@@ -460,6 +475,13 @@ func (t *Term) SwitchToManual() error {
 		return errLocked
 	}
 	t.mu.Lock()
+	if !t.connecting {
+		// Nothing to switch away from (the login just finished, or there is
+		// no connect): a flag kept now would open the next Reconnect in
+		// manual mode unasked.
+		t.mu.Unlock()
+		return nil
+	}
 	t.switched = true
 	cancel := t.cancelLogin
 	t.mu.Unlock()
@@ -539,11 +561,14 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		slog.Write(b)
 		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label, Data: base64.StdEncoding.EncodeToString(b)})
 	}
+	closeDone := make(chan struct{})
 	t.mu.Lock()
 	t.logDir = settings.LogDir
 	t.slog = slog
+	t.closeDone = closeDone
 	t.mu.Unlock()
 	onClose := func() {
+		defer close(closeDone)
 		t.mu.Lock()
 		if p, _ := slog.Flush(); p != "" {
 			t.lastLog = p // ログフォルダ opens this session's folder after the disconnect too
@@ -611,21 +636,26 @@ func seedHostKeys(known, replaced map[string]string) *memHostKeys {
 }
 
 // AllowHostKeyChange is the answer to the host-key-mismatch prompt: the
-// user says the device was replaced. The stale pins for the device (and its
-// bastions) are dropped here, the main window is told to drop them from the
-// vault (see SpawnTerminal), and the connection is tried again.
+// user says the device was replaced. The device's own stale pin is dropped
+// here, the main window is told to drop it from the vault (see
+// SpawnTerminal), and the connection is tried again. A jump host's pin is
+// never dropped this way (model.ReplacedHostKeyNames says why).
 func (t *Term) AllowHostKeyChange() error {
 	if t.isLocked() {
 		return errLocked
 	}
 	t.mu.Lock()
-	dev, hk, pw := t.dev, t.hostKeys, t.pw
+	dev, hk, pw, mismatched := t.dev, t.hostKeys, t.pw, t.hkMismatch
 	t.mu.Unlock()
 	if dev == nil || hk == nil {
 		return fmt.Errorf("機器が見つかりません")
 	}
+	names, err := dev.ReplacedHostKeyNames(mismatched)
+	if err != nil {
+		return err
+	}
 	t.mu.Lock()
-	for _, addr := range dev.HostKeyNames() {
+	for _, addr := range names {
 		if old := hk.GetHostKey(addr); old != "" {
 			if t.replacedKeys == nil {
 				t.replacedKeys = map[string]string{}
@@ -716,7 +746,7 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 		return err
 	}
 	cmd := exec.Command(exe, "--paste", t.label)
-	cmd.Env = childEnv()
+	cmd.Env = windowEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.pasteDone()
@@ -750,18 +780,30 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 		// Hand the keyboard back to this window: closing the paste window
 		// does not reliably re-activate the terminal underneath.
 		focusOwnWindow()
-		if !res.OK {
+		s, ok := pasteText(res)
+		if !ok {
 			runtime.EventsEmit(t.ctx, "term:paste-done", false)
 			return
-		}
-		s := strings.NewReplacer("\r\n", "\r", "\n", "\r").Replace(res.Text)
-		if res.CR && !strings.HasSuffix(s, "\r") {
-			s += "\r"
 		}
 		t.sendText(s, relay)
 		runtime.EventsEmit(t.ctx, "term:paste-done", true)
 	}()
 	return nil
+}
+
+// pasteText is what a paste window's answer sends to the device: the text
+// with its line endings as CR and, when asked, a final Enter. A cancel, or
+// an empty text, sends nothing (false): a window whose Load timed out shows
+// an empty box, and Enter in it must not reach the device as a bare Enter.
+func pasteText(res pasteRes) (string, bool) {
+	if !res.OK || res.Text == "" {
+		return "", false
+	}
+	s := strings.NewReplacer("\r\n", "\r", "\n", "\r").Replace(res.Text)
+	if res.CR && !strings.HasSuffix(s, "\r") {
+		s += "\r"
+	}
+	return s, true
 }
 
 func (t *Term) pasteDone() {
@@ -997,30 +1039,43 @@ func (t *Term) beforeClose(ctx context.Context) bool {
 // ConfirmClose is the answer "disconnect and close" to term:close-request:
 // the session ends the normal way (log closed, summary written), then the
 // window closes without asking again.
-func (t *Term) ConfirmClose() {
+func (t *Term) ConfirmClose() { t.closeAndQuit() }
+
+// termCloseWait bounds the wait for onClose when the window is quitting: a
+// log that will not flush must not keep the window on screen.
+const termCloseWait = 3 * time.Second
+
+// closeAndQuit ends the session the normal way — the log closed and its
+// 実行履歴 summary written — then quits the window without the "disconnect?"
+// question (ConfirmClose, and CLOSE from the main window). It waits for
+// onClose to finish: a fixed pause used to cut a slow Flush or history.Write
+// short and leave a run with no devices in the history.
+func (t *Term) closeAndQuit() {
 	t.mu.Lock()
 	t.quitting = true
 	ctx := t.ctx
 	t.mu.Unlock()
-	t.Close()
-	time.Sleep(300 * time.Millisecond) // let onClose write the summary
+	t.closeSession(termCloseWait)
 	if ctx != nil {
 		runtime.Quit(ctx)
 	}
 }
 
-// quitForParent ends the session the normal way — so the log is closed and
-// its 実行履歴 summary written — then quits without the "disconnect?"
-// question: the main window is closing and already asked.
-func (t *Term) quitForParent() {
+// closeSession is Close waited for: it returns once the session's onClose
+// has run, or after wait. At once when no session was ever attached.
+func (t *Term) closeSession(wait time.Duration) {
 	t.mu.Lock()
-	t.quitting = true
-	ctx := t.ctx
+	c, done := t.closeFn, t.closeDone
 	t.mu.Unlock()
-	t.Close()
-	time.Sleep(400 * time.Millisecond) // let onClose write the summary
-	if ctx != nil {
-		runtime.Quit(ctx)
+	if c != nil {
+		_ = c()
+	}
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(wait):
 	}
 }
 

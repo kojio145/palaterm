@@ -120,6 +120,13 @@ func TestExternalDeviceKeyAndStage(t *testing.T) {
 		"作業前.txt":                       "作業前", // nothing else to name it by
 		"x (HQ)_before.txt":             "x (HQ)",
 		"(HQ)sw01_after.txt":            "(HQ)sw01",
+		// Short device names are not timestamps: "s1" / "m1" were dropped as
+		// 1 second / 1 minute and their before and after files did not pair.
+		"s1_before.txt":   "s1",
+		"s1_after.txt":    "s1",
+		"m1_after.txt":    "m1",
+		"sw_1_before.txt": "sw_1",
+		"h1_14h30.log":    "h1",
 	} {
 		if got := externalDeviceKey(in, tok); got != want {
 			t.Errorf("externalDeviceKey(%q) = %q, want %q", in, got, want)
@@ -128,9 +135,14 @@ func TestExternalDeviceKeyAndStage(t *testing.T) {
 	for in, want := range map[string]string{
 		"maint_before": "before", "post-change": "after", "作業中ログ": "during", "ato_logs": "after",
 		"before_after": "", "plain": "", "pre": "before", "前": "before", "中": "during", "後": "after", "変更後": "after", "中継": "",
+		"事前事後比較": "", "作業前ログ": "before", "事後_確認": "after",
 	} {
-		if got := stageFromName(in, tok); got != want {
-			t.Errorf("stageFromName(%q) = %q, want %q", in, got, want)
+		// The same answer every time: a field holding two stage words used
+		// to get whichever the map range found first.
+		for i := 0; i < 50; i++ {
+			if got := stageFromName(in, tok); got != want {
+				t.Fatalf("stageFromName(%q) = %q, want %q (call %d)", in, got, want, i)
+			}
 		}
 	}
 }

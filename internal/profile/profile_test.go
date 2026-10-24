@@ -177,5 +177,13 @@ func TestStepClassification(t *testing.T) {
 			t.Errorf("Send=%q: Credential=%v Auth=%v, want %v/%v",
 				c.send, s.Credential(), s.Auth(), c.credential, c.auth)
 		}
+		// A step that types the placeholder verbatim (SendRaw) is classified
+		// the same: skipping it only when it used Send typed the password at
+		// the operational prompt.
+		r := Step{SendRaw: c.send + "\r"}
+		if r.Credential() != c.credential || r.Auth() != c.auth {
+			t.Errorf("SendRaw=%q: Credential=%v Auth=%v, want %v/%v",
+				c.send, r.Credential(), r.Auth(), c.credential, c.auth)
+		}
 	}
 }

@@ -30,3 +30,20 @@ func TestCheckCommandText(t *testing.T) {
 		t.Error("CheckProfileSends missed a pager step")
 	}
 }
+
+// A credential variable in an answer is refused (it would be typed to any
+// question that looks alike); in a login step it is what logs in.
+func TestCheckProfileSendsRefusesCredentialAnswers(t *testing.T) {
+	for _, v := range []string{"{user}", "{password}", "{enable}"} {
+		p := profile.Profile{Name: "x", Answers: []profile.Step{{Expect: "?", Send: "pre " + v}}}
+		if err := CheckProfileSends(p); err == nil {
+			t.Errorf("answer sending %s accepted", v)
+		}
+	}
+	p := profile.Profile{Name: "x",
+		Login:   []profile.Step{{Expect: "assword:", Send: "{password}"}},
+		Answers: []profile.Step{{Expect: "[confirm]", Send: "y"}}}
+	if err := CheckProfileSends(p); err != nil {
+		t.Errorf("login step sending {password} refused: %v", err)
+	}
+}

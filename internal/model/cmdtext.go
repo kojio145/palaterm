@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/kojio145/palaterm/internal/profile"
 )
@@ -36,12 +37,24 @@ func CheckCommands(cmds []Command) error {
 }
 
 // CheckProfileSends applies CheckCommandText to everything a profile types
-// (login, pager, disconnect steps and answers).
+// (login, pager, disconnect steps and answers), and refuses a credential
+// variable in an answer. Answers go to whatever question matches,
+// mid-command: a credential there would be typed to any prompt that happens
+// to look alike. So the variables are not expanded in them, and refused
+// rather than sent as literal text — here, so that the editor and every file
+// import (a profile JSON, a bundle) refuse the same thing.
 func CheckProfileSends(p profile.Profile) error {
 	for _, steps := range [][]profile.Step{p.Login, p.Pager, p.Disconnect, p.Answers} {
 		for _, st := range steps {
 			if err := CheckCommandText(st.Send); err != nil {
 				return fmt.Errorf("プロファイル「%s」の送信文字に%w", p.Name, err)
+			}
+		}
+	}
+	for _, ans := range p.Answers {
+		for _, v := range []string{"{user}", "{password}", "{enable}"} {
+			if strings.Contains(ans.Send, v) {
+				return fmt.Errorf("確認への自動応答の「送る文字」に %s は使えません（パスワード等を想定外の質問へ送らないため）", v)
 			}
 		}
 	}

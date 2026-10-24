@@ -72,12 +72,14 @@ function renderHistoryView() {
   const root = document.getElementById("tab-history");
   const runs = histState.runs;
   // Default comparison: the newest 作業前 and the newest 作業後 (same group
-  // when one exists), so the common case is one click.
-  if (!histState.a || !runs.some(r => r.dir === histState.a)) {
+  // when one exists), so the common case is one click. "-" is （選択）
+  // picked by the user: it stays empty (the default used to come back at
+  // once, so A could never be cleared), as 作業中's （なし） below.
+  if (histState.a !== "-" && (!histState.a || !runs.some(r => r.dir === histState.a))) {
     const before = runs.find(r => r.stage === "before");
     histState.a = before ? before.dir : "";
   }
-  if (!histState.b || !runs.some(r => r.dir === histState.b)) {
+  if (histState.b !== "-" && (!histState.b || !runs.some(r => r.dir === histState.b))) {
     const aRun = runs.find(r => r.dir === histState.a);
     // The newest 作業後 of the same group that came after A: right after a
     // 作業前 is taken, last month's 作業後 is not what B means.
@@ -169,7 +171,7 @@ function renderHistoryView() {
         <b style="white-space:nowrap">${esc(t("比較"))}</b>
         <span class="muted" style="font-size:12px">A</span><select id="cmp-a" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.a))}">${runOpt(histState.a)}</select>
         <span class="muted" style="font-size:12px">B</span><select id="cmp-b" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.b))}">${runOpt(histState.b)}</select>
-        <button class="btn primary" id="cmp-go" ${histState.a && histState.b && histState.a !== histState.b ? "" : "disabled"}>${esc(t("比較する"))}</button>
+        <button class="btn primary" id="cmp-go" ${aRun && bRun && histState.a !== histState.b ? "" : "disabled"}>${esc(t("比較する"))}</button>
         ${bOlder ? `<span style="font-size:12px;color:var(--warn)">${esc(t("⚠ B は A より前の実行です（A=作業前・B=作業後 の順になっていません）"))}</span>` : ""}
       </div>
       <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -207,8 +209,8 @@ function renderHistoryView() {
   // them is chosen again.
   root.querySelectorAll("[data-cmp-a]").forEach(b => b.onclick = () => { if (histState.a !== b.dataset.cmpA) histState.c = ""; histState.a = b.dataset.cmpA; renderHistoryView(); });
   root.querySelectorAll("[data-cmp-b]").forEach(b => b.onclick = () => { if (histState.b !== b.dataset.cmpB) histState.c = ""; histState.b = b.dataset.cmpB; renderHistoryView(); });
-  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value; histState.c = ""; renderHistoryView(); };
-  document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value; histState.c = ""; renderHistoryView(); };
+  document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value || "-"; histState.c = ""; renderHistoryView(); };
+  document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value || "-"; histState.c = ""; renderHistoryView(); };
   document.getElementById("cmp-c").onchange = e => { histState.c = e.target.value || "-"; renderHistoryView(); };
   document.getElementById("cmp-go").onclick = compareRuns;
   // The tab was redrawn (a sort, a filter, a row opened): the comparison of
@@ -546,56 +548,4 @@ function cmpTable(withTitle) {
 async function showDiff(name, pathA, pathB) {
   try { await App().OpenDiffWindow(pathA, pathB, name); }
   catch (e) { toast(t("差分を開けません") + ": " + terr(e), "err"); }
-}
-
-// (former in-app diff modal, kept for reference by the history of this file)
-async function showDiffModal(name, pathA, pathB) {
-  const base = p => p.split(/[\\/]/).pop();
-  const node = h(`<div>
-    <h3>${esc(t("差分"))}: ${esc(name)} <span class="muted" style="font-size:12px;font-weight:400">A = ${esc(base(pathA))}　B = ${esc(base(pathB))}</span></h3>
-    <div class="row-inline" style="gap:16px;margin-bottom:10px;font-size:13px">
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="df-noise" checked style="width:auto"> ${esc(t("時刻・稼働時間・カウンタの違いを無視"))}</label>
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" id="df-only" checked style="width:auto"> ${esc(t("差分行のみ表示（前後 3 行つき）"))}</label>
-      <span id="df-stat" class="muted"></span>
-    </div>
-    <div class="diff-wrap" id="df-body"></div>
-    <div class="modal-actions"><button class="btn" id="df-close">${esc(t("閉じる"))}</button></div>
-  </div>`);
-  openModal(node, "xwide");
-  node.querySelector("#df-close").onclick = closeModal;
-  let data = null;
-  async function load() {
-    const noise = node.querySelector("#df-noise").checked;
-    node.querySelector("#df-body").innerHTML = `<div class="muted" style="padding:14px">${esc(t("読み込み中…"))}</div>`;
-    try { data = await App().DiffLogFiles(pathA, pathB, noise); }
-    catch (e) { node.querySelector("#df-body").innerHTML = `<div style="padding:14px;color:var(--err)">${esc(terr(e))}</div>`; return; }
-    draw();
-  }
-  function draw() {
-    if (!data) return;
-    const only = node.querySelector("#df-only").checked;
-    node.querySelector("#df-stat").textContent = t("追加 {a} 行 / 削除 {b} 行 / 同じ {c} 行", { a: data.added, b: data.removed, c: data.same });
-    const lines = data.lines || [];
-    let keep = lines.map(() => !only);
-    if (only) {
-      const ctx = 3;
-      lines.forEach((l, i) => { if (l.kind !== "=") for (let j = Math.max(0, i - ctx); j <= Math.min(lines.length - 1, i + ctx); j++) keep[j] = true; });
-    }
-    const out = [];
-    let skipping = 0;
-    const flushSkip = () => { if (skipping) { out.push(`<tr class="d-skip"><td colspan="4">${esc(t("… {n} 行同じ …", { n: skipping }))}</td></tr>`); skipping = 0; } };
-    lines.forEach((l, i) => {
-      if (!keep[i]) { skipping++; return; }
-      flushSkip();
-      const cls = l.kind === "-" ? "d-del" : l.kind === "+" ? "d-add" : "";
-      out.push(`<tr class="${cls}"><td class="ln">${l.lineA || ""}</td><td class="side-a" style="width:calc(50% - 46px)">${esc(l.a || "")}</td><td class="ln">${l.lineB || ""}</td><td class="side-b" style="width:calc(50% - 46px)">${esc(l.b || "")}</td></tr>`);
-    });
-    flushSkip();
-    node.querySelector("#df-body").innerHTML = out.length
-      ? `<table><tbody>${out.join("")}</tbody></table>`
-      : `<div class="muted" style="padding:14px">${esc(t("差分はありません"))}</div>`;
-  }
-  node.querySelector("#df-noise").onchange = load;
-  node.querySelector("#df-only").onchange = draw;
-  await load();
 }

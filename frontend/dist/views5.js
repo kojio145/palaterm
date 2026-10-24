@@ -297,6 +297,81 @@ function gridResort() {
   order.sort((a, b) => G.sort.dir * gridLabel(col, G.rows[a].cells[col.key]).localeCompare(gridLabel(col, G.rows[b].cells[col.key]), undefined, { numeric: true }) || a - b);
   G.sortRank = new Map(order.map((i, n) => [G.rows[i].uid, n]));
 }
+// gridKeepSel runs fn — which may change which rows and columns are shown
+// and in what order — and brings the selection along (G.sel holds view
+// indexes): the cell cursor follows its row by UID and its column by key. A
+// range stays a range only while it still covers exactly the same rows in
+// the same order (パスワードを表示, a column shown or hidden); otherwise it
+// folds to its anchor cell — after a sort its two ends land far apart, and
+// the rows between them would be rows the user never selected (a Delete
+// then cleared them). An end whose row or column is gone folds to the
+// other end; with both gone the cursor stays where gridClampSel puts it.
+function gridKeepSel(fn) {
+  const s = G.sel;
+  const uidAt = r => (G.view[r] != null && G.rows[G.view[r]]) ? G.rows[G.view[r]].uid : null;
+  const keyAt = c => G.vc[c] ? G.vc[c].key : null;
+  const ua = uidAt(s.ar), uf = uidAt(s.fr), ka = keyAt(s.ac), kf = keyAt(s.fc);
+  const lo = Math.min(s.ar, s.fr), hi = Math.max(s.ar, s.fr);
+  const between = G.view.slice(lo, hi + 1).map(i => G.rows[i].uid);
+  fn();
+  const at = uid => uid == null ? -1 : G.view.findIndex(i => G.rows[i].uid === uid);
+  const na = at(ua), nf = at(uf);
+  const nlo = Math.min(na, nf), nhi = Math.max(na, nf);
+  const same = na >= 0 && nf >= 0 && nhi - nlo === hi - lo && G.view.slice(nlo, nhi + 1).every((i, k) => G.rows[i].uid === between[k]);
+  if (same) { s.ar = na; s.fr = nf; }
+  else if (na >= 0) s.ar = s.fr = na;
+  else if (nf >= 0) s.ar = s.fr = nf;
+  else s.fr = s.ar;
+  const col = key => key == null ? -1 : G.vc.findIndex(c => c.key === key);
+  const nac = col(ka), nfc = col(kf);
+  if (nac >= 0 && nfc >= 0) { s.ac = nac; s.fc = nfc; }
+  else if (nac >= 0) s.ac = s.fc = nac;
+  else if (nfc >= 0) s.ac = s.fc = nfc;
+  gridClampSel();
+}
+// gridRedrawRows draws the rows again after what they show or which of them
+// match changed (the filter box, パスワードを表示): the grid's frame — and so
+// its scroll offset — stays, and the selection follows its rows
+// (gridKeepSel).
+function gridRedrawRows() {
+  gridKeepSel(() => { gridRefilter(); gridView(); });
+  gridRenderBody();
+}
+// gridHeadHTML is the table's column widths and header row (the sort and
+// filter marks on each column).
+function gridHeadHTML() {
+  return `<colgroup><col style="width:46px">${G.vc.map(c => `<col style="width:${gridColW(c)}px">`).join("")}</colgroup>
+        <thead><tr><th class="g-corner g-rh" data-tip="${esc(t("すべて選択"))}"></th>${G.vc.map((c, ci) => `<th data-c="${ci}" class="${ci === 0 && c.key === "name" ? "g-stick" : ""}" data-tip="${esc(gridColTitle(c))}"><button class="g-hmenu${G.colFilter[c.key] || G.sort.key === c.key ? " on" : ""}" type="button" data-hmenu="${esc(c.key)}" tabindex="-1" data-tip="${esc(t("並べ替え・絞り込み"))}">${G.sort.key === c.key ? (G.sort.dir > 0 ? "▲" : "▼") : ""}${G.colFilter[c.key] ? "⏷" : "▾"}</button>${esc(gridColTitle(c))}<span class="g-rz" data-rz="${ci}" data-tip="${esc(t("ドラッグで列幅を変更（ダブルクリックで内容に合わせる）"))}"></span></th>`).join("")}</tr></thead>`;
+}
+// gridRedrawTable draws the table anew — columns, widths, header marks and
+// rows — inside the same frame, so the scroll offset stays (a sort, a
+// column filter, 解除, a column shown or hidden). Rebuilding the whole grid
+// for these sent the table back to the top. The selection follows its rows
+// and columns (gridKeepSel). With focus, keys go back to the table (a link
+// was just clicked), as the full rebuild used to arrange; the 列の表示
+// dialog redraws on every check box and must keep the focus for itself.
+function gridRedrawTable(focus) {
+  const table = document.getElementById("g-table");
+  if (!table) return;
+  gridKeepSel(() => {
+    G.vc = G.cols.filter(c => G.vis.has(c.key));
+    table.innerHTML = gridHeadHTML() + '<tbody id="g-body"></tbody>';
+    G.rendered = null;
+    gridWireHead(table);
+    gridRefilter();
+    gridView();
+  });
+  gridRenderBody();
+  if (focus) G.wrap.focus({ preventScroll: true });
+}
+// gridClearSort takes the sort off: the key and the order fixed from it.
+function gridClearSort() {
+  G.sort = { key: "", dir: 1 };
+  G.sortRank = null;
+}
+function gridWireHead(root) {
+  root.querySelectorAll(".g-hmenu").forEach(b => b.onclick = e => { e.stopPropagation(); gridHeaderMenu(b.dataset.hmenu, b); });
+}
 function gridRefilter() {
   const f = (G.filter || "").toLowerCase();
   const cols = Object.entries(G.colFilter).map(([k, set]) => [G.cols.find(c => c.key === k), set]).filter(([c]) => c);
@@ -358,8 +433,7 @@ function renderGrid(force) {
     <div id="g-findbar" class="g-findbar hidden"></div>
     <div class="grid-wrap" id="g-wrap" tabindex="0">
       <table class="grid" id="g-table">
-        <colgroup><col style="width:46px">${G.vc.map(c => `<col style="width:${gridColW(c)}px">`).join("")}</colgroup>
-        <thead><tr><th class="g-corner g-rh" data-tip="${esc(t("すべて選択"))}"></th>${G.vc.map((c, ci) => `<th data-c="${ci}" class="${ci === 0 && c.key === "name" ? "g-stick" : ""}" data-tip="${esc(gridColTitle(c))}"><button class="g-hmenu${G.colFilter[c.key] || G.sort.key === c.key ? " on" : ""}" type="button" data-hmenu="${esc(c.key)}" tabindex="-1" data-tip="${esc(t("並べ替え・絞り込み"))}">${G.sort.key === c.key ? (G.sort.dir > 0 ? "▲" : "▼") : ""}${G.colFilter[c.key] ? "⏷" : "▾"}</button>${esc(gridColTitle(c))}<span class="g-rz" data-rz="${ci}" data-tip="${esc(t("ドラッグで列幅を変更（ダブルクリックで内容に合わせる）"))}"></span></th>`).join("")}</tr></thead>
+        ${gridHeadHTML()}
         <tbody id="g-body"></tbody>
       </table>
       <div class="g-fill hidden" id="g-fill" data-tip="${esc(t("ドラッグで連番・コピー（Ctrl を押しながらで連番とコピーを入れ替え）。ダブルクリックで最後の行まで"))}"></div>
@@ -438,7 +512,13 @@ function gridStatus() {
   const fix = document.getElementById("g-sortfix");
   if (fix) fix.onclick = e => { e.preventDefault(); gridSortFix(); };
   const vr = document.getElementById("g-viewreset");
-  if (vr) vr.onclick = e => { e.preventDefault(); G.sort = { key: "", dir: 1 }; G.colFilter = {}; G.filter = ""; gridRefilter(); renderGrid(true); };
+  if (vr) vr.onclick = e => {
+    e.preventDefault();
+    gridClearSort(); G.colFilter = {}; G.filter = "";
+    const f = document.getElementById("g-filter");
+    if (f) f.value = "";
+    gridRedrawTable(true);
+  };
   const u = document.getElementById("g-undo"), rd = document.getElementById("g-redo");
   if (u) u.disabled = !G.undo.length;
   if (rd) rd.disabled = !G.redo.length;
@@ -707,9 +787,22 @@ function gridBeginEdit(initial) {
   inp.focus();
   if (initial == null) inp.setSelectionRange(inp.value.length, inp.value.length);
   inp.addEventListener("keydown", gridEditKey);
-  inp.addEventListener("blur", () => { if (G && G.edit && G.edit.inp === inp) gridCommitEdit(); });
+  // Focus leaving the editor commits it — a click on a cell, on a toolbar
+  // button (パスワードを表示), outside the table — as in Excel. Where the
+  // focus is going (a text box, say 絞り込み) is passed on, so the commit
+  // does not pull it back to the table. The window losing the focus (Alt+Tab,
+  // a click on another window) is not that: nothing in the page took it, and
+  // the half-typed value would be committed as it is; the editor stays, and
+  // typing goes on when the window is back.
+  inp.addEventListener("blur", ev => {
+    if (!(G && G.edit && G.edit.inp === inp)) return;
+    if (!ev.relatedTarget && !document.hasFocus()) return;
+    gridCommitEdit(null, false, ev.relatedTarget);
+  });
 }
-function gridCommitEdit(move, all) {
+// focusTo: the element taking the focus as the editor closes (a blur), or
+// null. Keys go back to the table unless that is a box to type in.
+function gridCommitEdit(move, all, focusTo) {
   const e = G.edit;
   if (!e) return;
   G.edit = null;
@@ -727,7 +820,8 @@ function gridCommitEdit(move, all) {
   }
   if (move) gridMove(move[0], move[1]);
   else gridPaintSel();
-  G.wrap.focus({ preventScroll: true });
+  const typing = focusTo && /^(INPUT|TEXTAREA|SELECT)$/.test(focusTo.tagName || "");
+  if (!typing) G.wrap.focus({ preventScroll: true });
 }
 function gridCancelEdit() {
   const e = G.edit;
@@ -1152,8 +1246,8 @@ function gridSortFix() {
     slots.forEach((sl, k) => { next[sl] = ordered[k]; });
     G.rows = next;
   });
-  G.sort = { key: "", dir: 1 };
-  renderGrid(true);
+  gridClearSort();
+  gridRedrawTable(true);
   toast(t("この並び順にしました（保存すると機器の並び順になります）"), "ok");
 }
 function gridDeleteRows() {
@@ -1498,8 +1592,10 @@ function gridColsDialog() {
     node.querySelectorAll("[data-col]").forEach(b => { if (b.checked) vis.add(b.dataset.col); });
     node.querySelectorAll("[data-hop]").forEach(b => { if (b.checked) G.cols.filter(c => c.hop === +b.dataset.hop).forEach(c => vis.add(c.key)); });
     G.vis = vis;
+    // Hiding the sort column would leave the sort on with no ▲▼ in sight.
+    if (G.sort.key && !vis.has(G.sort.key)) gridClearSort();
     gridSaveVis();
-    renderGrid(true);
+    gridRedrawTable(false); // the focus stays in the dialog
   };
   node.querySelectorAll("input").forEach(b => b.onchange = apply);
   node.querySelector("#gv-basic").onclick = () => {
@@ -1556,15 +1652,18 @@ function gridHeaderMenu(key, anchor) {
   pop.querySelectorAll("[data-a]").forEach(b => b.onclick = () => {
     const a = b.dataset.a;
     if (a === "asc" || a === "desc") { G.sort = { key, dir: a === "asc" ? 1 : -1 }; gridResort(); }
-    else if (a === "nosort") { G.sort = { key: "", dir: 1 }; G.sortRank = null; }
+    else if (a === "nosort") gridClearSort();
     else if (a === "ok") {
       const on = boxes().filter(x => x.checked).map(x => x.dataset.v);
       if (on.length === vals.length) delete G.colFilter[key]; else G.colFilter[key] = new Set(on);
     } else if (a === "clear") delete G.colFilter[key];
-    else if (a === "hide") { G.vis.delete(key); gridSaveVis(); }
-    close();
-    gridRefilter();
-    renderGrid(true);
+    else if (a === "hide") {
+      // Hiding the sort column would leave the sort on with no ▲▼ in sight.
+      if (G.sort.key === key) gridClearSort();
+      G.vis.delete(key); gridSaveVis();
+    }
+    close(); // puts the focus back on the table
+    gridRedrawTable(false);
   });
   pop.querySelector(".g-hq").focus();
 }
@@ -1581,7 +1680,11 @@ function gridAutoFit(c) {
   span.remove();
   w = Math.max(50, Math.min(600, w + 34));
   gridSetColW(col.key, w);
-  renderGrid(true);
+  // Only the width changes: the column's <col> takes it (as a drag of the
+  // edge does) and the selection is painted where the cells now are.
+  const el = document.querySelectorAll("#g-table col")[c + 1];
+  if (el) el.style.width = w + "px";
+  gridPaintSel();
 }
 // Double-click on the fill handle: down to the table's last device row.
 function gridFillToEnd() {
@@ -1623,8 +1726,16 @@ function gridWire(root) {
   $g("g-redo").onclick = () => gridUndo(true);
   $g("g-find").onclick = () => gridFind(true);
   $g("g-cols").onclick = gridColsDialog;
-  // The filters match what is shown (●●●● while hidden): worked out again.
-  $g("g-pw").onclick = () => { G.showPw = !G.showPw; gridRefilter(); renderGrid(true); };
+  // パスワードを表示 redraws the rows in place (gridRedrawRows): the scroll
+  // offset is never touched, a cursor off screen stays off screen, as in
+  // Excel. The filters match what is shown (●●●● while hidden), so they are
+  // worked out again.
+  $g("g-pw").onclick = () => {
+    G.showPw = !G.showPw;
+    $g("g-pw").textContent = G.showPw ? t("パスワードを隠す") : t("パスワードを表示");
+    gridRedrawRows();
+    G.wrap.focus({ preventScroll: true });
+  };
   $g("g-save").onclick = () => gridSave().catch(e => toast(t("保存失敗") + ": " + terr(e), "err"));
   $g("g-addrow").onclick = gridAddRow;
   $g("g-discard").onclick = async () => {
@@ -1638,9 +1749,9 @@ function gridWire(root) {
     await openGrid(scope);
   };
   const filt = $g("g-filter");
-  filt.oninput = () => { G.filter = filt.value; gridRefilter(); gridView(); gridRenderBody(); };
+  filt.oninput = () => { G.filter = filt.value; gridRedrawRows(); };
   filt.onkeydown = e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); G.wrap.focus(); } };
-  root.querySelectorAll(".g-hmenu").forEach(b => b.onclick = e => { e.stopPropagation(); gridHeaderMenu(b.dataset.hmenu, b); });
+  gridWireHead(root);
   const wrap = G.wrap;
   wrap.addEventListener("scroll", () => { if (!gridDrag) gridPaintSel(); });
   const glist = document.getElementById("g-list");

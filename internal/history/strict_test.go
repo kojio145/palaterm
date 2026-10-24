@@ -81,9 +81,9 @@ func TestStrictVerify(t *testing.T) {
 }
 
 // An interactive (Tera Term style) capture keeps the device's line editing:
-// tab completion is recorded as "sho\b \b\b \b\b \bshow ". This is the real
-// 2026-10-10 NEC IX log, trimmed, which showed "5 / 6 件が未反映" although
-// every setting had been applied.
+// tab completion is recorded as "sho\b \b\b \b\b \bshow ". The fixture is
+// made-up lab data that reproduces only the symptom: such a capture once
+// showed "5 / 6 件が未反映" although every setting had been applied.
 func TestStrictVerifyInteractiveBackspaces(t *testing.T) {
 	work := strings.Join([]string{
 		"IX-A(config)# terminal length 0\r",

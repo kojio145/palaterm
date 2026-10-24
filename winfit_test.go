@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestFitSize(t *testing.T) {
 	cases := []struct {
@@ -87,5 +90,42 @@ func TestExpandByBorder(t *testing.T) {
 	}
 	if r := expandBy(work, win, rect{}); r != work {
 		t.Errorf("DWM が読めないときは作業領域そのまま: %+v", r)
+	}
+}
+
+// A window kind's last size is remembered in its own file, within bounds:
+// under the floor it is not saved, over 10000 or unreadable it is not used
+// (the terminal and GUI windows share this, 2026-10-24 review).
+func TestWinSizeRemembered(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	const kind = "probe-window"
+	if _, _, ok := loadWinSize(kind, termWin); ok {
+		t.Fatal("a size before any was saved")
+	}
+	saveWinSize(kind, termWin, 1200, 700)
+	if w, h, ok := loadWinSize(kind, termWin); !ok || w != 1200 || h != 700 {
+		t.Fatalf("saved 1200×700, loaded %d×%d %v", w, h, ok)
+	}
+	saveWinSize(kind, termWin, termWin.MinW-1, 700) // under the floor: the last one stays
+	if w, h, ok := loadWinSize(kind, termWin); !ok || w != 1200 || h != 700 {
+		t.Errorf("a size under the floor replaced the last: %d×%d %v", w, h, ok)
+	}
+	saveWinSize("gui-probe", guiWinSize, 900, 600)
+	if w, _, _ := loadWinSize(kind, termWin); w != 1200 {
+		t.Errorf("the kinds share a file: %d", w)
+	}
+	if w, h, ok := loadWinSize("gui-probe", guiWinSize); !ok || w != 900 || h != 600 {
+		t.Errorf("GUI window size = %d×%d %v", w, h, ok)
+	}
+	for _, junk := range []string{`{"w":20000,"h":700}`, `{"w":1200,"h":10}`, "junk", ""} {
+		if err := os.WriteFile(winStateFile(kind), []byte(junk), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, ok := loadWinSize(kind, termWin); ok {
+			t.Errorf("%q accepted as a size", junk)
+		}
+	}
+	if w, h, ok := loadTermWinSize(); ok {
+		t.Errorf("terminal size from nowhere: %d×%d", w, h)
 	}
 }

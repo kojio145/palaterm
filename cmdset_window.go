@@ -79,11 +79,23 @@ func cmdsetTitle(name string) string {
 	return "PalaTerm - " + winWord("コマンドセット", "Command set") + ": " + name
 }
 
-// cmdsetShowLine is the "show" line for cs; parent is the main window's
-// rectangle on the first line to a spare window, "" otherwise.
-func cmdsetShowLine(cs model.CommandSet, parent string) []byte {
+// cmdsetShowLine is the "show" line for cs.
+func cmdsetShowLine(cs model.CommandSet) []byte {
 	d := cmdsetDocOf(cs)
-	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &d, Parent: parent})
+	b, _ := json.Marshal(cmdsetMsg{Kind: "show", Title: cmdsetTitle(cs.Name), Doc: &d})
+	return append(b, '\n')
+}
+
+// cmdsetWithParent is a "show" line with the main window's rectangle added
+// (the first line to a spare window; added when it is written, see
+// cmdsetOut).
+func cmdsetWithParent(line []byte, parent string) []byte {
+	var m cmdsetMsg
+	if json.Unmarshal(line, &m) != nil {
+		return line
+	}
+	m.Parent = parent
+	b, _ := json.Marshal(m)
 	return append(b, '\n')
 }
 
@@ -114,10 +126,16 @@ type cmdsetWinRef struct {
 	dead atomic.Bool // the pipe broke: the window is gone or going
 }
 
-// cmdsetOut is a line waiting to be written to a window.
+// cmdsetOut is a line waiting to be written to a window. first marks the
+// window's first line, a set (a window started with no set ends; a spare
+// shows on its first set); parent is then the main window's rectangle for
+// a spare (it places itself over it), "" otherwise, added to the line as it
+// is written so it survives the set being replaced in the queue.
 type cmdsetOut struct {
-	kind string
-	line []byte
+	kind   string
+	line   []byte
+	first  bool
+	parent string
 }
 
 func newCmdsetWinRef(name string) *cmdsetWinRef {
@@ -126,19 +144,34 @@ func newCmdsetWinRef(name string) *cmdsetWinRef {
 
 // send queues one line. A newer set (or a delete) replaces one still waiting
 // — only the latest content matters — so a child that does not read keeps at
-// most one set and the focus requests in memory.
-func (w *cmdsetWinRef) send(kind string, line []byte) {
+// most one set and the focus requests in memory. The first line is the
+// exception: a newer set takes its place (and a spare's parent), and a
+// delete queues behind it, or the window would end, or never show.
+func (w *cmdsetWinRef) send(kind string, line []byte) { w.queue(cmdsetOut{kind: kind, line: line}) }
+
+// sendFirst queues the window's first line: its set, with the main window's
+// rectangle when it is a spare.
+func (w *cmdsetWinRef) sendFirst(line []byte, parent string) {
+	w.queue(cmdsetOut{kind: "show", line: line, first: true, parent: parent})
+}
+
+func (w *cmdsetWinRef) queue(out cmdsetOut) {
 	w.qmu.Lock()
-	if kind != "focus" {
+	if out.kind != "focus" {
 		kept := w.q[:0]
 		for _, o := range w.q {
-			if o.kind == "focus" {
+			switch {
+			case o.kind == "focus":
+				kept = append(kept, o)
+			case o.first && out.kind == "show":
+				out.first, out.parent = true, o.parent
+			case o.first:
 				kept = append(kept, o)
 			}
 		}
 		w.q = kept
 	}
-	w.q = append(w.q, cmdsetOut{kind, line})
+	w.q = append(w.q, out)
 	w.qmu.Unlock()
 	select {
 	case w.kick <- struct{}{}:
@@ -164,7 +197,11 @@ func (w *cmdsetWinRef) writer() {
 			o := w.q[0]
 			w.q = w.q[1:]
 			w.qmu.Unlock()
-			if _, err := w.in.Write(o.line); err != nil {
+			line := o.line
+			if o.parent != "" {
+				line = cmdsetWithParent(line, o.parent)
+			}
+			if _, err := w.in.Write(line); err != nil {
 				w.dead.Store(true)
 				_ = w.in.Close()
 				return
@@ -203,6 +240,12 @@ var (
 	// (Prewarm sets it, DropSpare clears it; the respare after View checks
 	// it, so leaving the tab leaves no idle process behind).
 	cmdsetSpareWanted bool
+	// cmdsetSpareStarting: a spare's process is being started (outside the
+	// lock, see respareCommandSetWindow), so no second one starts meanwhile.
+	cmdsetSpareStarting bool
+	// cmdsetCloseGen counts closeCmdsetWindows calls: a spare whose start
+	// straddled one (ロック while it started) is closed, not kept.
+	cmdsetCloseGen int
 	// cmdsetPrewarmOn turns the spare window on (off in tests that count the
 	// windows started).
 	cmdsetPrewarmOn = true
@@ -242,6 +285,30 @@ func spawnCmdsetProc(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
 	return in, cmd.Process.Pid, done, nil
 }
 
+// commandSetCopyLocked is a copy of the set called name, nil when there is
+// none. Under a.mu.
+func (a *App) commandSetCopyLocked(name string) *model.CommandSet {
+	if a.inv == nil {
+		return nil
+	}
+	for i := range a.inv.CommandSets {
+		if a.inv.CommandSets[i].Name == name {
+			c := a.inv.CommandSets[i]
+			c.Commands = append([]model.Command(nil), c.Commands...)
+			return &c
+		}
+	}
+	return nil
+}
+
+// dropCmdsetWinLocked takes w out of the map, under whichever name it holds
+// now (a rename moves it). Under cmdsetMu.
+func dropCmdsetWinLocked(w *cmdsetWinRef) {
+	if cmdsetWins[w.name] == w {
+		delete(cmdsetWins, w.name)
+	}
+}
+
 // OpenCommandSetWindow shows the set in its read-only window: a new one, or
 // the one already open for it brought to the front.
 func (a *App) OpenCommandSetWindow(name string) error {
@@ -250,20 +317,12 @@ func (a *App) OpenCommandSetWindow(name string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
 	}
-	var cs *model.CommandSet
-	for i := range a.inv.CommandSets {
-		if a.inv.CommandSets[i].Name == name {
-			c := a.inv.CommandSets[i]
-			c.Commands = append([]model.Command(nil), c.Commands...)
-			cs = &c
-			break
-		}
-	}
+	cs := a.commandSetCopyLocked(name)
 	a.mu.Unlock()
 	if cs == nil {
 		return fmt.Errorf("command set %q not found", name)
 	}
-	line := cmdsetShowLine(*cs, "")
+	line := cmdsetShowLine(*cs)
 	cmdsetMu.Lock()
 	if w := cmdsetWins[name]; w != nil && !w.dead.Load() {
 		if w.in == nil {
@@ -291,11 +350,18 @@ func (a *App) OpenCommandSetWindow(name string) error {
 	var in io.WriteCloser
 	var pid int
 	var done <-chan struct{}
-	first := line
+	parent := ""
 	if sp := cmdsetSpare; sp != nil {
 		cmdsetSpare = nil
-		in, pid, done = sp.in, sp.pid, sp.done
-		first = cmdsetShowLine(*cs, parentRectString())
+		select {
+		case <-sp.done:
+			// It has exited (crashed) and its watcher has not cleared it
+			// yet: a window of its own instead of a click that shows nothing.
+			_ = sp.in.Close()
+		default:
+			in, pid, done = sp.in, sp.pid, sp.done
+			parent = parentRectString()
+		}
 	}
 	cmdsetMu.Unlock()
 	defer func() {
@@ -309,30 +375,46 @@ func (a *App) OpenCommandSetWindow(name string) error {
 	if in == nil {
 		in, pid, done, err = startCmdsetProc(false)
 	}
+	// The window gets the set as it is now, under its name as it is now: a
+	// save or a rename while the process started passed it by (sync skips a
+	// window with no pipe yet), and the click's copy would stand until the
+	// next save. a.mu before cmdsetMu, as persist takes them.
+	a.mu.Lock()
 	cmdsetMu.Lock()
 	if err != nil {
-		if cmdsetWins[name] == w {
-			delete(cmdsetWins, name)
-		}
+		dropCmdsetWinLocked(w)
 		cmdsetMu.Unlock()
+		a.mu.Unlock()
 		return err
 	}
-	if cmdsetWins[name] != w {
+	if cmdsetWins[w.name] != w {
 		// Closed (ロック) while the process was starting.
 		cmdsetMu.Unlock()
+		a.mu.Unlock()
 		_ = in.Close()
 		return nil
 	}
-	w.in, w.pid, w.last = in, pid, line
+	first, deleted := line, false
+	if cur := a.commandSetCopyLocked(w.name); cur != nil {
+		first = cmdsetShowLine(*cur)
+	} else {
+		// Deleted while starting: the window opens with what was clicked
+		// (its first line must be a set) and is told, as an open one is.
+		deleted = true
+	}
+	w.in, w.pid, w.last = in, pid, first
 	go w.writer()
-	w.send("show", first)
+	w.sendFirst(first, parent)
+	if deleted {
+		w.last = cmdsetKindLine("deleted")
+		w.send("deleted", w.last)
+	}
 	cmdsetMu.Unlock()
+	a.mu.Unlock()
 	go func() {
 		<-done
 		cmdsetMu.Lock()
-		if cmdsetWins[w.name] == w {
-			delete(cmdsetWins, w.name)
-		}
+		dropCmdsetWinLocked(w)
 		cmdsetMu.Unlock()
 		w.close()
 	}()
@@ -375,12 +457,26 @@ func (a *App) respareCommandSetWindow() {
 		return
 	}
 	cmdsetMu.Lock()
-	defer cmdsetMu.Unlock()
-	if cmdsetSpare != nil || !cmdsetSpareWanted {
+	if cmdsetSpare != nil || cmdsetSpareStarting || !cmdsetSpareWanted {
+		cmdsetMu.Unlock()
 		return
 	}
+	// Reserved under the lock, started outside it: a process start takes a
+	// second or two, and a save (syncCmdsetWindowsLocked, under a.mu) must
+	// not wait on it.
+	cmdsetSpareStarting = true
+	gen := cmdsetCloseGen
+	cmdsetMu.Unlock()
 	in, pid, done, err := startCmdsetProc(true)
+	cmdsetMu.Lock()
+	defer cmdsetMu.Unlock()
+	cmdsetSpareStarting = false
 	if err != nil {
+		return
+	}
+	if !cmdsetSpareWanted || cmdsetCloseGen != gen {
+		// The tab was left, or the windows were closed (ロック), meanwhile.
+		_ = in.Close()
 		return
 	}
 	sp := &cmdsetSpareRef{in: in, pid: pid, done: done}
@@ -433,7 +529,7 @@ func (a *App) syncCmdsetWindowsLocked() {
 		}
 		kind, line := "show", []byte(nil)
 		if cs := byName[name]; cs != nil {
-			line = cmdsetShowLine(*cs, "")
+			line = cmdsetShowLine(*cs)
 		} else {
 			kind, line = "deleted", cmdsetKindLine("deleted")
 		}
@@ -451,6 +547,7 @@ func (a *App) syncCmdsetWindowsLocked() {
 func closeCmdsetWindows() {
 	cmdsetMu.Lock()
 	defer cmdsetMu.Unlock()
+	cmdsetCloseGen++
 	if cmdsetSpare != nil {
 		_ = cmdsetSpare.in.Close()
 		cmdsetSpare = nil

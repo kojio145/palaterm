@@ -193,6 +193,12 @@ const I18N_EN_PATTERNS = [
   [/^JSONの形式が不正です: (.+)$/, "Invalid JSON: $1"],
   [/ホストキーが前回接続時と異なります（(.+?)、今回: (.+?) \/ 記録: (.+?)）。中間者攻撃または機器交換の可能性があります。機器を交換した場合は、接続時の確認で「機器を交換したので許可して再接続」を選んでください/,
     'Host key for $1 changed (now: $2 / pinned: $3). Possible man-in-the-middle attack or a replaced device. If the device was replaced, choose "Device was replaced — allow and reconnect" in the prompt.'],
+  [/^自分の踏み台（(.+?)）のホストキーが前回接続時と異なります。踏み台は全機器で共有するため、機器の交換としては許可できません。踏み台を交換した覚えがなければ、なりすましの可能性があるためネットワーク管理者に確認してください$/,
+    "The host key of your own jump host ($1) differs from the last connection. A jump host is shared by every device, so this cannot be allowed as a replaced device. If you do not remember replacing the jump host, this may be impersonation: check with your network administrator."],
+  [/^踏み台(\d+)段目（(.+?)）のホストキーが前回接続時と異なります。踏み台は他の機器とも共有するため、機器の交換としては許可できません。踏み台を交換した覚えがなければ、なりすましの可能性があるためネットワーク管理者に確認してください$/,
+    "The host key of jump host #$1 ($2) differs from the last connection. A jump host is shared with other devices, so this cannot be allowed as a replaced device. If you do not remember replacing the jump host, this may be impersonation: check with your network administrator."],
+  [/機器と共通のアルゴリズムがありません（「レガシー暗号を許可」が足すのは鍵交換と暗号だけで、この不一致には効きません）/,
+    'No algorithm in common with the device ("Allow legacy ciphers" only adds key exchange and cipher algorithms, which does not help here)'],
   [/— 機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください/,
     '— the device may not support modern algorithms. Enable "Allow legacy ciphers" in the device editor.'],
   [/— サーバがパスワード認証を受け付けていません（公開鍵認証のみ）。編集画面の SSH認証を「公開鍵」にして、秘密鍵ファイル（Tera Term などで使っていた鍵）を指定してください/,
@@ -2293,4 +2299,12 @@ Object.assign(I18N_EN, {
   "行をクリック・ドラッグで選択（Shift で範囲・Ctrl で追加/解除・Ctrl+A ですべて）": "Click or drag over rows to select them (Shift: a range, Ctrl: add / remove, Ctrl+A: all)",
   "コピーする行を選択してください": "Select the rows to copy",
   "{n} 行のコマンドをコピーしました": "Copied {n} command(s)",
+});
+
+// Review of 2026-10-24 (frontend, part 3): the 予約 tab's unknown wake-timer
+// setting and a one-off's past time.
+Object.assign(I18N_EN, {
+  "ⓘ この PC がスリープ中も動くかは確認できませんでした（電源設定を読めません）。確実に動かすには下をオンにしてください": "ⓘ Whether schedules run while this PC sleeps could not be told (its power plan could not be read). To be sure, turn on the option below",
+  "① の日時が過ぎています。今より後の時刻にしてください": "The date and time in ① have passed. Choose a time later than now",
+  "（大きすぎるため概算: 行をそのまま突き合わせています）": "(too large for an exact comparison: the lines were matched one for one)",
 });

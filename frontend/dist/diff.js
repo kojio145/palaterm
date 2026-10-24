@@ -172,7 +172,10 @@ async function bootDiffWindow() {
     v.textContent = changed ? t("差分あり: 追加 {a} 行 / 削除 {b} 行 / {c} か所", { a: r.added, b: r.removed, c: blocks.length }) : t("差分なし（A と B は同じ内容）");
     v.style.background = changed ? "rgba(250,204,21,.18)" : "rgba(34,197,94,.18)";
     v.style.color = changed ? "#fcd34d" : "#86efac";
-    document.getElementById("dw-counts").textContent = t("同じ {c} 行", { c: r.same }) + (noise ? "　" + t("（空行とプロンプトだけの行は比較から除外）") : "");
+    // approx: the two sides were too large or too different for the exact
+    // comparison, and the lines were matched one for one instead.
+    document.getElementById("dw-counts").textContent = t("同じ {c} 行", { c: r.same }) + (noise ? "　" + t("（空行とプロンプトだけの行は比較から除外）") : "")
+      + (r.approx ? "　" + t("（大きすぎるため概算: 行をそのまま突き合わせています）") : "");
     render();
     if (cur >= 0) setTimeout(() => goTo(0), 0);
   }
@@ -180,21 +183,15 @@ async function bootDiffWindow() {
   document.getElementById("dw-only").onchange = () => { render(); if (cur >= 0) goTo(cur); };
   document.getElementById("dw-open-a").onclick = () => D().OpenLog("a").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   document.getElementById("dw-open-b").onclick = () => D().OpenLog("b").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
-  // Font size.
-  const FONT_DEF = 12, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_diff_font"), 10) || FONT_DEF)); } catch (e) {}
-  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); body.style.fontSize = fontSize + "px"; try { localStorage.setItem("palaterm_diff_font", String(fontSize)); } catch (e) {} updateView(); }
-  setFont(fontSize);
-  document.getElementById("dw-font-inc").onclick = () => setFont(fontSize + 1);
-  document.getElementById("dw-font-dec").onclick = () => setFont(fontSize - 1);
-  body.addEventListener("wheel", e => { if (!e.ctrlKey) return; e.preventDefault(); setFont(fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+  // Font size (wireFontZoom, app.js).
+  const zoom = wireFontZoom("palaterm_diff_font", px => { body.style.fontSize = px + "px"; updateView(); }, { def: 12 });
+  zoom.set(zoom.size);
+  zoom.buttons(document.getElementById("dw-font-inc"), document.getElementById("dw-font-dec"));
+  zoom.wheel(body);
   document.addEventListener("keydown", e => {
     if ((e.altKey && e.key === "ArrowDown") || e.key === "F8") { e.preventDefault(); goTo(cur + 1); return; }
     if ((e.altKey && e.key === "ArrowUp") || e.key === "F7") { e.preventDefault(); goTo(cur - 1); return; }
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (zoom.key(e)) { e.preventDefault(); return; }
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!fbar.classList.contains("hidden")) closeFind(); else D().Close(); }
   });

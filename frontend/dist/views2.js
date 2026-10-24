@@ -64,8 +64,9 @@ function renderCommands() {
     } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
   };
   // 表示 (and a click on the preview): the set in a read-only window of its
-  // own; the same set again brings that window to the front.
-  root.querySelectorAll("[data-view]").forEach(b => b.onclick = () =>
+  // own; the same set again brings that window to the front. The button and
+  // the cell by their classes — never every [data-view] in the tab.
+  root.querySelectorAll(".act-view, .cs-preview").forEach(b => b.onclick = () =>
     App().OpenCommandSetWindow(b.dataset.view).catch(e => toast(t("開けませんでした") + ": " + terr(e), "err")));
   root.querySelectorAll("[data-edit]").forEach(b => b.onclick = () =>
     editCommandSet(INV.commandSets.find(s => s.name === b.dataset.edit)));
@@ -488,16 +489,10 @@ function renderRun() {
   const hasResults = vals.length > 0;
   const groups = INV.deviceGroups || [];
   const ungroupedCount = (INV.devices || []).filter(d => !d.group).length;
-  // The table panel scrolls inside itself and a run re-renders on every
-  // device event: the old panel element is kept (only its contents swapped)
-  // so the scroll position - and a scrollbar drag in progress - survive.
-  // A different group / filter / sort starts from the top as before.
-  const oldPanel = root.querySelector(".panel.scrollx");
   // The jump-host choice shows only for a group that has jump hosts (and is
   // off for one that has none, so it is never on unseen).
   const anyBastion = devs.some(devHasBastion);
   if (!anyBastion) runDirect = false;
-  const viewKey = JSON.stringify([runGroupSel, runFilter, runSort]);
   const html = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
@@ -559,13 +554,12 @@ function renderRun() {
            ${th("site", t("拠点名"), "84px")}${th("role", t("役割"), "84px")}${th("commandSet", t("コマンドセット"), "126px")}
            <th>${esc(t("メッセージ"))}</th><th style="width:${LANG === "ja" ? 220 : 240}px"></th></tr></thead><tbody id="run-body">${rows}</tbody></table>`}
     </div>`;
-  // A detached element loses its scroll offset, so the old panel stays in
-  // the DOM (only its contents swapped), and the filter box being typed in
-  // stays as it is (see patchKeeping): the nodes around them are drawn anew.
-  const keepPanel = oldPanel && oldPanel.dataset.view === viewKey
-    ? { o: oldPanel, find: f => f.querySelector(".panel.scrollx"), inner: true } : null;
-  patchKeeping(root, html.replace('<div class="panel scrollx">', `<div class="panel scrollx" data-view="${esc(viewKey)}">`),
-    [keepPanel, keepFocusedBox(root, "run-filter")]);
+  // The table panel scrolls inside itself and a run redraws the tab on every
+  // device event: the panel stays (only its contents swapped) so the scroll
+  // offset — and a scrollbar drag in progress — survive, and so does the
+  // filter box being typed in (see renderListTab). A different group /
+  // filter / sort starts from the top.
+  renderListTab(root, html, [runGroupSel, runFilter, runSort], "run-filter");
 
   // Filter / sort wiring. The text box re-renders on every keystroke; a box
   // kept across the redraw is wired already and keeps its caret.
@@ -678,6 +672,7 @@ function renderRun() {
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
   const applyEnable = async (ids, on) => {
+    if (!ids.length) return; // nothing shown: nothing to flip (and no write)
     const set = new Set(ids);
     (INV.devices || []).forEach(d => { if (set.has(d.id)) d.enabled = on; });
     renderRun();

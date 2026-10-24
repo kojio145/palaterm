@@ -54,6 +54,19 @@ func TestCheckFlagsChanges(t *testing.T) {
 		"shutdown -h now":  ReasonReload,
 		"sudo init 6":      ReasonReload,
 		"systemctl reboot": ReasonReload,
+		// Abbreviations that passed unwarned: bare "config", "shut" / "shu"
+		// (IOS's prefixes of shutdown), FortiGate's "exec" / "exe".
+		"config":             ReasonConfigMode,
+		"shutdown":           ReasonReload,
+		"shut":               ReasonReload,
+		"shu":                ReasonReload,
+		"exec reboot":        ReasonReload,
+		"exe reboot":         ReasonReload,
+		"exec shutdown":      ReasonReload,
+		"exe factoryreset":   ReasonReload,
+		"exec formatlogdisk": ReasonErase,
+		"exec backup config tftp x.cfg 192.0.2.10": ReasonWrite,
+		"exe update now": ReasonInterface,
 	}
 	for cmd, want := range cases {
 		hits := Check([]string{cmd})
@@ -80,6 +93,12 @@ func TestCheckPassesReads(t *testing.T) {
 		"display", "release", "relay",
 		"copy flash:x.cfg tftp://h/x.cfg", "copy run tftp:", "sudo systemctl status nginx", "init",
 		"show archive", "dir flash:", "sudo cat /etc/hosts",
+		// the full-form backup is a read like "copy run tftp:" — only a copy
+		// INTO a config or device storage is a change
+		"copy running-config tftp://192.0.2.10/r1.cfg", "copy running-config scp:", "copy running-config ftp:",
+		// prefixes of "show" are not prefixes of "shutdown"
+		"sh run", "sho ver", "show shutdown", "execute ping 192.0.2.1", "exe ping 192.0.2.1",
+		"get system status | grep config",
 	}
 	if hits := Check(safe); len(hits) != 0 {
 		t.Errorf("safe commands flagged: %+v", hits)

@@ -31,10 +31,21 @@ const (
 type telnetSession struct {
 	conn net.Conn
 	buf  []byte // leftover decoded bytes
+	// pending is the tail of a read that ended inside an IAC sequence (a
+	// lone IAC, "IAC WILL" without its option, a subnegotiation before its
+	// IAC SE), kept to be decoded with the next read. Nothing says a peer's
+	// negotiation arrives in one piece: a banner longer than the read buffer
+	// pushed its trailing IAC WILL ECHO over the boundary, and a tunneled
+	// channel delivers what it is handed in.
+	pending []byte
 	// hops are the jump hosts a tunneled session runs through (DialTunnel),
 	// closed after the connection itself.
 	hops []*ssh.Client
 }
+
+// maxTelnetPending bounds pending: a "subnegotiation" longer than this is
+// not one, and is dropped rather than held forever.
+const maxTelnetPending = 4096
 
 func dialTelnet(host string, port int, timeout time.Duration) (Session, error) {
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
@@ -73,7 +84,15 @@ func (t *telnetSession) Read(p []byte) (int, error) {
 			return 0, err
 		}
 
-		out := t.decode(raw[:n])
+		in := raw[:n]
+		if len(t.pending) > 0 {
+			in = append(t.pending, in...) // pending owns its array (see below)
+			t.pending = nil
+		}
+		out, rest := t.decode(in)
+		if len(rest) > 0 && len(rest) <= maxTelnetPending {
+			t.pending = append([]byte(nil), rest...)
+		}
 		if len(out) == 0 {
 			if err != nil {
 				return 0, err
@@ -89,9 +108,11 @@ func (t *telnetSession) Read(p []byte) (int, error) {
 }
 
 // decode strips IAC sequences from one raw read, answering option requests.
-func (t *telnetSession) decode(raw []byte) []byte {
+// rest is the unfinished sequence the read ended inside (a slice of raw), to
+// be put in front of the next read; nil when raw ended cleanly.
+func (t *telnetSession) decode(raw []byte) (out, rest []byte) {
 	n := len(raw)
-	out := make([]byte, 0, n)
+	out = make([]byte, 0, n)
 	for i := 0; i < n; i++ {
 		if raw[i] != iac {
 			out = append(out, raw[i])
@@ -99,7 +120,7 @@ func (t *telnetSession) decode(raw []byte) []byte {
 		}
 		// Need at least one more byte for the command.
 		if i+1 >= n {
-			break
+			return out, raw[i:]
 		}
 		cmd := raw[i+1]
 		switch cmd {
@@ -108,8 +129,7 @@ func (t *telnetSession) decode(raw []byte) []byte {
 			i++
 		case will, wont, do, dont:
 			if i+2 >= n {
-				i = n
-				break
+				return out, raw[i:]
 			}
 			opt := raw[i+2]
 			t.answer(cmd, opt)
@@ -119,12 +139,15 @@ func (t *telnetSession) decode(raw []byte) []byte {
 			for j+1 < n && !(raw[j] == iac && raw[j+1] == se) {
 				j++
 			}
+			if j+1 >= n {
+				return out, raw[i:] // IAC SE not here yet
+			}
 			i = j + 1
 		default:
 			i++ // 2-byte command with no option
 		}
 	}
-	return out
+	return out, nil
 }
 
 // answer replies to an option request: everything is refused except remote

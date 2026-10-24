@@ -51,7 +51,8 @@ func TestHostKeyPinSurvivesAVaultReopen(t *testing.T) {
 
 // Clearing a pin is how a legitimately replaced device is accepted again, so
 // it must reach the vault too — otherwise the warning comes back on restart
-// and the device is unreachable until the vault is deleted.
+// and the device is unreachable until the vault is deleted. The jump host's
+// pin is not the device's and stays: other devices share that hop.
 func TestClearHostKeysReachesTheVault(t *testing.T) {
 	a := newTestApp(t)
 	if err := a.CreateVault("master"); err != nil {
@@ -80,10 +81,11 @@ func TestClearHostKeysReachesTheVault(t *testing.T) {
 	if err := a2.Unlock("master"); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
-	for _, addr := range []string{"192.0.2.201:22", "192.0.2.202:22"} {
-		if got := a2.GetHostKey(addr); got != "" {
-			t.Errorf("%s still pinned after clear + reopen: %q", addr, got)
-		}
+	if got := a2.GetHostKey("192.0.2.201:22"); got != "" {
+		t.Errorf("device still pinned after clear + reopen: %q", got)
+	}
+	if got := a2.GetHostKey("192.0.2.202:22"); got != "ssh-rsa SHA256:hop" {
+		t.Errorf("jump host pin = %q, want it kept", got)
 	}
 }
 
@@ -109,7 +111,8 @@ func TestPinWhileLockedIsSavedAtUnlock(t *testing.T) {
 }
 
 // A device through the own jump host is pinned under the chain as connected
-// (the own hop in front): ClearHostKeys drops those names too.
+// (the own hop in front): ClearHostKeys drops that name too — and leaves the
+// own jump host's pin, which every device behind it relies on.
 func TestClearHostKeysThroughMyBastion(t *testing.T) {
 	a := newTestApp(t)
 	if err := a.CreateVault("master"); err != nil {
@@ -131,8 +134,8 @@ func TestClearHostKeysThroughMyBastion(t *testing.T) {
 	if k := a.GetHostKey("jump1.example:22>192.0.2.10:22"); k != "" {
 		t.Errorf("device key through the own jump host still pinned: %q", k)
 	}
-	if k := a.GetHostKey("jump1.example:22"); k != "" {
-		t.Errorf("own jump host key still pinned: %q", k)
+	if k := a.GetHostKey("jump1.example:22"); k != "ssh-ed25519 SHA256:hop" {
+		t.Errorf("own jump host pin = %q, want it kept", k)
 	}
 }
 

@@ -468,3 +468,277 @@ func TestCmdsetWinApply(t *testing.T) {
 		t.Fatal("a show without a set must be ignored")
 	}
 }
+
+// withSlowCmdsetProcs is withFakeCmdsetProcs with a process start that waits
+// for release: what happens in the main window while a window starts.
+func withSlowCmdsetProcs(t *testing.T) (started func() []*fakeCmdsetPipe, release chan struct{}) {
+	t.Helper()
+	var mu sync.Mutex
+	var procs []*fakeCmdsetPipe
+	release = make(chan struct{})
+	old, oldPrewarm := startCmdsetProc, cmdsetPrewarmOn
+	cmdsetPrewarmOn = false
+	startCmdsetProc = func(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
+		<-release
+		p := &fakeCmdsetPipe{}
+		mu.Lock()
+		procs = append(procs, p)
+		mu.Unlock()
+		return p, 0, make(chan struct{}), nil
+	}
+	t.Cleanup(func() {
+		startCmdsetProc, cmdsetPrewarmOn = old, oldPrewarm
+		closeCmdsetWindows()
+	})
+	return func() []*fakeCmdsetPipe {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]*fakeCmdsetPipe(nil), procs...)
+	}, release
+}
+
+// The set is saved and renamed while its window's process starts (a save
+// passes a window with no pipe by): the window opens with the set as it is
+// now, under the new name, and stays that name's window. The old check by
+// the click's name left a pipeless entry under the new name for good, and
+// View on that set opened nothing from then on.
+func TestCmdsetWindowRenamedWhileStarting(t *testing.T) {
+	started, release := withSlowCmdsetProcs(t)
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 1)
+	go func() { errs <- a.OpenCommandSetWindow("health-check") }()
+	time.Sleep(50 * time.Millisecond) // the click is in; the process is starting
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}, {Text: "show version"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RenameCommandSet("health-check", "health-check-2"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if n := len(started()); n != 1 {
+		t.Fatalf("started %d windows, want 1", n)
+	}
+	w := started()[0]
+	m := w.awaitMsgs(t, 1)
+	if m[0].Kind != "show" || m[0].Doc == nil || m[0].Doc.Name != "health-check-2" || len(m[0].Doc.Commands) != 2 || !strings.Contains(m[0].Title, "health-check-2") {
+		t.Fatalf("first line must be the set as saved and renamed meanwhile: %+v", m[0])
+	}
+	cmdsetMu.Lock()
+	_, stale := cmdsetWins["health-check"]
+	own := cmdsetWins["health-check-2"]
+	cmdsetMu.Unlock()
+	if stale || own == nil || own.in == nil {
+		t.Fatalf("map after the rename: stale=%v own=%+v", stale, own)
+	}
+	// View under the new name: the same window, to the front.
+	if err := a.OpenCommandSetWindow("health-check-2"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(started()); n != 1 {
+		t.Fatalf("View under the new name started another window (%d)", n)
+	}
+	if m = w.awaitMsgs(t, 2); m[1].Kind != "focus" {
+		t.Fatalf("want focus, got %+v", m[1])
+	}
+	// …and a later save still reaches it.
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check-2", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if m = w.awaitMsgs(t, 3); m[2].Kind != "show" || len(m[2].Doc.Commands) != 1 {
+		t.Fatalf("save after the rename not sent: %+v", m[2])
+	}
+	a.Lock()
+	if !w.isClosed() {
+		t.Fatal("ロック left the window open")
+	}
+}
+
+// The set is deleted while its window's process starts: the window opens
+// with what was clicked (its first line must be a set) and is told, as an
+// open window is.
+func TestCmdsetWindowDeletedWhileStarting(t *testing.T) {
+	started, release := withSlowCmdsetProcs(t)
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, 1)
+	go func() { errs <- a.OpenCommandSetWindow("health-check") }()
+	time.Sleep(50 * time.Millisecond)
+	if err := a.DeleteCommandSet("health-check"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	m := started()[0].awaitMsgs(t, 2)
+	if m[0].Kind != "show" || m[0].Doc == nil || m[0].Doc.Name != "health-check" || m[1].Kind != "deleted" {
+		t.Fatalf("want the set then the notice, got %+v", m)
+	}
+}
+
+// The spare's process has exited (crashed) and its watcher has not cleared
+// it yet: View starts a window of its own instead of handing the set to a
+// process that is gone and showing nothing.
+func TestCmdsetSpareExitedBeforeView(t *testing.T) {
+	started := withFakeCmdsetProcs(t)
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	gone := &fakeCmdsetPipe{}
+	done := make(chan struct{})
+	close(done)
+	cmdsetMu.Lock()
+	cmdsetSpare = &cmdsetSpareRef{in: gone, done: done}
+	cmdsetMu.Unlock()
+	if err := a.OpenCommandSetWindow("health-check"); err != nil {
+		t.Fatal(err)
+	}
+	if len(*started) != 1 {
+		t.Fatalf("View must start a window of its own when the spare has exited (started %d)", len(*started))
+	}
+	if !gone.isClosed() {
+		t.Fatal("the exited spare's pipe was not closed")
+	}
+	if m := (*started)[0].awaitMsgs(t, 1); m[0].Kind != "show" || m[0].Doc.Name != "health-check" {
+		t.Fatalf("first line = %+v", m)
+	}
+	cmdsetMu.Lock()
+	sp := cmdsetSpare
+	cmdsetMu.Unlock()
+	if sp != nil {
+		t.Fatal("the exited spare is still held")
+	}
+}
+
+// The spare's process starts outside the lock: a save in the main window
+// (which reaches the set windows under it) returns at once meanwhile, no
+// second spare starts, and a spare whose tab was left while it started is
+// closed rather than kept.
+func TestCmdsetRespareStartsOutsideLock(t *testing.T) {
+	var mu sync.Mutex
+	var procs []*fakeCmdsetPipe
+	release := make(chan struct{})
+	starting := make(chan struct{}, 2)
+	old, oldPrewarm, oldAfter := startCmdsetProc, cmdsetPrewarmOn, cmdsetRespareAfter
+	cmdsetPrewarmOn, cmdsetRespareAfter = true, 0
+	startCmdsetProc = func(spare bool) (io.WriteCloser, int, <-chan struct{}, error) {
+		if spare {
+			starting <- struct{}{}
+			<-release
+		}
+		p := &fakeCmdsetPipe{}
+		mu.Lock()
+		procs = append(procs, p)
+		mu.Unlock()
+		return p, 0, make(chan struct{}), nil
+	}
+	t.Cleanup(func() {
+		startCmdsetProc, cmdsetPrewarmOn, cmdsetRespareAfter = old, oldPrewarm, oldAfter
+		closeCmdsetWindows()
+		cmdsetSpareWanted = false
+	})
+	count := func() int { mu.Lock(); defer mu.Unlock(); return len(procs) }
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}); err != nil {
+		t.Fatal(err)
+	}
+	go a.PrewarmCommandSetWindow()
+	select {
+	case <-starting:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no spare started")
+	}
+	saved := make(chan error, 1)
+	go func() {
+		saved <- a.SaveCommandSet(model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show version"}}})
+	}()
+	select {
+	case err := <-saved:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a save waited on the spare's process start")
+	}
+	a.PrewarmCommandSetWindow() // a second call while one starts: nothing more
+	if len(starting) != 0 {
+		t.Fatal("a second spare was started while the first was starting")
+	}
+	// The tab is left before the process is up: the spare is dropped.
+	a.DropSpareCommandSetWindow()
+	close(release)
+	if !waitFor(func() bool { return count() == 1 && procs[0].isClosed() }) {
+		t.Fatalf("a spare started after the tab was left must be closed (started %d)", count())
+	}
+	cmdsetMu.Lock()
+	sp, startingNow := cmdsetSpare, cmdsetSpareStarting
+	cmdsetMu.Unlock()
+	if sp != nil || startingNow {
+		t.Fatalf("spare kept: %v starting: %v", sp != nil, startingNow)
+	}
+	// The tab is shown again: one spare, kept.
+	a.PrewarmCommandSetWindow()
+	if count() != 2 || procs[1].isClosed() {
+		t.Fatalf("showing the tab again must start one spare: %d", count())
+	}
+}
+
+// The spare's first set carries where the main window is (the window places
+// itself over it when shown). A save before the writer wrote that line
+// replaces the set but keeps the place; a delete queues behind it (the set
+// still shows the window); past the first line the older set is dropped.
+func TestCmdsetSendKeepsSpareParent(t *testing.T) {
+	cs1 := model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show clock"}}}
+	cs2 := model.CommandSet{Name: "health-check", Commands: []model.Command{{Text: "show version"}}}
+	w := newCmdsetWinRef("health-check")
+	w.sendFirst(cmdsetShowLine(cs1), "10,20,810,620")
+	w.send("show", cmdsetShowLine(cs2))
+	w.send("deleted", cmdsetKindLine("deleted"))
+	p := &fakeCmdsetPipe{}
+	w.in = p
+	go w.writer()
+	defer w.close()
+	m := p.awaitMsgs(t, 2)
+	if m[0].Kind != "show" || m[0].Parent != "10,20,810,620" || m[0].Doc == nil || m[0].Doc.Commands[0].Text != "show version" {
+		t.Fatalf("the spare's first line must carry the place and the newest set: %+v", m[0])
+	}
+	if m[1].Kind != "deleted" {
+		t.Fatalf("the delete must follow the set: %+v", m[1])
+	}
+	if m = p.settled(t); len(m) != 2 {
+		t.Fatalf("lines written: %d, want 2", len(m))
+	}
+
+	w2 := newCmdsetWinRef("health-check")
+	w2.send("show", cmdsetShowLine(cs1))
+	w2.send("show", cmdsetShowLine(cs2))
+	w2.send("focus", cmdsetKindLine("focus"))
+	p2 := &fakeCmdsetPipe{}
+	w2.in = p2
+	go w2.writer()
+	defer w2.close()
+	if m = p2.awaitMsgs(t, 2); m[0].Parent != "" || m[0].Doc.Commands[0].Text != "show version" || m[1].Kind != "focus" {
+		t.Fatalf("an ordinary window keeps only the newest set and the focus: %+v", m)
+	}
+}

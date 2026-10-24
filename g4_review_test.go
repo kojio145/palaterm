@@ -462,3 +462,48 @@ func TestDataLockIsExclusive(t *testing.T) {
 	}
 	syscall.CloseHandle(h2)
 }
+
+// A sharing violation whose holder line names a process of this PC that no
+// longer runs is not another PalaTerm (an indexer or a sync tool has the
+// file open): no refusal, and the stale line is not shown as today's holder
+// (2026-10-24 review).
+func TestDataLockStaleHolderIsNotPalaTerm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, dataLockName)
+	host, _ := os.Hostname()
+	// 4294967292: far above any PID in use, so not a process of this PC.
+	if err := os.WriteFile(path, []byte(host+"|lab|4294967292|2026-01-01 00:00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Something that is not PalaTerm holds it open without sharing writes.
+	p, _ := syscall.UTF16PtrFromString(path)
+	h, err := syscall.CreateFile(p, syscall.GENERIC_READ|syscall.GENERIC_WRITE, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.CloseHandle(h)
+	_, holder, err := acquireDataLock(dir)
+	if err == nil || errors.Is(err, errDataLocked) {
+		t.Fatalf("a stale holder counted as PalaTerm: %v", err)
+	}
+	if holder != "" {
+		t.Errorf("stale holder line shown: %q", holder)
+	}
+
+	dead := func(uint32) bool { return false }
+	live := func(uint32) bool { return true }
+	if !lockHolderGoneOn("pc1|lab|4242|t", "PC1", dead) {
+		t.Error("a dead process of this PC still counts as the holder")
+	}
+	if lockHolderGoneOn("pc1|lab|4242|t", "pc1", live) {
+		t.Error("a running PalaTerm of this PC taken for gone")
+	}
+	if lockHolderGoneOn("pc2|lab|4242|t", "pc1", dead) {
+		t.Error("another PC's holder cannot be checked and is trusted")
+	}
+	for _, line := range []string{"", "pc1|lab|x|t", "pc1|lab"} {
+		if lockHolderGoneOn(line, "pc1", dead) {
+			t.Errorf("%q taken for a gone holder", line)
+		}
+	}
+}

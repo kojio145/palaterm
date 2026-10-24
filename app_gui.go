@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/kojio145/palaterm/internal/model"
 )
 
 // GUI を開く: the device's web GUI (FortiGate & co.) in a window of
@@ -130,12 +132,15 @@ func (a *App) spawnGUIWindow(l guiLaunch) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	tieToMainWindow(cmd.Process.Pid)
-	trackChild(cmd.Process)
-	_, _ = stdin.Write(append(line, '\n'))
+	// Registered before the password goes down the pipe: a ロック or exit
+	// in between (closeGUIWindows) then closes this pipe too, and the window
+	// reads an end instead of a login.
 	guiWinMu.Lock()
 	guiWins[cmd] = stdin
 	guiWinMu.Unlock()
+	tieToMainWindow(cmd.Process.Pid)
+	trackChild(cmd.Process)
+	_, _ = stdin.Write(append(line, '\n'))
 	go func() {
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
@@ -172,10 +177,13 @@ func validPin(s string) bool {
 }
 
 // setGUICert records a GUI window's certificate (first seen, or a change
-// the user allowed) in the vault.
+// the user allowed) in the vault — under key only while a device still
+// answers to it: the window was handed its key when it opened, and the
+// device may have been deleted or given another address since (the pin
+// went with it, and would otherwise come back as an orphan).
 func (a *App) setGUICert(key, fp string) {
 	a.mu.Lock()
-	if a.inv == nil {
+	if a.inv == nil || !guiCertKeyInUse(a.inv, key) {
 		a.mu.Unlock()
 		return
 	}
@@ -185,6 +193,17 @@ func (a *App) setGUICert(key, fp string) {
 	a.inv.KnownGUICerts[key] = fp
 	a.mu.Unlock()
 	_ = a.persist()
+}
+
+// guiCertKeyInUse reports that some device of inv pins its GUI certificate
+// under key.
+func guiCertKeyInUse(inv *model.Inventory, key string) bool {
+	for i := range inv.Devices {
+		if inv.Devices[i].GUICertKey() == key {
+			return true
+		}
+	}
+	return false
 }
 
 // closeGUIWindows closes every GUI window (ロック, exit): closing its stdin

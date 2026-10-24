@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.17";
+const APP_VERSION = "1.9.18";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -391,17 +391,31 @@ function keepApply(oParent, nParent, pairs) {
     // from elsewhere (the clear button): never while an IME is composing,
     // nor when it shows that text already (the user is typing it).
     else if (oc.tagName === "INPUT" && !imeComposing && oc.value !== nc.value) oc.value = nc.value;
+    else if (oc.tagName === "SELECT") syncSelect(oc, nc);
   }
+}
+// A kept list box takes the new choices when they differ from its own (an
+// inventory refresh added a 拠点; a run's first device event filled the 状態
+// list) and the new choice when the state was changed from elsewhere; the
+// same list with the same choice is left alone, so an open list stays open.
+function syncSelect(o, n) {
+  const sig = s => [...s.options].map(x => [x.value, x.text, x.disabled ? 1 : 0].join("\n")).join("\0");
+  if (sig(o) !== sig(n)) o.replaceChildren(...n.childNodes);
+  if (o.value !== n.value) o.value = n.value;
 }
 // keep: [{o, find, inner}] — o is the node in root, find(fragment) its
 // counterpart in the new HTML.
 function patchKeeping(root, html, keep) {
   const tpl = document.createElement("template");
   tpl.innerHTML = html;
+  patchKeepingFrag(root, tpl.content, keep);
+}
+// The same, with the new HTML parsed already (frag is consumed).
+function patchKeepingFrag(root, frag, keep) {
   const pairs = (keep || []).filter(p => p && p.o && p.o !== root && root.contains(p.o))
-    .map(p => ({ o: p.o, n: p.find(tpl.content), inner: !!p.inner })).filter(p => p.n);
-  if (pairs.length && keepCheck(root, tpl.content, pairs)) keepApply(root, tpl.content, pairs);
-  else root.replaceChildren(tpl.content);
+    .map(p => ({ o: p.o, n: p.find(frag), inner: !!p.inner })).filter(p => p.n);
+  if (pairs.length && keepCheck(root, frag, pairs)) keepApply(root, frag, pairs);
+  else root.replaceChildren(frag);
 }
 // The filter box being typed in, as a keep entry (none when the focus is
 // elsewhere: then the box is drawn anew like the rest). A list box that has
@@ -422,22 +436,31 @@ function keepFocusedBox(root, prefix) {
   }
   return null;
 }
-// Draw a list tab: the filter box being typed in stays (see patchKeeping).
-// With viewKey — what defines the list shown: its filter / sort state and
-// its scope — the table panel stays too while that key is unchanged, so a
-// redraw (a save, an inventory refresh, a tick) keeps where the user had
+// Draw a list tab: the filter box being typed in stays (see patchKeeping;
+// prefix is the start of its id, "lv-text-" unless given — the run tab's is
+// "run-filter"). With viewKey — what defines the list shown: its filter /
+// sort state and its scope — the first table panel (.panel.scrollx) stays
+// too while that key is unchanged, so a redraw (a save, an inventory
+// refresh, a tick, a device event of a run) keeps where the user had
 // scrolled it; a change of key (another filter, sort or group) starts from
-// the top, as the run tab does (2026-10-24 user report: the lists jumped to
-// the top on every redraw).
-function renderListTab(root, html, viewKey) {
+// the top (2026-10-24 user report: the lists jumped to the top on every
+// redraw). The key is set on the parsed panel, never spliced into the HTML
+// text: a filter text with `$'` or `$&` in it is a replacement pattern
+// there, and the panel's tag need not match any one spelling.
+function renderListTab(root, html, viewKey, prefix) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
   let keepPanel = null;
-  if (viewKey !== undefined) {
+  const panel = viewKey === undefined ? null : tpl.content.querySelector(".panel.scrollx");
+  if (panel) {
     const key = JSON.stringify(viewKey);
+    // data-listkey: a name no click handler selects on (data-view is what
+    // the command set tab's buttons and cells carry).
+    panel.dataset.listkey = key;
     const oldPanel = root.querySelector(".panel.scrollx");
-    html = html.replace('<div class="panel scrollx">', `<div class="panel scrollx" data-view="${esc(key)}">`);
-    if (oldPanel && oldPanel.dataset.view === key) keepPanel = { o: oldPanel, find: f => f.querySelector(".panel.scrollx"), inner: true };
+    if (oldPanel && oldPanel.dataset.listkey === key) keepPanel = { o: oldPanel, find: () => panel, inner: true };
   }
-  patchKeeping(root, html, [keepPanel, keepFocusedBox(root, "lv-text-")]);
+  patchKeepingFrag(root, tpl.content, [keepPanel, keepFocusedBox(root, prefix || "lv-text-")]);
 }
 function listViewWire(key, root, rerender, focus) {
   const v = listView(key);
@@ -1494,3 +1517,48 @@ function profileName(key) {
 // lock card with nothing on it.
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
 else boot();
+
+// ---- font size of a child window ----
+// The terminal, paste, log viewer, screen, diff and command set windows each
+// remember a font size per PC and change it the same way: A− / A+ buttons,
+// Ctrl+wheel, Ctrl+plus / minus, Ctrl+0 for the default. One wiring for all
+// of them (it used to be copied into each): apply(px) draws the size, and
+// the window's own key handler asks key(e) whether a keydown was a zoom key
+// (true: handled). opts: def (13), min (8), max (32), fallbackKey (another
+// window's stored size, used until this window has one of its own).
+function wireFontZoom(storageKey, apply, opts) {
+  const o = opts || {};
+  const def = o.def || 13, min = o.min || 8, max = o.max || 32;
+  const clamp = n => Math.min(max, Math.max(min, n));
+  const stored = () => {
+    try { return parseInt(localStorage.getItem(storageKey) || (o.fallbackKey ? localStorage.getItem(o.fallbackKey) : null), 10) || def; }
+    catch (e) { return def; }
+  };
+  let size = clamp(stored());
+  const set = n => {
+    size = clamp(n);
+    try { localStorage.setItem(storageKey, String(size)); } catch (e) {}
+    apply(size);
+  };
+  return {
+    get size() { return size; },
+    set,
+    // The size stored now (a spare window shown long after it started).
+    reload: () => set(stored()),
+    key(e) {
+      if (!e.ctrlKey) return false;
+      if (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd") { set(size + 1); return true; }
+      if (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract") { set(size - 1); return true; }
+      if (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0") { set(def); return true; }
+      return false;
+    },
+    // after (optional) runs after a click on either button (a focus to put back).
+    buttons(incEl, decEl, after) {
+      incEl.onclick = () => { set(size + 1); if (after) after(); };
+      decEl.onclick = () => { set(size - 1); if (after) after(); };
+    },
+    wheel(el) {
+      el.addEventListener("wheel", e => { if (!e.ctrlKey) return; e.preventDefault(); set(size + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+    },
+  };
+}

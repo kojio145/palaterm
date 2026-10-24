@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"time"
 
@@ -236,6 +237,7 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	// putting these back undoes only this save.
 	prevDevices, prevGroups := a.inv.Devices, append([]model.DeviceGroup(nil), a.inv.DeviceGroups...)
 	prevSched := cloneSchedules(a.inv.Schedules)
+	prevRecords := maps.Clone(a.inv.ImportRecords)
 	prevPins := a.inv.KnownGUICerts
 	if prevPins != nil {
 		prevPins = make(map[string]string, len(a.inv.KnownGUICerts))
@@ -250,16 +252,22 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	for group, m := range renames {
 		renameSchedDevices(a.inv, group, m)
 	}
-	for _, d := range next {
-		a.ensureGroupExists(d.Group)
+	// A group typed into a saved row is a new group (only those rows: the
+	// rest of the inventory has its groups already).
+	for _, row := range rep.Saved {
+		a.ensureGroupExists(row.Base["group"])
 	}
 	a.inv.Devices = next
+	// What persist does before a write, under the lock held here: an ID on
+	// every device, and the import records of the deleted ones (their Base
+	// holds the passwords the import wrote) gone with them.
 	a.inv.EnsureDeviceIDs()
+	a.inv.PruneImportRecords()
 	for _, k := range rep.dropPins {
 		delete(a.inv.KnownGUICerts, k)
 	}
 	if err := a.saveVaultLocked(a.password); err != nil {
-		a.inv.Devices, a.inv.DeviceGroups, a.inv.Schedules, a.inv.KnownGUICerts = prevDevices, prevGroups, prevSched, prevPins
+		a.inv.Devices, a.inv.DeviceGroups, a.inv.Schedules, a.inv.ImportRecords, a.inv.KnownGUICerts = prevDevices, prevGroups, prevSched, prevRecords, prevPins
 		return nil, err
 	}
 	stopped = stop

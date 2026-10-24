@@ -134,12 +134,51 @@ func TestValidate(t *testing.T) {
 
 func TestNextOf(t *testing.T) {
 	list := []Schedule{
-		{Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "03:00"}}},
-		{Enabled: false, Slots: []Slot{{Kind: KindDaily, Time: "21:00"}}},
-		{Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "22:00"}}},
+		{Name: "night", Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "03:00"}}},
+		{Name: "off", Enabled: false, Slots: []Slot{{Kind: KindDaily, Time: "21:00"}}},
+		{Name: "evening", Enabled: true, Slots: []Slot{{Kind: KindDaily, Time: "22:00"}}},
 	}
 	if got := NextOf(list, at("2026-10-13 20:00:00")); !got.Equal(at("2026-10-13 22:00:00")) {
 		t.Errorf("got %v", got)
+	}
+	if got, name := NextOfNamed(list, at("2026-10-13 20:00:00")); !got.Equal(at("2026-10-13 22:00:00")) || name != "evening" {
+		t.Errorf("named: got %v %q", got, name)
+	}
+	if got, name := NextOfNamed(nil, at("2026-10-13 20:00:00")); !got.IsZero() || name != "" {
+		t.Errorf("empty list: got %v %q", got, name)
+	}
+}
+
+// The clock field takes HH:MM or HH:MM:SS and nothing else: the whole string
+// must be the time (no unit or zone pasted after it), no sign, no space.
+func TestParseClockStrict(t *testing.T) {
+	good := map[string][3]int{
+		"03:00":      {3, 0, 0},
+		"3:5":        {3, 5, 0},
+		"21:30:15":   {21, 30, 15},
+		" 23:59:59 ": {23, 59, 59},
+		"00:00:00":   {0, 0, 0},
+	}
+	for in, want := range good {
+		h, m, s, err := parseClock(in)
+		if err != nil || [3]int{h, m, s} != want {
+			t.Errorf("%q: got %d:%d:%d %v, want %v", in, h, m, s, err, want)
+		}
+	}
+	bad := []string{"", "03", "03:00xyz", "09:30 JST", "+3:00", "-1:00", "3: 5", "03:-5", "24:00", "12:60", "12:00:60",
+		"003:00", "03:00:00:00", "03::00", "0x3:00", "３:00", "03:0 0"}
+	for _, in := range bad {
+		if _, _, _, err := parseClock(in); err == nil {
+			t.Errorf("%q accepted", in)
+		}
+	}
+	// Validate refuses them in a slot as well.
+	now := at("2026-10-13 20:00:00")
+	for _, in := range []string{"09:30 JST", "+3:00"} {
+		sc := Schedule{Name: "x", Group: "g", Slots: []Slot{{Kind: KindDaily, Time: in}}}
+		if sc.Validate(now) == nil {
+			t.Errorf("slot time %q accepted by Validate", in)
+		}
 	}
 }
 

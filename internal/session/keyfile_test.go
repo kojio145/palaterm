@@ -1,8 +1,11 @@
 package session
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -35,10 +38,32 @@ func TestLoadPrivateKeyPlain(t *testing.T) {
 	if _, err := loadPrivateKey(path, ""); err != nil {
 		t.Fatalf("plain key should load: %v", err)
 	}
-	// A stray passphrase on an unprotected key is an error from the ssh pkg;
-	// just assert it does not succeed silently with the wrong expectation.
-	if _, err := loadPrivateKey(path, "unneeded"); err == nil {
-		t.Log("note: passphrase ignored for unprotected key")
+	// A passphrase left in the device's field from the protected key this
+	// file replaced must not stop an unprotected key from loading: the ssh
+	// package answers "key is not password protected", and the connection
+	// failed on it.
+	if _, err := loadPrivateKey(path, "unneeded"); err != nil {
+		t.Fatalf("stray passphrase on an unprotected OpenSSH key: %v", err)
+	}
+}
+
+// The same for the classic PEM shape ("EC PRIVATE KEY", as older tooling
+// wrote), where the package's answer is "not an encrypted key".
+func TestLoadPrivateKeyPlainPEMWithStrayPassphrase(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeKeyFile(t, &pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+	if _, err := loadPrivateKey(path, "unneeded"); err != nil {
+		t.Fatalf("stray passphrase on an unprotected PEM key: %v", err)
+	}
+	if _, err := loadPrivateKey(path, ""); err != nil {
+		t.Fatalf("plain PEM key should load: %v", err)
 	}
 }
 

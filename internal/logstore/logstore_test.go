@@ -172,6 +172,8 @@ func TestStageTokens(t *testing.T) {
 		{None: "x y"},                   // space
 		{None: "same", After: "same"},   // duplicate
 		{Before: strings.Repeat("あ", 33)},
+		{Before: "pre_work"}, // "_" is the folder name's field separator: read back as "work"
+		{Schedule: "a_b"},
 	} {
 		if bad.Validate() == nil {
 			t.Errorf("%+v should be rejected", bad)
@@ -315,6 +317,11 @@ func TestRootNameProblem(t *testing.T) {
 		{`C:\lab\logs.`, "末尾が空白やピリオド"},
 		{`C:\lab\logs \x`, "末尾が空白やピリオド"},
 		{`\\lab-nas`, "共有フォルダ"},
+		// Drive-relative: ResolveRoot joined it under the exe folder and
+		// Windows answered in English.
+		{`C:logs`, `ドライブ名の直後に \ がありません`},
+		{`D:lab/logs`, `ドライブ名の直後に \ がありません`},
+		{`C:`, "ドライブ名だけ"},
 	} {
 		got := RootNameProblem(tc.root)
 		if !strings.Contains(got, tc.want) {
@@ -323,7 +330,7 @@ func TestRootNameProblem(t *testing.T) {
 	}
 	for _, ok := range []string{
 		"logs", `C:\lab\logs`, `D:/lab/logs/2026`, `\\lab-nas\share\ops logs`, `..\logs`, `.\logs`,
-		`lab.logs`, `C:\lab\com`, `C:\lab\console`, `C:\lab\com10`, `C:\lab\事前ログ`, `"C:\lab\logs"`, `C:logs`,
+		`lab.logs`, `C:\lab\com`, `C:\lab\console`, `C:\lab\com10`, `C:\lab\事前ログ`, `"C:\lab\logs"`, `C:\`, `D:/`,
 	} {
 		if got := RootNameProblem(ok); got != "" {
 			t.Errorf("RootNameProblem(%q) = %q, want none", ok, got)

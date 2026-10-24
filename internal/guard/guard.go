@@ -37,14 +37,17 @@ const (
 
 var rules = []rule{
 	// Configuration mode (Cisco/NEC "configure terminal", "conf t", NX-OS
-	// "configure", Juniper "configure"/"edit", FortiGate "config ...",
-	// Yamaha "administrator", HP "configure", NEC IX "svintr-config").
-	{regexp.MustCompile(`(?i)^(conf(igure)?(\s+t(erminal)?)?|svintr-config|edit(\s|$)|administrator)(\s|$)`), ReasonConfigMode},
+	// "configure", bare "config" (IOS takes the prefix, FortiGate's global
+	// mode), Juniper "configure"/"edit", FortiGate "config ...", Yamaha
+	// "administrator", HP "configure", NEC IX "svintr-config").
+	{regexp.MustCompile(`(?i)^(conf(ig(ure)?)?(\s+t(erminal)?)?|svintr-config|edit(\s|$)|administrator)(\s|$)`), ReasonConfigMode},
 	{regexp.MustCompile(`(?i)^config\s+\S`), ReasonConfigMode},
-	// Reboot / power.
-	{regexp.MustCompile(`(?i)^(reload|reboot|restart|shutdown\s*$|halt|poweroff|execute\s+(reboot|shutdown|factoryreset)|request\s+system\s+(reboot|halt|power-off))`), ReasonReload},
+	// Reboot / power. A bare "shutdown" in any of IOS's prefixes from "shu"
+	// up ("sh" is show) stops an interface or a server; FortiGate takes
+	// "exe" and "exec" for "execute".
+	{regexp.MustCompile(`(?i)^(reload|reboot|restart|shu(t(d(o(w(n)?)?)?)?)?\s*$|halt|poweroff|exe(c(ute)?)?\s+(reboot|shutdown|factoryreset)|request\s+system\s+(reboot|halt|power-off))`), ReasonReload},
 	// Erase / delete / format / reset.
-	{regexp.MustCompile(`(?i)^(erase|format|delete\s|rm\s|clear\s+(config|startup|running)|write\s+erase|execute\s+(formatlogdisk|erase)|request\s+system\s+zeroize|cold\s+start|restart\s+factory|reset\s)`), ReasonErase},
+	{regexp.MustCompile(`(?i)^(erase|format|delete\s|rm\s|clear\s+(config|startup|running)|write\s+erase|exe(c(ute)?)?\s+(formatlogdisk|erase)|request\s+system\s+zeroize|cold\s+start|restart\s+factory|reset\s)`), ReasonErase},
 	// Cisco IOS accepts any unambiguous prefix of a command, and PalaTerm now
 	// answers "[confirm]" / "…]?" for it (Profile.Answers), so a short form
 	// that used to stop at the question would run unwarned: "rel", "del x",
@@ -63,12 +66,15 @@ var rules = []rule{
 	{regexp.MustCompile(`(?i)^(shutdown\s+(-[hrPHk]|now|\+\d)|init\s+[06](\s|$)|systemctl\s+(reboot|poweroff|halt|kexec|kill)|telinit\s+[06])`), ReasonReload},
 	// Saving / overwriting configuration.
 	// ("wr" / "write [memory]" is the short-form rule above; "write terminal"
-	// only shows the config.)
-	{regexp.MustCompile(`(?i)^(write\s+file|save(\s|$)|copy\s+\S+\s+(startup|running)-config|copy\s+running-config)(\s|$)`), ReasonWrite},
-	{regexp.MustCompile(`(?i)^(execute\s+backup|execute\s+restore)`), ReasonWrite},
+	// only shows the config. "copy running-config …" is a change only by its
+	// destination — to a config or device storage, the copy rule above — so
+	// the full-form backup "copy running-config tftp:" passes like "copy run
+	// tftp:".)
+	{regexp.MustCompile(`(?i)^(write\s+file|save(\s|$)|copy\s+\S+\s+(startup|running)-config)(\s|$)`), ReasonWrite},
+	{regexp.MustCompile(`(?i)^exe(c(ute)?)?\s+(backup|restore)(\s|$)`), ReasonWrite},
 	// Change commands that are only legal inside config mode but betray intent
 	// even when listed alone (interface / no / set / unset / ip / vlan …).
-	{regexp.MustCompile(`(?i)^(no\s+\S|interface\s+\S|set\s+\S|unset\s+\S|ip\s+(route|address)\s|vlan\s+\d|hostname\s+\S|username\s+\S|enable\s+(secret|password)\s|router\s+\S|access-list\s|ip\s+access-list\s|crypto\s|line\s+(vty|con)|boot\s+system|license\s+\S|install\s|upgrade\s|execute\s+(update|install)|request\s+system\s+software)`), ReasonInterface},
+	{regexp.MustCompile(`(?i)^(no\s+\S|interface\s+\S|set\s+\S|unset\s+\S|ip\s+(route|address)\s|vlan\s+\d|hostname\s+\S|username\s+\S|enable\s+(secret|password)\s|router\s+\S|access-list\s|ip\s+access-list\s|crypto\s|line\s+(vty|con)|boot\s+system|license\s+\S|install\s|upgrade\s|exe(c(ute)?)?\s+(update|install)|request\s+system\s+software)`), ReasonInterface},
 	// Commit (Juniper / NX-OS checkpoint / FortiGate "end" closes config).
 	{regexp.MustCompile(`(?i)^(commit(\s|$)|checkpoint\s|rollback\s)`), ReasonCommit},
 }

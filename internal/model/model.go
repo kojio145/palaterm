@@ -104,6 +104,18 @@ func (b *Bastion) Configured() bool {
 	return b != nil && (b.Mine || (b.Host != "" && b.Method != BastionNone))
 }
 
+// EffectivePort is the TCP port the hop is dialed and pinned under: the one
+// set, or its method's default (22 for SSH, 23 for Telnet).
+func (b *Bastion) EffectivePort() int {
+	if b.Port > 0 {
+		return b.Port
+	}
+	if b.Method == BastionTelnet {
+		return 23
+	}
+	return 22
+}
+
 // Device is a single network device in the inventory.
 type Device struct {
 	// Identity. ID is the internal key every edit, delete, reorder and
@@ -302,26 +314,51 @@ func TunnelName(via, addr string) string {
 	return via + ">" + addr
 }
 
-// HostKeyNames lists every name the device's SSH host keys (its own and its
-// jump hosts') are pinned under, so they can be dropped together when a
-// device is legitimately replaced.
+// HostKeyNames lists every name the device's SSH host keys are pinned under:
+// one per jump host in chain order, the device's own last.
 func (d *Device) HostKeyNames() []string {
 	bastions := d.ActiveBastions()
 	var names []string
 	via := ""
 	for _, b := range bastions {
-		p := b.Port
-		if p == 0 {
-			p = 22
-		}
 		if d.Tunneled() {
-			via = TunnelName(via, HopAddr(b.Host, p))
+			via = TunnelName(via, HopAddr(b.Host, b.EffectivePort()))
 			names = append(names, via)
 		} else {
-			names = append(names, HopAddr(b.Host, p))
+			names = append(names, HopAddr(b.Host, b.EffectivePort()))
 		}
 	}
 	return append(names, TunnelName(via, HopAddr(d.Host, d.EffectivePort())))
+}
+
+// OwnHostKeyName is the name the device's own SSH host key is pinned under
+// (the last of HostKeyNames).
+func (d *Device) OwnHostKeyName() string {
+	names := d.HostKeyNames()
+	return names[len(names)-1]
+}
+
+// ReplacedHostKeyNames is what "the device was replaced" may drop: the
+// device's own pin, and only that. mismatched is the name the host-key check
+// refused ("" when not known). A jump host's name there is not a replaced
+// device — the hop is shared by every device behind it, so dropping its pin
+// on one device's say-so would re-pin an impostor for all of them — and is
+// refused by name.
+func (d *Device) ReplacedHostKeyNames(mismatched string) ([]string, error) {
+	names := d.HostKeyNames()
+	own := names[len(names)-1]
+	if mismatched != "" && mismatched != own {
+		for i, b := range d.ActiveBastions() {
+			if names[i] != mismatched {
+				continue
+			}
+			if b.Mine {
+				return nil, fmt.Errorf("自分の踏み台（%s）のホストキーが前回接続時と異なります。踏み台は全機器で共有するため、機器の交換としては許可できません。踏み台を交換した覚えがなければ、なりすましの可能性があるためネットワーク管理者に確認してください", mismatched)
+			}
+			return nil, fmt.Errorf("踏み台%d段目（%s）のホストキーが前回接続時と異なります。踏み台は他の機器とも共有するため、機器の交換としては許可できません。踏み台を交換した覚えがなければ、なりすましの可能性があるためネットワーク管理者に確認してください", i+1, mismatched)
+		}
+	}
+	return []string{own}, nil
 }
 
 // NormalizeBastions migrates the deprecated single Bastion field into the
@@ -537,12 +574,7 @@ func (inv *Inventory) MigrateMyBastion() bool {
 	if len(inv.MyBastionLogins) == 0 {
 		return false
 	}
-	port := func(p int) int {
-		if p == 0 {
-			return 22
-		}
-		return p
-	}
+	port := func(p int) int { return (&Bastion{Method: BastionSSH, Port: p}).EffectivePort() }
 	match := func(b Bastion, l BastionLogin) bool {
 		return b.Method == BastionSSH && strings.EqualFold(b.Host, l.Host) && port(b.Port) == port(l.Port)
 	}
@@ -988,6 +1020,13 @@ func (d *Device) Validate() error {
 	if strings.TrimSpace(d.Name) == "" {
 		return errors.New("名前は必須です")
 	}
+	// Addresses are saved as they will be dialed: a blank pasted around one
+	// passed the checks below and then failed the name lookup on connecting.
+	d.Host = strings.TrimSpace(d.Host)
+	d.NormalizeBastions()
+	for i := range d.Bastions {
+		d.Bastions[i].Host = strings.TrimSpace(d.Bastions[i].Host)
+	}
 	if c, ok := ParseTermColor(d.TermColor); ok {
 		d.TermColor = c
 	} else {
@@ -995,7 +1034,7 @@ func (d *Device) Validate() error {
 	}
 	switch d.Conn {
 	case ConnSSH, ConnTelnet:
-		if strings.TrimSpace(d.Host) == "" {
+		if d.Host == "" {
 			return errors.New("IPアドレスは必須です")
 		}
 		if !validHostOrIP(d.Host) {
@@ -1025,7 +1064,7 @@ func (d *Device) Validate() error {
 	}
 	// A GUI is opened at the device's address: it needs one (a serial
 	// device's CLI does not).
-	if d.GUIOn && strings.TrimSpace(d.Host) == "" {
+	if d.GUIOn && d.Host == "" {
 		return errors.New("GUI を使う機器には IPアドレスが必要です")
 	}
 	if d.GUIOn && !validHostOrIP(d.Host) {
@@ -1041,10 +1080,10 @@ func (d *Device) Validate() error {
 		return fmt.Errorf("踏み台の通り方が不正です: %q", d.BastionMode)
 	}
 	tunnel := d.Tunneled()
-	if tunnel && d.Conn == ConnSerial {
-		return errors.New("シリアル接続の機器は踏み台を経由できません")
-	}
-	if d.UseMyBastion && d.Conn == ConnSerial && !d.CLIOff {
+	// A console cable goes nowhere through a jump host, whichever way the
+	// hops are crossed: the COM port would never be opened and the device's
+	// login would be typed into the hop's shell instead.
+	if d.Conn == ConnSerial && (len(bastions) > 0 || d.UseMyBastion) {
 		return errors.New("シリアル接続の機器は踏み台を経由できません")
 	}
 	// Behind a jump host the device's username is typed into the hop's shell

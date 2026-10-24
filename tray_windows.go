@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -119,6 +120,7 @@ var tray struct {
 	onOpen    func()
 	onQuit    func()
 	shown     chan struct{}
+	done      chan struct{} // closed when trayLoop has ended (icon deleted)
 	wndProcCB uintptr
 	// tip is what the icon says on hover and at the top of its menu: the
 	// schedule running now, or the next one and when ("waiting" alone told
@@ -245,7 +247,7 @@ func trayShow(onOpen, onQuit func(), balloonTitle, balloon string) {
 	tray.mu.Lock()
 	if tray.hwnd == 0 {
 		tray.onOpen, tray.onQuit = onOpen, onQuit
-		tray.shown = make(chan struct{})
+		tray.shown, tray.done = make(chan struct{}), make(chan struct{})
 		go trayLoop()
 		ch := tray.shown
 		tray.mu.Unlock()
@@ -275,20 +277,32 @@ func trayBalloon(title, text string) {
 	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
-// trayHide removes the icon (on exit).
+// trayHide removes the icon (on exit) and waits for the tray thread to
+// have done it: the request is a posted message, and a process that ended
+// before the thread got to it left a ghost icon in the notification area
+// until the mouse passed over it. Bounded, so an exit never hangs on it.
 func trayHide() {
 	tray.mu.Lock()
-	hwnd := tray.hwnd
+	hwnd, done := tray.hwnd, tray.done
 	tray.hwnd = 0
 	tray.mu.Unlock()
-	if hwnd != 0 {
-		pPostMessage.Call(hwnd, wmTrayClose, 0, 0)
+	if hwnd == 0 {
+		return
+	}
+	pPostMessage.Call(hwnd, wmTrayClose, 0, 0)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
 	}
 }
 
 func trayLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	tray.mu.Lock()
+	done := tray.done
+	tray.mu.Unlock()
+	defer close(done)
 	hinst, _, _ := pGetModuleHandle.Call(0)
 	if tray.wndProcCB == 0 {
 		tray.wndProcCB = syscall.NewCallback(trayWndProc)

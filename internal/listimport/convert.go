@@ -2,6 +2,7 @@ package listimport
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,7 +69,10 @@ func RowLabel(line, unit int, label string) string {
 }
 
 // unitFields is the first device's fields with a unit's own in their place
-// (a unit's field keeps the first one's default when it has none).
+// (a unit's field keeps the first one's default when it has none — except
+// the name: a line without a second device has an empty name cell, and the
+// first device's default there would make a phantom device of every such
+// line, all named alike).
 func unitFields(base []model.ImportField, u model.ImportUnit) []model.ImportField {
 	out := append([]model.ImportField(nil), base...)
 	for _, o := range u.Fields {
@@ -78,7 +82,7 @@ func unitFields(base []model.ImportField, u model.ImportUnit) []model.ImportFiel
 		found := false
 		for i := range out {
 			if out[i].Key == o.Key {
-				if o.Default == "" {
+				if o.Default == "" && o.Key != "name" {
 					o.Default = out[i].Default
 				}
 				out[i], found = o, true
@@ -180,7 +184,7 @@ func Convert(t *Table, r *model.ImportRule, env *Env) *Converted {
 			}
 			if name == "" {
 				row.Excluded = "機器名が空です"
-			} else if c := excluded(t, r, src, row.Values, missing); c != nil {
+			} else if c := excluded(t, r, src, row.Values, row.Lost, missing); c != nil {
 				row.Excluded, row.Exclusion = fmt.Sprintf("除外条件: %s%s", condWhat(*c), condWords(*c)), c
 			}
 			out.Rows = append(out.Rows, row)
@@ -193,16 +197,24 @@ func Convert(t *Table, r *model.ImportRule, env *Env) *Converted {
 	return out
 }
 
-// excluded returns the first exclusion condition the row meets.
-func excluded(t *Table, r *model.ImportRule, src SrcRow, vals map[string]string, missing map[string]bool) *model.ImportCond {
+// excluded returns the first exclusion condition the row meets. A condition
+// on a column the table does not have (or on a field whose value is lost
+// with its column) is not judged: the empty value it would read says
+// nothing about the device, and "状態 が空" would leave out every row of a
+// file whose 状態 column was renamed. The column is reported missing instead.
+func excluded(t *Table, r *model.ImportRule, src SrcRow, vals map[string]string, lost []string, missing map[string]bool) *model.ImportCond {
 	for i, c := range r.Exclude {
 		var v string
 		if c.Target == "field" {
+			if slices.Contains(lost, c.Key) {
+				continue
+			}
 			v = vals[c.Key]
 		} else {
 			col := t.column(c.Key, 0)
 			if col == 0 {
 				missing[c.Key] = true
+				continue
 			}
 			v = src.Cells[col]
 		}

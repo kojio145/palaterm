@@ -123,7 +123,17 @@ async function bootCmdsetWindow() {
     const el = document.elementFromPoint(r.left + 8, Math.min(Math.max(y, r.top + 1), r.bottom - 2));
     const row = el && el.closest(".cw-row");
     if (row) return +row.dataset.i;
-    return y < rows[0].getBoundingClientRect().top ? +rows[0].dataset.i : +rows[rows.length - 1].dataset.i;
+    // No row under the point (the scroll bar, the space under a short
+    // list): the nearest row still in view — above the list its first one,
+    // otherwise the last one shown above the pointer. Never the list's end:
+    // a drag onto the bottom edge used to select every line down to the
+    // last one at once, and the edge scroll brings the rest in a step at a
+    // time.
+    const inView = [...rows].filter(r2 => { const b = r2.getBoundingClientRect(); return b.bottom > r.top && b.top < r.bottom; });
+    if (!inView.length) return -1;
+    if (y <= r.top + 1) return +inView[0].dataset.i;
+    const above = inView.filter(r2 => r2.getBoundingClientRect().top <= y);
+    return +(above.length ? above[above.length - 1] : inView[inView.length - 1]).dataset.i;
   }
   function dragTo(y) {
     const j = rowAt(y);
@@ -192,15 +202,11 @@ async function bootCmdsetWindow() {
   document.getElementById("cw-copy-all").onclick = copyAll;
   ctxExtraItems = () => [[t("選択行をコピー"), copySel], [t("コマンドをすべてコピー"), copyAll]];
 
-  // Font size (remembered per PC).
-  const FONT_DEF = 13, FONT_MIN = 8, FONT_MAX = 32;
-  let fontSize = FONT_DEF;
-  try { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, parseInt(localStorage.getItem("palaterm_cmdset_font"), 10) || FONT_DEF)); } catch (e) {}
-  function setFont(n) { fontSize = Math.min(FONT_MAX, Math.max(FONT_MIN, n)); body.style.fontSize = fontSize + "px"; try { localStorage.setItem("palaterm_cmdset_font", String(fontSize)); } catch (e) {} }
-  setFont(fontSize);
-  document.getElementById("cw-font-inc").onclick = () => setFont(fontSize + 1);
-  document.getElementById("cw-font-dec").onclick = () => setFont(fontSize - 1);
-  body.addEventListener("wheel", e => { if (!e.ctrlKey) return; e.preventDefault(); setFont(fontSize + (e.deltaY < 0 ? 1 : -1)); }, { passive: false });
+  // Font size (remembered per PC; wireFontZoom, app.js).
+  const zoom = wireFontZoom("palaterm_cmdset_font", px => { body.style.fontSize = px + "px"; }, { def: 13 });
+  zoom.set(zoom.size);
+  zoom.buttons(document.getElementById("cw-font-inc"), document.getElementById("cw-font-dec"));
+  zoom.wheel(body);
 
   // Find (as the log viewer's): case-insensitive over the commands; the
   // matching rows are marked, the current one outlined and scrolled to.
@@ -242,9 +248,7 @@ async function bootCmdsetWindow() {
   document.addEventListener("keydown", e => {
     const inFind = document.activeElement === fin;
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
-    if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd")) { e.preventDefault(); setFont(fontSize + 1); return; }
-    if (e.ctrlKey && (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); setFont(fontSize - 1); return; }
-    if (e.ctrlKey && (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0")) { e.preventDefault(); setFont(FONT_DEF); return; }
+    if (zoom.key(e)) { e.preventDefault(); return; }
     // In the find box, Ctrl+A / Ctrl+C work on its text as usual.
     if (!inFind && e.ctrlKey && (e.key === "a" || e.key === "A" || e.code === "KeyA")) {
       e.preventDefault(); sel = new Set(cmds().map((c, i) => i)); paintSel(); return;
@@ -267,7 +271,7 @@ async function bootCmdsetWindow() {
       try { metaBox.checked = localStorage.getItem("palaterm_cmdset_meta") === "1"; } catch (e) {}
       try { topBox.checked = localStorage.getItem("palaterm_cmdset_ontop") === "1"; } catch (e) {}
       C().SetOnTop(topBox.checked).catch(() => {});
-      try { setFont(parseInt(localStorage.getItem("palaterm_cmdset_font"), 10) || FONT_DEF); } catch (e) {}
+      zoom.reload();
       setTimeout(() => body.focus(), 0);
     }
     st = s;

@@ -20,15 +20,21 @@ type DiffResult struct {
 	Added   int        `json:"added"`
 	Removed int        `json:"removed"`
 	Same    int        `json:"same"`
+	// Approx is set when the two sides were too large or too different for
+	// the shortest edit script (see maxDiffLines / maxEdits): the part of
+	// them that is neither common head nor common tail was then compared
+	// line for line, so the counts are an upper bound and a moved block
+	// shows as changed lines.
+	Approx bool `json:"approx,omitempty"`
 }
 
 // noise matches the parts of a line that differ between any two captures of
-// the same device without meaning anything: clock readings, uptime and
-// traffic counters. They are blanked before comparing so a before/after diff
-// shows what changed in the configuration and state, not that time passed.
-// The original text is still what the UI shows.
+// the same device without meaning anything: clock readings (see
+// blankClock), uptime and traffic counters. They are blanked before
+// comparing so a before/after diff shows what changed in the configuration
+// and state, not that time passed. The original text is still what the UI
+// shows.
 var noise = []*regexp.Regexp{
-	regexp.MustCompile(`\d{1,2}:\d{2}:\d{2}(\.\d+)?`),                         // hh:mm:ss
 	regexp.MustCompile(`(?i)\b(uptime is|up for)\b.*$`),                       // uptime lines
 	regexp.MustCompile(`(?i)\b\d+ (weeks?|days?|hours?|minutes?|seconds?)\b`), // 3 days, 2 hours
 	regexp.MustCompile(`(?i)\b(packets (input|output)|bytes|bits/sec|packets/sec|input rate|output rate|CPU utilization|Memory|free|used)\b.*$`),
@@ -63,6 +69,30 @@ func stripStamps(line string) string {
 	return line
 }
 
+// colonRun matches a whole run of colon-joined hex groups: a clock reading
+// (12:34:56, 12:34:56.789), but also a MAC address (00:11:22:33:44:55) and
+// an IPv6 address (2001:db8::12:34:56). clockRun is the shape of a clock.
+var (
+	colonRun = regexp.MustCompile(`[0-9A-Fa-f]*(?::[0-9A-Fa-f]+)+(?:\.\d+)?`)
+	clockRun = regexp.MustCompile(`^\d{1,2}:\d{2}:\d{2}(?:\.\d+)?$`)
+)
+
+// blankClock takes the clock readings out of a line and nothing else. A
+// bare hh:mm:ss pattern also matched the middle of a MAC or IPv6 address,
+// and a changed MAC entry or IPv6 next hop was then shown as identical;
+// taking the whole colon run first keeps those apart from a clock.
+func blankClock(line string) string {
+	if !strings.Contains(line, ":") {
+		return line
+	}
+	return colonRun.ReplaceAllStringFunc(line, func(run string) string {
+		if clockRun.MatchString(run) {
+			return ""
+		}
+		return run
+	})
+}
+
 func normalize(line string) string {
 	line = strings.TrimRight(line, " \t\r")
 	// AlaxalA's "!" before the prompt only says a change is not saved yet.
@@ -70,6 +100,7 @@ func normalize(line string) string {
 		line = line[1:]
 	}
 	line = stripStamps(line)
+	line = blankClock(line)
 	for _, re := range noise {
 		line = re.ReplaceAllString(line, "")
 	}
@@ -117,7 +148,9 @@ func Diff(a, b string, ignoreNoise bool) DiffResult {
 		}
 	}
 	var out DiffResult
-	for _, op := range myers(ka, kb) {
+	ops, approx := myers(ka, kb)
+	out.Approx = approx
+	for _, op := range ops {
 		switch op.kind {
 		case '=':
 			out.Lines = append(out.Lines, DiffLine{Kind: "=", A: la[ia[op.i]], B: lb[ib[op.j]], LineA: ia[op.i] + 1, LineB: ib[op.j] + 1})
@@ -155,74 +188,211 @@ type editOp struct {
 	i, j int
 }
 
+// maxDiffLines caps how many lines (both sides together, once the common
+// head and tail are set aside) the shortest edit script is computed for;
+// beyond it the middle is compared line for line and the result says so
+// (DiffResult.Approx). Memory is linear either way; this bounds the time.
+const maxDiffLines = 100_000
+
+// maxEdits is the edit distance one middle-snake search (see middleSnake)
+// explores before giving up on that stretch: two captures of one device
+// differ in a few lines, so a stretch that needs thousands of edits is a
+// different device, a different command, or a log the pager cut short, and
+// a line-for-line comparison serves it as well as an exact script that
+// would take seconds to find. Scaled with the input so that a large pair
+// with many scattered changes still gets the exact answer.
+func maxEdits(lines int) int {
+	limit := lines / 2
+	if limit < 4096 {
+		limit = 4096
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+	return limit
+}
+
 // myers computes a shortest edit script between a and b (Myers 1986, the
-// linear-space variant is unnecessary at log sizes: a few thousand lines).
-func myers(a, b []string) []editOp {
+// linear-space divide-and-conquer form of section 4b). The earlier version
+// kept a copy of the whole frontier for every edit-distance step, O(d·(n+m))
+// ints: two unrelated 6,000-line captures took gigabytes. This one keeps
+// two frontiers of n+m ints and recurses on the middle snake, so the memory
+// is the script itself. The second result says whether a stretch was
+// compared line for line instead (see maxDiffLines, maxEdits).
+func myers(a, b []string) ([]editOp, bool) {
 	n, m := len(a), len(b)
-	max := n + m
-	if max == 0 {
-		return nil
+	if n+m == 0 {
+		return nil, false
 	}
-	// v[k] = furthest x on diagonal k; stored with offset.
-	v := make([]int, 2*max+2)
-	var trace [][]int
-	off := max
-	var x, y int
-	found := false
-	for d := 0; d <= max && !found; d++ {
-		vc := make([]int, len(v))
-		copy(vc, v)
-		trace = append(trace, vc)
-		for k := -d; k <= d; k += 2 {
-			if k == -d || (k != d && v[off+k-1] < v[off+k+1]) {
-				x = v[off+k+1]
+	d := &differ{a: a, b: b, vf: make([]int, 2*(n+m)+4), vb: make([]int, 2*(n+m)+4)}
+	d.diff(0, n, 0, m)
+	orderEdits(d.ops)
+	return d.ops, d.approx
+}
+
+// orderEdits puts, within each run of edits between two equal lines, the
+// removed lines before the added ones. The UI folds "removed, then added"
+// into one changed block shown row for row; which side of a split the
+// middle snake lands on could otherwise put an addition first. The ops of
+// one run are independent (removals index a, additions b), so their order
+// does not change what they rebuild.
+func orderEdits(ops []editOp) {
+	for i := 0; i < len(ops); {
+		if ops[i].kind == '=' {
+			i++
+			continue
+		}
+		j := i
+		for j < len(ops) && ops[j].kind != '=' {
+			j++
+		}
+		run := ops[i:j]
+		var minus, plus []editOp
+		for _, op := range run {
+			if op.kind == '-' {
+				minus = append(minus, op)
 			} else {
-				x = v[off+k-1] + 1
-			}
-			y = x - k
-			for x < n && y < m && a[x] == b[y] {
-				x++
-				y++
-			}
-			v[off+k] = x
-			if x >= n && y >= m {
-				found = true
-				break
+				plus = append(plus, op)
 			}
 		}
+		copy(run, minus)
+		copy(run[len(minus):], plus)
+		i = j
 	}
-	// Backtrack.
-	var ops []editOp
-	x, y = n, m
-	for d := len(trace) - 1; d >= 0; d-- {
-		vv := trace[d]
-		k := x - y
-		var prevK int
-		if k == -d || (k != d && vv[off+k-1] < vv[off+k+1]) {
-			prevK = k + 1
+}
+
+type differ struct {
+	a, b   []string
+	ops    []editOp
+	approx bool
+	vf, vb []int // the forward and backward frontiers, sized for the whole
+}
+
+// diff appends the edit script of a[i0:i1] against b[j0:j1], in order.
+func (d *differ) diff(i0, i1, j0, j1 int) {
+	// The common head and tail cost nothing to find and keep the search to
+	// the part that differs.
+	for i0 < i1 && j0 < j1 && d.a[i0] == d.b[j0] {
+		d.ops = append(d.ops, editOp{'=', i0, j0})
+		i0++
+		j0++
+	}
+	tail := 0
+	for i0 < i1-tail && j0 < j1-tail && d.a[i1-1-tail] == d.b[j1-1-tail] {
+		tail++
+	}
+	ti, tj := i1-tail, j1-tail
+	i1, j1 = ti, tj
+	switch {
+	case i0 == i1:
+		for j := j0; j < j1; j++ {
+			d.ops = append(d.ops, editOp{'+', i0, j})
+		}
+	case j0 == j1:
+		for i := i0; i < i1; i++ {
+			d.ops = append(d.ops, editOp{'-', i, j0})
+		}
+	case (i1-i0)+(j1-j0) > maxDiffLines:
+		d.approx = true
+		d.pairwise(i0, i1, j0, j1)
+	default:
+		x, y, u, v, ok := d.middleSnake(i0, i1, j0, j1)
+		if !ok {
+			d.approx = true
+			d.pairwise(i0, i1, j0, j1)
+			break
+		}
+		d.diff(i0, x, j0, y)
+		for ; x < u; x, y = x+1, y+1 {
+			d.ops = append(d.ops, editOp{'=', x, y})
+		}
+		d.diff(u, i1, v, j1)
+	}
+	for k := 0; k < tail; k++ {
+		d.ops = append(d.ops, editOp{'=', ti + k, tj + k})
+	}
+}
+
+// pairwise compares a[i0:i1] and b[j0:j1] line for line — the fallback for
+// a stretch too large or too different for the shortest script. Equal
+// lines at the same offset are kept as such; what is left over on the
+// longer side is added or removed.
+func (d *differ) pairwise(i0, i1, j0, j1 int) {
+	for i0 < i1 && j0 < j1 {
+		if d.a[i0] == d.b[j0] {
+			d.ops = append(d.ops, editOp{'=', i0, j0})
 		} else {
-			prevK = k - 1
+			d.ops = append(d.ops, editOp{'-', i0, j0}, editOp{'+', i0, j0})
 		}
-		prevX := vv[off+prevK]
-		prevY := prevX - prevK
-		for x > prevX && y > prevY {
-			x--
-			y--
-			ops = append(ops, editOp{'=', x, y})
-		}
-		if d > 0 {
-			if x == prevX {
-				y--
-				ops = append(ops, editOp{'+', x, y})
+		i0++
+		j0++
+	}
+	for ; i0 < i1; i0++ {
+		d.ops = append(d.ops, editOp{'-', i0, j0})
+	}
+	for ; j0 < j1; j0++ {
+		d.ops = append(d.ops, editOp{'+', i0, j0})
+	}
+}
+
+// middleSnake finds the middle snake of a shortest edit script between
+// a[i0:i1] and b[j0:j1] — both non-empty, with no common head or tail — by
+// running the forward search from the start and the backward search from
+// the end until they meet. It returns the snake's ends (x,y)-(u,v) in whole-
+// input coordinates, and false when the stretch needs more than maxEdits
+// edits (the caller then compares it line for line).
+func (d *differ) middleSnake(i0, i1, j0, j1 int) (x, y, u, v int, ok bool) {
+	a, b := d.a[i0:i1], d.b[j0:j1]
+	n, m := len(a), len(b)
+	delta := n - m
+	odd := delta&1 != 0
+	half := (n + m + 1) / 2
+	limit := min(maxEdits(n+m), half)
+	// vf[off+k] is the furthest x reached forward on diagonal k = x-y;
+	// vb[offb+k] the furthest-back x on diagonal k from the end. Both index
+	// ranges fit the scratch arrays sized for the whole input.
+	vf, vb := d.vf, d.vb
+	off := half + 2
+	offb := half + 2 - delta
+	vf[off+1] = 0
+	vb[offb+delta-1] = n
+	for dd := 0; dd <= limit; dd++ {
+		for k := -dd; k <= dd; k += 2 {
+			var x0 int
+			if k == -dd || (k != dd && vf[off+k-1] < vf[off+k+1]) {
+				x0 = vf[off+k+1]
 			} else {
-				x--
-				ops = append(ops, editOp{'-', x, y})
+				x0 = vf[off+k-1] + 1
+			}
+			y0 := x0 - k
+			xx, yy := x0, y0
+			for xx < n && yy < m && a[xx] == b[yy] {
+				xx++
+				yy++
+			}
+			vf[off+k] = xx
+			if odd && k-delta >= -(dd-1) && k-delta <= dd-1 && vf[off+k] >= vb[offb+k] {
+				return i0 + x0, j0 + y0, i0 + xx, j0 + yy, true
+			}
+		}
+		for k := delta - dd; k <= delta+dd; k += 2 {
+			var x0 int
+			if k == delta+dd || (k != delta-dd && vb[offb+k-1] < vb[offb+k+1]) {
+				x0 = vb[offb+k-1]
+			} else {
+				x0 = vb[offb+k+1] - 1
+			}
+			y0 := x0 - k
+			xx, yy := x0, y0
+			for xx > 0 && yy > 0 && a[xx-1] == b[yy-1] {
+				xx--
+				yy--
+			}
+			vb[offb+k] = xx
+			if !odd && k >= -dd && k <= dd && vb[offb+k] <= vf[off+k] {
+				return i0 + xx, j0 + yy, i0 + x0, j0 + y0, true
 			}
 		}
 	}
-	// Reverse.
-	for i, j := 0, len(ops)-1; i < j; i, j = i+1, j-1 {
-		ops[i], ops[j] = ops[j], ops[i]
-	}
-	return ops
+	return 0, 0, 0, 0, false
 }

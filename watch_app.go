@@ -58,14 +58,21 @@ func (w *Watcher) Read(off int64) watchChunk {
 		return c
 	}
 	defer f.Close()
+	// The buffer is what is there to read (polled every moment, mostly
+	// nothing), the chunk at most.
+	size := int64(watchChunkMax)
 	if st, err := f.Stat(); err == nil {
 		c.ModUnixMs = st.ModTime().UnixMilli()
 		if st.Size() < off {
 			// Not this file any more (replaced): start over.
 			off = 0
 		}
+		size = min(size, st.Size()-off)
 	}
-	buf := make([]byte, watchChunkMax)
+	if size <= 0 {
+		return c
+	}
+	buf := make([]byte, size)
 	n, err := f.ReadAt(buf, off)
 	if err != nil && err != io.EOF {
 		c.Err = err.Error()

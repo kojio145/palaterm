@@ -69,25 +69,8 @@ func ExportRule(r model.ImportRule, app string) ([]byte, error) {
 	// them with a value ("元の列: パスワード が Init#1234") names a
 	// password too.
 	secretCols := map[string]bool{}
-	all := append([]model.ImportField(nil), r.Fields...)
-	for _, u := range r.Units {
-		all = append(all, u.Fields...)
-	}
-	for _, f := range all {
-		if !isSecret(f.Key) {
-			continue
-		}
-		switch f.Source {
-		case "column":
-			secretCols[foldHeader(f.Column)] = true
-			for _, fb := range f.Fallback {
-				secretCols[foldHeader(fb)] = true
-			}
-		case "template":
-			for _, m := range reTemplate.FindAllStringSubmatch(f.Template, -1) {
-				secretCols[foldHeader(m[1])] = true
-			}
-		}
+	for _, n := range secretNames(&r) {
+		secretCols[n] = true
 	}
 	out.Exclude = nil
 	for _, c := range r.Exclude {

@@ -160,14 +160,27 @@ type Device struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Write stores s as dir/palaterm-run.json.
+// Write stores s as dir/palaterm-run.json. The file is written beside its
+// name and renamed into place: a 予約 rewrites it every round (AddRound),
+// and a crash or power cut in the middle of an in-place write left a
+// truncated file, so the next round found no summary and the folder's
+// history started over.
 func Write(dir string, s Summary) error {
 	s.Format = Format
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, SummaryName), append(data, '\r', '\n'), 0o644)
+	final := filepath.Join(dir, SummaryName)
+	tmp := filepath.Join(dir, "."+SummaryName+".tmp")
+	if err := os.WriteFile(tmp, append(data, '\r', '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, final); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // List returns the runs under root (an absolute log folder), newest first.
@@ -369,20 +382,40 @@ func stageWords(tok logstore.StageTokens) map[string]string {
 	return w
 }
 
+// cjkStageWords are the Japanese stage words of two characters or more (a
+// lone 中 sits inside many words), longest first and then by text: a fixed
+// order, so a field is read the same way on every call — ranging over the
+// map gave "事前事後比較" a different stage each time.
+func cjkStageWords(words map[string]string) []string {
+	var cjk []string
+	for w := range words {
+		if isCJK(w) && len([]rune(w)) >= 2 {
+			cjk = append(cjk, w)
+		}
+	}
+	sort.Slice(cjk, func(i, j int) bool {
+		return len(cjk[i]) > len(cjk[j]) || (len(cjk[i]) == len(cjk[j]) && cjk[i] < cjk[j])
+	})
+	return cjk
+}
+
 // stageFromName reads the stage out of a folder name ("作業前", "前",
-// "sw_before_2026", "post-change"): "" when none or more than one is named.
+// "sw_before_2026", "post-change"): "" when none or more than one is named,
+// also inside one field ("事前事後比較").
 func stageFromName(name string, tok logstore.StageTokens) string {
 	words := stageWords(tok)
+	cjk := cjkStageWords(words)
 	found := ""
 	for _, f := range nameFields(name) {
 		st, ok := words[strings.ToLower(f)]
 		if !ok {
 			// Japanese stage words are not separated from the rest: "作業前ログ".
-			// Two characters or more only: a lone 中 sits inside many words.
-			for w, s := range words {
-				if isCJK(w) && len([]rune(w)) >= 2 && strings.Contains(f, w) {
-					st, ok = s, true
-					break
+			for _, w := range cjk {
+				if strings.Contains(f, w) {
+					if ok && st != words[w] {
+						return "" // two stages in one field: not a stage folder
+					}
+					st, ok = words[w], true
 				}
 			}
 		}
@@ -407,15 +440,7 @@ func stageFromName(name string, tok logstore.StageTokens) string {
 func externalDeviceKey(file string, tok logstore.StageTokens) string {
 	base := strings.TrimSuffix(file, filepath.Ext(file))
 	words := stageWords(tok)
-	var cjk []string
-	for w := range words {
-		if isCJK(w) && len([]rune(w)) >= 2 {
-			cjk = append(cjk, w)
-		}
-	}
-	sort.Slice(cjk, func(i, j int) bool {
-		return len(cjk[i]) > len(cjk[j]) || (len(cjk[i]) == len(cjk[j]) && cjk[i] < cjk[j])
-	})
+	cjk := cjkStageWords(words)
 	protected := ipv4RE.ReplaceAllStringFunc(base, func(ip string) string { return strings.ReplaceAll(ip, ".", string(ipDot)) })
 	var out strings.Builder
 	kept := 0
@@ -512,7 +537,10 @@ func isNameSep(r rune) bool {
 // isDateOrTime: a field that is only digits (with h / m / s / colons at
 // most): 20260901, 143000, 1430, the "09" and "01" of an already split
 // 2026-09-01, 14h30. Device names carry letters, so a bare number is never
-// one. (A file named by digits alone keeps its name: see externalDeviceKey.)
+// one. Two digits at least: a date or time part never has fewer, while
+// short device names do ("s1", "m1" dropped out as timestamps, and their
+// before and after files no longer paired). (A file named by digits alone
+// keeps its name: see externalDeviceKey.)
 func isDateOrTime(f string) bool {
 	digits := 0
 	for _, r := range f {
@@ -522,7 +550,7 @@ func isDateOrTime(f string) bool {
 			return false
 		}
 	}
-	return digits >= 1 && digits <= 14 && digits >= len([]rune(f))-6 && (digits >= len([]rune(f))-3 || strings.ContainsAny(f, "年月日時分秒"))
+	return digits >= 2 && digits <= 14 && digits >= len([]rune(f))-6 && (digits >= len([]rune(f))-3 || strings.ContainsAny(f, "年月日時分秒"))
 }
 
 func isCJK(s string) bool {

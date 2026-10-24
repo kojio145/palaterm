@@ -1,9 +1,14 @@
 package history
 
 import (
+	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/kojio145/palaterm/internal/logstore"
 )
@@ -77,6 +82,214 @@ func TestDiffIgnoresRouteAges(t *testing.T) {
 	c := "S*   0.0.0.0/0 [1/1] via 192.0.2.254, GigaEthernet1.0, 1d2h3m4s\n"
 	if r := Diff(a, c, true); r.Added+r.Removed == 0 {
 		t.Fatalf("changed next hop must be a difference")
+	}
+}
+
+// The clock pattern must not reach into colon-separated MAC and IPv6
+// addresses: a changed MAC entry or IPv6 next hop is a real difference.
+func TestDiffClockNoiseLeavesMACAndIPv6Alone(t *testing.T) {
+	for _, tc := range []struct{ a, b string }{
+		{"  10   0000.5e00.5301    DYNAMIC     Gi0/1\n", "  10   0000.5e00.5302    DYNAMIC     Gi0/1\n"},
+		{"ether 00:11:22:33:44:55\n", "ether 00:11:22:33:44:66\n"},
+		{"ether 00:11:22:33:44:55\n", "ether 00:11:22:33:45:55\n"},
+		{"S ::/0 via 2001:db8::12:34:56, Gi0/1\n", "S ::/0 via 2001:db8::12:34:57, Gi0/1\n"},
+		{"S ::/0 via 2001:db8:0:12:34:56:0:1, Gi0/1\n", "S ::/0 via 2001:db8:0:12:34:57:0:1, Gi0/1\n"},
+	} {
+		if r := Diff(tc.a, tc.b, true); r.Added+r.Removed == 0 {
+			t.Errorf("hidden as noise: %q vs %q", tc.a, tc.b)
+		}
+	}
+	// Clocks in their usual places are still noise.
+	for _, tc := range []struct{ a, b string }{
+		{"*10:15:02.123 JST Thu Oct 9 2026\n", "*11:40:55.456 JST Thu Oct 9 2026\n"},
+		{"Oct  9 10:15:02: %SYS-5-CONFIG_I: Configured from console\n", "Oct  9 11:40:55: %SYS-5-CONFIG_I: Configured from console\n"},
+		{"2026-10-09T10:15:02 lab\n", "2026-10-09T11:40:55 lab\n"},
+		{"time 1:02:03, 4:05:06\n", "time 7:08:09, 10:11:12\n"},
+		{"last at 10:15:02:\n", "last at 11:40:55:\n"},
+	} {
+		if r := Diff(tc.a, tc.b, true); r.Added+r.Removed != 0 {
+			t.Errorf("clock not ignored: %q vs %q: %+v", tc.a, tc.b, r.Lines)
+		}
+	}
+}
+
+// lcsLen is the textbook O(n·m) longest common subsequence, the reference
+// for the edit distance the shortest script must reach.
+func lcsLen(a, b []string) int {
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			if a[i-1] == b[j-1] {
+				cur[j] = prev[j-1] + 1
+			} else {
+				cur[j] = max(prev[j], cur[j-1])
+			}
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
+}
+
+// checkScript verifies that ops rebuild a and b in order and counts them.
+func checkScript(t *testing.T, a, b []string, ops []editOp) (same, removed, added int) {
+	t.Helper()
+	var ra, rb []string
+	for _, op := range ops {
+		switch op.kind {
+		case '=':
+			if a[op.i] != b[op.j] {
+				t.Fatalf("'=' pairs %q with %q", a[op.i], b[op.j])
+			}
+			ra = append(ra, a[op.i])
+			rb = append(rb, b[op.j])
+			same++
+		case '-':
+			ra = append(ra, a[op.i])
+			removed++
+		case '+':
+			rb = append(rb, b[op.j])
+			added++
+		}
+	}
+	if strings.Join(ra, "\n") != strings.Join(a, "\n") || strings.Join(rb, "\n") != strings.Join(b, "\n") {
+		t.Fatalf("script does not rebuild its inputs:\n%q\n%q\nops %v", a, b, ops)
+	}
+	return
+}
+
+// The linear-space script is a shortest one: as many edits as the LCS
+// allows, on random inputs of every small shape (and the reference walk
+// with no budget at all).
+func TestMyersIsShortestScript(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for iter := 0; iter < 3000; iter++ {
+		n, m := rng.Intn(13), rng.Intn(13)
+		a := make([]string, n)
+		b := make([]string, m)
+		for i := range a {
+			a[i] = string(rune('a' + rng.Intn(3)))
+		}
+		for j := range b {
+			b[j] = string(rune('a' + rng.Intn(3)))
+		}
+		ops, approx := myers(a, b)
+		if approx {
+			t.Fatalf("approx on a tiny input %q %q", a, b)
+		}
+		_, removed, added := checkScript(t, a, b, ops)
+		if want := n + m - 2*lcsLen(a, b); removed+added != want {
+			t.Fatalf("%q vs %q: %d edits, shortest is %d: %v", a, b, removed+added, want, ops)
+		}
+		// Within a change, removed lines come before added ones (the UI
+		// folds that order into one changed block).
+		for k := 1; k < len(ops); k++ {
+			if ops[k-1].kind == '+' && ops[k].kind == '-' {
+				t.Fatalf("%q vs %q: an addition before a removal: %v", a, b, ops)
+			}
+		}
+	}
+}
+
+func numberedLines(prefix string, n int) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&sb, "%s line %d\n", prefix, i)
+	}
+	return sb.String()
+}
+
+// Two unrelated 6,000-line captures took ≈2.4 GB with the frontier-copying
+// walk (10,000 lines ran out of memory); the result must now come in
+// linear memory and within a few seconds, and say it is approximate.
+func TestDiffLargeUnrelatedInputsStayBounded(t *testing.T) {
+	a, b := numberedLines("alpha", 6000), numberedLines("beta", 6000)
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	start := time.Now()
+	r := Diff(a, b, false)
+	elapsed := time.Since(start)
+	runtime.ReadMemStats(&after)
+	alloc := after.TotalAlloc - before.TotalAlloc
+	t.Logf("6000x6000 unrelated: %v, %d MB allocated", elapsed, alloc>>20)
+	if alloc > 64<<20 {
+		t.Fatalf("allocated %d MB", alloc>>20)
+	}
+	if elapsed > 10*time.Second {
+		t.Fatalf("took %v", elapsed)
+	}
+	// 12,000 edits are within the budget for 12,000 lines: the exact script.
+	if r.Approx || r.Added != 6000 || r.Removed != 6000 || r.Same != 0 {
+		t.Fatalf("counts: approx=%v +%d -%d =%d", r.Approx, r.Added, r.Removed, r.Same)
+	}
+
+	// Past the edit budget (60,000 edits, budget 10,000) the stretch is
+	// compared line for line, still in bounds, and the result says so.
+	a, b = numberedLines("alpha", 30000), numberedLines("beta", 30000)
+	runtime.ReadMemStats(&before)
+	start = time.Now()
+	r = Diff(a, b, false)
+	elapsed = time.Since(start)
+	runtime.ReadMemStats(&after)
+	alloc = after.TotalAlloc - before.TotalAlloc
+	t.Logf("30000x30000 unrelated: %v, %d MB allocated", elapsed, alloc>>20)
+	if alloc > 128<<20 || elapsed > 10*time.Second {
+		t.Fatalf("%v, %d MB", elapsed, alloc>>20)
+	}
+	if !r.Approx || r.Added != 30000 || r.Removed != 30000 || r.Same != 0 {
+		t.Fatalf("over the budget: approx=%v +%d -%d =%d", r.Approx, r.Added, r.Removed, r.Same)
+	}
+
+	// Two large captures of one device with a handful of scattered changes
+	// get the exact script, in the same bounds.
+	la := strings.Split(strings.TrimSuffix(numberedLines("cfg", 20000), "\n"), "\n")
+	lb := append([]string{}, la...)
+	lb[100], lb[9000], lb[19990] = "cfg changed 100", "cfg changed 9000", "cfg changed 19990"
+	lb = append(lb[:5000], append([]string{"cfg inserted a", "cfg inserted b"}, lb[5000:]...)...)
+	runtime.ReadMemStats(&before)
+	r = Diff(strings.Join(la, "\n"), strings.Join(lb, "\n"), false)
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 64<<20 {
+		t.Fatalf("scattered changes allocated %d MB", alloc>>20)
+	}
+	if r.Approx || r.Added != 5 || r.Removed != 3 || r.Same != 19997 {
+		t.Fatalf("scattered changes: approx=%v +%d -%d =%d", r.Approx, r.Added, r.Removed, r.Same)
+	}
+
+	// Beyond the line cap the middle is compared line for line, and the
+	// result says so.
+	big := strings.Split(strings.TrimSuffix(numberedLines("big", 60000), "\n"), "\n")
+	bigB := append([]string{}, big...)
+	for i := 1; i < len(bigB); i += 2 {
+		bigB[i] = "big other " + bigB[i]
+	}
+	r = Diff(strings.Join(big, "\n"), strings.Join(bigB, "\n"), false)
+	if !r.Approx || r.Added != 30000 || r.Removed != 30000 || r.Same != 30000 {
+		t.Fatalf("over the cap: approx=%v +%d -%d =%d", r.Approx, r.Added, r.Removed, r.Same)
+	}
+}
+
+// The summary is replaced whole: a crash in the middle of writing a 予約's
+// round must not leave a truncated file (the next round then started the
+// folder's history over). The temporary file is gone afterwards.
+func TestWriteReplacesSummaryWhole(t *testing.T) {
+	dir := t.TempDir()
+	first := Summary{StartedAt: "2026-10-09T10:00:00+09:00", Devices: []DeviceSummary{{Name: "r1", Success: true}}}
+	if err := Write(dir, first); err != nil {
+		t.Fatal(err)
+	}
+	second := AddRound(first, Summary{StartedAt: "2026-10-09T10:05:00+09:00", Devices: []DeviceSummary{{Name: "r1", Success: false}, {Name: "r2", Success: true}}})
+	if err := Write(dir, second); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := Read(dir)
+	if !ok || got.Rounds != 2 || len(got.Devices) != 2 || got.StartedAt != first.StartedAt {
+		t.Fatalf("read back: %+v %v", got, ok)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 || entries[0].Name() != SummaryName {
+		t.Fatalf("folder holds %v, want only %s", entries, SummaryName)
 	}
 }
 

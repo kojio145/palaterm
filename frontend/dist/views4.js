@@ -90,10 +90,6 @@ function renderSchedulesView() {
   const root = document.getElementById("tab-schedule");
   if (!schedTab.data) return;
   const { list, st, log } = schedTab.data;
-  // A redraw (a repeat every 10 seconds sends one each round) keeps the
-  // list where the user scrolled it.
-  const oldPanel = root.querySelector(".panel.scrollx");
-  const keepScroll = oldPanel && oldPanel.dataset.view === schedTab.view ? oldPanel.scrollTop : 0;
   const focus = listViewFocus();
   // Will a 予約 run on this PC while it sleeps? Only if Windows lets an app
   // wake it (wake timers allowed for the current power source) and the PC
@@ -102,14 +98,20 @@ function renderSchedulesView() {
   const pw = st.power || {};
   const timers = pw.onAC === false ? pw.wakeTimersDC : pw.wakeTimersAC;
   // The PC's own settings decide it — not whether a wake-up happens to be
-  // armed right now (with nothing scheduled there is none).
-  const canWake = st.wake !== "unsupported" && timers !== 0 && !pw.modernStandby;
+  // armed right now (with nothing scheduled there is none). The setting
+  // read as -1 (the power plan could not be read) is not a yes: then the
+  // line says so, and the check box is offered as when the answer is no.
+  const timersOn = timers === 1 || timers === 2;
+  const timersUnknown = !(timers === 0 || timersOn);
+  const canWake = st.wake !== "unsupported" && timersOn && !pw.modernStandby;
+  const wakeUnknown = !canWake && st.wake !== "unsupported" && timersUnknown && !pw.modernStandby;
   const keep = !!st.keepAwake;
   const wtName = v => v === 0 ? t("無効") : v === 1 ? t("有効") : v === 2 ? t("重要なスリープ解除タイマーのみ") : t("不明");
   // One line on what to expect. It describes this PC (it is not a PalaTerm
   // setting, and nothing the user clicked changed it) — so no red cross.
   const sleepLine = canWake ? t("✅ PalaTerm を起動していれば、画面ロック中もスリープ中も動きます")
     : keep ? t("✅ PalaTerm を起動していれば動きます（自分でスリープ・蓋を閉じたときは止まります）")
+    : wakeUnknown ? t("ⓘ この PC がスリープ中も動くかは確認できませんでした（電源設定を読めません）。確実に動かすには下をオンにしてください")
     : t("ⓘ この PC は、スリープすると予約が止まります");
   // A schedule's state in words: what it is doing and whether it will run
   // again — a bare check box said none of that.
@@ -164,6 +166,9 @@ function renderSchedulesView() {
       <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
       <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join(t("　"))}</div></td>
     </tr>`).join("");
+  // A redraw (a repeat every 10 seconds sends one each round) keeps the
+  // list where the user scrolled it: renderListTab keeps the panel while
+  // the list shown — which of the two, its filter and sort — is the same.
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("予約"))}</div>
@@ -193,23 +198,21 @@ function renderSchedulesView() {
     </div>
     ${schedTab.view === "list" ? `
     ${list.length ? listViewBar(LV, t("絞り込み（機器・コマンド・日時）"), [{ id: "state", label: t("状態: すべて"), values: [...new Set(list.map(stateWord))] }]) : ""}
-    <div class="panel scrollx" data-view="list">
+    <div class="panel scrollx">
       ${!list.length ? `<div class="empty">${esc(t("予約はありません。「＋ 予約を追加」から作れます"))}</div>`
         : !shownList.length ? `<div class="empty">${esc(t("絞り込みに一致する予約がありません"))}</div>`
         : `<table class="fixed" data-colw="schedules"><thead><tr>${listViewTh(LV, "state", t("状態"), "width:90px")}${listViewTh(LV, "target", t("実行する機器・コマンド"))}${listViewTh(LV, "when", t("日時"), "width:320px")}<th style="width:300px"></th></tr></thead><tbody>${rows}</tbody></table>`}
     </div>` : `
     ${log.length ? listViewBar(LG, t("絞り込み（予約・メッセージ）"), [{ id: "kind", label: t("結果: すべて"), values: [...new Set(log.map(schedKindLabel))] }]) : ""}
-    <div class="panel scrollx" data-view="log">
+    <div class="panel scrollx">
       ${!log.length ? `<div class="empty">${esc(t("まだ記録はありません"))}</div>`
         : !shownLog.length ? `<div class="empty">${esc(t("絞り込みに一致する記録がありません"))}</div>`
         : `<table class="fixed" data-colw="schedlog"><thead><tr>${listViewTh(LG, "due", t("予定日時"), "width:170px")}${listViewTh(LG, "schedule", t("予約"), "width:200px")}${listViewTh(LG, "kind", t("結果"), "width:90px")}${listViewTh(LG, "result", t("成功 / 失敗"), "width:120px")}<th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody>${logRows}</tbody></table>`}
-    </div>`}`);
+    </div>`}`, [schedTab.view, listView(schedTab.view === "list" ? LV : LG)]);
 
   listViewWire(LV, root, renderSchedulesView, focus);
   listViewWire(LG, root, renderSchedulesView, focus);
   wireColResize(root);
-  const panel = root.querySelector(".panel.scrollx");
-  if (panel && keepScroll) panel.scrollTop = keepScroll;
   root.querySelectorAll("[data-scview]").forEach(b => b.onclick = () => { schedTab.view = b.dataset.scview; renderSchedulesView(); });
   root.querySelectorAll("[data-lastlog]").forEach(b => b.onclick = () => { schedTab.view = "log"; renderSchedulesView(); });
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
@@ -576,6 +579,14 @@ function editSchedule(sc, prefill) {
     const p2 = n => String(n).padStart(2, "0");
     const stamp = d => `${ymd(d)} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
     for (const x of slots) {
+      // A one-off at a time already past would be refused by the backend —
+      // but only after the confirmation; said here instead, like the
+      // repeat's start below (the saved time of an edit is kept).
+      if (x.kind === "once") {
+        const kept = x.orig && x.date === x.orig.date && x.time === x.orig.time;
+        if (!kept && `${x.date} ${x.time}` < stamp(new Date())) { toast(t("① の日時が過ぎています。今より後の時刻にしてください"), "err"); return; }
+        continue;
+      }
       if (x.kind !== "interval") continue;
       const sec = x.every * x.unit;
       if (!(sec > 0) || Math.abs(sec - Math.round(sec)) > 1e-6) { toast(t("① の間隔は秒単位で割り切れる数で入れてください（例 1.5 時間 = 90 分）"), "err"); return; }

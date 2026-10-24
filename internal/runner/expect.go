@@ -46,7 +46,7 @@ type expecter struct {
 	dropped  int
 	headMark int
 	head     strings.Builder
-	readErr    error
+	readErr  error
 
 	rawSink func([]byte) // when set, incoming bytes are forwarded here (interactive mode)
 	tee     func([]byte) // when set, also gets every byte the transcript gets (a batch device's live log)
@@ -79,18 +79,15 @@ func newExpecterTee(sess session.Session, tee func([]byte)) *expecter {
 func (e *expecter) readLoop() {
 	// A panic here (in a tee or a sink) would take the whole program down,
 	// every other device and terminal with it: it ends this session instead,
-	// which the waits then report as a closed connection.
+	// which the waits then report as a closed connection and the terminal
+	// window hears of through onClose, as it does of any other end.
 	defer func() {
 		if p := recover(); p != nil {
-			e.mu.Lock()
-			e.closed = true
-			e.readErr = fmt.Errorf("内部エラー: %v", p)
-			e.mu.Unlock()
-			select {
-			case e.newData <- struct{}{}:
-			default:
-			}
+			oc := e.end(fmt.Errorf("内部エラー: %v", p))
 			_ = e.sess.Close()
+			if oc != nil {
+				oc()
+			}
 		}
 	}()
 	tmp := make([]byte, 4096)
@@ -121,16 +118,7 @@ func (e *expecter) readLoop() {
 			}
 		}
 		if err != nil {
-			e.mu.Lock()
-			e.closed = true
-			e.readErr = err
-			oc := e.onClose
-			e.mu.Unlock()
-			select {
-			case e.newData <- struct{}{}:
-			default:
-			}
-			if oc != nil {
+			if oc := e.end(err); oc != nil {
 				oc()
 			}
 			return
@@ -138,11 +126,59 @@ func (e *expecter) readLoop() {
 	}
 }
 
+// end marks the session over (nothing more will arrive), wakes the waits,
+// and hands back the onClose to call — nil when none is set yet, in which
+// case setOnClose calls it on arrival.
+func (e *expecter) end(err error) func() {
+	e.mu.Lock()
+	e.closed = true
+	e.readErr = err
+	oc := e.onClose
+	e.mu.Unlock()
+	select {
+	case e.newData <- struct{}{}:
+	default:
+	}
+	return oc
+}
+
+// setOnClose registers fn to be called once when the read loop ends. On a
+// session that has already ended it is called here, at once: the terminal
+// window taking over a login that failed after the device hung up (three
+// wrong passwords and the far end drops the line) otherwise never heard
+// term:closed, and sat at "connected" with its log left open.
+func (e *expecter) setOnClose(fn func()) {
+	e.mu.Lock()
+	e.onClose = fn
+	closed := e.closed
+	e.mu.Unlock()
+	if closed && fn != nil {
+		fn()
+	}
+}
+
+// reCache holds every pattern compiled so far, by its text: Expect and Seen
+// are polled dozens of times a second per device while a long output is
+// awaited, each poll on the same few patterns.
+var reCache sync.Map
+
+func compilePattern(pattern string) (*regexp.Regexp, error) {
+	if re, ok := reCache.Load(pattern); ok {
+		return re.(*regexp.Regexp), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	reCache.Store(pattern, re)
+	return re, nil
+}
+
 // Expect waits until pattern matches the accumulated output or the timeout
 // elapses. On match, the buffer is consumed up to and including the match so
 // the next Expect starts fresh.
 func (e *expecter) Expect(ctx context.Context, pattern string, timeout time.Duration) error {
-	re, err := regexp.Compile(pattern)
+	re, err := compilePattern(pattern)
 	if err != nil {
 		return err
 	}
@@ -261,7 +297,7 @@ func (e *expecter) Since(mark int) string {
 // without consuming it. It lets a caller notice that the device is already at
 // its operational prompt while it is still waiting for some other pattern.
 func (e *expecter) Seen(pattern string) bool {
-	re, err := regexp.Compile(pattern)
+	re, err := compilePattern(pattern)
 	if err != nil {
 		return false
 	}
