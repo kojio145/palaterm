@@ -1477,10 +1477,10 @@ function renderMyBastion() {
           <div class="field" style="margin-bottom:8px${key ? ";display:none" : ""}" data-mb-pw><label>${esc(t("パスワード"))}</label><input class="mb-pw" type="password" value="${esc(b.password || "")}"></div>
         </div>
         <div class="grid-2" data-mb-key ${key ? "" : 'style="display:none"'}>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t(i === 0 ? "秘密鍵ファイル（公開鍵認証時）" : "秘密鍵ファイル（SSH トンネル方式のときだけ。コマンドを打つ方式では手前の踏み台の上の鍵を使うので空欄のまま）"))}</label>
             <div class="row-inline" style="gap:6px"><input class="mb-key" style="flex:1" value="${esc(b.keyFile || "")}">
               <button class="btn sm mb-key-pick" type="button">${esc(t("参照…"))}</button></div></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label><input class="mb-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
+          <div class="field" style="margin-bottom:8px"><label>${esc(t(i === 0 ? "鍵のパスフレーズ（任意）" : "鍵のパスフレーズ（コマンドを打つ方式では手前の踏み台の上の鍵のもの・任意）"))}</label><input class="mb-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
         </div>
         <div class="field" style="margin-bottom:8px${ssh ? "" : ";display:none"}" data-mb-ssh><label style="font-weight:normal"><input type="checkbox" class="mb-legacy" style="width:auto" ${b.legacyAlgos ? "checked" : ""}> ${esc(t("この踏み台にレガシー暗号を許可"))}</label></div>
         <div class="field" style="margin-bottom:0"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>

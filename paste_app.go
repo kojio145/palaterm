@@ -61,6 +61,7 @@ func (p *Paste) startup(ctx context.Context) {
 	p.ctx = ctx
 	pasteWin.fit(ctx)
 	placeNearParent(ctx, pasteWin)
+	go keepKeyboardOnWebview(ctx)
 }
 
 // domReady brings the new window to the front with keyboard focus, so Enter
@@ -84,13 +85,25 @@ func (p *Paste) Load() pasteReq {
 }
 
 // Submit returns the (possibly edited) text to the terminal and closes.
+// The foreground goes back to the terminal first (handForegroundToParent),
+// while this window still holds it.
 func (p *Paste) Submit(text string, cr bool) {
 	_ = json.NewEncoder(os.Stdout).Encode(pasteRes{OK: true, Text: text, CR: cr})
+	handForegroundToParent()
 	runtime.Quit(p.ctx)
 }
 
 // Cancel closes without pasting.
 func (p *Paste) Cancel() {
 	_ = json.NewEncoder(os.Stdout).Encode(pasteRes{OK: false})
+	handForegroundToParent()
 	runtime.Quit(p.ctx)
+}
+
+// beforeClose: the X (or Alt+F4) closes the window with no answer — the
+// terminal takes the EOF as a cancel — and hands the foreground back the
+// same way. false lets the close go on.
+func (p *Paste) beforeClose(context.Context) bool {
+	handForegroundToParent()
+	return false
 }

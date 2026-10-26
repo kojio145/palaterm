@@ -1207,10 +1207,17 @@ function editDevice(dev, preGroup, template) {
     return arr;
   }
   // Hops after the first are reached by an ssh/telnet command typed on the
-  // previous hop's shell (runner.traverseBastions), so PalaTerm's own key file
-  // and legacy-cipher switch only ever apply to hop 1. The fields stay in the
-  // DOM (collectBastions reads them) but are hidden with a note for hop 2+.
-  const NOTE_HOP = "2段目以降の認証は手前の踏み台の ssh / telnet コマンドが行うため、ここで使われるのはユーザー名とパスワードだけです。鍵認証やレガシー暗号は、手前の踏み台側の ssh 設定（~/.ssh の鍵など）で用意してください。";
+  // previous hop's shell (runner.traverseBastions), so a private key file on
+  // this PC only ever applies to hop 1: that field stays in the DOM
+  // (collectBastions reads it) but is hidden with a note for hop 2+. The
+  // auth method, passphrase and legacy switch stay visible for every hop —
+  // the jump answers the previous hop's ssh asking for the passphrase of a
+  // key kept there (runner.jumpToKey) only with the hop's auth method set to
+  // public key, and retries a refused negotiation only with its legacy
+  // switch on (field case 2026-10-26: the fields hidden left the hop on
+  // "password", so the passphrase was never sent).
+  const NOTE_HOP = "2段目以降へは手前の踏み台の ssh / telnet コマンドで入ります。パスワードで入るならユーザー名とパスワードを、手前の踏み台の上にある鍵で入る（Enter passphrase for key … と聞かれる）なら「SSH認証」を公開鍵にして、その鍵のパスフレーズを下の欄に入れてください。この PC の秘密鍵ファイルは使いません。";
+  const TIP_HOP_PASS = "手前の踏み台の ssh が Enter passphrase for key … と聞いてきたときに自動で送ります。送るのはこの踏み台の「SSH認証」が公開鍵のときだけです（パスワード認証の踏み台が同じ文言を出しても、鍵のパスフレーズは渡しません）";
   // Through an SSH tunnel every hop is a login made from this PC, so every
   // hop's key and legacy fields apply and no jump command is typed.
   const bmode = node.querySelector("#f-bmode");
@@ -1240,24 +1247,26 @@ function editDevice(dev, preGroup, template) {
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label>
             <input class="b-port" type="number" value="${esc(String(b.port || (b.method === "telnet" ? 23 : 22)))}"></div>
         </div>
-        <div class="field" style="margin-bottom:8px${b.method === "telnet" || hide(i) ? ";display:none" : ""}" data-b-legacy>
+        <div class="field" style="margin-bottom:8px${b.method === "telnet" ? ";display:none" : ""}" data-b-legacy>
           <label><input class="b-legacy" type="checkbox" ${b.legacyAlgos ? "checked" : ""}>
             <span data-tip="${esc(t("この踏み台とのSSHで古い暗号方式も候補に含めます。機器側の同名設定とは独立しています（踏み台と機器は別のマシンなので、片方が古いことをもう片方の暗号強度を下げる理由にはしません）"))}">${esc(t("この踏み台にレガシー暗号を許可 ⓘ"))}</span></label></div>
         <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req b-user-req" ${b.method === "telnet" ? 'style="display:none"' : ""}>${esc(t("必須"))}</span></label><input class="b-user" value="${esc(b.username || "")}"></div>
           <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input class="b-pw" type="password" value="${esc(b.password || "")}"></div>
-          <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
+          <div class="field" style="margin-bottom:8px"><label>${esc(t("SSH認証"))}</label><select class="b-auth">
             <option value="password" ${b.authMethod === "password" ? "selected" : ""}>${esc(t("パスワード"))}</option>
             <option value="publickey" ${b.authMethod === "publickey" ? "selected" : ""}>${esc(t("公開鍵"))}</option></select></div>
         </div>
         ${hide(i) ? `<div class="muted" style="font-size:12px;margin-bottom:8px">${esc(t(NOTE_HOP))}</div>` : ""}
-        <div class="grid-2" ${hide(i) ? 'style="display:none"' : ""}>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
+        <div class="grid-2">
+          <div class="field" style="margin-bottom:8px${hide(i) ? ";display:none" : ""}" data-b-keyfile><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
             <div class="row-inline" style="gap:6px">
               <input class="b-key" style="flex:1" value="${esc(b.keyFile || "")}">
               <button class="btn sm b-key-pick" type="button">${esc(t("参照…"))}</button>
             </div></div>
-          <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label>
+          <div class="field" style="margin-bottom:8px"><label>${hide(i)
+            ? `<span data-tip="${esc(t(TIP_HOP_PASS))}">${esc(t("手前の踏み台の上にある鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存） ⓘ"))}</span>`
+            : esc(t("鍵のパスフレーズ（任意）"))}</label>
             <input class="b-keypass" type="password" value="${esc(b.keyPassphrase || "")}"></div>
         </div>
         <div class="field" style="margin-bottom:0${tun ? ";display:none" : ""}"><label>${esc(t("次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）"))}</label>
@@ -1289,15 +1298,15 @@ function editDevice(dev, preGroup, template) {
       const portInp = row.querySelector(".b-port");
       const p = parseInt(portInp.value, 10) || 0;
       if (!p || p === 22 || p === 23) portInp.value = sel.value === "ssh" ? 22 : 23;
-      const first = row === bhost.querySelector("[data-bastion-row]") && !mineBox.checked;
-      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" || (!first && bmode.value !== "tunnel") ? "none" : "";
+      row.querySelector("[data-b-legacy]").style.display = sel.value === "telnet" ? "none" : "";
       // A Telnet hop may ask for no username at all; an SSH login needs one.
       row.querySelector(".b-user-req").style.display = sel.value === "telnet" ? "none" : "";
     });
     // Pre-fill the last used key path when a bastion switches to public key.
     bhost.querySelectorAll(".b-auth").forEach(sel => sel.onchange = () => {
-      const inp = sel.closest("[data-bastion-row]").querySelector(".b-key");
-      if (sel.value === "publickey" && !inp.value && (INV.settings || {}).lastKeyFile) {
+      const row = sel.closest("[data-bastion-row]"), inp = row.querySelector(".b-key");
+      const keyFileShown = row.querySelector("[data-b-keyfile]").style.display !== "none";
+      if (sel.value === "publickey" && keyFileShown && !inp.value && (INV.settings || {}).lastKeyFile) {
         inp.value = INV.settings.lastKeyFile;
       }
     });

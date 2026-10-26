@@ -31,14 +31,23 @@ async function bootViewerWindow() {
       <button class="btn sm" id="lv-find-next" data-tip="${esc(t("次を検索（Enter）"))}">▼</button>
       <button class="btn sm" id="lv-find-close" data-tip="${esc(t("閉じる（Esc）"))}">✕</button>
     </div>
-    <textarea id="lv-text" readonly spellcheck="false" style="flex:1;min-height:0;width:100%;resize:none;background:#0b0e13;color:#cbd5e1;border:none;padding:10px 14px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:auto;outline:none"></textarea>
+    <div id="lv-body" style="flex:1;min-height:0;position:relative;background:#0b0e13">
+      <div id="lv-hl" aria-hidden="true" style="position:absolute;left:0;top:0;right:0;bottom:0;overflow:hidden;box-sizing:border-box;padding:10px 14px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow-wrap:break-word;color:transparent;pointer-events:none"></div>
+      <textarea id="lv-text" readonly spellcheck="false" style="position:absolute;inset:0;width:100%;height:100%;box-sizing:border-box;resize:none;background:transparent;color:#cbd5e1;border:none;padding:10px 14px;font-family:Consolas,monospace;font-size:12px;white-space:pre;overflow:auto;outline:none"></textarea>
+    </div>
     <div id="lv-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid var(--border)"></div>
   </div>`);
   document.body.appendChild(wrap);
   const ta = document.getElementById("lv-text"), note = document.getElementById("lv-note"), status = document.getElementById("lv-status");
+  // lv-hl is a copy of the text behind the textarea, in the same font,
+  // padding and wrapping, scrolled with it: the find marks its matches there
+  // (a textarea cannot colour parts of its text). Its text is transparent;
+  // only the marks show through. Filled by the find below, else empty.
+  const lvBody = document.getElementById("lv-body"), hl = document.getElementById("lv-hl");
+  let refind = () => {}; // set by the find: repaints its marks after the text changed
   // 表示の色: by default a light page, unlike the black terminal, so a log
   // is never taken for a live session (colors.js).
-  const applyColors = c => { ta.style.background = c.bg; ta.style.color = c.fg; };
+  const applyColors = c => { lvBody.style.background = c.bg; ta.style.color = c.fg; };
   applyColors(screenColors("viewer"));
   onScreenColors("viewer", applyColors);
   document.getElementById("lv-color").onclick = e => openScreenColorPanel("viewer", e.currentTarget, applyColors, () => ta.focus());
@@ -57,6 +66,7 @@ async function bootViewerWindow() {
     const lines = d.text ? d.text.split(/\r\n|\r|\n/).length : 0;
     status.textContent = d.err ? "" : t("{n} 行 / {c} 文字", { n: lines.toLocaleString(), c: d.text.length.toLocaleString() }) + "　" + d.path;
     if (!keepPos || (atBottom && !hadSel)) ta.scrollTop = ta.scrollHeight; else ta.scrollTop = top;
+    refind();
   }
   show(doc, false);
   async function reload(auto) {
@@ -69,7 +79,7 @@ async function bootViewerWindow() {
   // the choice is remembered per PC.
   const wrapBox = document.getElementById("lv-wrap");
   try { wrapBox.checked = localStorage.getItem("palaterm_viewer_wrap") === "1"; } catch (e) {}
-  const applyWrap = () => { ta.style.whiteSpace = wrapBox.checked ? "pre-wrap" : "pre"; ta.style.wordBreak = wrapBox.checked ? "break-all" : ""; };
+  const applyWrap = () => { [ta, hl].forEach(el => { el.style.whiteSpace = wrapBox.checked ? "pre-wrap" : "pre"; el.style.wordBreak = wrapBox.checked ? "break-all" : ""; }); };
   wrapBox.onchange = () => { applyWrap(); try { localStorage.setItem("palaterm_viewer_wrap", wrapBox.checked ? "1" : "0"); } catch (e) {} };
   applyWrap();
   // Follow mode: poll every 2 s. On by default when the file is still being
@@ -87,34 +97,78 @@ async function bootViewerWindow() {
   ctxExtraItems = () => [[t("全文コピー"), copyAll]];
 
   // Font size (its own key; wireFontZoom, app.js).
-  const zoom = wireFontZoom("palaterm_viewer_font", px => { ta.style.fontSize = px + "px"; }, { def: 12 });
+  const zoom = wireFontZoom("palaterm_viewer_font", px => { ta.style.fontSize = px + "px"; hl.style.fontSize = px + "px"; }, { def: 12 });
   zoom.set(zoom.size);
   zoom.buttons(document.getElementById("lv-font-inc"), document.getElementById("lv-font-dec"));
   zoom.wheel(ta);
 
-  // Find: case-insensitive, selects the match in the textarea and scrolls to it.
+  // Find: case-insensitive. Every match is marked in the backdrop (lv-hl) as
+  // the query is typed, the current one in a stronger colour, and Enter
+  // walks them. The textarea's own selection used to be the only sign of a
+  // match, and it is invisible while the find box has the keyboard — the
+  // match was found but could not be seen (2026-10-27).
   const bar = document.getElementById("lv-findbar"), fin = document.getElementById("lv-find-in"), fn = document.getElementById("lv-find-n");
-  let matches = [], idx = -1, lastQ = "";
+  let matches = [], idx = -1, lastQ = "", marks = [];
+  const maxMarks = 20000; // more matches than this: only the current one is drawn
   function collect(q) { const res = []; if (!q) return res; const lq = q.toLowerCase(), s = ta.value.toLowerCase(); let i = 0; while ((i = s.indexOf(lq, i)) >= 0) { res.push(i); i += lq.length; } return res; }
-  function showMatch() {
-    if (!matches.length) { fn.textContent = lastQ ? t("該当なし") : ""; return; }
-    const m = matches[idx];
-    ta.focus(); ta.setSelectionRange(m, m + lastQ.length);
-    // Scroll the selection into view: estimate the line from the text before it.
-    const line = ta.value.slice(0, m).split(/\r\n|\r|\n/).length - 1;
-    const lh = parseFloat(getComputedStyle(ta).lineHeight) || zoom.size * 1.4;
-    ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 2);
-    fn.textContent = `${idx + 1} / ${matches.length}`;
+  const syncScroll = () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; };
+  ta.addEventListener("scroll", syncScroll);
+  // The backdrop stops short of the textarea's scrollbars, so wrapped lines
+  // break where the textarea breaks them.
+  const fitBackdrop = () => { hl.style.right = (ta.offsetWidth - ta.clientWidth) + "px"; hl.style.bottom = (ta.offsetHeight - ta.clientHeight) + "px"; syncScroll(); };
+  new ResizeObserver(fitBackdrop).observe(ta);
+  function paint() {
+    marks = [];
+    if (!matches.length) { hl.textContent = ""; fitBackdrop(); return; }
+    const s = ta.value, n = lastQ.length;
+    const draw = matches.length <= maxMarks ? matches : [matches[Math.max(idx, 0)]];
+    let html = "", pos = 0;
+    draw.forEach(m => { html += esc(s.slice(pos, m)) + '<mark class="lv-m">' + esc(s.slice(m, m + n)) + "</mark>"; pos = m + n; });
+    hl.innerHTML = html + esc(s.slice(pos));
+    marks = [...hl.querySelectorAll("mark")];
+    fitBackdrop();
   }
-  function findNext(dir) { const q = fin.value; if (q !== lastQ) { lastQ = q; matches = collect(q); idx = dir >= 0 ? -1 : 0; } if (!matches.length) { showMatch(); return; } idx = (idx + dir + matches.length) % matches.length; showMatch(); fin.focus(); }
-  function openFind() { bar.classList.remove("hidden"); fin.focus(); fin.select(); }
-  function closeFind() { bar.classList.add("hidden"); ta.focus(); }
+  // markCurrent colours the current match and reports the count; it returns
+  // that mark (null when there is none to go to).
+  function markCurrent() {
+    marks.forEach(el => el.classList.remove("lv-cur"));
+    if (!matches.length) { fn.textContent = lastQ ? t("該当なし") : ""; return null; }
+    if (idx < 0) { fn.textContent = t("{n} 件", { n: matches.length.toLocaleString() }); return null; }
+    const el = marks.length === matches.length ? marks[idx] : marks[0];
+    if (el) el.classList.add("lv-cur");
+    fn.textContent = `${idx + 1} / ${matches.length}`;
+    return el;
+  }
+  function showMatch() {
+    const el = markCurrent();
+    if (!el) return;
+    const m = matches[idx];
+    ta.setSelectionRange(m, m + lastQ.length);
+    // The mark's place in the backdrop is the match's place in the textarea.
+    ta.scrollTop = Math.max(0, el.offsetTop - ta.clientHeight / 2);
+    if (el.offsetLeft < ta.scrollLeft + 20 || el.offsetLeft > ta.scrollLeft + ta.clientWidth - 40) ta.scrollLeft = Math.max(0, el.offsetLeft - ta.clientWidth / 3);
+  }
+  function search(q) { lastQ = q; matches = collect(q); idx = -1; paint(); }
+  function findNext(dir) {
+    const q = fin.value;
+    if (q !== lastQ) search(q);
+    if (!matches.length) { showMatch(); return; }
+    idx = (idx + dir + matches.length) % matches.length;
+    if (matches.length > maxMarks) paint();
+    showMatch(); fin.focus();
+  }
+  // Typing marks as it goes (a moment after the last key, for a big log);
+  // the text changing underneath (自動更新) keeps the marks in step.
+  let typeTimer = null;
+  fin.addEventListener("input", () => { clearTimeout(typeTimer); typeTimer = setTimeout(() => { search(fin.value); markCurrent(); }, 120); });
+  refind = () => { if (!lastQ) return; matches = collect(lastQ); if (idx >= matches.length) idx = matches.length - 1; paint(); markCurrent(); };
+  function openFind() { bar.classList.remove("hidden"); fin.focus(); fin.select(); if (fin.value && fin.value !== lastQ) { search(fin.value); markCurrent(); } }
+  function closeFind() { bar.classList.add("hidden"); lastQ = ""; matches = []; idx = -1; paint(); fn.textContent = ""; ta.focus(); }
   document.getElementById("lv-find").onclick = openFind;
   document.getElementById("lv-find-next").onclick = () => findNext(1);
   document.getElementById("lv-find-prev").onclick = () => findNext(-1);
   document.getElementById("lv-find-close").onclick = closeFind;
   fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
-  fin.addEventListener("input", () => { lastQ = ""; fn.textContent = ""; });
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (zoom.key(e)) { e.preventDefault(); return; }

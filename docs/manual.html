@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.18</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.19</div>
   </header>
 
   <nav class="toc">
@@ -427,7 +427,7 @@
     外側（手前）から順に並び、1段目→2段目→…→対象機器 の順に経由します。各段ごとに接続方式（SSH / Telnet）・
     ホスト・ユーザー・パスワードを設定します（SSH の踏み台はユーザー名が必須で、空のままでは保存できません。Telnet の踏み台は空でも可）。<strong>「踏み台の通り方」</strong>は次の 2 つから選びます。</p>
     <ul>
-      <li><strong>踏み台上でコマンドを打つ（標準）</strong> — 2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進みます。ルーターなどシェルのある踏み台ならどれでも使えます。その認証は手前の踏み台側の ssh クライアントが行うため、PalaTerm に登録した鍵ファイル・レガシー暗号の設定が使われるのは1段目だけです（編集画面でも2段目以降は鍵の欄が出ません）。</li>
+      <li><strong>踏み台上でコマンドを打つ（標準）</strong> — 2段目以降と対象機器へは、手前の踏み台のシェルで <code>ssh</code> / <code>telnet</code> コマンドを打って進みます。ルーターなどシェルのある踏み台ならどれでも使えます。その認証は手前の踏み台側の ssh クライアントが行うため、PalaTerm に登録した鍵ファイルが使われるのは1段目だけです（編集画面でも2段目以降は鍵ファイルの欄が出ません）。2段目以降を手前の踏み台の上にある鍵で入る構成（<code>Enter passphrase for key …</code> と聞かれる）では、その段の「SSH認証」を公開鍵にして「鍵のパスフレーズ」を入れると自動で送ります。レガシー暗号の許可も段ごとに効きます。</li>
       <li><strong>SSH トンネル</strong> — 踏み台の SSH の中を通して、この PC から各段と対象機器へ直接 SSH ログインします（OpenSSH の <code>ProxyJump</code> と同じ）。<strong>全段で</strong>この PC の秘密鍵・パスフレーズ・レガシー暗号の設定・ホストキー確認が効き、踏み台では何も打ちません。踏み台はすべて SSH で、TCP 転送（<code>AllowTcpForwarding</code>。Linux の OpenSSH は標準で許可）を許可している必要があります。対象機器は SSH / Telnet。転送を許可していない踏み台（ルーターなど）では「転送を許可していません」と表示されるので、「踏み台上でコマンドを打つ」を選んでください。</li>
     </ul>
     <p>「踏み台上でコマンドを打つ」で次の段へ渡る<strong>ジャンプコマンドのテンプレート</strong>（<code>{user}</code> <code>{host}</code> <code>{port}</code> の変数入り）も段ごとに変えられるため、NW機器を踏み台にする構成にも対応できます。テンプレートが空欄の標準コマンドでは、次の段（または機器）のポートが 22（Telnet は 23）以外なら <code>ssh -p 2222 user@host</code> のようにポートが付きます。踏み台を1つも追加しなければ直接接続です。</p>
@@ -910,6 +910,16 @@
     </ul>
   </section>
 
+  <section id="changes-1919">
+    <h2 class="step"><span class="num">9+</span>v1.9.19 での挙動の変更</h2>
+    <p>現場からの報告 4 件への対応のうち、使い方が変わる点です。</p>
+    <ul>
+      <li><strong>踏み台の 2 段目以降</strong>: 機器の編集画面に「SSH認証」「手前の踏み台の上にある鍵のパスフレーズ」「この踏み台にレガシー暗号を許可」が出ます。手前の踏み台の上にある鍵で入る構成（<code>Enter passphrase for key …</code> と聞かれる）は、その段を「公開鍵」にしてパスフレーズを入れれば通ります（この PC の秘密鍵ファイル欄が使えるのは 1 段目と SSH トンネル方式だけ）。</li>
+      <li><strong>貼り付けの確認窓を閉じた後</strong>、端末をクリックしなくてもそのまま打鍵できます。<kbd>Alt+Tab</kbd> やタイトルバーのクリックで端末窓に戻った直後の <kbd>Alt+V</kbd>／<kbd>Ctrl+V</kbd>／<kbd>Shift+Insert</kbd> も効きます。</li>
+      <li><strong>ログ表示の検索</strong>: 入力中に全一致が黄色で強調され、件数が出ます。<kbd>Enter</kbd>／<kbd>Shift+Enter</kbd> で移動すると現在位置が橙になります。</li>
+    </ul>
+  </section>
+
   <section id="trouble">
     <h2 class="step"><span class="num">9+</span>v1.9.18 での挙動の変更</h2>
     <p>全パッケージのコードレビューに伴う変更のうち、使い方が変わる点です。</p>
@@ -966,7 +976,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.18 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.19 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

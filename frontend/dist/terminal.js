@@ -373,6 +373,22 @@ async function bootTerminalWindow() {
     e.preventDefault(); e.stopImmediatePropagation();
     if (txt) pasteOrConfirm(txt, false);
   }, true);
+  // Coming back to this window (Alt+Tab, the taskbar) can leave the page
+  // focused with nothing in it focused — the keys above are xterm's, and
+  // reached nothing: Alt+V after Alt+Tab from Excel did not paste
+  // (2026-10-27). The terminal takes the keyboard back whenever the window
+  // does and nothing else in the page (the find box, a dialog) has it, and
+  // the paste keys work from the page itself as a second net.
+  const idleFocus = () => !document.activeElement || document.activeElement === document.body;
+  window.addEventListener("focus", () => { if (!closed && idleFocus()) term.focus(); });
+  document.addEventListener("keydown", e => {
+    if (locked || hkOpen || closed || e.metaKey || e.type !== "keydown") return;
+    if (document.activeElement === term.textarea || !idleFocus()) return; // xterm's handler above has it
+    const isV = e.code === "KeyV" || e.key === "v" || e.key === "V";
+    const isIns = e.code === "Insert" || e.key === "Insert";
+    if (e.altKey && !e.ctrlKey && isV) { e.preventDefault(); term.focus(); pasteFromClipboard(true); }
+    else if ((e.ctrlKey && isV) || (e.shiftKey && !e.ctrlKey && isIns)) { e.preventDefault(); term.focus(); pasteFromClipboard(false); }
+  });
   // Right-click follows the 設定 tab, as Tera Term's 2 options: paste at
   // once (default), a menu whose 貼り付け pastes, or nothing.
   document.getElementById("tw-host").addEventListener("contextmenu", e => {

@@ -867,12 +867,17 @@ const I18N_EN = {
   "踏み台サーバ（任意・最大5段。外側＝手前から順に）": "Jump hosts (optional, up to 5 hops, outermost first)",
   "＋ 踏み台を追加": "+ Add jump host",
   "{n}段目の踏み台": "Jump host #{n}",
-  "2段目以降の認証は手前の踏み台の ssh / telnet コマンドが行うため、ここで使われるのはユーザー名とパスワードだけです。鍵認証やレガシー暗号は、手前の踏み台側の ssh 設定（~/.ssh の鍵など）で用意してください。":
-    "Jump hosts after the first are logged into by the previous jump host's own ssh / telnet command, so only the username and password entered here are used. Key authentication and legacy ciphers for such a jump host belong in the previous jump host's ssh setup (e.g. a key under ~/.ssh).",
+  "2段目以降へは手前の踏み台の ssh / telnet コマンドで入ります。パスワードで入るならユーザー名とパスワードを、手前の踏み台の上にある鍵で入る（Enter passphrase for key … と聞かれる）なら「SSH認証」を公開鍵にして、その鍵のパスフレーズを下の欄に入れてください。この PC の秘密鍵ファイルは使いません。":
+    "Jump hosts after the first are entered with the previous jump host's own ssh / telnet command. To log in with a password, fill in the username and password; to log in with a key kept on the previous jump host (it asks \"Enter passphrase for key …\"), set \"SSH auth\" to public key and put that key's passphrase in the field below. A private key file on this PC is not used.",
+  "手前の踏み台の ssh が Enter passphrase for key … と聞いてきたときに自動で送ります。送るのはこの踏み台の「SSH認証」が公開鍵のときだけです（パスワード認証の踏み台が同じ文言を出しても、鍵のパスフレーズは渡しません）":
+    "Sent automatically when the previous jump host's ssh asks \"Enter passphrase for key …\". It is sent only while this jump host's \"SSH auth\" is public key (a password-authenticated jump host printing the same words never learns the key's passphrase)",
+  "手前の踏み台の上にある鍵のパスフレーズ（保護されていない鍵は空欄・暗号化保存） ⓘ": "Passphrase of the key kept on the previous jump host (empty for an unprotected key; stored encrypted) ⓘ",
   "ホスト": "Host",
   "ユーザー": "User",
   "SSH認証": "SSH auth",
   "秘密鍵ファイル（公開鍵認証時）": "Private key file (for public-key auth)",
+  "秘密鍵ファイル（SSH トンネル方式のときだけ。コマンドを打つ方式では手前の踏み台の上の鍵を使うので空欄のまま）": "Private key file (SSH tunnel only; with commands typed on the jump hosts the key kept on the previous jump host is used, so leave this empty)",
+  "鍵のパスフレーズ（コマンドを打つ方式では手前の踏み台の上の鍵のもの・任意）": "Key passphrase (with commands typed on the jump hosts: of the key kept on the previous jump host; optional)",
   "次ホップへのジャンプコマンド（空欄=標準。NW機器踏み台などコマンド形式が違う場合に指定）":
     "Jump command to the next hop (blank = standard; set when this jump host needs a different syntax)",
   "例: ssh -l {user} {host}　（使用可: {user} {host} {port}）": "e.g. ssh -l {user} {host}  (available: {user} {host} {port})",

@@ -185,6 +185,7 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 }
 
 func (t *Term) startup(ctx context.Context) {
+	go keepKeyboardOnWebview(ctx)
 	cell, ok := parseRect(os.Getenv(tileEnv))
 	// The flag and the queue under one lock (see PLACE in NewTerm): a
 	// 並べ直す that reached the window while it was starting keeps its
@@ -778,8 +779,13 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 		}
 		_ = cmd.Wait()
 		// Hand the keyboard back to this window: closing the paste window
-		// does not reliably re-activate the terminal underneath.
+		// does not reliably re-activate the terminal underneath. The paste
+		// window hands the foreground over before it closes
+		// (handForegroundToParent), which also grants this attempt; a
+		// second one a moment later wins against the window manager
+		// activating whatever it picks once the paste window is gone.
 		focusOwnWindow()
+		time.AfterFunc(300*time.Millisecond, func() { focusOwnWindow() })
 		s, ok := pasteText(res)
 		if !ok {
 			runtime.EventsEmit(t.ctx, "term:paste-done", false)

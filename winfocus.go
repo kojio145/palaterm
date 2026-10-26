@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"os"
 	"runtime"
 	"sync"
 	"syscall"
@@ -28,7 +30,95 @@ var (
 	pBringWindowToTop       = user32.NewProc("BringWindowToTop")
 	pIsIconic               = user32.NewProc("IsIconic")
 	pAllowSetForeground     = user32.NewProc("AllowSetForegroundWindow")
+	pGetGUIThreadInfo       = user32.NewProc("GetGUIThreadInfo")
+	pIsChild                = user32.NewProc("IsChild")
+	pGetAsyncKeyState       = user32.NewProc("GetAsyncKeyState")
 )
+
+// guiThreadInfo is GUITHREADINFO (user32), hwndFocus being the window the
+// thread's keyboard goes to.
+type guiThreadInfo struct {
+	cbSize        uint32
+	flags         uint32
+	hwndActive    uintptr
+	hwndFocus     uintptr
+	hwndCapture   uintptr
+	hwndMenuOwner uintptr
+	hwndMoveSize  uintptr
+	hwndCaret     uintptr
+	rcCaret       [4]int32
+}
+
+// keepKeyboardOnWebview watches, for the life of ctx, that keystrokes meant
+// for this window reach its page: when this window is the foreground one
+// but its thread's keyboard focus is outside the WebView2 widget, the focus
+// is put back on the widget. Clicking the title bar (Wails gives the frame
+// the focus on WM_NCLBUTTONDOWN and the hand-back to the widget does not
+// always follow), the taskbar or Alt+Tab left the window active with keys
+// going nowhere until a click inside it — Enter in the paste window did not
+// paste, the terminal did not type (probe 2026-10-27). Left alone while a
+// mouse button is down (a title-bar drag keeps the frame's focus on
+// purpose) and while another window — a native dialog, a dropdown — is
+// the foreground.
+func keepKeyboardOnWebview(ctx context.Context) {
+	const vkLButton, vkRButton = 0x01, 0x02
+	t := time.NewTicker(150 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		hwnd := ownTopLevelWindow()
+		if hwnd == 0 || foregroundWindow() != hwnd {
+			continue
+		}
+		if l, _, _ := pGetAsyncKeyState.Call(vkLButton); l&0x8000 != 0 {
+			continue
+		}
+		if r, _, _ := pGetAsyncKeyState.Call(vkRButton); r&0x8000 != 0 {
+			continue
+		}
+		target := webviewInputChild(hwnd)
+		if target == 0 {
+			continue
+		}
+		tid, _, _ := pGetWindowThreadProcess.Call(hwnd, 0)
+		info := guiThreadInfo{cbSize: uint32(unsafe.Sizeof(guiThreadInfo{}))}
+		if ok, _, _ := pGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&info))); ok == 0 {
+			continue
+		}
+		if info.hwndFocus == target {
+			continue
+		}
+		if c, _, _ := pIsChild.Call(target, info.hwndFocus); info.hwndFocus != 0 && c != 0 {
+			continue
+		}
+		giveKeyboardTo(hwnd, target)
+	}
+}
+
+// giveKeyboardTo puts the keyboard focus on child, a window of hwnd's
+// thread, from this one (SetFocus only works from the owning thread, so the
+// input queues are attached for the call — as focusOwnWindow does).
+func giveKeyboardTo(hwnd, child uintptr) {
+	focusMu.Lock()
+	defer focusMu.Unlock()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	tid, _, _ := pGetWindowThreadProcess.Call(hwnd, 0)
+	cur, _, _ := pGetCurrentThreadId.Call()
+	attached := false
+	if tid != 0 && tid != cur {
+		r, _, _ := pAttachThreadInput.Call(cur, tid, 1)
+		attached = r != 0
+	}
+	pSetFocus.Call(child)
+	if attached {
+		pAttachThreadInput.Call(cur, tid, 0)
+	}
+}
 
 // focusMu serialises the focus attempts of one process: the page asks at
 // DomReady and again once connected, and two AttachThreadInput dances at
@@ -212,6 +302,30 @@ func topLevelWindowOf(pid int) uintptr {
 	enumFound = 0
 	pEnumWindows.Call(enumTopCB, 0)
 	return enumFound
+}
+
+// handForegroundToParent gives the foreground to the window of the process
+// that started this one — the terminal under a paste confirmation — before
+// this window closes. Done from here because only the foreground process
+// may hand the foreground on: once the paste window is gone, Windows
+// activates whichever window comes next in the stack (another program's,
+// in the field), and the terminal's own focusOwnWindow is then refused
+// (it started this process, not the other way round) — the taskbar button
+// flashed and the first keystrokes went nowhere until a click (2026-10-27).
+// AllowSetForegroundWindow also lets the terminal's own attempt, made once
+// this process has exited, succeed.
+func handForegroundToParent() {
+	ppid := os.Getppid()
+	if ppid <= 0 {
+		return
+	}
+	pAllowSetForeground.Call(uintptr(ppid))
+	hwnd := topLevelWindowOf(ppid)
+	if hwnd == 0 {
+		return
+	}
+	pBringWindowToTop.Call(hwnd)
+	pSetForegroundWindow.Call(hwnd)
 }
 
 // bringProcessToFront raises a child window process's window (restored if

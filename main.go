@@ -101,7 +101,10 @@ type childWindow struct {
 	bind     interface{}
 	startup  func(context.Context)
 	domReady func(context.Context)
-	hidden   bool // StartHidden: the spare command-set window
+	// beforeClose runs when the window is closed from its frame (nil: just
+	// close); true keeps it open.
+	beforeClose func(context.Context) bool
+	hidden      bool // StartHidden: the spare command-set window
 	onTop    bool // AlwaysOnTop: the paste window
 }
 
@@ -129,6 +132,7 @@ func runChildWindow(w childWindow) {
 		BackgroundColour: &bg,
 		OnStartup:        w.startup,
 		OnDomReady:       w.domReady,
+		OnBeforeClose:    w.beforeClose,
 		Bind:             []interface{}{w.bind},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
@@ -206,7 +210,7 @@ func runPasteWindow(device string) {
 	p := NewPaste(title)
 	// Stays above the terminal it belongs to, like Tera Term's dialog; it
 	// can still be moved aside to read the terminal underneath.
-	runChildWindow(childWindow{title: title, size: pasteWin, bg: pasteBG, bind: p, onTop: true, startup: p.startup, domReady: p.domReady})
+	runChildWindow(childWindow{title: title, size: pasteWin, bg: pasteBG, bind: p, onTop: true, startup: p.startup, domReady: p.domReady, beforeClose: p.beforeClose})
 }
 
 func runMainApp() {
