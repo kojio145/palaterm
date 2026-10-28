@@ -32,7 +32,6 @@ var (
 	pAllowSetForeground     = user32.NewProc("AllowSetForegroundWindow")
 	pGetGUIThreadInfo       = user32.NewProc("GetGUIThreadInfo")
 	pIsChild                = user32.NewProc("IsChild")
-	pGetAsyncKeyState       = user32.NewProc("GetAsyncKeyState")
 )
 
 // guiThreadInfo is GUITHREADINFO (user32), hwndFocus being the window the
@@ -57,11 +56,14 @@ type guiThreadInfo struct {
 // always follow), the taskbar or Alt+Tab left the window active with keys
 // going nowhere until a click inside it — Enter in the paste window did not
 // paste, the terminal did not type (probe 2026-10-27). Left alone while a
-// mouse button is down (a title-bar drag keeps the frame's focus on
-// purpose) and while another window — a native dialog, a dropdown — is
-// the foreground.
+// mouse drag, move/size loop or menu is under way (a title-bar drag keeps
+// the frame's focus on purpose) and while another window — a native
+// dialog, a dropdown — is the foreground. Those states are read from the
+// window thread's GUITHREADINFO only: v1.9.19 polled the mouse buttons with
+// GetAsyncKeyState, and one corporate Defender blocked that release as
+// Trojan:Script/Wacatac.C!ml while v1.9.18 passed (2026-10-28).
 func keepKeyboardOnWebview(ctx context.Context) {
-	const vkLButton, vkRButton = 0x01, 0x02
+	const guiBusy = 0x0002 | 0x0004 | 0x0008 | 0x0010 // GUI_INMOVESIZE | GUI_INMENUMODE | GUI_SYSTEMMENUMODE | GUI_POPUPMENUMODE
 	t := time.NewTicker(150 * time.Millisecond)
 	defer t.Stop()
 	for {
@@ -74,12 +76,6 @@ func keepKeyboardOnWebview(ctx context.Context) {
 		if hwnd == 0 || foregroundWindow() != hwnd {
 			continue
 		}
-		if l, _, _ := pGetAsyncKeyState.Call(vkLButton); l&0x8000 != 0 {
-			continue
-		}
-		if r, _, _ := pGetAsyncKeyState.Call(vkRButton); r&0x8000 != 0 {
-			continue
-		}
 		target := webviewInputChild(hwnd)
 		if target == 0 {
 			continue
@@ -87,6 +83,9 @@ func keepKeyboardOnWebview(ctx context.Context) {
 		tid, _, _ := pGetWindowThreadProcess.Call(hwnd, 0)
 		info := guiThreadInfo{cbSize: uint32(unsafe.Sizeof(guiThreadInfo{}))}
 		if ok, _, _ := pGetGUIThreadInfo.Call(tid, uintptr(unsafe.Pointer(&info))); ok == 0 {
+			continue
+		}
+		if info.hwndCapture != 0 || info.flags&guiBusy != 0 {
 			continue
 		}
 		if info.hwndFocus == target {
