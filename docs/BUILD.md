@@ -14,17 +14,31 @@ Wails アプリはビルドタグを付けた `go build` で直接 exe 化でき
 npm も wails CLI も不要です。
 
 ```bash
-go build -trimpath -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
 ```
 
 （リポジトリ直下の `build.bat` も同じコマンドです。）
 
 - `-trimpath`        : exe にビルド環境のパスを埋め込まない
+- `-buildvcs=false`  : git の状態（コミット・変更の有無）を埋め込まない（下の「公開 exe と同じものを作る」用）
 - `-tags production` : 埋め込み済みフロントエンド資産を使う（開発サーバに接続しない）
 - `-H windowsgui`    : コンソールウィンドウを出さない GUI アプリにする
 - `-s -w`            : デバッグ情報を除去してサイズ削減
 
 生成物: `build/bin/PalaTerm.exe`（約 11MB、単一ファイル、インストール不要）
+
+### 公開 exe と同じものを作る（再現可能なビルド）
+
+v1.9.20 以降のリリースは、タグごとに GitHub Actions（`.github/workflows/build.yml`）でもビルドされ、
+同じソースと同じ Go（`go.mod` の `toolchain`）からはバイト単位で同じ exe ができます。
+リリースノートの SHA-256 と見比べるには、改行を変換せずに取り出したソースからビルドします。
+
+```bash
+git clone -c core.autocrlf=false https://github.com/kojio145/palaterm.git
+cd palaterm && git checkout v1.9.20        # 確かめたい版
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+sha256sum build/bin/PalaTerm.exe
+```
 
 ## テスト
 

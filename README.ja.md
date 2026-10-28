@@ -77,6 +77,7 @@ exe の外に書くのは次の 2 か所だけで、どちらにも機器・認�
 
 - [利用マニュアル](docs/manual.html)
 - [使い方ガイド](docs/USAGE.md) / [ビルド手順](docs/BUILD.md)
+- [Code signing policy](https://kojio145.github.io/palaterm/code-signing-policy.html)（コード署名ポリシー）— リリースのビルドと承認の担当・再現可能なビルド・プライバシー
 - [セキュリティレビュー記録](docs/SECURITY.md) — 脆弱性の報告方法は [SECURITY.md](SECURITY.md) を参照
 - [開発記（Zenn）](https://zenn.dev/kjo145/articles/palaterm-batch-login-go-wails) — 設計方針・作業前後の照合・実機検証で踏んだバグ・配布の壁
 

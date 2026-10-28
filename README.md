@@ -98,6 +98,7 @@ A device list another system exports (xls, xlsx, CSV — including the HTML ".xl
 
 - [User manual](https://kojio145.github.io/palaterm/manual.html) (Japanese)
 - [Usage guide](docs/USAGE.md) (Japanese) / [Build instructions](docs/BUILD.md)
+- [Code signing policy](https://kojio145.github.io/palaterm/code-signing-policy.html) — who builds and approves releases, reproducible build, privacy
 - [Security review record](docs/SECURITY.md) — see [SECURITY.md](SECURITY.md) for how to report vulnerabilities
 - [Development story on Zenn](https://zenn.dev/kjo145/articles/palaterm-batch-login-go-wails) (Japanese) — design, before/after verification, bugs found on real devices, distribution hurdles
 

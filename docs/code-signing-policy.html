@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>PalaTerm - Code signing policy</title>
+<meta name="description" content="Code signing policy of PalaTerm: who builds, reviews and approves signed Windows releases, how they are built, and what the program sends over the network.">
+<link rel="canonical" href="https://kojio145.github.io/palaterm/code-signing-policy.html">
+<style>
+  :root { --ground:#f6f8fb; --panel:#fff; --panel-2:#eef2f7; --ink:#1b2430; --ink-soft:#4c5a6b; --ink-faint:#7a889a; --line:#dde4ec; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --ground:#0f141b; --panel:#171e28; --panel-2:#1f2835; --ink:#e6ebf2; --ink-soft:#aab6c5; --ink-faint:#7a889a; --line:#2a3542; --accent:#6ea0ff; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:"Segoe UI","Hiragino Sans","Noto Sans JP",system-ui,sans-serif; line-height:1.7; }
+  main { max-width:860px; margin:0 auto; padding:48px 20px 64px; }
+  h1 { font-size:2rem; margin:0 0 6px; }
+  .tag { color:var(--ink-soft); margin:0 0 24px; }
+  h2 { font-size:1.25rem; margin:36px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--line); }
+  ul { padding-left:1.3em; } li { margin:4px 0; }
+  table { border-collapse:collapse; width:100%; background:var(--panel); }
+  th, td { border:1px solid var(--line); padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--panel-2); }
+  code { background:var(--panel-2); padding:1px 5px; border-radius:4px; font-size:.92em; overflow-wrap:anywhere; }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  footer { margin-top:48px; color:var(--ink-faint); font-size:.85rem; border-top:1px solid var(--line); padding-top:16px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Code signing policy</h1>
+  <p class="tag"><a href="./">PalaTerm</a> — batch SSH / Telnet / serial login tool for network engineers (Windows, MIT License)</p>
+
+  <div class="box">Free code signing provided by <a href="https://about.signpath.io/">SignPath.io</a>, certificate by <a href="https://signpath.org/">SignPath Foundation</a>.</div>
+  <p>Releases of PalaTerm are distributed only from the project's <a href="https://github.com/kojio145/palaterm/releases">GitHub Releases page</a>. A signed release contains only programs built from the source code in this repository; third-party Go modules are compiled into the executable from their published source, and no binary from another vendor is signed.</p>
+
+  <h2>Team roles</h2>
+  <table>
+    <tr><th>Role</th><th>Members</th></tr>
+    <tr><td>Committers and reviewers</td><td>KJO (<a href="https://github.com/kojio145/palaterm">repository owner</a>)</td></tr>
+    <tr><td>Approvers</td><td>KJO (<a href="https://github.com/kojio145/palaterm">repository owner</a>)</td></tr>
+  </table>
+  <ul>
+    <li>PalaTerm has a single maintainer. Changes proposed by anyone else (pull requests) are reviewed by the maintainer before they are merged.</li>
+    <li>Every signing request is approved manually by an approver; nothing is signed automatically.</li>
+    <li>All team members use multi-factor authentication for GitHub and SignPath.</li>
+  </ul>
+
+  <h2>How releases are built</h2>
+  <ul>
+    <li>Each release tag is built by GitHub Actions with the workflow <a href="https://github.com/kojio145/palaterm/blob/main/.github/workflows/build.yml"><code>.github/workflows/build.yml</code></a>: <code>go vet</code>, <code>go test</code>, then <code>go build -trimpath -buildvcs=false -tags production</code>.</li>
+    <li>The build is reproducible: the same source and Go version produce the same bytes. The SHA-256 of <code>PalaTerm.exe</code> is published in each release note and in the workflow run's summary, and anyone can rebuild it with the steps in <a href="https://github.com/kojio145/palaterm/blob/main/docs/BUILD.md">BUILD.md</a> to compare.</li>
+    <li>The executable's product name is <code>PalaTerm</code> and its version matches the release tag.</li>
+  </ul>
+
+  <h2>Privacy policy</h2>
+  <p>This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.</p>
+  <ul>
+    <li>PalaTerm connects only to the network devices and jump hosts the user configures, over SSH, Telnet or a serial port, when the user runs a task or opens a session. It has no telemetry, no crash reporting, no update check and no advertising.</li>
+    <li>Device entries, credentials (in an AES-256-GCM encrypted vault) and session logs are stored only in the folder next to the executable. Details: <a href="https://github.com/kojio145/palaterm/blob/main/docs/SECURITY.md">security review record</a>.</li>
+    <li>The user interface is rendered by the Microsoft Edge WebView2 Runtime that is part of Windows. That component is governed by the <a href="https://www.microsoft.com/privacy/privacystatement">Microsoft Privacy Statement</a>.</li>
+  </ul>
+
+  <h2>Installation and removal</h2>
+  <p>PalaTerm needs no installer and does not change the system configuration or the registry. To remove it, delete its folder (and, optionally, the two small settings folders listed in the <a href="https://github.com/kojio145/palaterm#readme">README</a>).</p>
+
+  <footer>
+    PalaTerm is an open-source project (MIT License) by KJO. Report security problems as described in <a href="https://github.com/kojio145/palaterm/blob/main/SECURITY.md">SECURITY.md</a>.<br>
+    日本語: PalaTerm のコード署名ポリシーです（署名の担当・ビルド方法・外部へ送る情報がないこと）。
+  </footer>
+</main>
+</body>
+</html>
