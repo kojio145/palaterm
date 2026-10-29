@@ -984,13 +984,40 @@ func (r *Runner) sendCommand(ctx context.Context, exp *expecter, prof profile.Pr
 	// Not the text: it is the expanded command, which may carry a password
 	// ({enable} on its own line), and this error goes to the run table, the
 	// history file and the failed-devices CSV. The caller names the command.
-	if err := exp.Send(text); err != nil {
+	if err := sendKeys(exp, text); err != nil {
 		return fmt.Errorf("send: %w", err)
 	}
 	if wait != "" {
 		return r.waitTailAnswering(ctx, exp, prof, waitTail(wait), timeout, prof.Answers)
 	}
 	return r.waitPromptAnswering(ctx, exp, prof, timeout, prof.Answers)
+}
+
+// sendKeys types a command line. A line with key tokens ({ctrl+c},
+// {ctrl+^}x, {break}: model.KeySegments) goes out as the keys themselves,
+// with no line ending unless it says {enter}; any other line is the command
+// plus the transport's line ending. Either way the caller then waits for the
+// prompt (or the line's 待つ文字列), as a Ctrl+C or Ctrl+Z ends on one too.
+func sendKeys(exp *expecter, text string) error {
+	segs, ok := model.KeySegments(text)
+	if !ok {
+		return exp.Send(text)
+	}
+	for _, sg := range segs {
+		var err error
+		switch sg.Kind {
+		case model.KeySegEnter:
+			err = exp.Send("")
+		case model.KeySegBreak:
+			err = exp.Break()
+		default:
+			err = exp.SendRaw(sg.Text)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitTail is the pattern for a command's 待つ文字列: the text, literally,

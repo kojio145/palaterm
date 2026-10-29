@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.21</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.22</div>
   </header>
 
   <nav class="toc">
@@ -331,6 +331,7 @@
       <li><strong>コマンドの表</strong>に、1行1コマンドで入力します。「＋ 行を追加」で末尾に、各行の<strong>「＋」</strong>でその行の直後に挿入できます。<strong>「＋ まとめて追加…」</strong>を押すと小窓が開き、1 行 1 コマンドで入力して「追加」（<kbd>Ctrl</kbd>+<kbd>Enter</kbd>）すると、行数ぶんのコマンドが待機 1 秒で末尾に一度に追加されます。</li>
       <li>各行には<strong>待機秒（リモート用・シリアル用）をコマンドごとに</strong>指定できます。出力が長いコマンドだけ長めにする、といった調整が可能です（通常は既定の1秒でOK）。各コマンドは、送ったあと<strong>機器のプロンプトが出るのを待ってから</strong>待機秒だけ待って次へ進みます。</li>
       <li><strong>待つ文字列（任意）</strong>: プロンプトの代わりに待つ文字をコマンドごとに指定できます（例: <code>configure terminal</code> の行に <code>(config)#</code>）。機器の今の行がその文字で終わったら次のコマンドを送ります（文字そのまま・行末で一致。行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプトを待ちます。サンプルのコマンドセットには、各 OS タイプのプロンプトと同じ <code>#</code> が最初から入っています。</li>
+      <li><strong>制御キーを送る</strong>（v1.9.22）: コマンドの文字には制御文字を入れられない代わりに、<code>{ctrl+c}</code> のようなキー札が書けます（<code>{ctrl+a}</code>〜<code>{ctrl+z}</code>・<code>{ctrl+[}</code> <code>{ctrl+\}</code> <code>{ctrl+]}</code> <code>{ctrl+^}</code> <code>{ctrl+_}</code>・<code>{esc}</code>・<code>{tab}</code>・<code>{enter}</code>・<code>{break}</code>＝シリアルのブレーク信号。大文字小文字は不問）。キー札を含む行は<strong>改行を付けずにそのまま送り</strong>（Cisco の ping を止める <code>{ctrl+^}x</code> のように文字を続けて書けます）、改行も送るなら末尾に <code>{enter}</code> を書きます。送ったあとは普通の行と同じくプロンプト（または待つ文字列）を待ちます。例: <code>ping 192.0.2.1 repeat 100000</code>（待つ文字列 <code>!</code>・待機 5 秒）の次の行に <code>{ctrl+^}x</code>、設定モードを抜けるのに <code>{ctrl+z}</code>。<code>{ctrl+1}</code> のような使えない札は保存時に止まります。<code>{break}</code> は SSH・Telnet ではエラーで止まります。</li>
       <li><strong>待機秒を使う</strong>（セット単位・既定オン）: オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または待つ文字列）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです（一覧に「待機秒なし」と出ます）。</li>
       <li><strong>「保存」</strong>を押します。</li>
     </ol>
@@ -910,6 +911,14 @@
     </ul>
   </section>
 
+  <section id="changes-1922">
+    <h2 class="step"><span class="num">9+</span>v1.9.22 での挙動の変更</h2>
+    <ul>
+      <li><strong>コマンドセットから制御キー</strong>: <code>{ctrl+c}</code> <code>{ctrl+z}</code> <code>{ctrl+^}x</code> <code>{esc}</code> <code>{break}</code> などのキー札がコマンドに書けます（<a href="#cmdset">3. コマンドセットを作る</a>）。</li>
+      <li><strong>入力欄の右クリック</strong>: 機器の編集・踏み台・設定・コマンドセットなど、メイン画面の文字の入力欄を右クリックすると「切り取り・コピー・貼り付け・すべて選択」が出ます（パスワード欄は貼り付けだけ）。これまでは何も出ず、貼り付けは <kbd>Ctrl+V</kbd> だけでした。</li>
+    </ul>
+  </section>
+
   <section id="changes-1919">
     <h2 class="step"><span class="num">9+</span>v1.9.19 での挙動の変更</h2>
     <p>現場からの報告 4 件への対応のうち、使い方が変わる点です。</p>
@@ -976,7 +985,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.21 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.22 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

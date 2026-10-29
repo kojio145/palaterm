@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.21";
+const APP_VERSION = "1.9.22";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -893,9 +893,55 @@ function closeCtxMenu() { ctxMenu.classList.add("hidden"); ctxMenu.innerHTML = "
 // Pages can add their own entries (the log viewer adds 全文コピー): a
 // function returning [label, action] pairs for the element right-clicked.
 let ctxExtraItems = null;
+// Right-click in a text field: the edit menu. Wails turns WebView2's own
+// context menu off in a production build, so without this a right-click in
+// the device editor's fields did nothing at all (only Ctrl+V pasted).
+const TEXT_INPUTS = new Set(["", "text", "password", "search", "url", "email", "tel", "number"]);
+function isTextField(el) {
+  if (!el || el.disabled || el.readOnly) return false;
+  return el.tagName === "TEXTAREA" || (el.tagName === "INPUT" && TEXT_INPUTS.has(el.type || ""));
+}
+async function pasteIntoField(el) {
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch (e) { }
+  if (!text) { try { text = await rt().ClipboardGetText(); } catch (e) { } }
+  if (!text) { toast(t("クリップボードが空です"), "err"); return; }
+  // A one-line field takes a multi-line clipboard as one line, as a
+  // keyboard paste does.
+  if (el.tagName === "INPUT") text = text.replace(/\r?\n/g, " ").trim();
+  el.focus();
+  const a = el.selectionStart ?? el.value.length, b = el.selectionEnd ?? a;
+  el.setRangeText(text, a, b, "end");
+  // Typed-in handlers (dirty flags, the hop rows' sync) listen to these.
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}
+function fieldMenuItems(el) {
+  const secret = el.dataset.eyed || el.type === "password";
+  const a = el.selectionStart ?? 0, b = el.selectionEnd ?? 0;
+  const picked = !secret && b > a ? el.value.slice(a, b) : "";
+  const items = [];
+  if (picked) {
+    items.push([t("切り取り"), async () => {
+      await copyText(picked, t("コピーしました"));
+      el.focus(); el.setRangeText("", a, b, "end");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }]);
+    items.push([t("コピー"), () => copyText(picked, t("コピーしました"))]);
+  }
+  items.push([t("貼り付け"), () => pasteIntoField(el)]);
+  if (!secret && el.value) items.push([t("すべて選択"), () => { el.focus(); el.select(); }]);
+  return items;
+}
 document.addEventListener("contextmenu", e => {
   closeCtxMenu();
   if (e.defaultPrevented) return; // e.g. 接続 (right-click = no automatic login)
+  if (isTextField(e.target)) {
+    e.preventDefault();
+    showCtxMenu(fieldMenuItems(e.target), e);
+    return;
+  }
   // Text selected on the page, or inside the input / textarea that was
   // right-clicked (its selection is not part of the page selection).
   let picked = "";
