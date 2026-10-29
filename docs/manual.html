@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.22</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.23</div>
   </header>
 
   <nav class="toc">
@@ -578,6 +578,7 @@
       <li>機器一覧、または実行タブの対象機器の行の<strong>「接続」</strong>を押します。</li>
       <li><strong>本ツールとは独立した別ウィンドウ</strong>が開きます（タスクバーにも別途表示。タイトルは「機器名 - アドレス」で、切断後は「切断」、失敗時は「接続失敗」が付きます。踏み台経由なら画面上部に「踏み台 n 段経由」）。接続の進み具合は「接続中…（経過秒）」で表示され、ログインは自動で完了します。</li>
       <li>そのまま<strong>キーボードで直接コマンドを入力</strong>できます（通常のTera Term等と同じ感覚）。</li>
+      <li><strong>画面の大きさと機器</strong>（v1.9.23）: 擬似端末は窓の実際の桁数・行数で開きます。OS タイプにページャ解除コマンド（<code>terminal length 0</code> など）がある機器では、ログイン後に窓の大きさを変えても機器には知らせません（Cisco IOS は大きさの通知を受けるたびに <code>terminal length</code> を行数に戻し、<code>--More--</code> が復活するため）。ページャ解除の無い OS タイプでは従来どおり知らせます。再接続は、そのときの窓の大きさで開き直します。</li>
       <li><strong>貼り付けは <kbd>Ctrl</kbd>+<kbd>V</kbd></strong>（<kbd>Shift</kbd>+<kbd>Insert</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> も可）、<strong><kbd>Alt</kbd>+<kbd>V</kbd></strong>（Tera Term の「貼り付け&lt;CR&gt;」相当）、<strong>右クリック</strong>（<a href="#settings">設定</a>で無効にしたり、メニューで確認してから貼り付けるようにもできます）、またはツールバーの<strong>「貼り付け…」</strong>。<strong>1 行だけなら確認なしでそのまま貼り付け</strong>、Enter は送りません（プロンプト上の内容を見てから自分で Enter。<kbd>Alt</kbd>+<kbd>V</kbd> のときだけ Enter も送ります）。<strong>2 行以上</strong>は Tera Term と同じく<strong>貼り付ける内容の確認が別ウィンドウ</strong>で開きます（端末の手前に出て、自由に動かしたり広げたりできます）。内容を確認し（必要なら編集し）、「貼り付け」または <kbd>Enter</kbd> で送ります（<kbd>Shift</kbd>+<kbd>Enter</kbd> で改行挿入、<kbd>Esc</kbd> で取消）。「最後に Enter を送る」は<strong>既定でオン</strong>で、切り替えた状態は次回以降も引き継がれます（<kbd>Alt</kbd>+<kbd>V</kbd> のときは常にオン）。Windows のクリップボード履歴（<kbd>Win</kbd>+<kbd>V</kbd>）から選んだ項目も同じ確認を経ます。複数行は各行の末尾が Enter として送られます。</li>
       <li>対話接続・貼り付けの確認・ログ表示・差分の各ウィンドウは、<strong>開いた元のウィンドウの上（同じモニタ）</strong>に開きます。デュアルモニタで本体をサブモニタに置いていても、メインモニタ側に飛ばずにそのまま使えます。</li>
       <li><strong>コピーは Tera Term と同じく、マウスで範囲を選択するだけ</strong>で自動的にクリップボードへ入り、上部バーに「コピーしました」と短く表示されます（ダブルクリックで単語選択）。<kbd>Ctrl</kbd>+<kbd>C</kbd> はコピーではなく機器への中断（^C）送信です。</li>
@@ -911,6 +912,13 @@
     </ul>
   </section>
 
+  <section id="changes-1923">
+    <h2 class="step"><span class="num">9+</span>v1.9.23 での挙動の変更</h2>
+    <ul>
+      <li><strong>単独窓（対話接続）の <code>--More--</code></strong>: Cisco IOS などで、自動ログインが <code>terminal length 0</code> を送ったのに直後の <code>show run</code> が <code>--More--</code> で止まる件を修正。原因は、ログイン後に窓の大きさを機器へ通知していたことで、IOS がその通知で <code>terminal length</code> を行数に戻していました。擬似端末を窓の実サイズで開き、ページャ解除のある OS タイプではその後の大きさの通知を送りません（<a href="#interactive">対話接続</a>）。</li>
+    </ul>
+  </section>
+
   <section id="changes-1922">
     <h2 class="step"><span class="num">9+</span>v1.9.22 での挙動の変更</h2>
     <ul>
@@ -985,7 +993,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.22 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.23 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

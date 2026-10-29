@@ -109,6 +109,10 @@ type Runner struct {
 
 	// HostKeys pins SSH host keys (TOFU). nil accepts any key (tests only).
 	HostKeys session.HostKeyStore
+	// TermCols and TermRows size the SSH pseudo-terminal: an interactive
+	// window sets them to its own screen before it connects (0: the
+	// default, see session.DialOpts).
+	TermCols, TermRows int
 
 	// live: the logs of the devices running now, by path (see FlushLive).
 	live sync.Map
@@ -181,6 +185,8 @@ func (r *Runner) dialOpts(dev *model.Device) session.DialOpts {
 	return session.DialOpts{
 		HostKey: session.VerifyHostKey(r.HostKeys),
 		Legacy:  dev.LegacyAlgos,
+		Cols:    r.TermCols,
+		Rows:    r.TermRows,
 	}
 }
 

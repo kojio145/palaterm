@@ -144,6 +144,21 @@ type DialOpts struct {
 	// CBC, 3DES) for network gear that supports nothing newer. Off by
 	// default, mirroring modern clients that disabled SHA-1 by default.
 	Legacy bool
+	// Cols and Rows size the pseudo-terminal (0: 120×40). An interactive
+	// window passes its own size, so the device sets its paging from the
+	// real screen once and the profile's pager-off command then holds —
+	// Cisco IOS resets "terminal length" to the row count of every
+	// window-change it receives.
+	Cols, Rows int
+}
+
+// ptySize is the pseudo-terminal size to request: the window's, or the
+// 120×40 a batch run has always used.
+func (o DialOpts) ptySize() (cols, rows int) {
+	if o.Cols > 0 && o.Rows > 0 {
+		return o.Cols, o.Rows
+	}
+	return 120, 40
 }
 
 // dialSSHClient connects and completes the SSH handshake, with the connect
@@ -248,7 +263,7 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 	if err != nil {
 		return nil, sshDialError(addr, err, user, auth, opts)
 	}
-	s, err := startShell(client)
+	s, err := startShell(client, opts)
 	if err != nil {
 		client.Close()
 		return nil, err
@@ -351,11 +366,12 @@ func algorithmHint(err error, opts DialOpts) string {
 
 // startShell opens the interactive shell on an authenticated client. The
 // caller still owns client when it fails.
-func startShell(client *ssh.Client) (*sshSession, error) {
+func startShell(client *ssh.Client, opts DialOpts) (*sshSession, error) {
 	sess, err := client.NewSession()
 	if err != nil {
 		return nil, err
 	}
+	cols, rows := opts.ptySize()
 
 	// ECHO stays on. Network gear ignores these modes, but a Unix-style far
 	// end honours them, and an OpenSSH client started on such a host — the
@@ -363,7 +379,7 @@ func startShell(client *ssh.Client) (*sshSession, error) {
 	// from the next hop. With ECHO off here, nothing the user typed showed
 	// on an ALAXALA reached through a jump server (its CLI is a real shell).
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 14400, ssh.TTY_OP_OSPEED: 14400}
-	if err := sess.RequestPty("xterm", 40, 120, modes); err != nil {
+	if err := sess.RequestPty("xterm", rows, cols, modes); err != nil {
 		sess.Close()
 		return nil, err
 	}

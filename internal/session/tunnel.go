@@ -58,7 +58,7 @@ func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, 
 		if err != nil {
 			return sshDialError(name, err, dev.Username, dev.AuthMethod, opts)
 		}
-		if s, err = startShell(c); err != nil {
+		if s, err = startShell(c, opts); err != nil {
 			c.Close()
 			return err
 		}

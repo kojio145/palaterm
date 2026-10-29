@@ -127,7 +127,14 @@ func TestLinuxProfilesEndToEnd(t *testing.T) {
 					t.Errorf("output %q missing:\n%s", want, res.Transcript)
 				}
 			}
+			// The "exit" of the disconnect goes out just before the line
+			// closes: the fake records it a moment after RunDevice returns
+			// (seen once in a full-suite run, 2026-10-29).
 			got := strings.Join(cmds(), " | ")
+			for i := 0; i < 20 && !strings.Contains(got, "exit"); i++ {
+				time.Sleep(100 * time.Millisecond)
+				got = strings.Join(cmds(), " | ")
+			}
 			pager := "export PAGER=cat SYSTEMD_PAGER=cat GIT_PAGER=cat"
 			for _, want := range []string{tc.user + " | pw", pager, "uname -a", "echo cost $5 # note", "exit"} {
 				if !strings.Contains(got, want) {

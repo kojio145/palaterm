@@ -49,6 +49,17 @@ type Term struct {
 	mu        sync.Mutex
 	send      func(string) error
 	resizeFn  func(cols, rows int) error
+	// cols/rows is the screen size the page last reported (Resize), the
+	// size the pseudo-terminal is opened at; sizeKnown closes at the first
+	// report so a connect can wait for it. sentCols/sentRows is the size the
+	// device has: the pty's, then each window-change forwarded. pagerOff is
+	// set once the profile's pager-off command has gone: from then on
+	// window-changes are not forwarded (see Resize).
+	cols, rows         int
+	sizeKnown          chan struct{}
+	sizeOnce           sync.Once
+	sentCols, sentRows int
+	pagerOff           bool
 	closeFn   func() error
 	logDir    string // Settings.LogDir once the vault is open ("" => logs/)
 	slog      *logstore.Stream
@@ -136,6 +147,7 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 		profiles:  reg,
 		runner:    runpkg.New(reg),
 		pwCh:      make(chan string, 1),
+		sizeKnown: make(chan struct{}),
 	}
 	// 並べて接続 may open the window with 同時入力 on (設定 tab).
 	t.bc.join = os.Getenv(bcastEnv) == "1"
@@ -324,7 +336,18 @@ func (t *Term) connect(pw string) {
 		d = inv.ResolveCredentials(d)
 		dev = &d
 	}
+	// The page measures its screen right after it loads (doFit → Resize);
+	// the pty is opened at that size so the device's paging is set from the
+	// real screen once, before the profile turns it off. A connect that
+	// comes first (the stdin password arrives at once) waits a moment.
+	select {
+	case <-t.sizeKnown:
+	case <-time.After(700 * time.Millisecond):
+	}
 	t.mu.Lock()
+	t.runner.TermCols, t.runner.TermRows = t.cols, t.rows
+	t.sentCols, t.sentRows = t.cols, t.rows
+	t.pagerOff = false
 	t.pw, t.dev, t.hostKeys = pw, dev, hk
 	t.autoLockMin = inv.Settings.AutoLockMin
 	if t.autoLockMin <= 0 {
@@ -411,11 +434,14 @@ func (t *Term) connect(pw string) {
 		runtime.EventsEmit(t.ctx, "term:data", termMsg{Device: t.label,
 			Data: base64.StdEncoding.EncodeToString([]byte(runpkg.RedactSecrets(string(b), dev)))})
 	}
-	exp, _, err := t.runner.ConnectTee(ctx, dev, inv.Settings, tee)
+	exp, prof, err := t.runner.ConnectTee(ctx, dev, inv.Settings, tee)
 	stopProgress()
 	t.noteMismatch(err)
 	t.mu.Lock()
 	t.cancelLogin = nil
+	// A completed login has sent the profile's pager-off command (when it
+	// has one): the window-changes that follow must not undo it.
+	t.pagerOff = err == nil && !t.switched && len(prof.Pager) > 0
 	switched := t.switched
 	t.switched = false
 	t.mu.Unlock()
@@ -607,7 +633,11 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	}
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
+	cols, rows := t.cols, t.rows
 	t.mu.Unlock()
+	// The screen may have changed while the login ran (並べて接続 placing
+	// the window): tell the device, where Resize still allows it.
+	_ = t.Resize(cols, rows)
 	t.bcastReport() // takes keys from the other windows now
 	// A serial device record has no host; the title shows the port and baud
 	// actually opened instead ("COM3 @ 9600"), so an auto-detected port is
@@ -861,14 +891,28 @@ func (t *Term) sendText(s string, relay bool) error {
 	return send(s)
 }
 
-// Resize notifies the device of a new terminal size.
+// Resize takes the page's screen size: before the connect it is the size
+// the pseudo-terminal will be opened at; during a session it is forwarded
+// to the device as a window-change — unless the profile's pager-off
+// command has gone. Cisco IOS answers every window-change by setting
+// "terminal length" to the new row count, which brought the --More--
+// paging back right after the automatic login had turned it off (field
+// report, 2026-10-29): the device keeps the size it was opened at, and
+// the pager stays off. A size the device already has is not sent again.
 func (t *Term) Resize(cols, rows int) error {
-	t.mu.Lock()
-	r := t.resizeFn
-	t.mu.Unlock()
-	if r == nil {
+	if cols <= 0 || rows <= 0 {
 		return nil
 	}
+	t.mu.Lock()
+	t.cols, t.rows = cols, rows
+	t.sizeOnce.Do(func() { close(t.sizeKnown) })
+	r := t.resizeFn
+	if r == nil || t.pagerOff || (cols == t.sentCols && rows == t.sentRows) {
+		t.mu.Unlock()
+		return nil
+	}
+	t.sentCols, t.sentRows = cols, rows
+	t.mu.Unlock()
 	return r(cols, rows)
 }
 
