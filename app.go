@@ -2454,6 +2454,26 @@ func (a *App) PickLogDir() (string, error) {
 	})
 }
 
+// dialogDir turns a wished-for starting folder of a file dialog into one the
+// dialog can open. The runtime refuses to open a dialog whose default folder
+// is missing ("default directory … does not exist"), which left the user
+// with no way to pick another key once the folder of the last one was moved
+// or deleted (the device save records that key's folder). The nearest
+// existing ancestor is used instead; "" lets the dialog pick its own place.
+func dialogDir(want string) string {
+	for d := want; d != ""; {
+		if st, err := os.Stat(d); err == nil && st.IsDir() {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	return ""
+}
+
 func (a *App) PickKeyFile() (string, error) {
 	a.mu.Lock()
 	def := ""
@@ -2463,7 +2483,7 @@ func (a *App) PickKeyFile() (string, error) {
 	a.mu.Unlock()
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("秘密鍵ファイルを選択", "Choose the private key file"),
-		DefaultDirectory: def,
+		DefaultDirectory: dialogDir(def),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("秘密鍵 (id_*;*.pem;*.key)", "Private keys (id_*;*.pem;*.key)"), Pattern: "id_*;*.pem;*.key"},
 			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
@@ -2863,7 +2883,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.20"
+const appVersion = "1.9.21"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
@@ -3045,7 +3065,7 @@ func (a *App) ImportCommandSetFile() (FileImport, error) {
 	defer recoverBound(a.ctx, "ImportCommandSetFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("コマンドセットのファイルを読み込む", "Import a command set file"),
-		DefaultDirectory: filepath.Join(exeDir(), "export", "command-sets"),
+		DefaultDirectory: dialogDir(filepath.Join(exeDir(), "export", "command-sets")),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("コマンドセット (*.csv;*.list;*.txt)", "Command sets (*.csv;*.list;*.txt)"), Pattern: "*.csv;*.list;*.txt"},
 			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
@@ -3093,7 +3113,7 @@ func (a *App) ImportOSProfileFile() (FileImport, error) {
 	defer recoverBound(a.ctx, "ImportOSProfileFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("OSタイププロファイルのファイルを読み込む", "Import an OS profile file"),
-		DefaultDirectory: filepath.Join(exeDir(), "export", "os-profiles"),
+		DefaultDirectory: dialogDir(filepath.Join(exeDir(), "export", "os-profiles")),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("OSプロファイル (*.json)", "OS profiles (*.json)"), Pattern: "*.json"},
 			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
@@ -3214,7 +3234,7 @@ func (a *App) PickImportFile(targetGroup string, overwriteShared bool) (*ImportP
 	defer recoverBound(a.ctx, "PickImportFile")
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("一式の目録（palaterm-bundle.json）または機器CSVを読み込む", "Import a bundle (palaterm-bundle.json) or a device CSV"),
-		DefaultDirectory: filepath.Join(exeDir(), "export", "bundles"),
+		DefaultDirectory: dialogDir(filepath.Join(exeDir(), "export", "bundles")),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("一式の目録 / 機器CSV", "Bundle manifest / device CSV"), Pattern: "palaterm-bundle.json;*.csv"},
 			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},

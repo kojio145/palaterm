@@ -165,7 +165,7 @@ func (a *App) ImportImportRuleFile() (string, error) {
 	_ = os.MkdirAll(importRulesDir(), 0o700)
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title:            a.word("変換ルールを読み込む", "Load an import rule"),
-		DefaultDirectory: importRulesDir(),
+		DefaultDirectory: dialogDir(importRulesDir()),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("変換ルール (*.json)", "Import rule (*.json)"), Pattern: "*.json"},
 		},
