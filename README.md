@@ -64,6 +64,8 @@ If you forget the master password the vault cannot be recovered.
 ## Installation
 
 None needed. Download `PalaTerm-vX.Y-win64.zip` from [Releases](../../releases), extract it, and put the `PalaTerm` folder wherever you like (e.g. `C:\Tools\PalaTerm`). Run `PalaTerm.exe` inside it — the vault, logs and exports are created in that folder, so nothing is scattered around the exe. The bare `PalaTerm.exe` is also attached for updating in place: replace the exe, keep the folder.
+
+Code signing: applied to the [SignPath Foundation](https://signpath.org/) for free code signing provided by [SignPath.io](https://about.signpath.io/) — see the [code signing policy](https://kojio145.github.io/palaterm/code-signing-policy.html).
 All PalaTerm data (encrypted vault, logs, exports) is written next to the exe. Its `data\` folder holds the vault and its previous copy (`.bak`),
 the schedule records (`schedule-log.json`, `schedule-dirs.json`, `schedule-checked.json` — names, IDs and times, no credentials),
 `palaterm.lock` (which PC and user have the folder open; released when PalaTerm exits) and `error.log` (written only when an internal error occurs).
