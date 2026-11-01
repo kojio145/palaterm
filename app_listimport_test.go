@@ -27,6 +27,7 @@ func listImportApp(t *testing.T) (*App, string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	a.listPath = path // what PickListFile's dialog would have chosen
 	return a, path, id
 }
 
@@ -120,6 +121,7 @@ func TestSampleMaskedOnTableError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer forgetBook()
+	a.listPath = path
 	// By its header text, and (the header renamed since) by its column.
 	for _, col := range []string{"PW", "パスワード"} {
 		res, err := a.TestImportRule(path, model.ImportRule{Name: "r", HeaderRow: 9, Fields: []model.ImportField{

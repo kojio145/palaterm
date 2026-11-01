@@ -250,6 +250,11 @@ func (s Slot) Next(after time.Time) time.Time {
 		}
 		return t
 	case KindInterval:
+		// Counted in elapsed time (time.Sub and time.Add measure absolute
+		// durations, the same in every zone): a 24-hour interval fires 24
+		// hours after the last one across a daylight-saving change, which
+		// is a different wall-clock hour on that day. Japan has no DST; the
+		// daily and weekly kinds go by the wall clock (time.Date) instead.
 		start, n, ok := s.intervalIndex(after)
 		if !ok || s.Remaining(after) == 0 {
 			return time.Time{} // all Count firings, or Until, are behind

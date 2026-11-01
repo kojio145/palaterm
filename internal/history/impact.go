@@ -44,21 +44,23 @@ type impactRule struct {
 }
 
 // The rules, first match wins. Written against the lower-cased line
-// (with "no " kept: removing a route weighs as much as adding one).
+// (with "no " / "undo " kept: removing a route weighs as much as adding
+// one). Besides IOS and FortiOS: Junos set paths, Comware / VRP, Yamaha.
 var impactRules = []impactRule{
-	{regexp.MustCompile(`^(no )?shutdown$`), "high", "ポートの up/down"},
-	{regexp.MustCompile(`^(no )?(ip |ipv6 )?(address|ip address|route|default-gateway|default-network)\b`), "high", "アドレス・経路"},
-	{regexp.MustCompile(`^(no )?ip route\b|^(no )?set (gateway|device|dst|ip|allowaccess)\b`), "high", "アドレス・経路"},
-	{regexp.MustCompile(`^(no )?(router|address-family|neighbor|network|redistribute|area|passive-interface)\b`), "high", "ルーティング"},
-	{regexp.MustCompile(`^(no )?(ip |ipv6 )?(access-group|traffic-filter|access-class)\b`), "high", "ACL の適用"},
-	{regexp.MustCompile(`^(no )?(permit|deny)\b|^(no )?access-list\b`), "high", "ACL の中身"},
-	{regexp.MustCompile(`^(no )?set (srcintf|dstintf|srcaddr|dstaddr|service|action|status|nat|schedule)\b`), "high", "ポリシー"},
-	{regexp.MustCompile(`^(no )?(vrf|ip vrf|crypto|tunnel|interface tunnel|channel-group|lacp|spanning-tree (mode|priority|vlan)|vtp|mtu|speed|duplex|hsrp|standby|vrrp|ip nat|nat)\b`), "high", "接続・冗長・NAT"},
-	{regexp.MustCompile(`^(no )?(switchport|vlan|encapsulation|set vlanid|ip helper-address|ip dhcp|dhcp)\b`), "mid", "VLAN・DHCP"},
-	{regexp.MustCompile(`^(no )?(ntp|clock|ip name-server|ip domain|dns|set (primary|secondary|server|source-ip|hostname))\b`), "mid", "時刻・名前解決"},
-	{regexp.MustCompile(`^(no )?(logging|syslog|snmp|snmp-server|aaa|tacacs|radius|username|enable (secret|password)|line |ip ssh|ip http|set (admin|password|passwd)|service password)\b`), "mid", "管理・認証"},
-	{regexp.MustCompile(`^(no )?(ip access-list|ipv6 access-list|route-map|ip prefix-list|class-map|policy-map|service-policy|set (name|member|subnet|start-ip|end-ip|interface))\b`), "mid", "オブジェクト・QoS"},
-	{regexp.MustCompile(`^(no )?(description|banner|remark|alias|set (comment|comments|alias|description|uuid|color))\b|^(no )?(exec-timeout|history|length)\b`), "low", "説明・表示"},
+	{regexp.MustCompile(`^(no |undo )?shutdown$|^(set|delete) interfaces \S+( unit \d+)? disable$`), "high", "ポートの up/down"},
+	{regexp.MustCompile(`^(set|delete|deactivate|activate) (interfaces|routing-instances) \S+.* description\b`), "low", "説明・表示"},
+	{regexp.MustCompile(`^(no |undo )?(ip |ipv6 )?(address|ip address|route|route-static|default-gateway|default-network)\b`), "high", "アドレス・経路"},
+	{regexp.MustCompile(`^(no |undo )?ip route\b|^(no |undo )?set (gateway|device|dst|ip|allowaccess)\b|^(set|delete|deactivate|activate) routing-options\b|^(set|delete|deactivate|activate) interfaces \S+.*\baddress\b|^(no )?ipv?6? (lan|wan|pp|tunnel|bridge|vlan)\S* address\b`), "high", "アドレス・経路"},
+	{regexp.MustCompile(`^(no |undo )?(router|address-family|neighbor|network |redistribute|area|passive-interface|ospf|bgp|isis|rip|import-route|peer)\b|^(set|delete|deactivate|activate) (protocols|routing-instances)\b`), "high", "ルーティング"},
+	{regexp.MustCompile(`^(no |undo )?(ip |ipv6 )?(access-group|traffic-filter|access-class|packet-filter)\b|^(no )?ipv?6? \S+ secure filter\b|^(set|delete) interfaces \S+.* filter\b`), "high", "ACL の適用"},
+	{regexp.MustCompile(`^(no |undo )?(permit|deny)\b|^(no |undo )?access-list\b|^(no |undo )?rule \d+\b|^(no )?ipv?6? filter\b|^(set|delete|deactivate|activate) firewall\b`), "high", "ACL の中身"},
+	{regexp.MustCompile(`^(no |undo )?set (srcintf|dstintf|srcaddr|dstaddr|service|action|status|nat|schedule)\b|^(set|delete|deactivate|activate) security (policies|zones|nat|address-book)\b|^(no )?nat descriptor\b`), "high", "ポリシー"},
+	{regexp.MustCompile(`^(no |undo )?(vrf|ip vrf|ip binding vpn-instance|crypto|tunnel|interface tunnel|channel-group|lacp|spanning-tree (mode|priority|vlan)|stp|vtp|mtu|jumboframe|speed|duplex|hsrp|standby|vrrp|ip nat|nat|link-aggregation|port link-aggregation|ipsec|ike)\b`), "high", "接続・冗長・NAT"},
+	{regexp.MustCompile(`^(no |undo )?(switchport|vlan|port (link-type|access|trunk|hybrid)|encapsulation|set vlanid|ip helper-address|ip dhcp|dhcp|dhcp-server)\b|^(set|delete) (vlans|interfaces \S+.* vlan-id)\b`), "mid", "VLAN・DHCP"},
+	{regexp.MustCompile(`^(no |undo )?(ntp|ntp-service|clock|ip name-server|ip domain|dns|set (primary|secondary|server|source-ip|hostname))\b|^(set|delete) system (ntp|time-zone|name-server|domain-name)\b|^(no )?(timezone|schedule at)\b`), "mid", "時刻・名前解決"},
+	{regexp.MustCompile(`^(no |undo )?(logging|syslog|info-center|snmp|snmp-server|snmp-agent|aaa|tacacs|radius|hwtacacs|username|local-user|user-interface|enable (secret|password)|line |ip ssh|ip http|ssh|telnet|set (admin|password|passwd)|service password|administrator|login|sshd|httpd|telnetd|securityclass)\b|^(set|delete) system (login|services|root-authentication|syslog|host-name|authentication-order|radius-server|tacplus-server)\b`), "mid", "管理・認証"},
+	{regexp.MustCompile(`^(no |undo )?(ip access-list|ipv6 access-list|acl|route-map|ip prefix-list|route-policy|ip ip-prefix|class-map|policy-map|service-policy|traffic (classifier|behavior|policy)|qos|set (name|member|subnet|start-ip|end-ip|interface))\b|^(set|delete|deactivate|activate) (policy-options|class-of-service|applications)\b`), "mid", "オブジェクト・QoS"},
+	{regexp.MustCompile(`^(no |undo )?(description|banner|header|remark|alias|set (comment|comments|alias|description|uuid|color))\b|^(no |undo )?(exec-timeout|history|length|idle-timeout|screen-length)\b|^(set|delete) system login message\b`), "low", "説明・表示"},
 }
 
 // Headings whose whole block weighs high whatever the line.
@@ -66,6 +68,23 @@ var highSections = regexp.MustCompile(`(?i)^(config (firewall policy|firewall po
 
 // Objects a changed heading defines, and the word used to refer to them.
 var objectHead = regexp.MustCompile(`(?i)^(ip access-list (?:extended|standard) (\S+)|ipv6 access-list (\S+)|route-map (\S+)|ip prefix-list (\S+)|class-map(?: match-\w+)? (\S+)|policy-map (\S+)|object-group \w+ (\S+)|edit "?([^"]+)"?|crypto map (\S+)|track (\d+)|vlan (\d+)|interface Port-channel(\d+)|ip sla (\d+))$`)
+
+// numberedRefWord: the keyword a reference to a numbered object follows
+// ("switchport access vlan 10", "standby 1 track 1", "channel-group 1"):
+// a bare number elsewhere ("exec-timeout 10 0", "speed 10") is no
+// reference. Objects whose numbers have no such keyword (a FortiGate
+// "edit 10") are not looked up.
+var numberedRefWord = map[string]string{"track": "track", "vlan": "vlan", "interface": "(?:channel-group|port-channel)", "ip": "(?:ip sla|sla)"}
+
+// isNumber: all digits.
+func isNumber(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return s != ""
+}
 
 func impactLevel(text, section string) (string, string) {
 	t := strings.ToLower(strings.TrimSpace(text))
@@ -206,7 +225,18 @@ func references(r DiffResult) []RefItem {
 	}
 	var out []RefItem
 	for _, o := range objs {
-		re := regexp.MustCompile(`(?i)(^|[^\w.\-])` + regexp.QuoteMeta(o.name) + `($|[^\w.\-])`)
+		var re *regexp.Regexp
+		if isNumber(o.name) {
+			kw, ok := numberedRefWord[strings.ToLower(o.kind)]
+			if !ok {
+				continue
+			}
+			// "vlan 10", "vlan 10,20", "Vlan10", "track 1 …": the number
+			// right after the keyword, or in the list after it.
+			re = regexp.MustCompile(`(?i)\b` + kw + `\s*(?:[\d,\-]*[,\-])?` + o.name + `(?:[,\-][\d,\-]*)?(?:\s|$)`)
+		} else {
+			re = regexp.MustCompile(`(?i)(^|[^\w.\-])` + regexp.QuoteMeta(o.name) + `($|[^\w.\-])`)
+		}
 		var rows []int
 		for i, l := range r.Lines {
 			if i >= o.start && i < o.end || l.Noise {

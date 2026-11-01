@@ -77,6 +77,14 @@ func windowEnv(extra ...string) []string {
 	return env
 }
 
+// viewerKids are the log, diff and screen windows this process opened and
+// still running (spawnWindow): closed with the vault (Lock, ResetVault),
+// as the GUI and set windows are — they show device configurations.
+var (
+	viewerKidsMu sync.Mutex
+	viewerKids   = map[*os.Process]struct{}{}
+)
+
 // spawnWindow starts another PalaTerm window process detached from this one.
 func spawnWindow(env []string, args ...string) error {
 	exe, err := os.Executable()
@@ -90,8 +98,35 @@ func spawnWindow(env []string, args ...string) error {
 	}
 	tieToMainWindow(cmd.Process.Pid)
 	trackChild(cmd.Process)
-	go func() { _ = cmd.Wait() }()
+	viewerKidsMu.Lock()
+	viewerKids[cmd.Process] = struct{}{}
+	viewerKidsMu.Unlock()
+	go func() {
+		_ = cmd.Wait()
+		viewerKidsMu.Lock()
+		delete(viewerKids, cmd.Process)
+		viewerKidsMu.Unlock()
+	}()
 	return nil
+}
+
+// closeViewerWindows ends the log, diff and screen windows still open (the
+// vault locked or deleted). They hold no state worth a graceful close:
+// each only shows files.
+func closeViewerWindows() {
+	viewerKidsMu.Lock()
+	defer viewerKidsMu.Unlock()
+	for p := range viewerKids {
+		_ = p.Kill()
+		delete(viewerKids, p)
+	}
+}
+
+// openViewerWindows is how many such windows are still running (tests).
+func openViewerWindows() int {
+	viewerKidsMu.Lock()
+	defer viewerKidsMu.Unlock()
+	return len(viewerKids)
 }
 
 func (v *Viewer) startup(ctx context.Context) {

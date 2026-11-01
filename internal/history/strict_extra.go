@@ -56,15 +56,16 @@ func rangeMembers(parent string) ([]string, bool) {
 // a global line), as the after log names it, else the before log, else as
 // typed.
 func parentHead(c typedCmd, before, after *cfgIndex) string {
-	if c.parent == "" {
+	p := c.scope()
+	if p == "" {
 		return ""
 	}
 	for _, x := range []*cfgIndex{after, before} {
-		if h, _ := x.block(c.parent); h != "" {
+		if h, _ := x.block(p); h != "" {
 			return h
 		}
 	}
-	return normKey(c.parent)
+	return normKey(p)
 }
 
 // parentHeads is every block a command was typed into: its parent's, or
@@ -92,9 +93,11 @@ func parentHeads(c typedCmd, before, after *cfgIndex) []string {
 // markSuperseded: a setting not found afterwards is not "missing" when a
 // later line of the same work, in the same block, undid it ("shutdown"
 // then "no shutdown" — a port bounce) or replaced its value ("ip address
-// 192.0.2.1 …" corrected to "ip address 192.0.2.2 …"). Settings that add to
-// a list (ntp server, ip route, logging host, vlan, secondary addresses …)
-// are not replaced by the next one, so they stay missing.
+// 192.0.2.1 …" corrected to "ip address 192.0.2.2 …"). Only a setting
+// known to hold one value (see singleValued) is replaced by the next one;
+// settings that add to a list (ntp server, ip route, logging host, radius-
+// server host, vlan, secondary addresses …) stay missing. Two FortiOS
+// lines are in the same block only when typed in the same entry.
 //
 // missingIn[i] is where command i is missing: its block, or for a range
 // the members that lack it. It is superseded only when a later line undid
@@ -170,7 +173,7 @@ func undoes(later, earlier []string) bool {
 
 // valueShape splits a setting into its keywords and its values ("ip address
 // 192.0.2.1 255.255.255.0" → "ip address"); ok is false when the setting is
-// not one value of a keyword (words after the values, a list it adds to).
+// not one value of a keyword (words after the values).
 func valueShape(t []string) ([]string, bool) {
 	n := 0
 	for n < len(t) && isWord(t[n]) {
@@ -188,15 +191,6 @@ func valueShape(t []string) ([]string, bool) {
 		}
 	}
 	kw := t[:n]
-	for _, p := range [][]string{
-		{"ip", "route"}, {"ipv6", "route"}, {"ntp", "server"}, {"ntp", "peer"}, {"logging"}, {"logging", "host"},
-		{"snmp-server", "host"}, {"ip", "helper-address"}, {"ip", "name-server"}, {"vlan"}, {"ip", "domain-list"},
-		{"ip", "dhcp", "excluded-address"}, {"switchport", "trunk", "allowed", "vlan", "add"}, {"switchport", "trunk", "allowed", "vlan", "remove"},
-	} {
-		if len(kw) == len(p) && startsWith(kw, p...) {
-			return nil, false
-		}
-	}
 	// Junos paths ("set interfaces ge-0/0/0 …") carry names with digits:
 	// only a short FortiGate-style "set x y" is one value.
 	if kw[0] == "set" && len(t) > 4 {
@@ -207,7 +201,8 @@ func valueShape(t []string) ([]string, bool) {
 
 // isFreeKeyword: a keyword the user's own text follows (description,
 // remark …), also abbreviated ("desc"). An abbreviation that may stand for
-// another keyword ("comm" — community or comment) does not count.
+// another keyword ("comm" — community or comment, "name" — named-key or
+// namespace) does not count.
 func isFreeKeyword(w string) bool {
 	if freeText[w] {
 		return true
@@ -215,7 +210,7 @@ func isFreeKeyword(w string) bool {
 	if len(w) < 4 {
 		return false
 	}
-	for _, other := range []string{"community", "named-key", "namespace"} {
+	for _, other := range []string{"community", "named-key", "namespace", "host"} {
 		if strings.HasPrefix(other, w) {
 			return false
 		}
@@ -228,19 +223,79 @@ func isFreeKeyword(w string) bool {
 	return false
 }
 
-// replaces: the same keywords with another value.
-func replaces(later, earlier []string) bool {
-	a, ok1 := valueShape(later)
-	b, ok2 := valueShape(earlier)
-	if !ok1 || !ok2 || len(a) != len(b) {
-		return false
+// singleValued lists the settings that hold one value, so that typing them
+// again replaces the earlier value: the work verdict counts the earlier
+// line as superseded, and a value removed between the logs is explained by
+// the one the work put in. Everything else — ntp server, ip route, logging
+// host, radius-server host, snmp-server community, ip helper-address …
+// — adds to a list, and an earlier value stays until it is removed. The
+// command generator (cmdgen.go) uses the same list to tell a "~" line that
+// is an overwrite from one that needs "no <B>" first. Keywords as the
+// device prints them, in order; a typed abbreviation of three letters or
+// more fits ("desc").
+var singleValued = [][]string{
+	{"description"}, {"name"}, {"alias"}, {"hostname"}, {"host-name"}, {"sysname"},
+	{"ip", "address"}, {"ip", "default-gateway"},
+	{"switchport", "mode"}, {"switchport", "access", "vlan"}, {"switchport", "trunk", "native", "vlan"}, {"switchport", "trunk", "encapsulation"},
+	{"switchport", "trunk", "allowed", "vlan"}, // the whole list; "… vlan add / remove / except" is not (see singleValuedKey)
+	{"speed"}, {"duplex"}, {"mtu"}, {"enable", "secret"}, {"enable", "password"}, {"username"}, {"banner"},
+	{"snmp-server", "location"}, {"snmp-server", "contact"}, {"clock", "timezone"}, {"exec-timeout"},
+	{"set"}, // FortiOS: "set <key> <value>" inside one entry (a Junos path is not one value: see valueShape)
+}
+
+// singleValuedKey is the keyword part of a single-valued setting ("ip
+// address" for "ip address 192.0.2.1 255.255.255.0", "username ops
+// privilege" for "username ops privilege 15", "switchport mode" for
+// "switchport mode access", "set status" for FortiOS's "set status
+// disable"), or nil when the line is not one.
+func singleValuedKey(t []string) []string {
+	for _, p := range singleValued {
+		if len(t) <= len(p) || !abbrevOf(t[:len(p)], p) {
+			continue
+		}
+		if t[0] == "set" && len(t) > 4 {
+			return nil // a Junos path, not FortiOS's "set <key> <value>"
+		}
+		if kw, ok := valueShape(t); ok {
+			for _, w := range kw[len(p):] {
+				if w == "add" || w == "remove" || w == "except" {
+					return nil // adds to the list or takes from it
+				}
+			}
+			return kw
+		}
+		// Words only ("duplex full", "switchport mode access", "set status
+		// disable"): the value is the last word.
+		for _, w := range t {
+			if !isWord(w) {
+				return nil
+			}
+		}
+		return t[:len(t)-1]
 	}
-	for k := range a {
-		if !sameWord(a[k], b[k]) {
+	return nil
+}
+
+// abbrevOf: the typed words are the keywords, each equal or an
+// abbreviation of three letters or more.
+func abbrevOf(typed, kw []string) bool {
+	for i, w := range kw {
+		if typed[i] != w && (len(typed[i]) < 3 || !isWord(typed[i]) || !strings.HasPrefix(w, typed[i])) {
 			return false
 		}
 	}
 	return true
+}
+
+// replaces: later sets the same single-valued setting as earlier, with
+// another value. A name in the keywords must be the same name ("username
+// ops …" is not replaced by "username alice …").
+func replaces(later, earlier []string) bool {
+	a, b := singleValuedKey(later), singleValuedKey(earlier)
+	if a == nil || b == nil || len(a) != len(b) {
+		return false
+	}
+	return tokMatch(a, b, whole) || tokMatch(b, a, whole)
 }
 
 // touchSet: the after-log lines a typed setting was found as, with the
@@ -304,6 +359,11 @@ type cfgLine struct {
 	// owner: the nearest line above that is less indented — the block head,
 	// or a nested head such as FortiGate's "edit port1".
 	owner string
+	// nest: the FortiOS table and entry the line is in, as indexConfig
+	// names nested blocks ("config system ntp / config ntpserver / edit
+	// 1"); for a nested head line, its own path. "" outside FortiOS
+	// nesting.
+	nest string
 }
 
 // configLines returns the configuration listing of a log, or the whole
@@ -362,7 +422,7 @@ func configSectionIdx(lines []string) ([]int, int) {
 	sawPrompt := false
 	junosCtx := false // inside "[edit interfaces …]": a bare show lists that subtree
 	for li, l := range lines {
-		if m := promptLine.FindStringSubmatch(strings.TrimRight(l, " \t")); m != nil {
+		if m := promptParts(strings.TrimRight(l, " \t")); m != nil {
 			sawPrompt = true
 			cur = nil
 			if cmd := strings.TrimSpace(m[2]); showConfig.MatchString(cmd) {
@@ -446,6 +506,7 @@ func listingLines(sec []string) []cfgLine {
 	type level struct {
 		indent int
 		key    string
+		nest   string // the nested path when the line is a FortiOS head
 	}
 	var owners []level
 	for _, l := range sec {
@@ -456,7 +517,7 @@ func listingLines(sec []string) []cfgLine {
 		// Only the listing's own stamps are dropped: the clock / counter
 		// noise of Diff would cut real lines ("description used for …").
 		k := normKey(stripStamps(l))
-		if k == "" || k == "end" || k == "exit" || k == "}" || strings.HasPrefix(k, "!") || strings.HasPrefix(k, "#") ||
+		if k == "" || k == "end" || k == "exit" || k == "next" || k == "}" || strings.HasPrefix(k, "!") || strings.HasPrefix(k, "#") ||
 			strings.HasPrefix(k, "building configuration") || barePrompt.MatchString(k) {
 			continue
 		}
@@ -465,17 +526,22 @@ func listingLines(sec []string) []cfgLine {
 		for len(owners) > 0 && owners[len(owners)-1].indent >= indent {
 			owners = owners[:len(owners)-1]
 		}
-		owner := ""
+		owner, nest := "", ""
 		if len(owners) > 0 {
-			owner = owners[len(owners)-1].key
+			owner, nest = owners[len(owners)-1].key, owners[len(owners)-1].nest
 		}
-		owners = append(owners, level{indent, k})
+		self := ""
+		if indent > 0 && head != "" && fgHead.MatchString(k) {
+			self = firstNonEmpty(nest, head) + nestSep + k
+			nest = self
+		}
+		owners = append(owners, level{indent, k, self})
 		if indent == 0 {
 			head, headOrig = k, orig
 			out = append(out, cfgLine{key: k, orig: orig})
 			continue
 		}
-		out = append(out, cfgLine{block: head, key: k, orig: orig, blockOrig: headOrig, owner: owner})
+		out = append(out, cfgLine{block: head, key: k, orig: orig, blockOrig: headOrig, owner: owner, nest: nest})
 	}
 	return out
 }
@@ -488,7 +554,7 @@ func listingLines(sec []string) []cfgLine {
 // same block has the same leading words (a value replaced), when a "no …"
 // removes it, or when it is inside a block the work created or removed
 // (typed into, or removed with "no interface …").
-func unexpectedChanges(cmds []typedCmd, touched touchSet, beforeLog, afterLog string) ([]ChangedLine, int) {
+func unexpectedChanges(cmds []typedCmd, fgHeads []string, touched touchSet, beforeLog, afterLog string) ([]ChangedLine, int) {
 	bl, al := configLines(beforeLog), configLines(afterLog)
 	if len(bl) == 0 || len(al) == 0 {
 		return []ChangedLine{}, 0
@@ -502,7 +568,19 @@ func unexpectedChanges(cmds []typedCmd, touched touchSet, beforeLog, afterLog st
 		return m
 	}
 	cb, ca := count(bl), count(al)
-	// The blocks each command was typed into, worked out once.
+	// The nested FortiOS blocks each side has.
+	nests := func(ls []cfgLine) map[string]bool {
+		m := map[string]bool{}
+		for _, l := range ls {
+			if l.nest != "" {
+				m[l.nest] = true
+			}
+		}
+		return m
+	}
+	nb, na := nests(bl), nests(al)
+	// The blocks each command was typed into, worked out once; the FortiOS
+	// tables and entries the work opened count as typed into.
 	inBlocks := make([]map[string]bool, len(cmds))
 	heads := map[string]bool{}
 	for i, c := range cmds {
@@ -512,23 +590,36 @@ func unexpectedChanges(cmds []typedCmd, touched touchSet, beforeLog, afterLog st
 			heads[h] = true
 		}
 	}
+	for _, h := range fgHeads {
+		heads[h] = true
+	}
 	// A block that exists on one side only was created or removed whole.
 	wholeBlock := func(block string) bool {
 		return block != "" && (ca[key{"", block}] == 0) != (cb[key{"", block}] == 0) && (heads[block] || touched.at(block, ""))
 	}
+	wholeNest := func(nest string) bool {
+		return nest != "" && na[nest] != nb[nest] && heads[nest]
+	}
+	// Where a line is: its block, and its FortiOS entry when it has one.
+	at := func(l cfgLine, m map[string]bool) bool {
+		return m[l.block] || (l.nest != "" && m[l.nest])
+	}
+	touchedAt := func(l cfgLine) bool {
+		return touched.at(l.key, l.block) || (l.nest != "" && touched.at(l.key, l.nest))
+	}
 	// The values a typed setting put in, by place (block and owner line):
 	// an old value removed at the same place was replaced by the work
 	// ("description old" → "description new"), wherever the line was typed
-	// from (FortiGate's set lines have no block in the work log).
+	// from.
 	type place struct{ block, owner string }
 	putIn := map[place][][]string{}
 	for _, l := range al {
-		if touched.at(l.key, l.block) && ca[key{l.block, l.key}] > cb[key{l.block, l.key}] {
+		if touchedAt(l) && ca[key{l.block, l.key}] > cb[key{l.block, l.key}] {
 			putIn[place{l.block, l.owner}] = append(putIn[place{l.block, l.owner}], strings.Fields(l.key))
 		}
 	}
 	explained := func(l cfgLine, added bool) bool {
-		if added && touched.at(l.key, l.block) {
+		if added && touchedAt(l) {
 			return true
 		}
 		if !added {
@@ -538,12 +629,17 @@ func unexpectedChanges(cmds []typedCmd, touched touchSet, beforeLog, afterLog st
 				}
 			}
 		}
-		if wholeBlock(l.block) || (l.block == "" && wholeBlock(l.key)) {
+		if wholeBlock(l.block) || (l.block == "" && wholeBlock(l.key)) || wholeNest(l.nest) {
+			return true
+		}
+		// A FortiOS head the work typed ("edit lab-net", "config
+		// ntpserver") is the work's own line.
+		if l.nest != "" && fgHead.MatchString(l.key) && heads[l.nest] {
 			return true
 		}
 		t := strings.Fields(l.key)
 		for i, c := range cmds {
-			if c.parent != "" && !inBlocks[i][l.block] {
+			if c.scope() != "" && !at(l, inBlocks[i]) {
 				continue
 			}
 			ct := strings.Fields(c.key)
@@ -589,29 +685,15 @@ func unexpectedChanges(cmds []typedCmd, touched touchSet, beforeLog, afterLog st
 	return out, n
 }
 
-// sameLead: the same leading words — two for most gear, three for a set
-// line ("set alias …", "set system ntp …").
+// sameLead: a typed setting accounts for a changed line of its block when
+// it is the same single-valued setting (the keywords, another value: the
+// work replaced it), or the line itself. A list setting typed ("ip route
+// …", "ntp server …") says nothing about the other entries of that list:
+// those came and went on their own (review 2026-11-01, A-3).
 func sameLead(typed, line []string) bool {
-	n := 2
-	if len(line) > 0 && line[0] == "set" {
-		n = 3
+	if k := singleValuedKey(line); k != nil {
+		kt := singleValuedKey(typed)
+		return kt != nil && len(kt) == len(k) && (tokMatch(kt, k, whole) || tokMatch(k, kt, whole))
 	}
-	if len(typed) < n || len(line) < n {
-		n = min(len(typed), len(line))
-		if n == 0 || len(typed) != len(line) {
-			return false
-		}
-	}
-	for k := 0; k < n; k++ {
-		if !sameWord(typed[k], line[k]) {
-			return false
-		}
-	}
-	return true
-}
-
-// sameWord: equal, or a keyword or interface name abbreviated; numbers and
-// addresses must be equal ("vlan 10" is not "vlan 100").
-func sameWord(a, b string) bool {
-	return a == b || tokMatch([]string{a}, []string{b}, whole) || tokMatch([]string{b}, []string{a}, whole)
+	return tokMatch(typed, line, whole) || tokMatch(line, typed, whole)
 }

@@ -156,6 +156,25 @@ func atomicWrite(path string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	// One generation back, for the day the current file is damaged anyway
+	// (disk error, an antivirus quarantine): <vault>.bak, same encryption.
+	// It keeps the time that generation was saved, which the offer to
+	// restore it names. Replaced whole (temp + rename) like the vault: a
+	// power cut while it is written must not leave a half backup.
+	if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
+		if replaceFile(BackupPath(path), old) == nil {
+			if st, err := os.Stat(path); err == nil {
+				_ = os.Chtimes(BackupPath(path), st.ModTime(), st.ModTime())
+			}
+		}
+	}
+	return replaceFile(path, data)
+}
+
+// replaceFile writes data to a temporary file beside path, flushes it, and
+// renames it over path, so path is always a whole file.
+func replaceFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".palaterm-*.tmp")
 	if err != nil {
 		return err
@@ -177,17 +196,6 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	_ = os.Chmod(tmpName, 0o600)
-	// One generation back, for the day the current file is damaged anyway
-	// (disk error, an antivirus quarantine): <vault>.bak, same encryption.
-	// It keeps the time that generation was saved, which the offer to
-	// restore it names.
-	if old, err := os.ReadFile(path); err == nil && len(old) > 0 {
-		if writeSynced(BackupPath(path), old) == nil {
-			if st, err := os.Stat(path); err == nil {
-				_ = os.Chtimes(BackupPath(path), st.ModTime(), st.ModTime())
-			}
-		}
-	}
 	// A terminal window reading the vault at that moment makes Windows
 	// refuse the replace (sharing violation); it lets go within moments.
 	for i := 0; i < 10; i++ {
@@ -258,23 +266,49 @@ func RestoreBackup(path string, now time.Time) (string, error) {
 // (<path>.bak), the damaged files RestoreBackup set aside
 // (<path>.broken-<time>, still readable with the password of their day) and
 // any temporary file a failed save left. Called when the master password
-// changes or the vault is reset, so no file encrypted under the old password
-// stays behind. The directory is listed rather than globbed: a folder name
-// with [ ] in it is no pattern.
-func RemoveBackups(path string) {
-	_ = os.Remove(path + ".bak")
+// changes, the vault is reset or a new one is created, so no file encrypted
+// under the old password stays behind. The directory is listed rather than
+// globbed: a folder name with [ ] in it is no pattern. A copy that cannot
+// be removed (an antivirus scan holding it, retried like Save) is reported:
+// it still opens with the password of its day, and the caller must say so.
+func RemoveBackups(path string) error {
+	var first error
+	note := func(err error) {
+		if err != nil && first == nil {
+			first = err
+		}
+	}
+	note(removeRetry(path + ".bak"))
 	dir, base := filepath.Dir(path), filepath.Base(path)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return
+		if !errors.Is(err, os.ErrNotExist) {
+			note(err)
+		}
+		return first
 	}
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, base+".broken-") ||
 			(strings.HasPrefix(name, ".palaterm-") && strings.HasSuffix(name, ".tmp")) {
-			_ = os.Remove(filepath.Join(dir, name))
+			note(removeRetry(filepath.Join(dir, name)))
 		}
 	}
+	return first
+}
+
+// removeRetry deletes path, retrying a sharing violation the way Save does.
+// A file that is already gone is fine.
+func removeRetry(path string) error {
+	var err error
+	for i := 0; i < 10; i++ {
+		err = os.Remove(path)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return err
 }
 
 // writeSynced writes data to path and flushes it to disk.

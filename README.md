@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.9.25 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.9.26 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 > 日本語の概要: 複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
 > コマンドセットを並列実行してログを自動保存する Windows 用ツールです。Tera Term マクロや手作業のログ取得の置き換えを想定しています。
@@ -78,7 +78,7 @@ To uninstall, delete the exe folder and, optionally, those two folders.
 One folder runs one PalaTerm: opening the same folder through another path (a drive letter and a UNC path, another PC or user) is refused while the first is open.
 
 Unsigned executables may trigger a Microsoft Defender SmartScreen warning on first
-launch ("More info" → "Run anyway"). Code signing is planned.
+launch ("More info" → "Run anyway"). A code-signing certificate has been applied for (SignPath Foundation, see above); releases will be signed once it is granted.
 
 ## Quick start
 

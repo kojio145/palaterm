@@ -78,7 +78,11 @@ function renderHistoryView() {
   // picked by the user: it stays empty (the default used to come back at
   // once, so A could never be cleared), as 作業中's （なし） below.
   if (histState.a !== "-" && (!histState.a || !runs.some(r => r.dir === histState.a))) {
-    const before = runs.find(r => r.stage === "before");
+    // The group whose 作業後 the run tab took last comes first: two groups
+    // worked on the same night used to default to whichever was newest.
+    const lastReq = typeof lastRunReq !== "undefined" ? lastRunReq : null;
+    const prefGroup = lastReq && lastReq.stage === "after" && lastReq.group ? lastReq.group : "";
+    const before = (prefGroup && runs.find(r => r.stage === "before" && r.group === prefGroup)) || runs.find(r => r.stage === "before");
     histState.a = before ? before.dir : "";
   }
   if (histState.b !== "-" && (!histState.b || !runs.some(r => r.dir === histState.b))) {
@@ -204,7 +208,10 @@ function renderHistoryView() {
   // the rows come from the runs already in hand.
   listViewWire(LV, root, renderHistoryView, focus);
   wireColResize(root);
-  document.getElementById("hist-refresh").onclick = renderHistory;
+  // 再読み込み drops the comparison shown: the folders may have changed
+  // under the same names (a schedule's next round, an external folder
+  // replaced), and the old verdict would be drawn again as if current.
+  document.getElementById("hist-refresh").onclick = () => { histState.cmp = null; renderHistory(); };
   const more = document.getElementById("hist-more");
   if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
@@ -369,7 +376,7 @@ async function compareRuns() {
     const msg = where.map(w => `${w}: ${fmtRunMsg((w === "A" ? e.ea : e.eb) || t("ログなし"))}`).join(" ／ ");
     return { name: n, fail: where.join("/"), msg, a: e.a, b: e.b };
   });
-  histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB };
+  histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB, at: new Date().toISOString() };
   drawCompare();
 }
 
@@ -458,6 +465,7 @@ function cmpNoteText(c) {
     vlan: t("VLAN 一覧で確認"),
     otherBlock: t("作業したのと別のブロックにあります"),
     noConfig: t("作業後のログに設定の表示がありません"),
+    noBlock: t("作業後のログにそのブロックがありません（PASS にはしません）"),
     notStored: t("設定に残らないコマンドです"),
     default: t("既定値のため表示されない可能性があります"),
     spacing: t("画面端での折り返しによる空白の違いを無視して確認"),
@@ -507,7 +515,7 @@ function drawCompare() {
     C.headline = headline;
     banner = `<div style="margin-top:12px;padding:10px 14px;border-radius:8px;border:1px solid var(--${cls});font-size:14px;font-weight:600;color:var(--${cls})">${esc(headline)}
       ${notes.length ? `<div style="font-size:12px;font-weight:400;margin-top:4px;color:var(--warn)">${notes.map(esc).join("<br>")}</div>` : ""}
-      <div class="muted" style="font-size:12px;font-weight:400;margin-top:4px">${esc(t("作業中の実行: {t}", { t: workName }))}${noWork ? "　" + esc(t("判定対象外 {n} 台（作業ログ無し、または設定コマンド無し）", { n: noWork })) : ""}　${esc(t("※ 作業中のログから設定コマンド行を抜き出し、作業後のログ（show running-config 等）にその設定があるかを 1 件ずつ照合しています（省略形・暗号化されたパスワード・まとめられた VLAN 一覧なども照合。？ はログからは判定できない行）"))}</div></div>`;
+      <div class="muted" style="font-size:12px;font-weight:400;margin-top:4px">${esc(t("作業中の実行: {t}", { t: workName }))}${noWork ? "　" + esc(t("判定対象外 {n} 台（作業ログ無し、または設定コマンド無し）", { n: noWork })) : ""}　${esc(t("比較した時刻: {t}", { t: fmtRunTime(C.at) }))}　${esc(t("※ 作業中のログから設定コマンド行を抜き出し、作業後のログ（show running-config 等）にその設定があるかを 1 件ずつ照合しています（省略形・暗号化されたパスワード・まとめられた VLAN 一覧なども照合。？ はログからは判定できない行）"))}</div></div>`;
   } else C.headline = "";
   const mark = st => st === "missing" ? `<span style="color:var(--err)">✗</span>` : st === "already" ? `<span class="muted">＝</span>` : st === "superseded" ? `<span class="muted">↷</span>` : st === "unverified" ? `<span style="color:var(--warn)">？</span>` : `<span style="color:var(--ok)">✓</span>`;
   const unexpectedBlock = s => {
@@ -541,6 +549,7 @@ function drawCompare() {
   const tools = `<div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:12px;font-size:13px">
       ${needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(work ? t("設定の差分・未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }) : t("設定の差分・判定不能の機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}
       <span style="flex:1"></span>
+      <span class="muted" style="font-size:12px" data-tip="${esc(t("この結果を出した時刻。チェックリストを直したあと、ログを取り直したあとは「比較する」をもう一度押してください"))}">${esc(t("比較した時刻: {t}", { t: fmtRunTime(C.at) }))}</span>
       <button class="btn sm" id="cmp-copy" data-tip="${esc(t("結論と機器ごとの結果を、Excel や作業報告に貼れる形（タブ区切り）でコピーします"))}">${esc(t("結果をコピー"))}</button>
       <button class="btn sm" id="cmp-csv" data-tip="${esc(t("機器ごとの結果を export\\compare に CSV で書き出します"))}">${esc(t("CSV に書き出す"))}</button>
       <button class="btn sm" id="cmp-html" data-tip="${esc(t("機器ごとの結果と設定の差分（左右・変わった部分の強調つき）を 1 枚の HTML に書き出します（export\\compare。外部通信なし・スクリプトなし）"))}">${esc(t("HTML レポート"))}</button>
@@ -580,19 +589,40 @@ function drawCompare() {
     const devices = C.failRows.map(r => ({ name: r.name, error: t("{w} で失敗", { w: r.fail }) + ": " + r.msg })).concat(cmpSorted(C).map(({ r }) => ({ name: r.name, pathA: byName[r.name].a, pathB: byName[r.name].b, verdict: work ? cmpVerdictText(r, work) : "", check: cmpChecklist() ? cmpCheckText(r.check) : "", error: r.err || "" })));
     try {
       const path = await App().ExportCompareReport({ title: t("比較レポート") + " " + (a.group || ""), runA: runTitle(a), runB: runTitle(b), work: work ? runTitle(work) : "", headline: C.headline || "", lang: LANG, devices });
-      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
-        try { await App().OpenExportFolder(path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")))); } catch (e) { toast(terr(e), "err"); }
-      }
+      await exportDoneDialog(path);
     } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
   };
   document.getElementById("cmp-csv").onclick = async () => {
     try {
       const path = await App().ExportCompareResult(cmpTable(false).map(r => r.map(v => String(v))));
-      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
-        try { await App().OpenExportFolder(path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")))); } catch (e) { toast(terr(e), "err"); }
-      }
+      await exportDoneDialog(path);
     } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
   };
+}
+
+// After an export: the file can be opened at once (the default app for
+// .html / .csv: OpenExportFile) or its folder shown. ファイルを開く only
+// when the binding is there.
+function exportDoneDialog(path) {
+  const dir = path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")));
+  const canOpenFile = typeof App().OpenExportFile === "function";
+  return new Promise(resolve => {
+    const node = h(`<div>
+      <h3>${esc(t("書き出しました"))}</h3>
+      <p style="font-size:14px;line-height:1.8;margin:4px 0 10px"><span class="muted" style="font-size:12px">${esc(path)}</span></p>
+      <div class="modal-actions">
+        <button class="btn" id="xd-close">${esc(t("閉じる"))}</button>
+        <button class="btn" id="xd-folder">${esc(t("フォルダを開く"))}</button>
+        ${canOpenFile ? `<button class="btn primary" id="xd-file" autofocus data-tip="${esc(t("既定のアプリ（ブラウザ・Excel など）で開きます"))}">${esc(t("ファイルを開く"))}</button>` : ""}
+      </div>
+    </div>`);
+    openModal(node, "mid");
+    const done = () => { closeModal(); resolve(); };
+    node.querySelector("#xd-close").onclick = done;
+    node.querySelector("#xd-folder").onclick = async () => { done(); try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); } };
+    const f = node.querySelector("#xd-file");
+    if (f) f.onclick = async () => { done(); try { await App().OpenExportFile(path); } catch (e) { toast(terr(e), "err"); } };
+  });
 }
 
 // The comparison as a table (every device, in the order shown, the header
@@ -669,14 +699,27 @@ async function checklistEditor() {
   </div>`);
   openModal(node, "wide");
   const sel = node.querySelector("#ck-sel"), nameIn = node.querySelector("#ck-name"), ta = node.querySelector("#ck-text");
+  // What the fields held when the list was shown: switching lists, ＋ 新しい,
+  // 閉じる and Esc ask before throwing away edits (guardDiscard cannot be
+  // used: the fields are reused by every list).
+  let snap = "";
+  const snapNow = () => JSON.stringify([nameIn.value, ta.value]);
+  const dirty = () => snapNow() !== snap;
+  async function discardOk() {
+    return !dirty() || await subConfirm(esc(t("編集した内容は保存されていません。破棄しますか？")), t("破棄する"));
+  }
   async function show() {
     sel.innerHTML = lists.map(c => `<option value="${esc(c.name)}" ${cur && c.name === cur.name ? "selected" : ""}>${esc(c.name)}（${c.lines.length}）</option>`).join("") || `<option value="">${esc(t("（まだありません）"))}</option>`;
     nameIn.value = cur ? cur.name : "";
     ta.value = cur ? await App().FormatChecklistLines(cur.lines) : "";
     node.querySelector("#ck-del").disabled = !cur;
+    snap = snapNow();
   }
-  sel.onchange = () => { cur = lists.find(c => c.name === sel.value) || null; show(); };
-  node.querySelector("#ck-new").onclick = () => { cur = null; show(); nameIn.focus(); };
+  sel.onchange = async () => {
+    if (!(await discardOk())) { sel.value = cur ? cur.name : ""; return; }
+    cur = lists.find(c => c.name === sel.value) || null; await show();
+  };
+  node.querySelector("#ck-new").onclick = async () => { if (!(await discardOk())) return; cur = null; await show(); nameIn.focus(); };
   node.querySelector("#ck-add").onclick = async () => {
     const vals = node.querySelector("#ck-vals").value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
     if (!vals.length) { toast(t("値を入力してください"), "err"); return; }
@@ -690,26 +733,43 @@ async function checklistEditor() {
     if (!name) { toast(t("名前を入力してください"), "err"); return; }
     const lines = await App().ParseChecklistText(ta.value);
     if (!lines.length) { toast(t("あるべき設定行を 1 行以上書いてください"), "err"); return; }
-    if (cur && cur.name !== name) { try { await App().DeleteChecklist(cur.name); } catch (e) { /* renamed: the old one may be gone already */ } }
+    // A new list, or a rename, under a name another list has: refused (it
+    // used to replace that list without a word). The backend refuses it
+    // too (ChecklistExists / RenameChecklist).
+    if (!cur || cur.name !== name) {
+      let taken = lists.some(c => c.name === name);
+      if (!taken && typeof App().ChecklistExists === "function") { try { taken = !!(await App().ChecklistExists(name)); } catch (e) { /* the save below decides */ } }
+      if (taken) { toast(t("同じ名前のチェックリスト「{n}」があります。別の名前にしてください", { n: name }), "err"); return; }
+    }
+    // A rename is one step in the vault (RenameChecklist): deleting the old
+    // list first lost it when the save after it failed.
+    if (cur && cur.name !== name) {
+      try { await App().RenameChecklist(cur.name, name); } catch (e) { toast(t("名前を変えられません") + ": " + terr(e), "err"); return; }
+    }
     try { await App().SaveChecklist({ name, lines }); } catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); return; }
     await refreshInventory();
     lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
     cur = lists.find(c => c.name === name) || null;
     histState.k = name;
+    // The comparison drawn was judged against the lines before this save.
+    histState.cmp = null;
     toast(t("チェックリスト「{n}」を保存しました（{c} 行）", { n: name, c: lines.length }), "ok");
-    show();
+    await show();
   };
   node.querySelector("#ck-del").onclick = async () => {
     if (!cur) return;
-    if (!(await uiConfirm({ title: t("チェックリストを削除しますか？"), message: esc(cur.name), okLabel: t("削除"), cancelLabel: t("キャンセル"), danger: true }))) return;
+    // Over the editor (uiConfirm would replace it).
+    if (!(await subConfirm(`<b>${esc(t("チェックリストを削除しますか？"))}</b><br>${esc(cur.name)}`, t("削除"), t("キャンセル")))) return;
     try { await App().DeleteChecklist(cur.name); } catch (e) { toast(terr(e), "err"); return; }
     await refreshInventory();
     lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
     if (histState.k === cur.name) histState.k = "";
+    histState.cmp = null;
     cur = lists[0] || null;
-    show();
+    await show();
   };
-  node.querySelector("#ck-close").onclick = () => { closeModal(); renderHistoryView(); };
+  // 閉じる is also what Esc presses (app.js): the guard covers both.
+  node.querySelector("#ck-close").onclick = async () => { if (!(await discardOk())) return; closeModal(); renderHistoryView(); };
   await show();
 }
 
@@ -784,13 +844,29 @@ async function deviceVersionsDialog() {
 // would be typed to one that does not).
 function cmdLinesOf(text) { return text.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith("!") && !s.startsWith("#")); }
 function cmdDirLabel(dir) { return dir === "forward" ? t("揃える（A → B）") : t("戻す（B → A）"); }
-function cmdFamilyLabel(f) { return { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", generic: t("不明（一覧のみ）") }[f] || f; }
+function cmdFamilyLabel(f) { return { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", comware: t("Comware/VRP 系"), generic: t("不明（一覧のみ）") }[f] || f; }
+// The comment line put above the generated commands (the copy, the dialog's
+// text, the paste confirmation): which device and which way, so a paste into
+// the wrong one of eight windows shows itself. Dropped by cmdLinesOf, so a
+// command set or the run tab never gets it. "!" is Cisco's comment, "#" the
+// others'.
+function cmdHeaderLine(family, dir, name) {
+  return `${family === "cisco" ? "!" : "#"} PalaTerm ${cmdDirLabel(dir)} ${name} ${fmtRunTime(new Date().toISOString())}`;
+}
 async function cmdDialog(name, pathA, pathB, dir, group) {
-  const dev = (INV.devices || []).find(d => d.name === name && (d.group || "") === (group || "")) || (INV.devices || []).find(d => d.name === name);
+  // The device of the compared run's group only: a same-name device of
+  // another group is another device (its OS type, its run tab row).
+  const dev = (INV.devices || []).find(d => d.name === name && (d.group || "") === (group || "")) || null;
   let g;
   try { g = await App().GenerateCommands(pathA, pathB, dir, dev ? dev.osType || "" : ""); }
   catch (e) { toast(t("コマンドを作れません") + ": " + terr(e), "err"); return; }
   const text = (g.lines || []).map(l => l.text).join("\n");
+  const shown = text ? cmdHeaderLine(g.family, dir, name) + "\n" + text : "";
+  const now = new Date(), p2 = n => String(n).padStart(2, "0");
+  // Local time (toISOString gave UTC: nine hours off in Japan).
+  const stamp = `${now.getFullYear()}${p2(now.getMonth() + 1)}${p2(now.getDate())}_${p2(now.getHours())}${p2(now.getMinutes())}`;
+  const noDevTip = group ? t("比較した実行のグループ「{g}」に同名の機器がありません。実行タブへは渡せません（コピーして使ってください）", { g: group })
+    : t("この機器はグループ未設定の機器一覧に無いため、実行タブへは渡せません（コピーして使ってください）");
   const notes = [];
   if (g.noConfig) notes.push(t("A か B のログに設定の表示（show running-config 等）が無いため作れません"));
   else if (g.empty) notes.push(t("差分はありますが、コマンドにできる行がありませんでした"));
@@ -802,15 +878,15 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
     <h3>${esc(t("{d}: {n}", { d: cmdDirLabel(dir), n: name }))}</h3>
     <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("差分から機械的に作ったコマンドです。投入前に必ず目で確認してください。機器の種類は「{f}」と判断しました（{by}）。", { f: cmdFamilyLabel(g.family), by: g.familyBy === "osType" ? t("OS タイプから") : t("設定の内容から") }))}</p>
     ${notes.length ? `<div class="warn-box" style="font-size:12px">${notes.map(esc).join("<br>")}</div>` : ""}
-    <div class="field"><textarea id="cg-text" class="mono" style="min-height:260px;font-size:12px" spellcheck="false">${esc(text)}</textarea></div>
+    <div class="field"><textarea id="cg-text" class="mono" style="min-height:260px;font-size:12px" spellcheck="false">${esc(shown)}</textarea></div>
     <div class="row-inline" style="gap:8px;flex-wrap:wrap">
-      <input id="cg-name" placeholder="${esc(t("コマンドセット名"))}" value="${esc((dir === "forward" ? t("揃える") : t("戻す")) + "-" + name + "-" + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/^(\d{8})(\d{4})$/, "$1_$2"))}" style="flex:1;min-width:200px">
+      <input id="cg-name" placeholder="${esc(t("コマンドセット名"))}" value="${esc((dir === "forward" ? t("揃える") : t("戻す")) + "-" + name + "-" + stamp)}" style="flex:1;min-width:200px">
       <button class="btn" id="cg-save" ${text ? "" : "disabled"}>${esc(t("コマンドセットとして保存"))}</button>
     </div>
     <div class="modal-actions">
       <button class="btn" id="cg-close">${esc(t("閉じる"))}</button>
       <button class="btn" id="cg-copy" ${text ? "" : "disabled"}>${esc(t("コピー"))}</button>
-      <button class="btn primary" id="cg-run" ${text && dev ? "" : "disabled"} data-tip="${esc(dev ? t("実行タブを開き、この機器 1 台に絞って「今回だけ入力」にコマンドを入れます。実行はまだしません") : t("この機器は機器一覧に無いため、実行タブへは渡せません（コピーして使ってください）"))}">${esc(t("実行タブへ（今回だけ入力）"))}</button>
+      <button class="btn primary" id="cg-run" ${text && dev ? "" : "disabled"} data-tip="${esc(dev ? t("実行タブを開き、この機器だけを対象にして「今回だけ入力」にコマンドを入れます（作業タイミングは「作業中」）。実行はまだしません") : noDevTip)}">${esc(t("実行タブへ（今回だけ入力）"))}</button>
     </div>
   </div>`);
   openModal(node, "wide");
@@ -820,9 +896,11 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
   node.querySelector("#cg-save").onclick = async () => {
     const nm = node.querySelector("#cg-name").value.trim();
     if (!nm) { toast(t("コマンドセット名を入力してください"), "err"); return; }
+    if (nm.startsWith("__")) { toast(t("「__」で始まる名前は使えません（内部の目印と重なります）"), "err"); return; }
     const cmds = cmdLinesOf(ta.value).map(s => ({ text: s, pauseSec: 1, serialSec: 1 }));
     if (!cmds.length) { toast(t("コマンドがありません"), "err"); return; }
-    if ((INV.commandSets || []).some(s => s.name === nm) && !(await uiConfirm({ title: t("上書きしますか？"), message: esc(t("同じ名前のコマンドセット「{n}」があります。上書きします", { n: nm })), okLabel: t("上書き"), cancelLabel: t("キャンセル") }))) return;
+    // Over the dialog (uiConfirm would replace it, and the commands with it).
+    if ((INV.commandSets || []).some(s => s.name === nm) && !(await subConfirm(`<b>${esc(t("上書きしますか？"))}</b><br>${esc(t("同じ名前のコマンドセット「{n}」があります。上書きします", { n: nm }))}`, t("上書き"), t("キャンセル")))) return;
     try { await App().SaveCommandSet({ name: nm, commands: cmds, pauseOff: false }); await refreshInventory(); toast(t("コマンドセット「{n}」を保存しました", { n: nm }), "ok"); }
     catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); }
   };
@@ -832,11 +910,16 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
     if (!lines.length) { toast(t("コマンドがありません"), "err"); return; }
     for (const k in runState) delete runState[k];
     runGroupSel = dev.group || RUN_UNGROUPED;
-    runFilter.text = dev.name; runFilter.site = ""; runFilter.status = "";
+    // This device by its exact name (runFilter.exact, views2.js), not the
+    // substring filter: "lab-sw1" also showed lab-sw10… as targets.
+    runFilter.text = ""; runFilter.site = ""; runFilter.status = "";
+    if (typeof runFilterSetExact === "function") runFilterSetExact(dev.name); else runFilter.exact = dev.name;
+    // The work itself: the comparison finds it between 作業前 and 作業後.
+    runStage = "during";
     runSetSel = RUN_ADHOC; runAdHoc = lines.join("\n");
     closeModal();
     await switchTab("run");
-    toast(t("「{n}」1 台に絞り、「今回だけ入力」にコマンドを入れました。内容を確かめてから「▶ 一括実行」を押してください（作業タイミングは「作業中」がおすすめ）", { n: dev.name }), "ok");
+    toast(t("『{n}』だけを対象に、作業中として実行します。「今回だけ入力」にコマンドを入れました。内容を確かめてから「▶ 一括実行」を押してください", { n: dev.name }), "ok");
   };
 }
 

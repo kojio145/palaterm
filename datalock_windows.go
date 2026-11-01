@@ -140,6 +140,24 @@ func lockHolderText(line string) string {
 		fmt.Sprintf(" (PC: %s, user: %s, since %s)", f[0], f[1], f[3]))
 }
 
+// releaseDataLock empties the lock file and closes it (the exit): the
+// holder's line — this PC's name and the Windows user name — is for the
+// refusal while PalaTerm runs, not for whoever reads the folder after it
+// (a data\ copied to a share, a PalaTerm handed on). Windows would drop the
+// hold on its own at the end of the process; the emptying is the point.
+func releaseDataLock() {
+	h := dataLock
+	if h == 0 || h == syscall.InvalidHandle {
+		return
+	}
+	dataLock = 0
+	if _, err := syscall.Seek(h, 0, 0); err == nil {
+		_ = syscall.SetEndOfFile(h)
+		_ = syscall.FlushFileBuffers(h)
+	}
+	_ = syscall.CloseHandle(h)
+}
+
 // claimDataFolder takes the data folder's lock for the main window. When
 // another main window — in another session, on another PC, or through
 // another path — holds it, the user is told and false is returned.

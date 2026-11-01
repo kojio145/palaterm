@@ -21,12 +21,12 @@ func TestHostKeyPinSurvivesAVaultReopen(t *testing.T) {
 		addr = "192.0.2.201:22"
 		fp   = "ssh-rsa SHA256:j2Xs/U48fUBLWM0VTQQu9MxggjdhoLTEIXog59g60s0"
 	)
-	if got := a.GetHostKey(addr); got != "" {
+	if got := a.hostKeys().GetHostKey(addr); got != "" {
 		t.Fatalf("a fresh vault already pins %q", got)
 	}
 	// The pin is saved a moment later (persistSoon), batched with others
 	// pinned meanwhile — not inside the SSH handshake.
-	a.SetHostKey(addr, fp)
+	a.hostKeys().SetHostKey(addr, fp)
 	time.Sleep(1500 * time.Millisecond)
 	reopen := func() *App {
 		a2 := NewApp()
@@ -36,15 +36,15 @@ func TestHostKeyPinSurvivesAVaultReopen(t *testing.T) {
 		}
 		return a2
 	}
-	if got := reopen().GetHostKey(addr); got != fp {
+	if got := reopen().hostKeys().GetHostKey(addr); got != fp {
 		t.Fatalf("pin after reopen = %q, want %q", got, fp)
 	}
 
 	// One still pending when the app exits (or locks) is written then.
 	const addr2 = "192.0.2.202:22"
-	a.SetHostKey(addr2, fp)
+	a.hostKeys().SetHostKey(addr2, fp)
 	a.shutdown(nil)
-	if got := reopen().GetHostKey(addr2); got != fp {
+	if got := reopen().hostKeys().GetHostKey(addr2); got != fp {
 		t.Fatalf("pin pending at exit = %q, want %q", got, fp)
 	}
 }
@@ -69,8 +69,8 @@ func TestClearHostKeysReachesTheVault(t *testing.T) {
 	if err := a.SaveDevice(dev); err != nil {
 		t.Fatalf("save device: %v", err)
 	}
-	a.SetHostKey("192.0.2.201:22", "ssh-rsa SHA256:device")
-	a.SetHostKey("192.0.2.202:22", "ssh-rsa SHA256:hop")
+	a.hostKeys().SetHostKey("192.0.2.201:22", "ssh-rsa SHA256:device")
+	a.hostKeys().SetHostKey("192.0.2.202:22", "ssh-rsa SHA256:hop")
 
 	if err := a.ClearHostKeys("IX-A"); err != nil {
 		t.Fatalf("clear host keys: %v", err)
@@ -81,10 +81,10 @@ func TestClearHostKeysReachesTheVault(t *testing.T) {
 	if err := a2.Unlock("master"); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
-	if got := a2.GetHostKey("192.0.2.201:22"); got != "" {
+	if got := a2.hostKeys().GetHostKey("192.0.2.201:22"); got != "" {
 		t.Errorf("device still pinned after clear + reopen: %q", got)
 	}
-	if got := a2.GetHostKey("192.0.2.202:22"); got != "ssh-rsa SHA256:hop" {
+	if got := a2.hostKeys().GetHostKey("192.0.2.202:22"); got != "ssh-rsa SHA256:hop" {
 		t.Errorf("jump host pin = %q, want it kept", got)
 	}
 }
@@ -105,7 +105,7 @@ func TestPinWhileLockedIsSavedAtUnlock(t *testing.T) {
 	if err := a.Unlock("master"); err != nil {
 		t.Fatal(err)
 	}
-	if got := a.GetHostKey("192.0.2.9:22"); got != "ssh-ed25519 SHA256:x" {
+	if got := a.hostKeys().GetHostKey("192.0.2.9:22"); got != "ssh-ed25519 SHA256:x" {
 		t.Errorf("pin after unlock = %q", got)
 	}
 }
@@ -126,15 +126,15 @@ func TestClearHostKeysThroughMyBastion(t *testing.T) {
 	if err := a.SaveDevice(dev); err != nil {
 		t.Fatalf("save device: %v", err)
 	}
-	a.SetHostKey("jump1.example:22", "ssh-ed25519 SHA256:hop")
-	a.SetHostKey("jump1.example:22>192.0.2.10:22", "ssh-ed25519 SHA256:dev")
+	a.hostKeys().SetHostKey("jump1.example:22", "ssh-ed25519 SHA256:hop")
+	a.hostKeys().SetHostKey("jump1.example:22>192.0.2.10:22", "ssh-ed25519 SHA256:dev")
 	if err := a.ClearHostKeys("fw1"); err != nil {
 		t.Fatalf("clear host keys: %v", err)
 	}
-	if k := a.GetHostKey("jump1.example:22>192.0.2.10:22"); k != "" {
+	if k := a.hostKeys().GetHostKey("jump1.example:22>192.0.2.10:22"); k != "" {
 		t.Errorf("device key through the own jump host still pinned: %q", k)
 	}
-	if k := a.GetHostKey("jump1.example:22"); k != "ssh-ed25519 SHA256:hop" {
+	if k := a.hostKeys().GetHostKey("jump1.example:22"); k != "ssh-ed25519 SHA256:hop" {
 		t.Errorf("own jump host pin = %q, want it kept", k)
 	}
 }
@@ -153,13 +153,13 @@ func TestClearHostKeysDropsDirectPin(t *testing.T) {
 	if err := a.SaveDevice(dev); err != nil {
 		t.Fatalf("save device: %v", err)
 	}
-	a.SetHostKey("192.0.2.1:22>192.0.2.10:22", "ssh-ed25519 SHA256:viahop")
-	a.SetHostKey("192.0.2.10:22", "ssh-ed25519 SHA256:direct")
+	a.hostKeys().SetHostKey("192.0.2.1:22>192.0.2.10:22", "ssh-ed25519 SHA256:viahop")
+	a.hostKeys().SetHostKey("192.0.2.10:22", "ssh-ed25519 SHA256:direct")
 	if err := a.ClearHostKeys("fw1"); err != nil {
 		t.Fatalf("clear host keys: %v", err)
 	}
 	for _, k := range []string{"192.0.2.1:22>192.0.2.10:22", "192.0.2.10:22"} {
-		if v := a.GetHostKey(k); v != "" {
+		if v := a.hostKeys().GetHostKey(k); v != "" {
 			t.Errorf("%s still pinned: %q", k, v)
 		}
 	}

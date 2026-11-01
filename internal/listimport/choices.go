@@ -34,7 +34,13 @@ func normalizeChoice(key, v string) string {
 	}
 	switch kind {
 	case "conn", "hopMethod":
+		// "Telnet（SSH不可）" names SSH only to rule it out: with a negation
+		// beside the words, the cell is left as it is (the row then fails
+		// the check and is looked at) rather than read as SSH.
+		negated := has("不可", "なし", "disabled", "no")
 		switch {
+		case negated && (has("ssh") || has("telnet")):
+			return v
 		case has("ssh"): // "SSH/Telnet" too: the secure one
 			return "ssh"
 		case has("telnet"):

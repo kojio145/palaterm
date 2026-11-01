@@ -58,6 +58,13 @@ type expecter struct {
 	// console, which reads CR and LF as two separate Enters.
 	eol string
 
+	// missPat / missLen: the pattern Expect last failed to find, and how much
+	// of buf it had searched. The same pattern is polled every 100–150 ms
+	// while a long output is awaited, and each poll used to run it over the
+	// whole unconsumed output again (review 2026-11-01).
+	missPat string
+	missLen int
+
 	newData chan struct{}
 }
 
@@ -99,6 +106,7 @@ func (e *expecter) readLoop() {
 			sink := e.rawSink
 			if sink == nil {
 				e.buf.Write(tmp[:n])
+				e.trimBuf()
 				e.record(tmp[:n])
 			}
 			e.mu.Unlock()
@@ -174,6 +182,34 @@ func compilePattern(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
+// bufKeep is how much unconsumed output buf holds at most (its tail): a
+// command's output is only ever examined at its tail (the prompt, a pager
+// marker, a question) while the transcript keeps the whole of it, so there
+// is no reason for buf to grow with a 10 MB "show tech". The cut waits
+// until twice bufKeep, like the transcript's (record).
+const bufKeep = 64 << 10
+
+// missOverlap is how far back of a failed search Expect looks again: a
+// match that straddles the old end (half a pager marker, then the rest)
+// must still be found. Longer than any pattern Expect is given.
+const missOverlap = 1 << 10
+
+// trimBuf cuts buf to its tail once it is past twice bufKeep (caller holds
+// mu). What Expect searched already is kept in step (missLen).
+func (e *expecter) trimBuf() {
+	if e.buf.Len() <= 2*bufKeep {
+		return
+	}
+	s := e.buf.String()
+	cut := len(s) - bufKeep
+	for cut < len(s) && !utf8.RuneStart(s[cut]) {
+		cut++
+	}
+	e.buf.Reset()
+	e.buf.WriteString(s[cut:])
+	e.missLen = max(0, e.missLen-cut)
+}
+
 // Expect waits until pattern matches the accumulated output or the timeout
 // elapses. On match, the buffer is consumed up to and including the match so
 // the next Expect starts fresh.
@@ -188,13 +224,24 @@ func (e *expecter) Expect(ctx context.Context, pattern string, timeout time.Dura
 	for {
 		e.mu.Lock()
 		cur := e.buf.String()
-		if loc := re.FindStringIndex(cur); loc != nil {
-			remaining := cur[loc[1]:]
+		// The same pattern again: what it missed last time it misses still,
+		// so search only what arrived since (less an overlap).
+		from := 0
+		if pattern == e.missPat && e.missLen > missOverlap && e.missLen <= len(cur) {
+			from = e.missLen - missOverlap
+			for from > 0 && !utf8.RuneStart(cur[from]) {
+				from--
+			}
+		}
+		if loc := re.FindStringIndex(cur[from:]); loc != nil {
+			remaining := cur[from+loc[1]:]
 			e.buf.Reset()
 			e.buf.WriteString(remaining)
+			e.missPat, e.missLen = "", 0
 			e.mu.Unlock()
 			return nil
 		}
+		e.missPat, e.missLen = pattern, len(cur)
 		closed := e.closed
 		e.mu.Unlock()
 
@@ -293,9 +340,16 @@ func (e *expecter) Since(mark int) string {
 	return s
 }
 
+// seenTail is how much of the unconsumed output a pattern anchored at its
+// end (`\z`) is matched against: the prompt, a pager marker or a question
+// is on the last line, not 5 MB back.
+const seenTail = 8 << 10
+
 // Seen reports whether pattern is currently present in the unconsumed output,
 // without consuming it. It lets a caller notice that the device is already at
 // its operational prompt while it is still waiting for some other pattern.
+// A pattern anchored at the end of the output is matched against the tail
+// of it only (seenTail).
 func (e *expecter) Seen(pattern string) bool {
 	re, err := compilePattern(pattern)
 	if err != nil {
@@ -303,7 +357,15 @@ func (e *expecter) Seen(pattern string) bool {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return re.MatchString(e.buf.String())
+	cur := e.buf.String()
+	if strings.HasSuffix(pattern, `\z`) && len(cur) > seenTail {
+		cut := len(cur) - seenTail
+		for cut < len(cur) && !utf8.RuneStart(cur[cut]) {
+			cut++
+		}
+		cur = cur[cut:]
+	}
+	return re.MatchString(cur)
 }
 
 // Drain discards any pending unmatched output, so the next Expect only sees
@@ -312,6 +374,7 @@ func (e *expecter) Seen(pattern string) bool {
 func (e *expecter) Drain() {
 	e.mu.Lock()
 	e.buf.Reset()
+	e.missPat, e.missLen = "", 0
 	e.mu.Unlock()
 }
 

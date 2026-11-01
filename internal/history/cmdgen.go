@@ -26,7 +26,7 @@ type CmdLine struct {
 
 // CmdGen is the result.
 type CmdGen struct {
-	Family    string    `json:"family"`   // cisco / fortigate / junos / yamaha / generic
+	Family    string    `json:"family"`   // cisco / comware / fortigate / junos / yamaha / generic
 	FamilyBy  string    `json:"familyBy"` // "osType" / "content"
 	Direction string    `json:"direction"`
 	Lines     []CmdLine `json:"lines"`
@@ -61,10 +61,12 @@ func GenerateCommands(a, b, direction, osType string) CmdGen {
 		}
 	}
 	g.Family, g.FamilyBy = detectFamily(cfg, osType)
-	w := &cmdWriter{res: r, rows: direction == "rollback"}
+	w := &cmdWriter{res: r, rows: direction == "rollback", os: strings.ToLower(osType)}
 	switch g.Family {
 	case "cisco":
 		w.cisco()
+	case "comware":
+		w.comware()
 	case "fortigate":
 		w.fortigate()
 	case "junos":
@@ -93,10 +95,12 @@ func detectFamily(cfg []string, osType string) (string, string) {
 		return "junos", "osType"
 	case strings.Contains(lo, "yamaha") || strings.Contains(lo, "rtx"):
 		return "yamaha", "osType"
+	case strings.Contains(lo, "comware") || strings.Contains(lo, "h3c") || strings.Contains(lo, "huawei") || strings.Contains(lo, "vrp") || strings.Contains(lo, "nec-qx"):
+		return "comware", "osType"
 	case strings.Contains(lo, "cisco") || strings.Contains(lo, "ios") || strings.Contains(lo, "alaxala") || strings.Contains(lo, "aruba") || strings.Contains(lo, "allied") || strings.Contains(lo, "nec-ix") || strings.Contains(lo, "nxos"):
 		return "cisco", "osType"
 	}
-	var fgConfig, fgEnd, edits, setLines, braces, yam, bang, iface, host, nonEmpty int
+	var fgConfig, fgEnd, edits, setLines, braces, yam, bang, iface, host, nonEmpty, hash, cw, ciscoish int
 	for _, l := range cfg {
 		t := strings.TrimSpace(l)
 		if t == "" {
@@ -128,10 +132,24 @@ func detectFamily(cfg []string, osType string) (string, string) {
 		switch {
 		case t == "!":
 			bang++
+		case t == "#":
+			hash++
 		case strings.HasPrefix(lt, "interface "):
 			iface++
 		case strings.HasPrefix(lt, "hostname "):
 			host++
+		}
+		for _, p := range []string{"sysname ", "undo ", "port link-type ", "port link-mode ", "ip route-static ", "local-user ", "ntp-service ", "snmp-agent "} {
+			if strings.HasPrefix(lt, p) {
+				cw++
+				break
+			}
+		}
+		for _, p := range []string{"switchport", "ip address ", "spanning-tree ", "line vty", "line con", "feature ", "shutdown", "no shutdown", "ip route ", "ntp server ", "logging ", "version ", "service ", "enable ", "vlan "} {
+			if strings.HasPrefix(lt, p) {
+				ciscoish++
+				break
+			}
 		}
 	}
 	switch {
@@ -141,7 +159,12 @@ func detectFamily(cfg []string, osType string) (string, string) {
 		return "junos", "content"
 	case yam >= 3 && bang == 0:
 		return "yamaha", "content"
-	case bang > 0 || iface > 0 || host > 0:
+	case hash >= 2 && cw > 0 && bang == 0:
+		// Comware / VRP: "#" between sections, sysname, undo.
+		return "comware", "content"
+	case bang > 0 && (iface > 0 || host > 0), iface > 0 && ciscoish >= 2:
+		// Cisco-style: "!" between sections with interfaces or a hostname,
+		// or (NX-OS, no "!") interfaces with Cisco-style lines under them.
 		return "cisco", "content"
 	}
 	return "generic", "content"
@@ -152,6 +175,7 @@ func detectFamily(cfg []string, osType string) (string, string) {
 type cnode struct {
 	row     int
 	head    bool
+	banner  bool // a multi-line banner: the rows under it are its text
 	kids    []*cnode
 	trailer []int
 }
@@ -164,6 +188,11 @@ func cmdTree(lines []DiffLine) []*cnode {
 	for i := range lines {
 		l := lines[i]
 		if l.Noise {
+			continue
+		}
+		if top := len(stack) - 1; top >= 0 && stack[top].banner && l.Depth > depthOf(stack[top].row) {
+			// Banner text: never a closer, never a heading.
+			stack[top].kids = append(stack[top].kids, &cnode{row: i})
 			continue
 		}
 		key := strings.TrimSpace(rowText(l))
@@ -199,6 +228,12 @@ func cmdTree(lines []DiffLine) []*cnode {
 			stack = stack[:len(stack)-1]
 		}
 		n := &cnode{row: i, head: l.Head}
+		if l.Head {
+			_, _, n.banner = bannerBlock(strings.TrimSpace(l.A))
+			if !n.banner {
+				_, _, n.banner = bannerBlock(strings.TrimSpace(l.B))
+			}
+		}
 		parent := root
 		if len(stack) > 0 {
 			parent = stack[len(stack)-1]
@@ -233,7 +268,7 @@ func (n *cnode) all(lines []DiffLine, kind string) bool {
 }
 
 func (n *cnode) changed(lines []DiffLine) bool {
-	if lines[n.row].Kind != "=" {
+	if lines[n.row].Kind != "=" || lines[n.row].Moved {
 		return true
 	}
 	for _, k := range n.kids {
@@ -255,7 +290,8 @@ type chunk struct {
 
 type cmdWriter struct {
 	res       DiffResult
-	rows      bool // keep row references (rollback)
+	rows      bool   // keep row references (rollback)
+	os        string // the profile key, lower-cased ("" when unknown)
 	out       []CmdLine
 	manual    int
 	skipped   int
@@ -338,80 +374,167 @@ func firstWords(s string, n int) string {
 // ---- cisco ----
 
 var (
-	physIface   = regexp.MustCompile(`(?i)^interface\s+((Gigabit|FastEthernet|TenGigabit|TwentyFiveGig|FortyGigabit|HundredGig|Ethernet|Serial|mgmt)\S*)$`)
-	numberedACL = regexp.MustCompile(`(?i)^access-list\s+(\d+)\s`)
-	bannerHead  = regexp.MustCompile(`(?i)^banner\s+(motd|login|exec|incoming)\s+(\S)`)
-	vlanListRe  = regexp.MustCompile(`(?i)^(\s*)(switchport trunk allowed vlan|switchport trunk pruning vlan|spanning-tree vlan)\s+([\d,\-]+)(\s+.*)?$`)
-	addrFamily  = regexp.MustCompile(`(?i)^\s*address-family\b`)
+	// physIface: a physical port (Cisco, NX-OS, AlaxalA "gigabitethernet
+	// 0/5", NEC IX "GigaEthernet0.0", Comware "GigabitEthernet1/0/1",
+	// Huawei "GE0/0/1"): never "no interface", which a device rejects or
+	// takes as "wipe the port".
+	physIface = regexp.MustCompile(`(?i)^interface\s+((?:(?:Two|Five|TwentyFive|Forty|Hundred|Four|Ten|App|X|M)?Gigabit(?:Ethernet)?|(?:Giga|Fast|M-?|X)?Ethernet|(?:TwentyFive|Hundred|Forty|Ten|X)?GigE|Ten-GigabitEthernet|Twenty-FiveGigE|Forty-GigE|Hundred-GigE|(?:25|40|100|10)?GE|XGE|MEth|Eth|Fa|Gi|Te|Twe|Tw|Fi|Fo|Hu|Serial|Se|mgmt|Management|MgmtEth|Cellular|Dot11Radio|Wlan-GigabitEthernet|Bluetooth|Async)\s*\d\S*)$`)
+	// logicalIface: an interface "no interface" removes cleanly.
+	logicalIface = regexp.MustCompile(`(?i)^interface\s+(vlan|loopback|port-channel|tunnel|bvi|nve|dialer|virtual-template|null|bdi|bundle-ether|lo|vl|po|eth-trunk|vlanif|bridge-aggregation|route-aggregation|vlan-interface|multilink|group-async|pseudowire)\S*$`)
+	numberedACL  = regexp.MustCompile(`(?i)^access-list\s+(\d+)\s`)
+	prefixListRe = regexp.MustCompile(`(?i)^((?:ip|ipv6) prefix-list\s+\S+)\s+(?:seq\s+\d+\s+)?(?:permit|deny|description)\b`)
+	// orderedBlock: a block whose entries are evaluated in order (or whose
+	// device rejects a partial edit): any change inside it means the whole
+	// block is removed and re-entered as it was.
+	orderedBlock = regexp.MustCompile(`(?i)^((?:ip|ipv6|mac|arp) access-list\b|route-map\b)`)
+	vlanListRe   = regexp.MustCompile(`(?i)^(\s*)(switchport trunk allowed vlan|switchport trunk pruning vlan|spanning-tree vlan)\s+([\d,\-]+)(\s+.*)?$`)
+	// allowedVlanRe: one line of a trunk's VLAN list, with its mode (none
+	// / "" = the list, add / remove / except / none / all).
+	allowedVlanRe = regexp.MustCompile(`(?i)^\s*switchport trunk allowed vlan(?:\s+(add|remove|except|none|all))?(?:\s+([\d,\-]+))?\s*$`)
+	// vrfSwitch: a command that wipes the interface's addresses (and more)
+	// as a side effect: the addresses of A are put back after it.
+	vrfSwitch  = regexp.MustCompile(`(?i)^\s*(?:no )?(?:(?:ip )?vrf forwarding\b|vrf member\b|switchport$)`)
+	addrLine   = regexp.MustCompile(`(?i)^\s*(?:ip|ipv6) address\b`)
+	addrFamily = regexp.MustCompile(`(?i)^\s*address-family\b`)
 )
+
+// overwriteKeys are settings a device keeps one of: typing the new value
+// replaces the old one, so a changed line is put back by its A line alone.
+// Every other changed line is a list entry until proven otherwise
+// (ip route, ntp server, logging host, snmp-server community, ip
+// helper-address …): B's line is removed first, or B's value would stay in
+// force next to A's. The verdict's singleValued (strict_extra.go) is the
+// same notion and is read too; this list adds the settings that only
+// matter when commands are generated (an interface's port settings, which
+// a "no" first would flap).
+var overwriteKeys = []string{
+	"ip domain-name", "ip domain name", "ip domain lookup",
+	"ip mtu", "bandwidth", "delay",
+	"clock summer-time", "password", "login", "transport input", "transport output", "transport preferred",
+	"logging buffered", "logging console", "logging monitor", "logging trap", "logging facility", "logging source-interface", "logging origin-id",
+	"ntp source", "snmp-server location", "snmp-server contact",
+	"spanning-tree mode", "spanning-tree portfast", "spanning-tree cost", "spanning-tree port-priority", "spanning-tree guard", "spanning-tree link-type", "spanning-tree bpduguard", "spanning-tree bpdufilter",
+	"switchport mode", "switchport access vlan", "switchport trunk native vlan", "switchport trunk encapsulation", "switchport trunk allowed vlan", "switchport voice vlan",
+	"switchport port-security maximum", "switchport port-security violation", "switchport port-security aging",
+	"channel-group", "encapsulation", "ip ospf cost", "ip ospf priority", "ip ospf hello-interval", "ip ospf dead-interval", "ip ospf network",
+	"vrf forwarding", "ip vrf forwarding", "vrf member", "storm-control", "ip tcp adjust-mss", "ip igmp version",
+	"vtp domain", "vtp mode", "vtp version", "ip ssh version", "ip ssh time-out", "ip ssh authentication-retries",
+	"errdisable recovery interval", "mac address-table aging-time", "port-channel load-balance", "lldp timer", "cdp timer",
+	"username",
+	// Comware / VRP
+	"port link-type", "port link-mode", "port access vlan", "port trunk pvid vlan", "port hybrid pvid vlan", "header", "jumboframe enable", "stp edged-port", "link-aggregation mode",
+}
+
+// keyPhrase: the leading keywords of a setting ("ip address 192.0.2.1
+// 255.255.255.0" → "ip address"), lower-cased.
+func keyPhrase(line string) string {
+	f := strings.Fields(line)
+	n := 0
+	for n < len(f) && isWordToken(f[n]) {
+		n++
+	}
+	return strings.ToLower(strings.Join(f[:n], " "))
+}
+
+// overwriteSetting says whether typing a (A's line) alone replaces b (B's
+// line of the same setting) on the device.
+func overwriteSetting(a, b string) bool {
+	ka, kb := keyPhrase(a), keyPhrase(b)
+	if ka == "" || kb == "" {
+		return false
+	}
+	fa, fb := strings.Fields(strings.ToLower(a)), strings.Fields(strings.ToLower(b))
+	if fa[0] == "username" || fb[0] == "username" {
+		// "username ops …" replaces the same user's line; another user's
+		// line would stay.
+		return fa[0] == fb[0] && len(fa) > 1 && len(fb) > 1 && fa[1] == fb[1]
+	}
+	if fa[0] == "set" && (len(fa) > 4 || len(fb) > 4) {
+		return false // a Junos path: a leaf may hold a list
+	}
+	for _, f := range [][]string{fa, fb} {
+		for _, w := range f[1:] {
+			if w == "secondary" || w == "add" || w == "remove" {
+				return false
+			}
+		}
+	}
+	both := func(p string) bool {
+		return (ka == p || strings.HasPrefix(ka, p+" ")) && (kb == p || strings.HasPrefix(kb, p+" "))
+	}
+	for _, p := range singleValued {
+		if both(strings.Join(p, " ")) {
+			return true
+		}
+	}
+	for _, p := range overwriteKeys {
+		if both(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultIfaceOK: the device takes "default interface X" (IOS, IOS-XE,
+// NX-OS). AlaxalA, NEC IX, Aruba, Allied and ASA do not; a physical port
+// of theirs that gained settings is left for a look by hand.
+func (w *cmdWriter) defaultIfaceOK() bool {
+	switch {
+	case w.os == "":
+		return true
+	case strings.Contains(w.os, "asa"):
+		return false
+	}
+	return strings.Contains(w.os, "cisco") || strings.Contains(w.os, "nxos") || strings.Contains(w.os, "ios")
+}
+
+// resetIface: the chunk that takes a physical port back to its defaults.
+func (w *cmdWriter) resetIface(name string, row int) chunk {
+	if w.defaultIfaceOK() {
+		return chunk{lines: []CmdLine{w.line("default interface "+name, row)}, phase: phOther, sub: 9}
+	}
+	return chunk{lines: []CmdLine{w.note("interface "+name, "物理ポートの設定を手で既定に戻す（この機種に default interface は無い）", row)}, phase: phOther, sub: 9}
+}
 
 func (w *cmdWriter) cisco() {
 	lines := w.res.Lines
 	tree := cmdTree(lines)
 	w.skipped = w.res.SecretLines
 	consumed := map[int]bool{}
-	// Numbered ACLs and banners are groups of top-level rows.
+	// Numbered ACLs and prefix lists are groups of top-level rows that are
+	// evaluated in order: any change (a moved entry too) and the whole
+	// group is removed and re-entered as it was in A.
 	for i, n := range tree {
 		if n.head || consumed[n.row] {
 			continue
 		}
-		text := strings.TrimSpace(rowText(lines[n.row]))
-		if m := numberedACL.FindStringSubmatch(text); m != nil {
-			num := m[1]
-			var group []int
-			changed := false
-			for _, x := range tree[i:] {
-				t := strings.TrimSpace(rowText(lines[x.row]))
-				if mm := numberedACL.FindStringSubmatch(t); mm == nil || mm[1] != num {
-					continue
-				}
-				group = append(group, x.row)
-				if lines[x.row].Kind != "=" {
-					changed = true
-				}
-			}
-			for _, r := range group {
-				consumed[r] = true
-			}
-			if changed {
-				c := chunk{phase: phObjAdd, sub: 4}
-				c.lines = append(c.lines, w.line("no access-list "+num, group[0]))
-				for _, r := range group {
-					if lines[r].Kind != "+" {
-						c.lines = append(c.lines, w.line(strings.TrimSpace(lines[r].A), r))
-					}
-				}
-				w.add(c)
-			}
+		key := flatGroupKey(strings.TrimSpace(rowText(lines[n.row])))
+		if key == "" {
 			continue
 		}
-		if m := bannerHead.FindStringSubmatch(text); m != nil {
-			delim := m[2]
-			group := []int{n.row}
-			changed := lines[n.row].Kind != "="
-			for _, x := range tree[i+1:] {
-				t := rowText(lines[x.row])
-				group = append(group, x.row)
-				if lines[x.row].Kind != "=" {
-					changed = true
-				}
-				if strings.Contains(t, delim) {
-					break
-				}
+		var group []int
+		changed := false
+		for _, x := range tree[i:] {
+			if x.head || !strings.EqualFold(flatGroupKey(strings.TrimSpace(rowText(lines[x.row]))), key) {
+				continue
 			}
+			group = append(group, x.row)
+			if lines[x.row].Kind != "=" || lines[x.row].Moved {
+				changed = true
+			}
+		}
+		for _, r := range group {
+			consumed[r] = true
+		}
+		if changed {
+			c := chunk{phase: phObjAdd, sub: 4}
+			c.lines = append(c.lines, w.line("no "+key, group[0]))
 			for _, r := range group {
-				consumed[r] = true
-			}
-			if changed {
-				c := chunk{phase: phOther}
-				c.lines = append(c.lines, w.line("no banner "+strings.ToLower(m[1]), group[0]))
-				for _, r := range group {
-					if lines[r].Kind != "+" {
-						c.lines = append(c.lines, w.line(lines[r].A, r))
-					}
+				if lines[r].Kind != "+" {
+					c.lines = append(c.lines, w.line(strings.TrimSpace(lines[r].A), r))
 				}
-				w.add(c)
 			}
+			w.add(c)
 		}
 	}
 	for _, n := range tree {
@@ -425,6 +548,10 @@ func (w *cmdWriter) cisco() {
 			}
 			continue
 		}
+		if n.banner {
+			w.ciscoBanner(n)
+			continue
+		}
 		w.ciscoBlock(n, 0)
 	}
 	if len(w.chunks) == 0 {
@@ -435,6 +562,69 @@ func (w *cmdWriter) cisco() {
 	w.out = append(w.out, w.ctx("end", -1))
 }
 
+// flatGroupKey names the group a top-level list line belongs to
+// ("access-list 10", "ip prefix-list LAB"); "" for any other line.
+func flatGroupKey(text string) string {
+	if m := numberedACL.FindStringSubmatch(text); m != nil {
+		return "access-list " + m[1]
+	}
+	if m := prefixListRe.FindStringSubmatch(text); m != nil {
+		return strings.Join(strings.Fields(m[1]), " ")
+	}
+	return ""
+}
+
+// ciscoBanner writes a multi-line banner back as it was in A: the
+// current one removed, A's lines, and the closing delimiter — always, or
+// everything pasted after it would become banner text.
+func (w *cmdWriter) ciscoBanner(n *cnode) {
+	lines := w.res.Lines
+	l := lines[n.row]
+	headA, headB := strings.TrimSpace(l.A), strings.TrimSpace(l.B)
+	c := chunk{phase: phOther, sub: 5}
+	if l.Kind != "-" {
+		kind, _, _ := bannerBlock(headB)
+		if kind == "" {
+			kind, _, _ = bannerBlock(headA)
+		}
+		c.lines = append(c.lines, w.line("no banner "+kind, n.row))
+	}
+	if l.Kind != "+" {
+		_, delim, _ := bannerBlock(headA)
+		c.lines = append(c.lines, w.line(headA, n.row))
+		last := headA
+		for _, k := range n.kids {
+			if lines[k.row].Kind == "+" {
+				continue
+			}
+			last = lines[k.row].A
+			c.lines = append(c.lines, w.line(last, k.row))
+		}
+		if delim != "" && (last == headA || !strings.Contains(last, delim)) {
+			c.lines = append(c.lines, w.line(delim, -1))
+		}
+	}
+	w.add(c)
+}
+
+// removeBlock: the chunk that removes a whole block that is only in B: a
+// physical port goes back to its defaults, anything else is "no <head>".
+func (w *cmdWriter) removeBlock(head string, row int) chunk {
+	if m := physIface.FindStringSubmatch(head); m != nil {
+		return w.resetIface(m[1], row)
+	}
+	if strings.HasPrefix(strings.ToLower(head), "interface ") && !logicalIface.MatchString(head) {
+		// An interface of a kind not known here: "no interface" is wrong
+		// for a port and only right for a logical one.
+		if w.defaultIfaceOK() {
+			return chunk{lines: []CmdLine{w.line("default "+head, row)}, phase: phOther, sub: 9}
+		}
+		return chunk{lines: []CmdLine{w.note(head, "種類の分からないインタフェース: 消すか既定に戻すかを手で確認", row)}, phase: phOther, sub: 9}
+	}
+	ph, sub := ciscoPhase("no "+head, false)
+	return chunk{lines: []CmdLine{w.line("no "+head, row)}, phase: ph, sub: sub}
+}
+
 // ciscoBlock writes a block with differences as one chunk (or one line
 // when the whole block is new or gone).
 func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
@@ -442,12 +632,7 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 	head := strings.TrimSpace(rowText(lines[n.row]))
 	switch {
 	case n.all(lines, "+"):
-		if m := physIface.FindStringSubmatch(head); m != nil {
-			w.add(chunk{lines: []CmdLine{w.line("default interface "+m[1], n.row)}, phase: phOther, sub: 9})
-			return
-		}
-		ph, sub := ciscoPhase("no "+head, false)
-		w.add(chunk{lines: []CmdLine{w.line("no "+head, n.row)}, phase: ph, sub: sub})
+		w.add(w.removeBlock(head, n.row))
 		return
 	case n.all(lines, "-"):
 		c := chunk{}
@@ -457,11 +642,11 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 		c.lines = append(c.lines, w.ctx(exitFor(head, lines[n.row].Depth), -1))
 		w.add(c)
 		return
-	case lines[n.row].Kind == "~":
-		// A renamed block ("ip access-list extended OLD" → "… NEW"): the
-		// new one goes, the old one comes back whole.
-		ph, sub := ciscoPhase("no "+head, false)
-		w.add(chunk{lines: []CmdLine{w.line("no "+head, n.row)}, phase: ph, sub: sub})
+	case lines[n.row].Kind == "~", orderedBlock.MatchString(head):
+		// A renamed block ("ip access-list extended OLD" → "… NEW"), or an
+		// ordered one (a named ACL, a route-map) with any change inside:
+		// the current one goes, the old one comes back whole.
+		w.add(w.removeBlock(head, n.row))
 		old := strings.TrimSpace(lines[n.row].A)
 		c := chunk{}
 		c.phase, c.sub = ciscoPhase(old, false)
@@ -481,19 +666,20 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 			}
 		}
 		if allNew {
-			w.add(chunk{lines: []CmdLine{w.line("default interface "+m[1], n.row)}, phase: phOther, sub: 9})
+			w.add(w.resetIface(m[1], n.row))
 			return
 		}
 	}
 	c := chunk{phase: phOther, sub: 9}
 	c.lines = append(c.lines, w.ctx(head, n.row))
 	var nos, rest []CmdLine
+	vlanRows := w.allowedVlanRows(n)
 	for _, k := range n.kids {
-		if !k.changed(lines) {
+		if !k.changed(lines) || vlanRows[k.row] {
 			continue
 		}
 		if k.head {
-			sub := &cmdWriter{res: w.res, rows: w.rows}
+			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os}
 			sub.ciscoBlock(k, depth+1)
 			for _, sc := range sub.chunks {
 				rest = append(rest, sc.lines...)
@@ -513,7 +699,31 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 			}
 		}
 	}
+	rest = append(rest, w.allowedVlanLines(n, vlanRows)...)
 	body := append(nos, rest...)
+	// "no vrf forwarding", "vrf forwarding X", "switchport" / "no
+	// switchport" wipe the interface's addresses: A's come back after.
+	wipes := false
+	for _, l := range body {
+		if vrfSwitch.MatchString(l.Text) {
+			wipes = true
+		}
+	}
+	if wipes {
+		have := map[string]bool{}
+		for _, l := range body {
+			have[strings.TrimSpace(l.Text)] = true
+		}
+		for _, k := range n.kids {
+			if k.head || lines[k.row].Kind == "+" || !addrLine.MatchString(lines[k.row].A) || have[strings.TrimSpace(lines[k.row].A)] {
+				continue
+			}
+			body = append(body, w.note(strings.TrimSpace(lines[k.row].A), "vrf / switchport の切替で消えるアドレスを入れ直す", k.row))
+		}
+	}
+	if len(body) == 0 {
+		return
+	}
 	for _, l := range body {
 		if ph, sub := ciscoPhase(l.Text, true); ph < c.phase || (ph == c.phase && sub < c.sub) {
 			c.phase, c.sub = ph, sub
@@ -528,13 +738,131 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 	w.add(c)
 }
 
-// wholeBlock writes every line of a block as it was in A.
-func (w *cmdWriter) wholeBlock(n *cnode, c *chunk) {
+// allowedVlanRows: the rows under a block that make up its trunk VLAN
+// list ("switchport trunk allowed vlan 1-100" and the "add …" lines
+// after it) when both sides have one; they are handled as one set by
+// allowedVlanLines. Empty when a side has no list (the rows then go the
+// usual way, line by line).
+func (w *cmdWriter) allowedVlanRows(n *cnode) map[int]bool {
 	lines := w.res.Lines
+	rows := map[int]bool{}
+	hasA, hasB := false, false
 	for _, k := range n.kids {
-		if lines[k.row].Kind == "+" {
+		if k.head {
 			continue
 		}
+		l := lines[k.row]
+		if l.Kind != "+" && allowedVlanRe.MatchString(l.A) {
+			rows[k.row], hasA = true, true
+		}
+		if l.Kind != "-" && allowedVlanRe.MatchString(l.B) {
+			rows[k.row], hasB = true, true
+		}
+	}
+	if !hasA || !hasB {
+		return map[int]bool{}
+	}
+	return rows
+}
+
+// allowedVlanLines turns the VLAN-list rows of a block into the add /
+// remove lines that take B's set to A's. A list that says none / all /
+// except is left for a look by hand.
+func (w *cmdWriter) allowedVlanLines(n *cnode, rows map[int]bool) []CmdLine {
+	if len(rows) == 0 {
+		return nil
+	}
+	lines := w.res.Lines
+	type ent struct {
+		row  int
+		line int
+		text string
+	}
+	var ea, eb []ent
+	changed := false
+	first := -1
+	for _, k := range n.kids {
+		if !rows[k.row] {
+			continue
+		}
+		l := lines[k.row]
+		if l.Kind != "=" || l.Moved {
+			changed = true
+			if first < 0 {
+				first = k.row
+			}
+		}
+		if l.Kind != "+" {
+			ea = append(ea, ent{k.row, l.LineA, l.A})
+		}
+		if l.Kind != "-" {
+			eb = append(eb, ent{k.row, l.LineB, l.B})
+		}
+	}
+	if !changed {
+		return nil
+	}
+	sort.SliceStable(ea, func(i, j int) bool { return ea[i].line < ea[j].line })
+	sort.SliceStable(eb, func(i, j int) bool { return eb[i].line < eb[j].line })
+	build := func(es []ent) (map[int]bool, []ent) {
+		set := map[int]bool{}
+		var manual []ent
+		for _, e := range es {
+			m := allowedVlanRe.FindStringSubmatch(e.text)
+			if m == nil {
+				manual = append(manual, e)
+				continue
+			}
+			switch strings.ToLower(m[1]) {
+			case "":
+				set = vlanSet(m[2])
+			case "add":
+				for v := range vlanSet(m[2]) {
+					set[v] = true
+				}
+			case "remove":
+				for v := range vlanSet(m[2]) {
+					delete(set, v)
+				}
+			default:
+				manual = append(manual, e)
+			}
+		}
+		return set, manual
+	}
+	setA, manA := build(ea)
+	setB, manB := build(eb)
+	if len(manA)+len(manB) > 0 {
+		var out []CmdLine
+		for _, e := range append(manA, manB...) {
+			if l := lines[e.row]; l.Kind != "=" || l.Moved {
+				out = append(out, w.note(strings.TrimSpace(e.text), "VLAN 一覧の none / all / except は手で確認", e.row))
+			}
+		}
+		return out
+	}
+	var out []CmdLine
+	if extra := vlanDiff(setB, setA); extra != "" {
+		out = append(out, w.line(" switchport trunk allowed vlan remove "+extra, first))
+	}
+	if gone := vlanDiff(setA, setB); gone != "" {
+		out = append(out, w.line(" switchport trunk allowed vlan add "+gone, first))
+	}
+	return out
+}
+
+// wholeBlock writes every line of a block as it was in A, in A's order
+// (a moved row sits at B's place in the result).
+func (w *cmdWriter) wholeBlock(n *cnode, c *chunk) {
+	lines := w.res.Lines
+	kids := make([]*cnode, 0, len(n.kids))
+	for _, k := range n.kids {
+		if lines[k.row].Kind != "+" {
+			kids = append(kids, k)
+		}
+	}
+	sort.SliceStable(kids, func(i, j int) bool { return lines[kids[i].row].LineA < lines[kids[j].row].LineA })
+	for _, k := range kids {
 		c.lines = append(c.lines, w.line(lines[k.row].A, k.row))
 		if k.head {
 			w.wholeBlock(k, c)
@@ -584,15 +912,19 @@ func (w *cmdWriter) ciscoLeaf(row int, sub bool) ([]CmdLine, bool) {
 			}
 			return out, len(out) > 0
 		}
-		if sub && firstWords(ta, 2) != firstWords(tb, 2) {
-			return []CmdLine{w.line(noToggle(b), row), w.line(a, row)}, true
+		if overwriteSetting(ta, tb) || strings.EqualFold(strings.TrimSpace(noToggle(tb)), ta) {
+			// One value per device (description, hostname, speed …): A's
+			// line replaces B's. "ip address" too — removing it first
+			// would cut the session off.
+			return []CmdLine{w.line(a, row)}, true
 		}
-		if ph, _ := ciscoPhase(tb, true); sub && ph == phRefAdd {
-			// A reference to another object ("ip access-group NEW in"):
-			// the new reference is taken off before the old one goes back.
-			return []CmdLine{w.line(noToggle(b), row), w.line(a, row)}, true
+		// A list entry (ip route, ntp server, logging host, snmp-server
+		// community, ip helper-address …) or a reference ("ip access-group
+		// NEW in"): B's goes first, then A's comes back.
+		if strings.HasPrefix(strings.ToLower(tb), "username ") {
+			return []CmdLine{w.note(noToggle(b), "username の削除は確認プロンプトが出る機種がある", row), w.line(a, row)}, true
 		}
-		return []CmdLine{w.line(a, row)}, true
+		return []CmdLine{w.line(noToggle(b), row), w.line(a, row)}, true
 	}
 	return nil, false
 }
@@ -775,7 +1107,17 @@ func (w *cmdWriter) fgWalk(n *cnode, path []string) {
 		case "-":
 			rest = append(rest, w.line(strings.TrimSpace(l.A), k.row))
 		case "~":
-			rest = append(rest, w.line(strings.TrimSpace(l.A), k.row))
+			// "set x …" replaces x's value; a pair of different keys
+			// (a removed line and an added one that happened to sit
+			// together) means B's key is unset before A's line.
+			ta := strings.TrimSpace(l.A)
+			ma, mb := fgSet.FindStringSubmatch(ta), fgSet.FindStringSubmatch(t)
+			if mb != nil && (ma == nil || !strings.EqualFold(ma[1], mb[1])) {
+				unsets = append(unsets, w.line("unset "+mb[1], k.row))
+			} else if mb == nil && !strings.HasPrefix(lt, "unset ") {
+				rest = append(rest, w.note(t, "逆の操作が分からない", k.row))
+			}
+			rest = append(rest, w.line(ta, k.row))
 		}
 	}
 	if len(dels)+len(unsets)+len(rest) > 0 {
@@ -1043,6 +1385,16 @@ func (w *cmdWriter) junos(a, b string) {
 				sets = append(sets, w.note(t, "逆の操作が分からない", -1))
 			}
 		case "-", "~":
+			if l.Kind == "~" {
+				// The B line of a pair is a leaf of its own (a list
+				// value, or an unrelated line that sat next to A's):
+				// it goes before A's comes back. The commit applies
+				// both at once, so a single-valued leaf sees no gap.
+				tb := strings.TrimSpace(l.B)
+				if f := strings.Fields(tb); len(f) >= 2 && strings.EqualFold(f[0], "set") {
+					dels = append(dels, w.line("delete "+strings.TrimSpace(tb[len(f[0]):]), -1))
+				}
+			}
 			t := strings.TrimSpace(l.A)
 			if strings.HasPrefix(strings.ToLower(t), "delete ") {
 				dels = append(dels, w.line(t, -1))
@@ -1125,7 +1477,9 @@ func (w *cmdWriter) yamaha() {
 					c.lines = append(c.lines, cl)
 				}
 			}
-			w.add(c)
+			if len(c.lines) > 1 {
+				w.add(c)
+			}
 			return
 		}
 		cl := w.yamahaLeaf(n.row)
@@ -1162,9 +1516,13 @@ func (w *cmdWriter) yamahaLeaf(row int) []CmdLine {
 	return nil
 }
 
+// yamahaFilterRef: a filter applied to an interface ("ip lan1 secure
+// filter in 100").
+var yamahaFilterRef = regexp.MustCompile(`\bfilter\s+(in|out)\b`)
+
 func yamahaPhase(cmd string) (int, int) {
 	t := strings.ToLower(strings.TrimSpace(cmd))
-	filterRef := regexp.MustCompile(`\bfilter\s+(in|out)\b`)
+	filterRef := yamahaFilterRef
 	switch {
 	case strings.HasPrefix(t, "no ") && filterRef.MatchString(t):
 		return phRefDel, 0
@@ -1176,6 +1534,130 @@ func yamahaPhase(cmd string) (int, int) {
 		return phRefAdd, 0
 	}
 	return phOther, 5
+}
+
+// ---- comware / VRP ----
+
+// undoToggle puts "undo " in front of a command or takes it off.
+func undoToggle(cmd string) string {
+	t := strings.TrimSpace(cmd)
+	lead := cmd[:len(cmd)-len(strings.TrimLeft(cmd, " \t"))]
+	if strings.HasPrefix(strings.ToLower(t), "undo ") {
+		return lead + strings.TrimSpace(t[5:])
+	}
+	return lead + "undo " + t
+}
+
+// comware writes the commands of a Comware / VRP device: "undo" as the
+// negation, blocks closed with "quit", the whole inside system-view …
+// return. A physical port that is only in B gets its lines undone one by
+// one (there is no "default interface").
+func (w *cmdWriter) comware() {
+	lines := w.res.Lines
+	tree := cmdTree(lines)
+	w.skipped = w.res.SecretLines
+	for _, n := range tree {
+		if !n.changed(lines) {
+			continue
+		}
+		if !n.head {
+			if cl, ok := w.comwareLeaf(n.row); ok {
+				w.add(chunk{lines: cl, phase: phOther, sub: 5})
+			}
+			continue
+		}
+		w.comwareBlock(n)
+	}
+	if len(w.chunks) == 0 {
+		return
+	}
+	w.warnings = append(w.warnings, "Comware/VRP 系: undo に引数が要るかどうかは機種で違います。投入前に 1 行ずつ確認してください")
+	w.out = append(w.out, w.ctx("system-view", -1))
+	w.flush()
+	w.out = append(w.out, w.ctx("return", -1))
+}
+
+func (w *cmdWriter) comwareBlock(n *cnode) {
+	lines := w.res.Lines
+	head := strings.TrimSpace(rowText(lines[n.row]))
+	old := strings.TrimSpace(lines[n.row].A)
+	phys := physIface.MatchString(head)
+	whole := func(h string) {
+		c := chunk{phase: phOther, sub: 5}
+		c.lines = append(c.lines, w.ctx(h, n.row))
+		w.wholeBlock(n, &c)
+		c.lines = append(c.lines, w.ctx("quit", -1))
+		w.add(c)
+	}
+	switch {
+	case n.all(lines, "+") && !phys:
+		w.add(chunk{lines: []CmdLine{w.line("undo "+head, n.row)}, phase: phOther, sub: 4})
+		return
+	case n.all(lines, "-"):
+		whole(head)
+		return
+	case lines[n.row].Kind == "~":
+		if phys {
+			w.add(chunk{lines: []CmdLine{w.note(head, "物理ポートの設定を手で既定に戻す", n.row)}, phase: phOther, sub: 4})
+		} else {
+			w.add(chunk{lines: []CmdLine{w.line("undo "+head, n.row)}, phase: phOther, sub: 4})
+		}
+		whole(old)
+		return
+	}
+	c := chunk{phase: phOther, sub: 5}
+	c.lines = append(c.lines, w.ctx(head, n.row))
+	var undos, rest []CmdLine
+	for _, k := range n.kids {
+		if !k.changed(lines) {
+			continue
+		}
+		if k.head {
+			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os}
+			sub.comwareBlock(k)
+			for _, sc := range sub.chunks {
+				rest = append(rest, sc.lines...)
+			}
+			w.manual += sub.manual
+			continue
+		}
+		cl, ok := w.comwareLeaf(k.row)
+		if !ok {
+			continue
+		}
+		for _, l := range cl {
+			if strings.HasPrefix(strings.TrimSpace(l.Text), "undo ") {
+				undos = append(undos, l)
+			} else {
+				rest = append(rest, l)
+			}
+		}
+	}
+	body := append(undos, rest...)
+	if len(body) == 0 {
+		return
+	}
+	c.lines = append(c.lines, body...)
+	c.lines = append(c.lines, w.ctx("quit", -1))
+	w.add(c)
+}
+
+func (w *cmdWriter) comwareLeaf(row int) ([]CmdLine, bool) {
+	l := w.res.Lines[row]
+	a, b := l.A, l.B
+	ta, tb := strings.TrimSpace(a), strings.TrimSpace(b)
+	switch l.Kind {
+	case "+":
+		return []CmdLine{w.line(undoToggle(b), row)}, true
+	case "-":
+		return []CmdLine{w.line(a, row)}, true
+	case "~":
+		if overwriteSetting(ta, tb) || strings.EqualFold(strings.TrimSpace(undoToggle(tb)), ta) {
+			return []CmdLine{w.line(a, row)}, true
+		}
+		return []CmdLine{w.line(undoToggle(b), row), w.line(a, row)}, true
+	}
+	return nil, false
 }
 
 // ---- generic ----
@@ -1237,7 +1719,7 @@ func ConfigFingerprint(log string) string {
 		if mask[i] {
 			continue
 		}
-		k := normalize(l)
+		k := normalizeConfig(l)
 		if k == "" || barePrompt.MatchString(k) {
 			continue
 		}

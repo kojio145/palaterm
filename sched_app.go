@@ -85,12 +85,23 @@ type SchedLogEntry struct {
 type SchedLogFile struct {
 	Device string `json:"device"`
 	Path   string `json:"path"`
+	// OK is the device's result; Error its message as the run tab shows it
+	// (the runner masks the device's passwords in what it quotes). A line
+	// written before these fields existed has neither: nil is "not known",
+	// not a failure (the page marks ok === false only).
+	OK    *bool  `json:"ok,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 type schedJob struct {
 	sc     schedule.Schedule
 	due    time.Time
 	manual bool
+	// restart: planned at the first look after a restart from the saved
+	// last look (schedule-checked.json). Such a firing runs only when the
+	// new last look could be written: the file is the only thing that keeps
+	// it from running once more after the next restart.
+	restart bool
 }
 
 // schedState is the scheduler's own state (App.sched).
@@ -133,11 +144,82 @@ type schedState struct {
 	// runs counts the scheduled batches' goroutines, so the exit can wait
 	// for the round that was running to write its line (waitSchedRuns).
 	runs sync.WaitGroup
+	// fileErr: per data\ file (base name), why its last write failed ("" or
+	// absent: it went through). The 予約 tab shows it (ScheduleStatus) and
+	// the tray says it once per schedNoteQuiet: the 実行記録 and the last
+	// look would otherwise be lost in silence, and the last look lost means
+	// a round run again after a restart.
+	fileErr map[string]string
+}
+
+// schedFileNote records whether a write of one of the scheduler's data\
+// files went through (under s.mu) and, when it did not, tells the page
+// (sched:problem) and the tray — once per schedNoteQuiet per file, and
+// without writing a 実行記録 line for it (the 実行記録 may be the file that
+// cannot be written).
+func (a *App) schedFileNote(path string, err error) {
+	s := &a.sched
+	name := filepath.Base(path)
+	s.mu.Lock()
+	if err == nil {
+		delete(s.fileErr, name)
+		s.mu.Unlock()
+		return
+	}
+	if s.fileErr == nil {
+		s.fileErr = map[string]string{}
+	}
+	s.fileErr[name] = err.Error()
+	key := "\x00file:" + name
+	now := time.Now()
+	quiet := false
+	if last, ok := s.noted[key]; ok && now.Sub(last) < schedNoteQuiet {
+		quiet = true
+	} else {
+		if s.noted == nil {
+			s.noted = map[string]time.Time{}
+		}
+		s.noted[key] = now
+	}
+	s.mu.Unlock()
+	if quiet {
+		return
+	}
+	e := SchedLogEntry{At: now.Format(time.RFC3339), Kind: "error", Message: schedFileErrText(name, err)}
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "sched:problem", e) // nothing of the vault in it
+	}
+	if a.windowHidden() {
+		trayBalloon(winWord("予約の記録を保存できません", "A schedule file could not be written"),
+			winWord("data\\"+name+" を書けません。「予約」タブで確かめてください", "data\\"+name+" cannot be written: see the schedule tab"))
+	}
+}
+
+// schedFileErrText is the message for a data\ file that cannot be written.
+func schedFileErrText(name string, err error) string {
+	return fmt.Sprintf("予約の記録ファイル data\\%s を保存できません: %v", name, err)
+}
+
+// schedFileErrors is what the 予約 tab shows of the files that cannot be
+// written ("" when every write went through).
+func (a *App) schedFileErrors() string {
+	s := &a.sched
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var parts []string
+	for _, name := range slices.Sorted(maps.Keys(s.fileErr)) {
+		parts = append(parts, schedFileErrText(name, errors.New(s.fileErr[name])))
+	}
+	return strings.Join(parts, "\n")
 }
 
 // schedNoteQuiet is how long the same problem of the same schedule is not
 // told again.
 const schedNoteQuiet = 10 * time.Minute
+
+// schedClockBackMax: a clock found set back by this much or more since the
+// last look is not waited for (schedPlan).
+const schedClockBackMax = 24 * time.Hour
 
 // schedCheckedFile is data/schedule-checked.json: per schedule ID, up to
 // when its firings were handled. At the unlock after a restart the firings
@@ -170,8 +252,10 @@ func (s *schedState) loadStateLocked() {
 	}
 }
 
-// writeSchedState writes the file (outside s.mu).
-func writeSchedState(path string, f schedCheckedFile) { _ = writeJSONAtomic(path, f) }
+// writeSchedState writes the file (outside s.mu); the error is the caller's
+// to record (schedFileNote) — a last look not written is a round that may
+// run again after the next restart.
+func writeSchedState(path string, f schedCheckedFile) error { return writeJSONAtomic(path, f) }
 
 // writeJSONAtomic writes v as indented JSON to path through a temporary
 // file and a rename, so a crash mid-write leaves the old file, not half of
@@ -212,7 +296,7 @@ func (a *App) resetSchedFiles() {
 	s.mu.Lock()
 	s.checked, s.saved, s.savedOn, s.stateDirty = map[string]time.Time{}, nil, 0, false
 	s.stateLoaded = true // nothing to read any more
-	s.queue, s.skips, s.noted = nil, nil, nil
+	s.queue, s.skips, s.noted, s.fileErr = nil, nil, nil, nil
 	s.mu.Unlock()
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
@@ -223,11 +307,16 @@ func (a *App) resetSchedFiles() {
 	}
 }
 
-// waitSchedRuns waits up to max for the scheduled batches' goroutines to
-// end (the exit: execBatch has freed the batch slot, but the round's line,
-// its passed-over firings and sched:done are written by the goroutine after
-// that). It reports whether they all ended in time.
+// waitSchedRuns is the exit's: it drops the firings still waiting their
+// turn, recording each as skipped (handled at the tick that queued it, it
+// would otherwise neither run nor be missed after the restart — and must
+// not start now, behind the round being stopped), then waits up to max for
+// the scheduled batches' goroutines to end (execBatch has freed the batch
+// slot, but the round's line, its passed-over firings and sched:done are
+// written by the goroutine after that). It reports whether they all ended
+// in time.
 func (a *App) waitSchedRuns(max time.Duration) bool {
+	a.schedDropQueue("PalaTerm の終了のため、待機していたこの回は実行しませんでした")
 	done := make(chan struct{})
 	go func() {
 		a.sched.runs.Wait()
@@ -260,11 +349,11 @@ func schedPublic(e SchedLogEntry) SchedLogEntry {
 }
 
 // schedProblem: a line of the 実行記録 that is not a run (missed, skipped,
-// refused, error, stopped) — the ones a user has to be told, since nothing
-// else on screen or in the tray says them.
+// refused, error, stopped, changed) — the ones a user has to be told, since
+// nothing else on screen or in the tray says them.
 func schedProblem(kind string) bool {
 	switch kind {
-	case "missed", "skipped", "refused", "error", "stopped":
+	case "missed", "skipped", "refused", "error", "stopped", "changed":
 		return true
 	}
 	return false
@@ -281,6 +370,8 @@ func schedNoteTitle(kind string) string {
 		return winWord("予約を実行しませんでした（設定を変えるコマンド）", "A scheduled run was refused (commands that change the device)")
 	case "stopped":
 		return winWord("予約を停止しました", "A schedule was stopped")
+	case "changed":
+		return winWord("予約の対象機器が変わりました", "A schedule's devices changed")
 	}
 	return winWord("予約を実行できませんでした", "A scheduled run could not start")
 }
@@ -288,9 +379,11 @@ func schedNoteTitle(kind string) string {
 // schedNote tells a problem line on screen (sched:problem: the page shows a
 // toast) and, while the window is in the tray, in a balloon. The same
 // problem of the same schedule is told once per schedNoteQuiet; a stop
-// always. With the vault locked neither the page (the lock screen is
-// showing) nor the balloon gets a name, a message or a path (schedPublic):
-// only that a 予約 went wrong, and what kind. It reports whether it told.
+// always. With the vault locked the page (the lock screen is showing) gets
+// no name, message or path (schedPublic): only that a 予約 went wrong, and
+// what kind. The balloon never gets them, locked or not: Windows keeps the
+// balloons in its notification history, readable after the lock. It reports
+// whether it told.
 func (a *App) schedNote(e SchedLogEntry) bool {
 	if !schedProblem(e.Kind) {
 		return false
@@ -317,12 +410,7 @@ func (a *App) schedNote(e SchedLogEntry) bool {
 		runtime.EventsEmit(a.ctx, "sched:problem", ev)
 	}
 	if a.windowHidden() {
-		text := winWord(fmt.Sprintf("「%s」%s", e.Schedule, e.Message),
-			fmt.Sprintf("\"%s\" — see the schedule log (予約の実行記録)", e.Schedule))
-		if locked {
-			text = winWord("ロック解除後に「予約の実行記録」で確かめてください", "Unlock PalaTerm and see the schedule log (予約の実行記録)")
-		}
-		trayBalloon(schedNoteTitle(e.Kind), text)
+		trayBalloon(schedNoteTitle(e.Kind), winWord("「予約の実行記録」で確かめてください", "See the schedule log (予約の実行記録)"))
 	}
 	return true
 }
@@ -350,7 +438,10 @@ func (a *App) writeSchedLog(e SchedLogEntry) {
 	if len(s.log) > schedLogMax {
 		s.log = slices.Clone(s.log[len(s.log)-schedLogMax:]) // let the old array go
 	}
-	_ = writeJSONAtomic(schedLogPath(), s.log)
+	// The line is kept in memory either way; a file that cannot be written
+	// is told (the lines would otherwise vanish at the next start, as if
+	// nothing had happened).
+	a.schedFileNote(schedLogPath(), writeJSONAtomic(schedLogPath(), s.log))
 }
 
 // ScheduleLog returns the 予約の実行記録, newest first (at most limit).
@@ -377,11 +468,13 @@ func (a *App) readSchedLog(limit int) []SchedLogEntry {
 // schedCopy is what a locked vault leaves the scheduler: an inventory built
 // from a list of what a firing needs — the devices an enabled schedule
 // targets (credentials filled in from their group, the own jump host put in
-// front), the command sets, the settings, the pinned host keys and the
-// schedules themselves. Nothing else is copied: the other devices, the group
-// credentials, the own jump hosts, the table drafts, the GUI pins, the
-// import rules — and whatever is added to the vault later, until it is put
-// on this list on purpose. nil when nothing is scheduled.
+// front), the command sets those schedules and devices name (a command may
+// carry a password), the settings, the pinned host keys and the enabled
+// schedules themselves. Nothing else is copied: the other devices and sets,
+// the disabled schedules, the group credentials, the own jump hosts, the
+// table drafts, the GUI pins, the import rules — and whatever is added to
+// the vault later, until it is put on this list on purpose. nil when
+// nothing is scheduled.
 func schedCopy(inv *model.Inventory) *model.Inventory {
 	if inv == nil {
 		return nil
@@ -422,15 +515,30 @@ func schedCopy(inv *model.Inventory) *model.Inventory {
 	}
 	settings := src.Settings
 	settings.LastKeyFile = ""
+	// The command sets a firing can reach: the schedule's own, or the kept
+	// devices' own when the schedule leaves the set to each device.
+	setNames := map[string]bool{}
+	for _, sc := range on {
+		setNames[sc.CommandSet] = true
+	}
+	for _, d := range keep {
+		setNames[d.CommandSet] = true
+	}
+	var sets []model.CommandSet
+	for _, cs := range src.CommandSets {
+		if setNames[cs.Name] {
+			sets = append(sets, cs)
+		}
+	}
 	return &model.Inventory{
 		Version:       src.Version,
 		SavedBy:       src.SavedBy,
 		Devices:       keep,
-		CommandSets:   src.CommandSets,
+		CommandSets:   sets,
 		DeviceGroups:  groups,
 		Settings:      settings,
 		KnownHostKeys: src.KnownHostKeys,
-		Schedules:     src.Schedules,
+		Schedules:     slices.Clone(on),
 	}
 }
 
@@ -504,6 +612,69 @@ func stopLeaving(inv *model.Inventory, before, after []model.Device) []SchedLogE
 		}
 		if len(l.moved) > 0 {
 			out = append(out, stopSchedules(inv, g, l.moved, fmt.Sprintf("機器「%s」が別のグループへ移動したため停止しました", strings.Join(slices.Sorted(maps.Keys(l.moved)), ", ")))...)
+		}
+	}
+	return out
+}
+
+// schedImportChanged is for a 一式読込 (ApplyImport): before is the device
+// list as it was before bundle.Apply, inv the inventory after it. A read-in
+// bundle adds devices to a group and replaces the ones of the same name
+// (another address, say) — targets nobody checked. The enabled schedules of
+// a group that gained devices or had addresses changed: one that runs on
+// the whole group (Names nil) is stopped until re-enabled (a "stopped"
+// line); one with a fixed device list is told ("changed") when a device it
+// names has another address now. Devices that left a group are handled as
+// stopLeaving does. Called under a.mu, before the vault is written; the
+// caller logs the lines after a successful save (logStopped).
+func schedImportChanged(inv *model.Inventory, before []model.Device) []SchedLogEntry {
+	out := stopLeaving(inv, before, inv.Devices)
+	old := map[string]model.Device{} // ID → before
+	for _, d := range before {
+		old[d.ID] = d
+	}
+	type change struct {
+		added   int
+		changed map[string]bool // names whose Host changed
+	}
+	byGroup := map[string]*change{}
+	for _, d := range inv.Devices {
+		o, ok := old[d.ID]
+		if ok && (o.Group != d.Group || o.Host == d.Host) {
+			continue
+		}
+		c := byGroup[d.Group]
+		if c == nil {
+			c = &change{changed: map[string]bool{}}
+			byGroup[d.Group] = c
+		}
+		if ok {
+			c.changed[d.Name] = true
+		} else {
+			c.added++
+		}
+	}
+	for i := range inv.Schedules {
+		sc := &inv.Schedules[i]
+		c := byGroup[sc.Group]
+		if !sc.Enabled || c == nil {
+			continue
+		}
+		if sc.Names == nil {
+			sc.Enabled = false
+			out = append(out, SchedLogEntry{ScheduleID: sc.ID, Schedule: sc.Name, Kind: "stopped",
+				Message: fmt.Sprintf("一式読込でグループ「%s」の機器が変わったため停止しました（追加 %d 台・アドレス変更 %d 台）。対象を確かめてから再度有効にしてください", sc.Group, c.added, len(c.changed))})
+			continue
+		}
+		var hit []string
+		for _, n := range sc.Names {
+			if c.changed[n] {
+				hit = append(hit, n)
+			}
+		}
+		if len(hit) > 0 {
+			out = append(out, SchedLogEntry{ScheduleID: sc.ID, Schedule: sc.Name, Kind: "changed",
+				Message: fmt.Sprintf("一式読込で機器「%s」のアドレスが変わりました。対象を確かめてください", strings.Join(hit, ", "))})
 		}
 	}
 	return out
@@ -604,12 +775,28 @@ func (a *App) saveSchedulesLocked(before []schedule.Schedule) error {
 }
 
 // hasPendingSchedules: an enabled schedule will still fire, or one is
-// running or waiting its turn now (× then must not cut it off).
+// running or waiting its turn now (× then must not cut it off) — or, after
+// a restart, schedules were enabled when PalaTerm last looked and wait for
+// the unlock (the lock screen says they do; × must keep that promise).
 func (a *App) hasPendingSchedules() bool {
 	a.sched.mu.Lock()
 	busy := a.sched.runID != "" || len(a.sched.queue) > 0
 	a.sched.mu.Unlock()
-	return busy || !schedule.NextOf(a.schedules(), time.Now()).IsZero()
+	return busy || !schedule.NextOf(a.schedules(), time.Now()).IsZero() || a.SchedulesWaitUnlock()
+}
+
+// schedDropQueue empties the queue of waiting firings, recording each as
+// skipped with why (the exit; a 今すぐ実行 too).
+func (a *App) schedDropQueue(why string) {
+	s := &a.sched
+	s.mu.Lock()
+	dropped := s.queue
+	s.queue = nil
+	s.mu.Unlock()
+	for _, j := range dropped {
+		a.schedLog(SchedLogEntry{Due: j.due.Format(time.RFC3339), ScheduleID: j.sc.ID, Schedule: j.sc.Name, Kind: "skipped",
+			Message: why, Manual: j.manual})
+	}
 }
 
 func (a *App) schedKick() {
@@ -646,7 +833,31 @@ func (a *App) schedTick(now time.Time) {
 	s := &a.sched
 	save, missed, busy := a.schedPlan(now, list, have)
 	if save != nil {
-		writeSchedState(s.statePath, *save)
+		err := writeSchedState(s.statePath, *save)
+		a.schedFileNote(s.statePath, err)
+		if err != nil {
+			// The firings planned from the saved last look (a restart) are
+			// not run while the new last look cannot be written: nothing
+			// would stop them from running once more after the next restart.
+			// Recorded as missed; the write is tried again next tick.
+			s.mu.Lock()
+			s.stateDirty = true
+			q := s.queue[:0]
+			var dropped []schedJob
+			for _, j := range s.queue {
+				if j.restart {
+					dropped = append(dropped, j)
+				} else {
+					q = append(q, j)
+				}
+			}
+			s.queue = q
+			s.mu.Unlock()
+			for _, j := range dropped {
+				missed = append(missed, SchedLogEntry{Due: j.due.Format(time.RFC3339), ScheduleID: j.sc.ID, Schedule: j.sc.Name, Kind: "missed",
+					Message: fmt.Sprintf("最終確認時刻（data\\%s）を保存できないため、再起動後のこの回は実行しませんでした（二重実行を防ぐため）: %v", filepath.Base(s.statePath), err)})
+			}
+		}
 	}
 	for _, e := range missed {
 		a.schedLog(e)
@@ -716,8 +927,21 @@ func (a *App) schedPlan(now time.Time, list []schedule.Schedule, have bool) (sav
 			dirty = true
 		}
 		if ok && now.Before(from) {
-			// The clock was set back (time sync): the firings up to from
-			// were handled already, and running them again would repeat them.
+			// The clock was set back (time sync, a zone put right): the
+			// firings up to from were handled already, and running them again
+			// would repeat them. Set back by a day or more (a reset CMOS
+			// clock, a date typed wrong), waiting for the clock to catch up
+			// would be a silence of days or years with the 予約 tab looking
+			// fine: said once, and the last look moved to now (a repeat is
+			// the lesser risk unattended).
+			if from.Sub(now) >= schedClockBackMax {
+				s.checked[sc.ID] = now
+				dirty = true
+				missed = append(missed, SchedLogEntry{Due: now.Format(time.RFC3339), ScheduleID: sc.ID, Schedule: sc.Name, Kind: "error",
+					Message: fmt.Sprintf("PC の時計が最終確認時刻（%s）より前に戻っていたため、最終確認時刻を今（%s）に合わせました。時計を確かめてください",
+						from.Format("2006-01-02 15:04:05"), now.Format("2006-01-02 15:04:05"))})
+				continue
+			}
 			if restart {
 				s.checked[sc.ID] = from
 			}
@@ -771,7 +995,7 @@ func (a *App) schedPlan(now time.Time, list []schedule.Schedule, have bool) (sav
 				sp.Last = run
 				s.skips[sc.ID] = sp
 			} else {
-				s.queue = append(s.queue, schedJob{sc: sc, due: run})
+				s.queue = append(s.queue, schedJob{sc: sc, due: run, restart: restart})
 			}
 		}
 	}
@@ -927,6 +1151,10 @@ func (e changeCmdError) Is(target error) bool { return target == errChangeComman
 
 // changeCommandsErr refuses a snapshot whose sets change the devices: a
 // 予約 runs unattended, so it only collects (show …), never configures.
+// The message names the set, the line numbers and what kind of change —
+// not the commands themselves: it goes to data\schedule-log.json (outside
+// the vault), the tray and a toast, and a command that changes a device
+// may carry a password (a username line, an SNMP community).
 func changeCommandsErr(snap *model.Inventory) error {
 	warns := dangerOf(snap)
 	if len(warns) == 0 {
@@ -939,11 +1167,11 @@ func changeCommandsErr(snap *model.Inventory) error {
 			continue
 		}
 		seen[w.CommandSet] = true
-		var cmds []string
+		var lines []string
 		for _, h := range w.Hits {
-			cmds = append(cmds, h.Text)
+			lines = append(lines, fmt.Sprintf("%d 行目（%s）", h.Index+1, h.Reason))
 		}
-		parts = append(parts, fmt.Sprintf("「%s」: %s", w.CommandSet, strings.Join(cmds, " / ")))
+		parts = append(parts, fmt.Sprintf("「%s」: %s", w.CommandSet, strings.Join(lines, " / ")))
 	}
 	return changeCmdError{fmt.Sprintf("設定を変更するコマンドを含むため予約では実行できません（%s）", strings.Join(parts, "、"))}
 }
@@ -1047,9 +1275,21 @@ func (a *App) startScheduled(job schedJob) error {
 		done := a.execBatch(ctx, cancel, snap, req, job.sc.Name, dir, emit)
 		ok, failed, canceled := 0, 0, false
 		var logs []SchedLogFile
+		byName := map[string]*model.Device{}
+		for i := range snap.Devices {
+			byName[snap.Devices[i].Name] = &snap.Devices[i]
+		}
 		for _, r := range done.Results {
 			if r.LogPath != "" {
-				logs = append(logs, SchedLogFile{Device: r.Device, Path: r.LogPath})
+				// The result goes with the log: a week later the failed
+				// device of one round is found in the 実行記録, not by
+				// opening thirty logs. Its message masked as the log is.
+				res := r.Success
+				msg := r.Error
+				if d := byName[r.Device]; d != nil && msg != "" {
+					msg = runpkg.RedactSecrets(msg, d)
+				}
+				logs = append(logs, SchedLogFile{Device: r.Device, Path: r.LogPath, OK: &res, Error: msg})
 			}
 			if r.Success {
 				ok++
@@ -1100,12 +1340,11 @@ func (a *App) startScheduled(job schedJob) error {
 		}
 		// From the tray, a balloon — but a repeat every 10 seconds must not
 		// pop one up every 10 seconds: only a failure, or its last round.
+		// The counts only, locked or not (the balloon stays in Windows'
+		// notification history after a lock): the name is in the 実行記録.
 		if a.windowHidden() && (!e.Repeat || e.Last || failed > 0) {
-			text := fmt.Sprintf(winWord("「%s」 成功 %d・失敗 %d", "\"%s\": %d ok, %d failed"), job.sc.Name, ok, failed)
-			if locked {
-				text = fmt.Sprintf(winWord("成功 %d・失敗 %d", "%d ok, %d failed"), ok, failed)
-			}
-			trayBalloon(winWord("予約の一括実行が終わりました", "Scheduled run finished"), text)
+			trayBalloon(winWord("予約の一括実行が終わりました", "Scheduled run finished"),
+				fmt.Sprintf(winWord("成功 %d・失敗 %d", "%d ok, %d failed"), ok, failed))
 		}
 	}()
 	return nil
@@ -1179,7 +1418,7 @@ func (a *App) schedRunDir(sc schedule.Schedule, s model.Settings, ids []string) 
 		}
 	}
 	recs[sc.ID] = schedDirRec{Dir: dir, Group: sc.Group}
-	_ = writeJSONAtomic(schedDirsPath(), recs)
+	a.schedFileNote(schedDirsPath(), writeJSONAtomic(schedDirsPath(), recs))
 	return dir
 }
 
@@ -1230,19 +1469,25 @@ func schedLastProblems(log []SchedLogEntry) map[string]*SchedLogEntry {
 // is locked the names (Running, NextName) are left out: the page is on its
 // lock screen, and the status is readable without the master password.
 type ScheduleStatus struct {
-	Running  string `json:"running"` // the 予約 running now ("" when locked)
-	Done     int    `json:"done"`
-	Total    int    `json:"total"`
-	Queued   int    `json:"queued"`
-	Wake     string `json:"wake"`   // armWake status: ok / unsupported / none / error text
-	WakeAt   string `json:"wakeAt"` // RFC3339
-	Locked   bool   `json:"locked"`
-	HasCopy  bool   `json:"hasCopy"` // locked with schedules kept in memory
-	Next     string `json:"next"`
-	NextName string `json:"nextName"` // "" when locked
+	Running string `json:"running"` // the 予約 running now ("" when locked)
+	// RunningID is its ID (what CancelScheduledRun takes; an ID says nothing
+	// of the vault, so it is left in while locked).
+	RunningID string `json:"runningId"`
+	Done      int    `json:"done"`
+	Total     int    `json:"total"`
+	Queued    int    `json:"queued"`
+	Wake      string `json:"wake"`   // armWake status: ok / unsupported / none / error text
+	WakeAt    string `json:"wakeAt"` // RFC3339
+	Locked    bool   `json:"locked"`
+	HasCopy   bool   `json:"hasCopy"` // locked with schedules kept in memory
+	Next      string `json:"next"`
+	NextName  string `json:"nextName"` // "" when locked
 	// Power: can this PC be woken for a 予約 (see readPowerInfo).
 	Power     PowerInfo `json:"power"`
 	KeepAwake bool      `json:"keepAwake"` // 予約がある間はスリープしない
+	// FileError: the scheduler's data\ files that cannot be written, one
+	// message per line ("" when every write went through); see schedFileNote.
+	FileError string `json:"fileError,omitempty"`
 }
 
 // ListSchedules returns the vault's schedules with their next firing.
@@ -1287,11 +1532,12 @@ func (a *App) GetScheduleStatus() ScheduleStatus {
 	a.mu.Unlock()
 	s := &a.sched
 	s.mu.Lock()
-	st.Running, st.Done, st.Total, st.Queued, st.Wake = s.runName, s.runDone, s.runTotal, len(s.queue), s.wake
+	st.Running, st.RunningID, st.Done, st.Total, st.Queued, st.Wake = s.runName, s.runID, s.runDone, s.runTotal, len(s.queue), s.wake
 	if !s.wakeAt.IsZero() {
 		st.WakeAt = s.wakeAt.Format(time.RFC3339)
 	}
 	s.mu.Unlock()
+	st.FileError = a.schedFileErrors()
 	best, name := schedule.NextOfNamed(list, now)
 	if !best.IsZero() {
 		st.Next, st.NextName = best.Format(time.RFC3339), name
@@ -1432,11 +1678,11 @@ func (a *App) stopScheduleRun(id string) {
 		}
 	}
 	a.sched.queue = q
-	running := a.sched.runID == id
 	a.sched.mu.Unlock()
-	if running {
-		a.CancelScheduledRun() // its end writes the passed-over firings
-	} else {
+	// Cancelled only if the round running is this schedule's, checked again
+	// under both locks: its end writes the passed-over firings. (Its round
+	// may have ended since the look above; then nothing to cancel.)
+	if !a.cancelScheduledRun(id) {
 		a.schedFlushSkips(id, a.schedNameOf(id))
 	}
 }
@@ -1550,21 +1796,51 @@ func (a *App) RunScheduleNow(id string) error {
 		return fmt.Errorf("予約が見つかりません")
 	}
 	a.sched.mu.Lock()
+	defer a.sched.mu.Unlock()
+	// A second click (or one while its round runs) would queue the same set
+	// of commands to run again right after: refused, like schedPlan refuses
+	// to stack a firing behind the previous one.
+	busy := a.sched.runID == id
+	for _, j := range a.sched.queue {
+		busy = busy || j.sc.ID == id
+	}
+	if busy {
+		return fmt.Errorf("この予約はすでに実行中か、実行を待っています")
+	}
 	a.sched.queue = append(a.sched.queue, *job)
-	a.sched.mu.Unlock()
 	a.schedKick()
 	return nil
 }
 
-// CancelScheduledRun stops the scheduled batch running now (中止).
-func (a *App) CancelScheduledRun() {
+// CancelScheduledRun stops the scheduled batch running now (中止) when it
+// is schedule id's round — not whatever round took the slot since the page
+// looked. From the page, so not while the vault is locked (the lock screen
+// is not a way to stop a 03:00 run).
+func (a *App) CancelScheduledRun(id string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
+	if !a.cancelScheduledRun(id) {
+		return fmt.Errorf("この予約は実行中ではありません")
+	}
+	return nil
+}
+
+// cancelScheduledRun cancels the batch if it is schedule id's, checked under
+// both locks (a.mu, then s.mu, the order startScheduled takes them in), so a
+// round of another schedule that started in between is left alone. It
+// reports whether it cancelled.
+func (a *App) cancelScheduledRun(id string) bool {
 	a.mu.Lock()
+	a.sched.mu.Lock()
+	match := id != "" && a.runSched != "" && a.sched.runID == id
 	c := a.runCancel
-	sched := a.runSched
+	a.sched.mu.Unlock()
 	a.mu.Unlock()
-	if sched != "" && c != nil {
+	if match && c != nil {
 		c()
 	}
+	return match
 }
 
 // ---- tray (× while schedules are pending) ----
@@ -1646,6 +1922,12 @@ func renameSchedSet(inv *model.Inventory, oldName, newName string) {
 // deleted group). Called under a.mu; the caller logs the lines after
 // releasing it.
 func stopSchedSet(inv *model.Inventory, name string) []SchedLogEntry {
+	if name == "" {
+		// "" is 各機器のセット (the default), not a set that can be deleted:
+		// matching it would stop every schedule that leaves the set to the
+		// devices.
+		return nil
+	}
 	var out []SchedLogEntry
 	for i := range inv.Schedules {
 		sc := &inv.Schedules[i]

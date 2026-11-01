@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -59,7 +60,8 @@ func childLine(s string) {
 // bcastState is what the window last told the main window.
 type bcastState struct {
 	join, ready    bool
-	joined, readyN int // the counts from the main window (BCN)
+	joined, readyN int      // the counts from the main window (BCN)
+	names          []string // the windows with 同時入力 on, by device name (BCN)
 	reported       string
 }
 
@@ -69,6 +71,9 @@ type bcastEvent struct {
 	Ready  bool `json:"ready"`
 	Joined int  `json:"joined"` // windows with 同時入力 on (this one included)
 	ReadyN int  `json:"readyN"` // of those, the ones that take keys now
+	// Names are those windows' devices (this one included), so the pill
+	// can say which windows the keys go to.
+	Names []string `json:"names"`
 }
 
 // bcastReport tells the main window (and the page) this window's state when
@@ -101,7 +106,8 @@ func (t *Term) bcastReport() {
 }
 
 func (t *Term) bcEventLocked() bcastEvent {
-	return bcastEvent{Join: t.bc.join, Ready: t.bc.ready, Joined: t.bc.joined, ReadyN: t.bc.readyN}
+	names := append([]string{}, t.bc.names...)
+	return bcastEvent{Join: t.bc.join, Ready: t.bc.ready, Joined: t.bc.joined, ReadyN: t.bc.readyN, Names: names}
 }
 
 // SetBroadcast turns 同時入力 on or off for this window.
@@ -169,7 +175,19 @@ func (t *Term) bcastSend(s string) {
 	}
 }
 
-// bcastCounts is BCN from the main window.
+// bcastNamesLine is BCNAMES from the main window (a JSON array of the
+// joined windows' device names): kept for the BCN that follows it.
+func (t *Term) bcastNamesLine(arg string) {
+	var names []string
+	if json.Unmarshal([]byte(arg), &names) != nil {
+		return
+	}
+	t.mu.Lock()
+	t.bc.names = names
+	t.mu.Unlock()
+}
+
+// bcastCounts is BCN from the main window: "<joined> <ready>".
 func (t *Term) bcastCounts(arg string) {
 	f := strings.Fields(arg)
 	if len(f) != 2 {

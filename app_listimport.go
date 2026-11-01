@@ -218,16 +218,38 @@ func readRuleFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// PickListFile asks for a device list to import or to try a rule on.
+// PickListFile asks for a device list to import or to try a rule on. The
+// file chosen is the only one the list bindings read from then on
+// (pickedList), until ForgetListFile, Lock or ResetVault.
 func (a *App) PickListFile() (string, error) {
 	defer recoverBound(a.ctx, "PickListFile")
-	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: a.word("機器一覧のファイルを選ぶ", "Choose a device list file"),
 		Filters: []runtime.FileFilter{
 			{DisplayName: a.word("機器一覧（Excel・CSV など）", "Device list (Excel, CSV, …)"), Pattern: "*.xls;*.xlsx;*.xlsm;*.csv;*.tsv;*.txt;*.htm;*.html;*.xml"},
 			{DisplayName: a.word("すべてのファイル", "All files"), Pattern: "*.*"},
 		},
 	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	a.mu.Lock()
+	a.listPath = path
+	a.mu.Unlock()
+	return path, nil
+}
+
+// pickedList refuses a path other than the one PickListFile's dialog chose
+// (the page hands it back to try a rule, preview and import): the list
+// bindings read the file the user picked, not any path the page names —
+// the same gate as pickedImport for the bundle import.
+func (a *App) pickedList(path string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if path == "" || a.listPath == "" || path != a.listPath {
+		return fmt.Errorf("ファイルが選ばれていません（「ファイルを選ぶ」から選び直してください）")
+	}
+	return nil
 }
 
 // bookCache keeps the last file read: the rule editor tries the rule on
@@ -260,8 +282,14 @@ func forgetBook() {
 // listReadHook runs between reading a list and keeping it (tests only).
 var listReadHook func()
 
-// ForgetListFile is forgetBook for the page (the import screen was left).
-func (a *App) ForgetListFile() { forgetBook() }
+// ForgetListFile is forgetBook for the page (the import screen was left);
+// the file chosen is forgotten with it.
+func (a *App) ForgetListFile() {
+	a.mu.Lock()
+	a.listPath = ""
+	a.mu.Unlock()
+	forgetBook()
+}
 
 // fileStamp tells one version of a file from the next (size and time).
 func fileStamp(path string) (string, error) {
@@ -281,6 +309,10 @@ func fileStamp(path string) (string, error) {
 func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, envSig string) (*sheet.Book, string, *listimport.Table, *listimport.Converted, error) {
 	if path == "" {
 		return nil, "", nil, nil, fmt.Errorf("ファイルが選ばれていません")
+	}
+	// Every list binding reads through here: only the file picked.
+	if err := a.pickedList(path); err != nil {
+		return nil, "", nil, nil, err
 	}
 	stamp, err := fileStamp(path)
 	if err != nil {

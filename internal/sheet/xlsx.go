@@ -87,6 +87,10 @@ func readXLSX(data []byte) (*Book, error) {
 		st.date1904 = workbookDate1904(wb)
 	}
 
+	// Two <sheet> entries at the same part are one sheet (a hostile file
+	// names a big one hundreds of times): read once, at most maxSheets.
+	seen := map[string]bool{}
+	read := 0
 	for i, ws := range parseWorkbookSheets(wb) {
 		target := ""
 		if rel, ok := rels[ws.rid]; ok {
@@ -100,6 +104,15 @@ func readXLSX(data []byte) (*Book, error) {
 		name := ws.name
 		if name == "" {
 			name = sheetName(i + 1)
+		}
+		if seen[normPart(target)] {
+			x.book.warn("シート「%s」は別のシートと同じ内容を指しているため読み込んでいません", name)
+			continue
+		}
+		seen[normPart(target)] = true
+		if read++; read > maxSheets {
+			x.book.warn("シートが多すぎるため、%d 枚目以降は読み込んでいません", maxSheets+1)
+			break
 		}
 		x.readSheet(target, name, sst, st)
 	}
@@ -335,7 +348,7 @@ func (x *xlsxReader) styles(name string) *xlsxStyles {
 }
 
 func (x *xlsxReader) readSheet(target, name string, sst []string, st *xlsxStyles) {
-	sb := &sheetBuilder{name: name}
+	sb := &sheetBuilder{name: name, book: x.book}
 	defer sb.finish(x.book)
 	b, err := x.part(target)
 	if errors.Is(err, errZipBomb) {

@@ -386,8 +386,18 @@ function gridRefilter() {
 function renderGrid(force) {
   const root = document.getElementById("tab-devices");
   if (!G) {
-    root.innerHTML = `<div class="empty">${esc(t("読み込み中…"))}</div>`;
-    openGrid(gridScopeOf(deviceView.group)).catch(e => toast(terr(e), "err"));
+    // While the table loads, the way back is already there; a load that
+    // fails (a vault the backend cannot read now) goes back to the list
+    // with the reason, instead of retrying into the same failure on every
+    // visit to the tab.
+    const group = deviceView.group;
+    root.innerHTML = `<div class="page-head"><div class="row-inline" style="gap:12px"><button class="btn sm" id="back-choose">${esc(t("← 対象選択"))}</button>
+      <div><div class="page-title">${esc(t("表で編集"))}</div></div></div></div><div class="empty">${esc(t("読み込み中…"))}</div>`;
+    root.querySelector("#back-choose").onclick = () => { deviceView = { mode: "select", group: null }; renderDevices(); };
+    openGrid(gridScopeOf(group)).catch(e => {
+      toast(t("表を開けません") + ": " + terr(e), "err");
+      if (deviceView.mode === "grid") { deviceView = { mode: "list", group }; renderDevices(); }
+    });
     return;
   }
   // Redrawn only when asked: a refresh from elsewhere (an inventory reload)
@@ -694,9 +704,24 @@ function gridEnsureVisible(r, c, keepX, keepY) {
 }
 function gridSelect(ar, ac, fr, fc) {
   G.sel = { ar, ac, fr: fr ?? ar, fc: fc ?? ac };
+  // Any move but Tab ends a run of Tabs (see gridTab / gridEnterDown).
+  G.tabC = null;
   gridClampSel();
   gridPaintSel();
   gridShowSel();
+}
+// Tab … Tab, then Enter: as in Excel, Enter goes down and back to the
+// column the Tabs started from. gridTab moves and remembers that column;
+// gridEnterDown uses it once.
+function gridTab(back) {
+  const c = G.tabC ?? G.sel.fc;
+  gridMove(0, back ? -1 : 1);
+  G.tabC = c;
+}
+function gridEnterDown(up) {
+  const c = G.tabC;
+  if (c != null && !up) gridSelect(G.sel.fr + 1, c);
+  else gridMove(up ? -1 : 1, 0);
 }
 function gridMove(dr, dc, extend) {
   const s = G.sel;
@@ -844,8 +869,8 @@ function gridEditKey(ev) {
     ev.preventDefault(); gridCommitEdit(GRID_ARROWS[ev.key]); return;
   }
   if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); gridCommitEdit(null, true); return; }
-  if (ev.key === "Enter") { ev.preventDefault(); gridCommitEdit(ev.shiftKey ? [-1, 0] : [1, 0]); return; }
-  if (ev.key === "Tab") { ev.preventDefault(); gridCommitEdit(ev.shiftKey ? [0, -1] : [0, 1]); return; }
+  if (ev.key === "Enter") { ev.preventDefault(); gridCommitEdit(null); gridEnterDown(ev.shiftKey); return; }
+  if (ev.key === "Tab") { ev.preventDefault(); const c = G.tabC ?? G.sel.fc; gridCommitEdit(ev.shiftKey ? [0, -1] : [0, 1]); G.tabC = c; return; }
   if (ev.key === "Escape") { ev.preventDefault(); gridCancelEdit(); return; }
   // Ctrl+R / Ctrl+D would reload / bookmark the page from inside the editor.
   if ((ev.ctrlKey || ev.metaKey) && ["r", "d", "s"].includes(ev.key.toLowerCase())) ev.preventDefault();
@@ -968,14 +993,20 @@ function gridPasteText(text) {
   const list = [];
   let endR = g.r0 + h - 1, endC = Math.min(g.c0 + w - 1, G.vc.length - 1);
   G.pasting = true;
+  let pwKept = 0;
   gridMutate(() => {
+    // Over several rows (a column picked by its header), the empty rows
+    // under the devices stay empty, as gridPickList leaves them: a value
+    // there would make each of the 20 padding rows a device with no name.
+    const many = sr > 1;
+    const skip = r => many && gridIsBlank(gridRowAt(r));
     if (h === 1 && w === 1 && (sr > 1 || sc > 1)) {
       // One value into a selection: every selected cell gets it.
-      for (let r = g.r0; r <= g.r1; r++) for (let c = g.c0; c <= g.c1; c++) list.push([r, c, data[0][0]]);
+      for (let r = g.r0; r <= g.r1; r++) { if (skip(r)) continue; for (let c = g.c0; c <= g.c1; c++) list.push([r, c, data[0][0]]); }
       endR = g.r1; endC = g.c1;
     } else if ((sr > h || sc > w) && sr % h === 0 && sc % w === 0) {
       // A block into a selection it fits a whole number of times: tiled.
-      for (let r = 0; r < sr; r++) for (let c = 0; c < sc; c++) list.push([g.r0 + r, g.c0 + c, (data[r % h][c % w] ?? "")]);
+      for (let r = 0; r < sr; r++) { if (skip(g.r0 + r)) continue; for (let c = 0; c < sc; c++) list.push([g.r0 + r, g.c0 + c, (data[r % h][c % w] ?? "")]); }
       endR = g.r1; endC = g.c1;
     } else {
       // Rows past the end become new rows, as in Excel.
@@ -997,7 +1028,7 @@ function gridPasteText(text) {
       // A password column reads empty while passwords are hidden (a copy
       // made then has them blank): an empty value pasted over a password
       // leaves it. Delete or the shown passwords clear it on purpose.
-      if (col.kind === "secret" && !G.showPw && !own && v === "" && row.cells[col.key]) return;
+      if (col.kind === "secret" && !G.showPw && !own && v === "" && row.cells[col.key]) { pwKept++; return; }
       row.cells[col.key] = gridNorm(col, v);
       wrote.add(row.uid + "\x00" + col.key);
     });
@@ -1007,6 +1038,9 @@ function gridPasteText(text) {
     }
   });
   G.pasting = false;
+  // The rule above is silent otherwise: a column pasted from Excel to clear
+  // passwords would look as if it had worked.
+  if (pwKept) toast(t("パスワード {n} 件は隠れているため残しました（消すには Delete か「パスワードを表示」）", { n: pwKept }), "warn", { ms: 6000 });
   G.sel = { ar: g.r0, ac: g.c0, fr: Math.min(endR, G.view.length - 1), fc: endC };
   gridPaintSel();
   gridShowSel();
@@ -1022,16 +1056,23 @@ function gridClear() {
 function gridFillDown(right) {
   if (!G.view.length) return;
   const g = gridRange(), list = [];
+  // Over several rows the empty rows under the devices stay empty (see
+  // gridPasteText): Ctrl+D on a column picked by its header fills the
+  // devices, not the 20 padding rows.
+  const many = g.r1 > g.r0;
+  const skip = r => many && gridIsBlank(gridRowAt(r));
   if (!right) {
     const src = g.r0 === g.r1 ? g.r0 - 1 : g.r0;
     if (src < 0) return;
-    for (let r = (g.r0 === g.r1 ? g.r0 : g.r0 + 1); r <= g.r1; r++)
+    for (let r = (g.r0 === g.r1 ? g.r0 : g.r0 + 1); r <= g.r1; r++) {
+      if (skip(r)) continue;
       for (let c = g.c0; c <= g.c1; c++) list.push([r, c, gridLabelRaw(src, c)]);
+    }
   } else {
     const src = g.c0 === g.c1 ? g.c0 - 1 : g.c0;
     if (src < 0) return;
     for (let c = (g.c0 === g.c1 ? g.c0 : g.c0 + 1); c <= g.c1; c++)
-      for (let r = g.r0; r <= g.r1; r++) list.push([r, c, gridXfer(G.vc[src], G.vc[c], gridLabelRaw(r, src))]);
+      for (let r = g.r0; r <= g.r1; r++) { if (skip(r)) continue; list.push([r, c, gridXfer(G.vc[src], G.vc[c], gridLabelRaw(r, src))]); }
   }
   gridSetCells(list);
 }
@@ -1397,7 +1438,10 @@ async function gridAfterSave(rep) {
   gridView(); gridRenderBody();
   const n = Object.keys(saved).length + gone.size;
   if (!rep.applied && !n) { toast(t("保存できる行がありませんでした"), "err"); return; }
-  toast(left ? t("{n} 台分を保存しました。保存できなかった {m} 行は下書きに残しています", { n, m: left }) : t("{n} 台分を保存しました", { n }), "ok");
+  // The undo steps went with the save (they held the rows as they were
+  // before it): said, since the rows left as a draft can no longer be
+  // taken back with Ctrl+Z.
+  toast(left ? t("{n} 台分を保存しました。保存できなかった {m} 行は下書きに残しています（元に戻す履歴は保存でリセットされました）", { n, m: left }) : t("{n} 台分を保存しました", { n }), "ok", left ? { ms: 6000 } : undefined);
 }
 function gridFocusFirstError() {
   for (let r = 0; r < G.view.length; r++) {
@@ -1746,7 +1790,12 @@ function gridWire(root) {
     delete GRID_COUNTS[G.scope];
     const scope = G.scope;
     G = null;
-    await openGrid(scope);
+    try { await openGrid(scope); }
+    catch (e) {
+      toast(t("表を開けません") + ": " + terr(e), "err");
+      deviceView = { mode: "list", group: scope === GRID_UNGROUPED ? DEV_UNGROUPED : (scope || null) };
+      renderDevices();
+    }
   };
   const filt = $g("g-filter");
   filt.oninput = () => { G.filter = filt.value; gridRedrawRows(); };
@@ -1982,8 +2031,8 @@ function gridKey(e) {
   if (k === " " && e.shiftKey) { done(); gridSelect(G.sel.ar, 0, G.sel.fr, G.vc.length - 1); return; }
   const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
   if (arrows[k]) { done(); gridMove(arrows[k][0], arrows[k][1], e.shiftKey); return; }
-  if (k === "Tab") { done(); gridMove(0, e.shiftKey ? -1 : 1); return; }
-  if (k === "Enter") { done(); gridMove(e.shiftKey ? -1 : 1, 0); return; }
+  if (k === "Tab") { done(); gridTab(e.shiftKey); return; }
+  if (k === "Enter") { done(); gridEnterDown(e.shiftKey); return; }
   if (k === "PageDown") { done(); gridMove(20, 0, e.shiftKey); return; }
   if (k === "PageUp") { done(); gridMove(-20, 0, e.shiftKey); return; }
   if (k === "Home") { done(); gridMove(0, -G.sel.fc, e.shiftKey); return; }
@@ -1992,7 +2041,13 @@ function gridKey(e) {
   if ((k === " " || k === "F4") && !e.shiftKey && gridChoices(G.vc[G.sel.fc])) { done(); gridOpenList(); return; }
   if (k === "Delete") { done(); gridClear(); return; }
   if (k === "Backspace") { done(); gridBeginEdit(""); return; }
-  if (k === "Escape") { done(); G.clip = null; gridSelect(G.sel.fr, G.sel.fc); return; }
+  if (k === "Escape") {
+    done();
+    // A cut not pasted yet is forgotten, as in Excel; said, since the cells
+    // were not emptied and nothing else shows it.
+    if (G.clip && G.clip.cut) toast(t("切り取りを取り消しました（セルの内容はそのままです）"), "ok");
+    G.clip = null; gridSelect(G.sel.fr, G.sel.fc); return;
+  }
   // Typing starts editing: the editor takes the focus during this keydown,
   // so the key itself (or the IME's composition, key "Process") lands in it.
   if ((k.length === 1 && !e.altKey) || k === "Process") { e.stopPropagation(); gridBeginEdit(""); return; }

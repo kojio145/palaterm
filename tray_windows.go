@@ -277,6 +277,22 @@ func trayBalloon(title, text string) {
 	pShellNotifyIcon.Call(nimModify, uintptr(unsafe.Pointer(&nid)))
 }
 
+// trayRefresh takes the icon out of the notification area and puts it back
+// (a lock): Windows drops a tray icon's balloons from its notification
+// history when the icon goes, so what the balloons said before the lock
+// (they carry no names, but when a run ended and how it went) is not there
+// to read after it. No-op without an icon.
+func trayRefresh() {
+	tray.mu.Lock()
+	hwnd, onOpen, onQuit := tray.hwnd, tray.onOpen, tray.onQuit
+	tray.mu.Unlock()
+	if hwnd == 0 {
+		return
+	}
+	trayHide()
+	trayShow(onOpen, onQuit, "", "")
+}
+
 // trayHide removes the icon (on exit) and waits for the tray thread to
 // have done it: the request is a posted message, and a process that ended
 // before the thread got to it left a ghost icon in the notification area

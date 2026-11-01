@@ -377,6 +377,10 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
 }
 .lang-select:hover { background: var(--bg-3); color: var(--text); }
+/* Page zoom buttons at the foot of the sidebar (app.js wireMainZoom). */
+.zoom-bar { display: flex; align-items: center; gap: 4px; margin: 2px 2px 4px; }
+.zoom-bar .btn.sm { padding: 4px 8px; }
+.zoom-pct { flex: 1; text-align: center; font-size: 11px; color: var(--text-dim); }
 
 /* About dialog */
 .about-box { text-align: center; padding: 8px 6px 2px; }

@@ -173,7 +173,7 @@ func Write(dir string, s Summary) error {
 	}
 	final := filepath.Join(dir, SummaryName)
 	tmp := filepath.Join(dir, "."+SummaryName+".tmp")
-	if err := os.WriteFile(tmp, append(data, '\r', '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(data, '\r', '\n'), 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, final); err != nil {
@@ -410,12 +410,23 @@ func stageFromName(name string, tok logstore.StageTokens) string {
 		st, ok := words[strings.ToLower(f)]
 		if !ok {
 			// Japanese stage words are not separated from the rest: "作業前ログ".
+			rest := f
 			for _, w := range cjk {
 				if strings.Contains(f, w) {
 					if ok && st != words[w] {
 						return "" // two stages in one field: not a stage folder
 					}
 					st, ok = words[w], true
+					rest = strings.Replace(rest, w, "", 1)
+				}
+			}
+			// What is left may name another stage in one character:
+			// "作業前後比較" is a comparison, not a before folder.
+			if ok {
+				for w, s := range words {
+					if s != st && len([]rune(w)) == 1 && isCJK(w) && strings.Contains(rest, w) {
+						return ""
+					}
 				}
 			}
 		}
@@ -452,10 +463,16 @@ func externalDeviceKey(file string, tok logstore.StageTokens) string {
 			}
 		}
 	}
-	for _, seg := range nameSegments(protected) {
-		f := strings.ReplaceAll(seg.field, string(ipDot), ".")
+	segs := nameSegments(protected)
+	fields := make([]string, len(segs))
+	for i, seg := range segs {
+		fields[i] = strings.ReplaceAll(seg.field, string(ipDot), ".")
+	}
+	stamp := dateFields(fields)
+	for i, seg := range segs {
+		f := fields[i]
 		drop := false
-		if _, ok := words[strings.ToLower(f)]; ok || isDateOrTime(f) {
+		if _, ok := words[strings.ToLower(f)]; ok || stamp[i] {
 			drop = true
 		} else if isCJK(f) {
 			cut := f
@@ -534,13 +551,52 @@ func isNameSep(r rune) bool {
 	return r == '_' || r == '-' || r == ' ' || r == '.' || r == '\\' || r == '/' || r == '(' || r == ')' || r == '[' || r == ']' || r == '　'
 }
 
+// dateFields marks the fields of a name that are a date or a time. A
+// field of two or three digits alone ("01", "10") is a date or time part
+// only next to one — the "09" and "01" of an already split 2026-09-01, the
+// "14" and "30" of 20260901_14_30 — and a device's number otherwise:
+// lab-sw-01 and lab-sw-02 both came out as "lab-sw" and were one device
+// (review 2026-11-01, A-4).
+func dateFields(fields []string) []bool {
+	stamp := make([]bool, len(fields))
+	for i, f := range fields {
+		stamp[i] = isDateOrTime(f) && !shortNumber(f)
+	}
+	for changed := true; changed; {
+		changed = false
+		for i, f := range fields {
+			if stamp[i] || !shortNumber(f) {
+				continue
+			}
+			if (i > 0 && stamp[i-1]) || (i+1 < len(fields) && stamp[i+1]) {
+				stamp[i], changed = true, true
+			}
+		}
+	}
+	return stamp
+}
+
+// shortNumber: two or three digits and nothing else.
+func shortNumber(f string) bool {
+	if len(f) < 2 || len(f) > 3 {
+		return false
+	}
+	for _, r := range f {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // isDateOrTime: a field that is only digits (with h / m / s / colons at
 // most): 20260901, 143000, 1430, the "09" and "01" of an already split
 // 2026-09-01, 14h30. Device names carry letters, so a bare number is never
 // one. Two digits at least: a date or time part never has fewer, while
 // short device names do ("s1", "m1" dropped out as timestamps, and their
 // before and after files no longer paired). (A file named by digits alone
-// keeps its name: see externalDeviceKey.)
+// keeps its name: see externalDeviceKey; a short number counts only next
+// to a longer one: see dateFields.)
 func isDateOrTime(f string) bool {
 	digits := 0
 	for _, r := range f {
@@ -594,7 +650,11 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 					dv.Status = "error"
 					r.Failed++
 				}
-				if d.LogFile != "" {
+				// LogFile is a file name inside the run folder and nothing
+				// else: a summary dropped in from outside with "..\..\x" in
+				// it must not point the history at a file beyond the log root
+				// (review 2026-11-01, J-3).
+				if d.LogFile != "" && filepath.Base(d.LogFile) == d.LogFile && d.LogFile != "." && d.LogFile != ".." {
 					p := filepath.Join(dir, d.LogFile)
 					if _, err := os.Stat(p); err == nil {
 						dv.LogPath = p
@@ -608,6 +668,9 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 	// No summary (a run from before this feature): list the log files. The
 	// device name is the file name up to the first "_" — the default template
 	// starts with {host}_ — which is a guess, so the status stays unknown.
+	// (A device named with "_" loses its tail here; reading the name the way
+	// an external folder's is read would add the site and role instead and
+	// no longer pair with the runs that have a summary, so the guess stays.)
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.IsDir() || e.Name() == SummaryName {

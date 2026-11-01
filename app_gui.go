@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,6 +36,11 @@ type guiLaunch struct {
 	PinKey string `json:"pinKey"`
 	Pin    string `json:"pin"`
 	Lang   string `json:"lang"`
+	// NoAutoLogin: an earlier window of this device sent these credentials
+	// and the login form came back (refused); this window fills them in
+	// but does not press the button — a wrong password sent once per
+	// window opened would count towards locking the user out.
+	NoAutoLogin bool `json:"noAutoLogin,omitempty"`
 }
 
 // guiEventCert is the line a GUI window writes when it records a
@@ -48,12 +55,47 @@ const guiEventCert = "GUICERT"
 // sat untouched meanwhile.
 const guiEventActive = "ACTIVE"
 
+// guiEventLoginFail is the line a GUI window writes when the login it sent
+// automatically was refused (the login form came back). The main window
+// remembers it for the device and these credentials until PalaTerm exits
+// or the credentials are edited: the next window fills in, does not send.
+const guiEventLoginFail = "GUILOGINFAIL"
+
 var (
 	guiWinMu sync.Mutex
 	guiWins  = map[*exec.Cmd]io.WriteCloser{}
 	// guiActiveAt is when a GUI window last reported activity (unix ms).
 	guiActiveAt atomic.Int64
+	// guiLoginFailed: per device ID, the credentials a GUI window sent and
+	// had refused (under guiWinMu; for this process's life).
+	guiLoginFailed = map[string]string{}
 )
+
+// guiCredKey is what guiLoginFailed remembers of the credentials: the user
+// name and a digest of the password, never the password itself.
+func guiCredKey(user, password string) string {
+	sum := sha256.Sum256([]byte(password))
+	return user + "\x00" + hex.EncodeToString(sum[:])
+}
+
+// guiLoginRefused reports that a window of device id sent these credentials
+// and had them refused.
+func guiLoginRefused(id, user, password string) bool {
+	guiWinMu.Lock()
+	defer guiWinMu.Unlock()
+	return id != "" && guiLoginFailed[id] == guiCredKey(user, password)
+}
+
+// noteGUILoginRefused remembers that a window of device id had these
+// credentials refused.
+func noteGUILoginRefused(id, user, password string) {
+	if id == "" {
+		return
+	}
+	guiWinMu.Lock()
+	guiLoginFailed[id] = guiCredKey(user, password)
+	guiWinMu.Unlock()
+}
 
 // GUIActiveAgoMs is how long ago a GUI window was last used, in
 // milliseconds; -1 when none is open or none has reported anything.
@@ -102,15 +144,32 @@ func (a *App) OpenGUI(id string) (*GUIInfo, error) {
 	}
 	info := GUIInfo{ID: d.ID, Device: d.Name, URL: d.GUIURL()}
 	if err := a.spawnGUIWindow(guiLaunch{URL: info.URL, Title: d.Name, User: d.Username, Password: d.Password,
-		PinKey: key, Pin: pin, Lang: lang}); err != nil {
+		PinKey: key, Pin: pin, Lang: lang, NoAutoLogin: guiLoginRefused(d.ID, d.Username, d.Password)}, d.ID); err != nil {
 		return nil, err
 	}
 	return &info, nil
 }
 
+// guiChildEnv is childEnv without the WEBVIEW2_* variables: the WebView2
+// loader reads them (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, _USER_DATA_FOLDER,
+// _BROWSER_EXECUTABLE_FOLDER) over what the window asks for, and a
+// --remote-debugging-port planted that way would open the logged-in page
+// to any process, the throw-away profile moved elsewhere.
+func guiChildEnv() []string {
+	var env []string
+	for _, kv := range childEnv() {
+		if strings.HasPrefix(strings.ToUpper(kv), "WEBVIEW2_") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
+}
+
 // spawnGUIWindow opens a GUI window (a child PalaTerm process, tied to this
-// one like the terminals) and hands it l on stdin.
-func (a *App) spawnGUIWindow(l guiLaunch) error {
+// one like the terminals) and hands it l on stdin. deviceID is what a
+// refused login is remembered under.
+func (a *App) spawnGUIWindow(l guiLaunch, deviceID string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -120,7 +179,7 @@ func (a *App) spawnGUIWindow(l guiLaunch) error {
 		return err
 	}
 	cmd := exec.Command(exe, "--gui")
-	cmd.Env = childEnv()
+	cmd.Env = guiChildEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -142,7 +201,11 @@ func (a *App) spawnGUIWindow(l guiLaunch) error {
 	trackChild(cmd.Process)
 	_, _ = stdin.Write(append(line, '\n'))
 	go func() {
+		// A panic here (setGUICert → persist) must not end the main process
+		// and every terminal window with it.
+		defer recoverGo("guiLine")
 		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 64*1024), 1<<20)
 		for sc.Scan() {
 			f := strings.Fields(sc.Text())
 			if len(f) == 2 && f[0] == guiEventCert && validPin(f[1]) {
@@ -151,11 +214,25 @@ func (a *App) spawnGUIWindow(l guiLaunch) error {
 			if len(f) == 1 && f[0] == guiEventActive {
 				guiActiveAt.Store(time.Now().UnixMilli())
 			}
+			if len(f) == 1 && f[0] == guiEventLoginFail {
+				noteGUILoginRefused(deviceID, l.User, l.Password)
+			}
 		}
+		// Scan stops short of EOF on a line over its buffer (ErrTooLong):
+		// read on to the end regardless, or the child blocks on a full
+		// pipe, Wait never returns and the window stays counted as open.
+		_, _ = io.Copy(io.Discard, stdout)
 		_ = cmd.Wait()
 		guiWinMu.Lock()
 		delete(guiWins, cmd)
+		last := len(guiWins) == 0
 		guiWinMu.Unlock()
+		// The last window gone (closed, or killed by the exit or a crash):
+		// the profiles no running window owns are deleted now, not at the
+		// next start of PalaTerm.
+		if last {
+			go cleanStaleGUIProfiles()
+		}
 	}()
 	return nil
 }

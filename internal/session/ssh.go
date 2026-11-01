@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -290,14 +291,7 @@ func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphr
 	} else {
 		authMethods = append(authMethods, ssh.Password(password))
 		// Some devices use keyboard-interactive for password auth.
-		authMethods = append(authMethods, ssh.KeyboardInteractive(
-			func(_, _ string, questions []string, _ []bool) ([]string, error) {
-				ans := make([]string, len(questions))
-				for i := range questions {
-					ans[i] = password
-				}
-				return ans, nil
-			}))
+		authMethods = append(authMethods, ssh.KeyboardInteractive(keyboardInteractive(password)))
 	}
 
 	// Strong algorithms only by default; the per-device レガシー暗号 toggle
@@ -311,24 +305,72 @@ func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphr
 		"aes128-gcm@openssh.com", "aes256-gcm@openssh.com",
 		"aes128-ctr", "aes192-ctr", "aes256-ctr",
 	}
+	// Host-key signature algorithms and MACs are pinned the same way: left to
+	// the library, ssh-dss (1024-bit DSA) and SHA-1 (ssh-rsa, hmac-sha1-96)
+	// were accepted by default while the KEX and cipher lists said "modern
+	// only" (review 2026-11-01). The pin itself is key type + SHA-256
+	// fingerprint, so an RSA host key keeps its record whether the server
+	// signs with rsa-sha2-256 or (legacy) ssh-rsa.
+	hostKeyAlgos := []string{
+		ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521,
+		ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256,
+		ssh.CertAlgoED25519v01, ssh.CertAlgoECDSA256v01, ssh.CertAlgoECDSA384v01, ssh.CertAlgoECDSA521v01,
+		ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01,
+	}
+	macs := []string{
+		"hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com",
+		"hmac-sha2-256", "hmac-sha2-512",
+	}
 	if opts.Legacy {
 		kex = append(kex, "diffie-hellman-group14-sha1", "diffie-hellman-group1-sha1")
 		ciphers = append(ciphers, "aes128-cbc", "3des-cbc")
+		hostKeyAlgos = append(hostKeyAlgos, ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA, ssh.CertAlgoRSAv01, ssh.InsecureCertAlgoDSAv01)
+		macs = append(macs, "hmac-sha1", "hmac-sha1-96")
 	}
 	hostKey := opts.HostKey
 	if hostKey == nil {
 		hostKey = ssh.InsecureIgnoreHostKey() // tests / fakes only
 	}
 	return &ssh.ClientConfig{
-		User:            user,
-		Auth:            authMethods,
-		HostKeyCallback: hostKey,
-		Timeout:         timeout,
+		User:              user,
+		Auth:              authMethods,
+		HostKeyCallback:   hostKey,
+		HostKeyAlgorithms: hostKeyAlgos,
+		Timeout:           timeout,
 		Config: ssh.Config{
 			KeyExchanges: kex,
 			Ciphers:      ciphers,
+			MACs:         macs,
 		},
 	}, nil
+}
+
+// rePasswordQuestion is a keyboard-interactive question that asks for the
+// password (any case; the Japanese word too, for a localized PAM).
+var rePasswordQuestion = regexp.MustCompile(`(?i)password|passcode|パスワード`)
+
+// keyboardInteractive answers a server's keyboard-interactive questions with
+// the password — only the questions that ask for it (the word in the
+// question, or an echo-off field), and only once. Every question used to get
+// the password: on a server that adds a one-time code, the password went
+// into the code field (and from there into that server's log), and a second
+// round after a refusal got the same password again (review 2026-11-01).
+// A question that is not the password's gets "" — the library carries on
+// to the next method, or the server refuses.
+func keyboardInteractive(password string) ssh.KeyboardInteractiveChallenge {
+	sent := false
+	return func(_, _ string, questions []string, echos []bool) ([]string, error) {
+		ans := make([]string, len(questions))
+		for i, q := range questions {
+			noEcho := i < len(echos) && !echos[i]
+			if sent || !(noEcho || rePasswordQuestion.MatchString(q)) {
+				continue
+			}
+			ans[i] = password
+			sent = true
+		}
+		return ans, nil
+	}
 }
 
 // sshDialError adds what the user can do about a failed handshake: allow
@@ -344,24 +386,16 @@ func sshDialError(addr string, err error, user string, auth model.AuthMethod, op
 }
 
 // algorithmHint says what to do about x/crypto's "no common algorithm for
-// <what>; ...". The レガシー暗号 toggle adds old key-exchange and cipher
-// algorithms and nothing else, so it is offered for those two alone: a device
-// that insists on an old MAC or host-key algorithm would fail the same way
-// with it on, and the hint would send the user round in a circle.
+// <what>; ...". The レガシー暗号 toggle adds the old key-exchange, cipher,
+// host-key and MAC algorithms (see sshConfig), so it is the thing to try for
+// any of the four — unless it is on already, in which case the library's
+// own words (what we offered, what the peer offered) are the best there is.
 func algorithmHint(err error, opts DialOpts) string {
 	msg := err.Error()
-	i := strings.Index(msg, "no common algorithm for ")
-	if i < 0 {
+	if !strings.Contains(msg, "no common algorithm for ") || opts.Legacy {
 		return ""
 	}
-	what, _, _ := strings.Cut(msg[i+len("no common algorithm for "):], ";")
-	if strings.Contains(what, "key exchange") || strings.Contains(what, "cipher") {
-		if opts.Legacy {
-			return ""
-		}
-		return "機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください"
-	}
-	return "機器と共通のアルゴリズムがありません（「レガシー暗号を許可」が足すのは鍵交換と暗号だけで、この不一致には効きません）"
+	return "機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください"
 }
 
 // startShell opens the interactive shell on an authenticated client. The

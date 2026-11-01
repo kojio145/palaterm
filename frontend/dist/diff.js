@@ -81,6 +81,7 @@ async function bootDiffWindow() {
       <span><i class="dw-sw" style="background:rgba(239,68,68,.35)"></i> ${esc(t("A にだけある行"))}</span>
       <span><i class="dw-sw" style="background:rgba(34,197,94,.35)"></i> ${esc(t("B にだけある行"))}</span>
       <span><i class="dw-sw" style="background:rgba(167,139,250,.45)"></i> ${esc(t("順序が変わったブロック"))}</span>
+      <span id="dw-chunk" style="color:var(--warn)"></span>
       <span id="dw-counts" style="flex:1;text-align:right"></span>
     </div>
   </div>`);
@@ -146,7 +147,13 @@ async function bootDiffWindow() {
     }
   }
   const segHTML = (segs, text, kind) => segs ? segs.map(s => s.k === "=" ? esc(s.t) : `<span class="dw-seg-${s.k === "-" ? "del" : "add"}">${esc(s.t)}</span>`).join("") : esc(text);
-  function render() {
+  // Rows go into the page this many at a time (one chunk per animation
+  // frame): a show tech-class log with the folding off is 100,000 rows,
+  // and one innerHTML of them froze the window. done() runs once every
+  // row is in (at once when there are few).
+  const CHUNK = 2000;
+  let renderSeq = 0;
+  function render(done) {
     if (!doc) return;
     computeFolds();
     const foldAt = {}; folds.forEach(f => { if (!expanded.has(foldKey(f.start))) foldAt[f.start] = f; });
@@ -169,9 +176,34 @@ async function bootDiffWindow() {
       const right = r.b === null ? ph : `<td class="dw-ln">${r.lb || ""}</td><td class="dw-txt dw-b">${segHTML(r.segB, r.b, "+")}</td>`;
       html.push(`<tr class="dw-${r.kind}${r.head ? " dw-head" : ""}" data-i="${i}" ${r.block !== undefined ? `data-block="${r.block}"` : ""}>${left}${right}</tr>`);
     }
-    body.innerHTML = rows.length ? `<table class="dw-table"><colgroup><col style="width:52px"><col style="width:calc(50% - 52px)"><col style="width:52px"><col style="width:calc(50% - 52px)"></colgroup><tbody>${html.join("")}</tbody></table>`
-      : `<div class="muted" style="padding:14px">${esc(t("差分はありません"))}</div>`;
-    body.querySelectorAll("tr.dw-skip").forEach(tr => tr.onclick = () => { expanded.add(foldKey(parseInt(tr.dataset.fold, 10))); render(); });
+    const seq = ++renderSeq;
+    const chunkNote = $("dw-chunk");
+    const table = first => `<table class="dw-table"><colgroup><col style="width:52px"><col style="width:calc(50% - 52px)"><col style="width:52px"><col style="width:calc(50% - 52px)"></colgroup><tbody>${first}</tbody></table>`;
+    chunkNote.textContent = "";
+    const wireSkips = () => body.querySelectorAll("tr.dw-skip").forEach(tr => { if (!tr.onclick) tr.onclick = () => { expanded.add(foldKey(parseInt(tr.dataset.fold, 10))); render(); }; });
+    if (!rows.length) body.innerHTML = `<div class="muted" style="padding:14px">${esc(t("差分はありません"))}</div>`;
+    else if (html.length <= CHUNK) body.innerHTML = table(html.join(""));
+    else {
+      body.innerHTML = table(html.slice(0, CHUNK).join(""));
+      const tb = body.querySelector("tbody");
+      const onDone = done;
+      let at = CHUNK;
+      const more = () => {
+        if (seq !== renderSeq) return; // drawn again meanwhile
+        tb.insertAdjacentHTML("beforeend", html.slice(at, at + CHUNK).join(""));
+        at += CHUNK;
+        wireSkips();
+        if (at < html.length) { chunkNote.textContent = t("描画中… {a} / {b} 行", { a: at, b: html.length }); requestAnimationFrame(more); return; }
+        chunkNote.textContent = "";
+        updateView(); markCurrent();
+        if (jumpRow >= 0) { const tr = body.querySelector(`tr[data-i="${jumpRow}"]`); if (tr) tr.classList.add("dw-jump"); }
+        if (onDone) onDone();
+      };
+      chunkNote.textContent = t("描画中… {a} / {b} 行", { a: at, b: html.length });
+      requestAnimationFrame(more);
+      done = null; // called by the last chunk
+    }
+    wireSkips();
     $("dw-expand").textContent = folds.length && folds.every(f => expanded.has(foldKey(f.start))) ? t("すべて畳む") : t("すべて展開");
     $("dw-expand").disabled = !folds.length;
     // Location bar: one marker per block, placed by row position.
@@ -186,6 +218,7 @@ async function bootDiffWindow() {
     updateView();
     markCurrent();
     if (jumpRow >= 0) { const tr = body.querySelector(`tr[data-i="${jumpRow}"]`); if (tr) tr.classList.add("dw-jump"); }
+    if (done) done();
   }
   function updateView() {
     const v = $("dw-view"); if (!v) return;
@@ -415,9 +448,12 @@ async function bootDiffWindow() {
     if (r.mode === "config") parts.push(t("設定だけを比較中"));
     if (r.approx) parts.push(t("（大きすぎるため概算: 行をそのまま突き合わせています）"));
     $("dw-counts").textContent = parts.join("　");
-    render();
-    if (keep) { body.scrollTop = keep.scroll; if (cur >= 0) markCurrent(); }
-    else if (cur >= 0) setTimeout(() => goTo(cur), 0);
+    // The scroll position / the first block: once every row is in (a
+    // chunked draw has only its first rows when render returns).
+    render(() => {
+      if (keep) { body.scrollTop = keep.scroll; if (cur >= 0) markCurrent(); }
+      else if (cur >= 0) setTimeout(() => goTo(cur), 0);
+    });
   }
   $("dw-noise").onchange = load;
   $("dw-secrets").onchange = load;
@@ -431,7 +467,7 @@ async function bootDiffWindow() {
     const pane = $("dw-cmdpane");
     pane.classList.remove("hidden");
     $("dw-cmd-title").textContent = dir === "forward" ? t("揃える（A → B）") : t("戻す（B → A）");
-    const fam = { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", generic: t("不明（一覧のみ）") }[g.family] || g.family;
+    const fam = { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", comware: t("Comware/VRP 系"), generic: t("不明（一覧のみ）") }[g.family] || g.family;
     const notes = [t("機器の種類は「{f}」と判断（設定の内容から）。投入前に必ず目で確認してください", { f: fam })];
     if (g.noConfig) notes.push(t("A か B のログに設定の表示（show running-config 等）が無いため作れません"));
     else if (g.empty) notes.push(t("差分はありますが、コマンドにできる行がありませんでした"));
@@ -440,8 +476,13 @@ async function bootDiffWindow() {
     if (g.reordered) notes.push(t("依存関係（参照 → 定義）の順に並べ替えています"));
     (g.warnings || []).forEach(w => notes.push(w));
     $("dw-cmd-note").textContent = notes.join("　");
-    cmdText = (g.lines || []).map(l => l.text).join("\n");
-    $("dw-cmd-text").innerHTML = (g.lines || []).map(l => `<span class="${l.context ? "dw-cmd-ctx" : ""}${l.note ? " dw-cmd-manual" : ""}"${l.note ? ` data-tip="${esc(l.note)}"` : ""}>${esc(l.note ? "! " + t("手で確認") + ": " + l.text : l.text)}</span>`).join("\n");
+    // A comment line first — which device, which way, when — so a paste
+    // into the wrong window shows itself ("!" is Cisco's comment, "#" the
+    // others'; a command set made from the copy drops it).
+    const lines = g.lines || [];
+    const header = lines.length ? `${g.family === "cisco" ? "!" : "#"} PalaTerm ${$("dw-cmd-title").textContent} ${doc && doc.label ? doc.label : ""} ${fmtRunTime(new Date().toISOString())}` : "";
+    cmdText = (header ? [header] : []).concat(lines.map(l => l.text)).join("\n");
+    $("dw-cmd-text").innerHTML = (header ? [`<span class="dw-cmd-ctx">${esc(header)}</span>`] : []).concat(lines.map(l => `<span class="${l.context ? "dw-cmd-ctx" : ""}${l.note ? " dw-cmd-manual" : ""}"${l.note ? ` data-tip="${esc(l.note)}"` : ""}>${esc(l.note ? "! " + t("手で確認") + ": " + l.text : l.text)}</span>`)).join("\n");
     updateView();
   }
   // 影響: the impact items and the references of changed objects, in the
@@ -459,7 +500,7 @@ async function bootDiffWindow() {
     if (imp.refs && imp.refs.length) {
       html += "\n\n" + esc(t("変わったオブジェクトの参照先:")) + "\n" + imp.refs.map(r => `<b>${esc(r.name)}</b> ← ` + r.rows.map(row => `<span class="dw-imp" data-row="${row}" style="cursor:pointer;text-decoration:underline">${esc(rowText(rows[row] || { a: "", b: "" }).trim())}</span>`).join("　")).join("\n");
     }
-    cmdText = items.map(it => `${lv[it.level][0]} ${it.text}${it.section ? " [" + it.section + "]" : ""} - ${it.reason}`).join("\n");
+    cmdText = items.map(it => `${t(lv[it.level][0])} ${it.text}${it.section ? " [" + it.section + "]" : ""} - ${it.reason}`).join("\n");
     $("dw-cmd-text").innerHTML = html || esc(t("変更はありません"));
     $("dw-cmd-text").querySelectorAll(".dw-imp").forEach(el => el.onclick = () => { const i = parseInt(el.dataset.row, 10); jumpRow = i; reveal(i); render(); setTimeout(() => { jumpRow = -1; render(); }, 2500); });
     updateView();
@@ -468,7 +509,8 @@ async function bootDiffWindow() {
   $("dw-cmd-back").onclick = () => showCommands("rollback").catch(e => toast(terr(e), "err"));
   $("dw-cmd-fwd").onclick = () => showCommands("forward").catch(e => toast(terr(e), "err"));
   $("dw-cmd-copy").onclick = () => copyText(cmdText, t("コマンドをコピーしました"));
-  $("dw-cmd-close").onclick = () => { $("dw-cmdpane").classList.add("hidden"); updateView(); };
+  const closeCmdPane = () => { $("dw-cmdpane").classList.add("hidden"); updateView(); };
+  $("dw-cmd-close").onclick = closeCmdPane;
   $("dw-open-a").onclick = () => D().OpenLog("a").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   $("dw-open-b").onclick = () => D().OpenLog("b").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   // Font size (wireFontZoom, app.js).
@@ -482,7 +524,12 @@ async function bootDiffWindow() {
     if (zoom.key(e)) { e.preventDefault(); return; }
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (e.ctrlKey && (e.key === "a" || e.key === "A" || e.code === "KeyA") && !isTextField(e.target)) { e.preventDefault(); selectSide(); return; }
-    if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!fbar.classList.contains("hidden")) closeFind(); else D().Close(); }
+    // Esc: the search bar, then the 戻す / 揃える / 影響 pane, then the window.
+    if (e.key === "Escape" && !document.getElementById("sc-pop")) {
+      if (!fbar.classList.contains("hidden")) closeFind();
+      else if (!$("dw-cmdpane").classList.contains("hidden")) closeCmdPane();
+      else D().Close();
+    }
   });
   await load();
 }

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
 	runpkg "github.com/kojio145/palaterm/internal/runner"
+	"github.com/kojio145/palaterm/internal/schedule"
 	"github.com/kojio145/palaterm/internal/session"
 	"github.com/kojio145/palaterm/internal/vault"
 )
@@ -44,8 +46,9 @@ type App struct {
 	inv      *model.Inventory // nil until unlocked
 
 	runCancel context.CancelFunc
-	runActive bool   // a batch is in progress (blocks a second concurrent batch)
-	runSched  string // the 予約 running it ("" = started by hand)
+	runActive bool        // a batch is in progress (blocks a second concurrent batch)
+	runReq    *RunRequest // the by-hand batch's request while it runs (GetRunStatus)
+	runSched  string      // the 予約 running it ("" = started by hand)
 
 	// Host keys pinned during a batch are saved shortly after, together
 	// (persistSoon), not one vault write per device inside the handshake.
@@ -88,7 +91,30 @@ type App struct {
 	// The file PickImportFile's dialog chose last: the only one
 	// PreviewImportFile / ApplyImport read (the page hands the path back).
 	importPath string
+
+	// The device list PickListFile's dialog chose last: the only file the
+	// 一覧の取り込み bindings read (pickedList), as importPath above.
+	listPath string
+
+	// runProg counts the running batch's devices for the lock screen
+	// (GetRunCounts): numbers only, never a name. runSeen is the devices
+	// counted so far (by name, in memory only).
+	runProg runCounts
+	runSeen map[string]bool
 }
+
+// vaultHostKeys is the batch runner's session.HostKeyStore backed by the
+// vault. A type of its own, not App: every exported App method is a Wails
+// binding, and GetHostKey / SetHostKey on App let the page read any pin
+// and replace one (even while locked, through pendingPins).
+type vaultHostKeys struct{ a *App }
+
+// hostKeys is the vault-backed store the runner uses between batches.
+func (a *App) hostKeys() session.HostKeyStore { return &vaultHostKeys{a} }
+
+func (h *vaultHostKeys) GetHostKey(addr string) string { return h.a.pinnedHostKey(addr) }
+
+func (h *vaultHostKeys) SetHostKey(addr, fingerprint string) { h.a.pinHostKey(addr, fingerprint) }
 
 // UnlockInfo is what the lock screen asks after an Unlock: a backup that can
 // replace a damaged vault (BackupAt, after a failed unlock), a vault saved by
@@ -169,7 +195,7 @@ func NewApp() *App {
 		vaultPath: defaultVaultPath(),
 	}
 	a.sched.kick = make(chan struct{}, 1)
-	a.runner.HostKeys = a // TOFU host key pinning backed by the vault
+	a.runner.HostKeys = a.hostKeys() // TOFU host key pinning backed by the vault
 	vault.Writer = appVersion
 	return a
 }
@@ -186,6 +212,17 @@ func (a *App) startup(ctx context.Context) {
 	for _, d := range []string{"logs", filepath.Join("export", "bundles"), filepath.Join("export", "command-sets"), filepath.Join("export", "os-profiles"), "data"} {
 		_ = os.MkdirAll(filepath.Join(exeDir(), d), 0o755)
 	}
+	// What those folders hold is this user's (the vault, exported
+	// passwords, device logs): on Windows a 0600 file inherits the folder's
+	// ACL, so the folders themselves are limited to the user and SYSTEM
+	// (acl_windows.go; a failure is logged, never fatal). The default log
+	// root only — a log folder the user chose is theirs to permission.
+	go func() {
+		defer recoverGo("protectAppFolders")
+		for _, d := range []string{"data", "export", "logs"} {
+			protectFolder(filepath.Join(exeDir(), d))
+		}
+	}()
 	// Keep a JSON of every default OS profile on disk (written only when the
 	// file is missing — user-edited exports are never overwritten). Combined
 	// with delete never touching these files, a removed default can always be
@@ -209,10 +246,10 @@ func (a *App) startup(ctx context.Context) {
 	go a.schedLoop()
 }
 
-// ---- SSH host key pinning (session.HostKeyStore) ----
+// ---- SSH host key pinning (session.HostKeyStore, see vaultHostKeys) ----
 
-// GetHostKey returns the pinned fingerprint for addr ("host:port"), or "".
-func (a *App) GetHostKey(addr string) string {
+// pinnedHostKey returns the pinned fingerprint for addr ("host:port"), or "".
+func (a *App) pinnedHostKey(addr string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
@@ -221,8 +258,8 @@ func (a *App) GetHostKey(addr string) string {
 	return a.inv.KnownHostKeys[addr]
 }
 
-// SetHostKey pins addr's fingerprint on first sight and persists the vault.
-func (a *App) SetHostKey(addr, fingerprint string) {
+// pinHostKey pins addr's fingerprint on first sight and persists the vault.
+func (a *App) pinHostKey(addr, fingerprint string) {
 	a.mu.Lock()
 	if a.inv == nil {
 		// Locked while a batch runs: keep the pin for the next unlock.
@@ -305,6 +342,9 @@ func (a *App) shutdown(ctx context.Context) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	endChildren()
+	// The holder line (PC name, Windows user) is for the refusal while the
+	// app runs, not for whoever reads the folder later.
+	releaseDataLock()
 }
 
 // stopRunForExit cancels the running batch (by hand or a 予約) and waits up
@@ -317,7 +357,7 @@ func (a *App) stopRunForExit(max time.Duration) bool {
 	if !active {
 		return true
 	}
-	a.CancelRun()
+	a.cancelRun()
 	deadline := time.Now().Add(max)
 	for time.Now().Before(deadline) {
 		a.mu.Lock()
@@ -358,6 +398,83 @@ func (a *App) ClearHostKeys(id string) error {
 	return a.persist()
 }
 
+// ClearHopHostKeys drops the pinned host key of one of a device's jump hosts
+// (hop: 0-based in the chain as connected, the own jump hosts first; -1 =
+// every hop of the device) — the way out when a jump host was replaced
+// and every device behind it fails with 「踏み台N段目のホストキーが前回接続時と
+// 異なります」. The device's own pin stays. Asked for by a button, after a
+// confirmation, never from a connection's mismatch prompt (that one only
+// ever lets the device's own key go).
+func (a *App) ClearHopHostKeys(id string, hop int) error {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return errVaultLocked
+	}
+	idx := a.inv.DeviceIndex(id)
+	if idx < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("機器が見つかりません")
+	}
+	dev := a.inv.Devices[idx]
+	resolved := a.inv.ResolveCredentials(dev)
+	// Pinned under the chain as connected (own jump hosts in front) and,
+	// from before the device used the own jump hosts, without them.
+	var hops []string
+	for _, d := range []model.Device{resolved, dev} {
+		names := d.HostKeyNames()
+		hops = append(hops, names[:len(names)-1]...)
+	}
+	n := len(resolved.ActiveBastions())
+	if n == 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("この機器は踏み台を使っていません")
+	}
+	if hop >= n {
+		a.mu.Unlock()
+		return fmt.Errorf("踏み台%d段目はありません（%d段まで）", hop+1, n)
+	}
+	if hop >= 0 {
+		hops = []string{resolved.HostKeyNames()[hop]}
+	} // negative: every hop
+	for _, addr := range hops {
+		delete(a.inv.KnownHostKeys, addr)
+	}
+	a.mu.Unlock()
+	return a.persist()
+}
+
+// ClearMyBastionHostKeys drops the pinned host keys of the user's own jump
+// hosts (自分の踏み台), every hop: the way out when one was replaced. The
+// devices' own pins stay.
+func (a *App) ClearMyBastionHostKeys() error {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return errVaultLocked
+	}
+	via := ""
+	n := 0
+	for _, b := range a.inv.MyBastions {
+		if b.Host == "" {
+			continue
+		}
+		n++
+		addr := model.HopAddr(b.Host, b.EffectivePort())
+		// Pinned under the bare address (commands typed on the hop) or
+		// under the chain that leads to it (SSH tunnel).
+		via = model.TunnelName(via, addr)
+		delete(a.inv.KnownHostKeys, addr)
+		delete(a.inv.KnownHostKeys, via)
+	}
+	if n == 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("自分の踏み台が設定されていません")
+	}
+	a.mu.Unlock()
+	return a.persist()
+}
+
 // memHostKeys is the terminal child process's in-memory HostKeyStore, seeded
 // from the vault's pinned keys (the child never writes the vault back).
 type memHostKeys struct {
@@ -377,7 +494,7 @@ func (r *runHostKeys) GetHostKey(addr string) string { return r.mem.GetHostKey(a
 
 func (r *runHostKeys) SetHostKey(addr, fp string) {
 	r.mem.SetHostKey(addr, fp)
-	r.app.SetHostKey(addr, fp)
+	r.app.pinHostKey(addr, fp)
 }
 
 func newMemHostKeys(seed map[string]string) *memHostKeys {
@@ -452,6 +569,11 @@ func (a *App) CreateVault(password string) error {
 	if vault.Exists(a.vaultPath) {
 		return fmt.Errorf("vault already exists")
 	}
+	// A .bak or .broken-* of a vault deleted by hand opens with its old
+	// password: it must not stay beside the new vault.
+	if err := vault.RemoveBackups(a.vaultPath); err != nil {
+		return fmt.Errorf("以前の vault の控え（.bak / .broken-*）を削除できませんでした: %v", err)
+	}
 	// The samples are named in the UI's language: an English UI used to
 	// open on 「サンプルグループ」 and 「【サンプル】Cisco_ルータ」.
 	lang := a.uiLang()
@@ -474,6 +596,7 @@ func (a *App) CreateVault(password string) error {
 	a.readOnly, a.unlockInfo = false, UnlockInfo{}
 	a.schedInv = nil    // the vault itself again
 	a.pendingPins = nil // a new vault starts with no pins from an old one
+	a.lastDone = nil    // nor with the last batch's results (device names) of an old one
 	a.mu.Unlock()
 	return nil
 }
@@ -734,6 +857,17 @@ func (a *App) Unlock(password string) error {
 		p.Pager = nil
 		seed = true
 	}
+	// Junos: the built-in prompt is "> " (with the space) since v1.9.26, so a
+	// "| display xml" line ending in ">" is not taken for the prompt. A vault
+	// seeded with the old ">" keeps its own copy of the profile: update it
+	// where it is still the built-in value; one the user edited is theirs.
+	for i := range inv.CustomProfiles {
+		p := &inv.CustomProfiles[i]
+		if p.Key == "juniper-junos" && p.Prompt == ">" {
+			p.Prompt = "> "
+			seed = true
+		}
+	}
 	// Yamaha RTX over Telnet / serial asks for the login password before the
 	// ">" the built-in first row waited for, so the login sat until the
 	// command timeout. Put the password row first where the login still
@@ -769,6 +903,15 @@ func (a *App) Unlock(password string) error {
 	if logstore.IsOldDefaultDirTemplate(inv.Settings.LogDirTemplate) {
 		inv.Settings.LogDirTemplate = logstore.DefaultDirTemplate
 		seed = true
+	}
+	// The key file remembered for pre-filling new devices: one moved or
+	// deleted since would be saved into every new device, to fail at the
+	// first connection ("no such file").
+	if k := inv.Settings.LastKeyFile; k != "" {
+		if _, err := os.Stat(k); err != nil {
+			inv.Settings.LastKeyFile = ""
+			seed = true
+		}
 	}
 	if seed && !newer {
 		if err := vault.Save(a.vaultPath, password, inv); err != nil {
@@ -830,24 +973,34 @@ func onlyLegacyDefaultSets(sets []model.CommandSet) bool {
 // enabled 予約 need to run while locked (schedCopy).
 func (a *App) Lock() {
 	// The GUI windows are logged-in sessions: they close with the vault.
+	// So do the log, diff and screen windows: a device's configuration
+	// stays readable in them otherwise, lock or no lock.
 	closeGUIWindows()
 	closeCmdsetWindows()
+	closeViewerWindows()
 	a.flushPersist()
 	a.mu.Lock()
 	if a.inv != nil {
 		a.schedInv = schedCopy(a.inv)
 	}
 	a.password, a.inv = "", nil
+	// What the last Unlock found (rekeyed profile names, who saved the
+	// vault) is the open vault's to tell, not the lock screen's.
+	a.unlockInfo = UnlockInfo{}
 	// A file read before the lock is not applied after it: the answer to
 	// its name conflict, and the bundle the import screen was showing, go
 	// with the vault they were read for.
-	a.pendingImport, a.importPath = nil, ""
+	a.pendingImport, a.importPath, a.listPath = nil, "", ""
 	a.mu.Unlock()
 	// So does the device list last read for 一覧の取り込み (passwords in
 	// it) — after the vault is closed: a read in progress keeps its file
 	// only while the vault is open (readList), so it is either refused or
 	// forgotten here.
 	forgetBook()
+	// The balloons shown before the lock (a 予約's name, a device that was
+	// skipped) stay in Windows' notification history with the icon; a
+	// re-added icon starts with an empty history.
+	trayRefresh()
 }
 
 // locked reports that no vault is open. The bindings the page can reach
@@ -886,11 +1039,16 @@ func (a *App) ChangeMasterPassword(current, next string) error {
 	// The save just kept the old file as the backup — still readable with the
 	// old password, which may be the reason for the change. Drop it; the
 	// next save makes a new one under the new password.
-	vault.RemoveBackups(a.vaultPath)
+	rmErr := vault.RemoveBackups(a.vaultPath)
 	a.password = next
 	// Open terminal windows unlock and reconnect with the master password;
 	// they get the new one too (the old one may be why it was changed).
 	a.sendToTerminals(termPWLine + " " + base64.StdEncoding.EncodeToString([]byte(next)))
+	if rmErr != nil {
+		// The change itself is done (the vault is re-saved); what remains is
+		// a copy under the old password, which the user must know about.
+		return fmt.Errorf("パスワードは変更しましたが、旧パスワードで開ける控え（.bak / .broken-*）を削除できませんでした: %v。ウイルス対策ソフトが掴んでいる場合は、しばらくしてからもう一度パスワードを変更してください", rmErr)
+	}
 	return nil
 }
 
@@ -913,12 +1071,17 @@ func (a *App) ResetVault(current string) error {
 	a.readOnly, a.unlockInfo = false, UnlockInfo{}
 	a.schedInv = nil
 	a.pendingPins = nil // nothing of the old vault goes into the next one
-	a.pendingImport, a.importPath = nil, ""
+	a.lastDone = nil    // nor the last batch's results (its device names, errors, log paths)
+	a.pendingImport, a.importPath, a.listPath = nil, "", ""
 	a.mu.Unlock()
 	// The GUI windows are logged into the devices just deleted: they close
-	// with the vault, as at Lock.
+	// with the vault, as at Lock. So do the terminal windows — each holds
+	// the old master password and a session on a device of the vault being
+	// deleted — and the log, diff and screen windows showing its logs.
 	closeGUIWindows()
 	closeCmdsetWindows()
+	closeViewerWindows()
+	a.sendToTerminals(termCloseLine)
 	forgetBook()
 	a.resetSchedFiles() // the old vault's schedule names, device names and log paths in data\
 	if err := os.Remove(a.vaultPath); err != nil && !os.IsNotExist(err) {
@@ -926,7 +1089,9 @@ func (a *App) ResetVault(current string) error {
 	}
 	// "Everything is deleted" must include the backup (the old credentials
 	// under the old password) and any half-written temporary file.
-	vault.RemoveBackups(a.vaultPath)
+	if err := vault.RemoveBackups(a.vaultPath); err != nil {
+		return fmt.Errorf("vault は削除しましたが、控え（.bak / .broken-*）を削除できませんでした: %v。data フォルダの残りを手で削除してください", err)
+	}
 	return nil
 }
 
@@ -1051,6 +1216,9 @@ func (a *App) freeProfileKeyLocked(name string) string {
 // export\os-profiles\ are never touched, so a deleted profile can always be
 // restored via ファイル読込.
 func (a *App) DeleteProfile(key string) error {
+	if strings.TrimSpace(key) == "" {
+		return errNameEmpty
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1137,6 +1305,10 @@ func errDeviceNameTaken(group, name string) error {
 // the check runs when the name or group changes, so a device left as it was
 // always saves.
 func (a *App) SaveDevice(d model.Device) error {
+	// Trimmed as RenameDevice and the table editor trim: "lab-sw1 " beside
+	// "lab-sw1" would be two devices to the schedules and the log names.
+	d.Name, d.Group = strings.TrimSpace(d.Name), strings.TrimSpace(d.Group)
+	d.Site, d.Role = strings.TrimSpace(d.Site), strings.TrimSpace(d.Role)
 	if err := d.Validate(); err != nil {
 		return err
 	}
@@ -1149,6 +1321,7 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.mu.Unlock()
 		return err
 	}
+	before, beforeSched := slices.Clone(a.inv.Devices), slices.Clone(a.inv.Schedules)
 	idx := -1
 	if d.ID != "" {
 		for i := range a.inv.Devices {
@@ -1190,8 +1363,24 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.inv.Settings.LastKeyFile = d.KeyFile
 	}
 	a.mu.Unlock()
+	return a.persistThenLog(before, beforeSched, stopped)
+}
+
+// persistThenLog saves the vault and only then writes the 実行記録 lines
+// of the schedules the change stopped; a failed save puts the devices and
+// schedules back as they were (ApplyGrid's rule), so no line says a
+// schedule stopped for a change that was never kept.
+func (a *App) persistThenLog(before []model.Device, beforeSched []schedule.Schedule, stopped []SchedLogEntry) error {
+	if err := a.persist(); err != nil {
+		a.mu.Lock()
+		if a.inv != nil {
+			a.inv.Devices, a.inv.Schedules = before, beforeSched
+		}
+		a.mu.Unlock()
+		return err
+	}
 	a.logStopped(stopped)
-	return a.persist()
+	return nil
 }
 
 // ensureGroupExists adds a group entry if the name is new (caller holds a.mu).
@@ -1219,13 +1408,13 @@ func (a *App) DeleteDevice(id string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("機器が見つかりません")
 	}
+	before, beforeSched := slices.Clone(a.inv.Devices), slices.Clone(a.inv.Schedules)
 	delete(a.inv.KnownGUICerts, a.inv.Devices[idx].GUICertKey())
 	// A schedule naming it would run on the next device given its name.
 	stopped := stopLeaving(a.inv, a.inv.Devices[idx:idx+1], nil)
 	a.inv.Devices = append(a.inv.Devices[:idx], a.inv.Devices[idx+1:]...)
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	return a.persist()
+	return a.persistThenLog(before, beforeSched, stopped)
 }
 
 // DevicePatch is a bulk edit from the device list: each non-nil field is set
@@ -1519,15 +1708,35 @@ func (a *App) DeviceNameExists(name, group, exceptID string) bool {
 
 // ---- Device groups (named device selections) ----
 
-// SaveDeviceGroup inserts or updates a device group by name.
+// SaveDeviceGroup inserts or updates a device group by name (the page's
+// edit of a group; a new group goes through CreateDeviceGroup, which
+// refuses a name already taken instead of replacing that group).
 func (a *App) SaveDeviceGroup(g model.DeviceGroup) error {
+	return a.saveDeviceGroup(g, false)
+}
+
+// CreateDeviceGroup adds a group; a name another group has is refused (as
+// CopyDeviceGroup and RenameDeviceGroup refuse it).
+func (a *App) CreateDeviceGroup(g model.DeviceGroup) error {
+	return a.saveDeviceGroup(g, true)
+}
+
+func (a *App) saveDeviceGroup(g model.DeviceGroup, create bool) error {
+	g.Name = strings.TrimSpace(g.Name)
 	if g.Name == "" {
 		return fmt.Errorf("グループ名は必須です")
+	}
+	if model.ReservedName(g.Name) {
+		return errors.New(model.ReservedNameMsg)
 	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return fmt.Errorf("vault is locked")
+	}
+	if create && a.inv.Group(g.Name) != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("同名のグループ「%s」が既にあります", g.Name)
 	}
 	found := false
 	for i := range a.inv.DeviceGroups {
@@ -1552,6 +1761,9 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return 0, fmt.Errorf("グループ名は必須です")
+	}
+	if model.ReservedName(newName) {
+		return 0, errors.New(model.ReservedNameMsg)
 	}
 	a.mu.Lock()
 	if a.inv == nil {
@@ -1593,6 +1805,11 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 // the next free number), since names must stay unique within a group — the
 // ungrouped devices count as one. Returns those renames ("old → new").
 func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
+	// "" is the ungrouped devices, not a group: deleting it would stop
+	// every 「グループ未設定」 schedule and drop that table draft.
+	if strings.TrimSpace(name) == "" {
+		return nil, errNameEmpty
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1661,6 +1878,13 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 	if newName == "" {
 		return fmt.Errorf("新しいグループ名を入力してください")
 	}
+	if model.ReservedName(newName) {
+		return errors.New(model.ReservedNameMsg)
+	}
+	// "" would move every ungrouped device into newName.
+	if strings.TrimSpace(oldName) == "" {
+		return errNameEmpty
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1690,6 +1914,11 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 
 // ---- Command sets ----
 
+// errNameEmpty refuses a delete or rename by an empty name: by name, "" is
+// the default (every schedule's 「各機器のセット」, the ungrouped devices),
+// never one item.
+var errNameEmpty = errors.New("名前が空です")
+
 // checkCommandSet trims the set's name and refuses an empty one or a command
 // with control characters — the same for a set saved and one created, so no
 // "" or "bk " set is made by either.
@@ -1697,6 +1926,9 @@ func checkCommandSet(cs *model.CommandSet) error {
 	cs.Name = strings.TrimSpace(cs.Name)
 	if cs.Name == "" {
 		return fmt.Errorf("セット名は必須です")
+	}
+	if model.ReservedName(cs.Name) {
+		return errors.New(model.ReservedNameMsg)
 	}
 	return model.CheckCommands(cs.Commands)
 }
@@ -1759,6 +1991,9 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("セット名は必須です")
+	}
+	if model.ReservedName(newName) {
+		return errors.New(model.ReservedNameMsg)
 	}
 	a.mu.Lock()
 	if a.inv == nil {
@@ -1832,6 +2067,11 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 // would fail every time from then on ("command set not found"): it stops,
 // and the 実行記録 says why (a rename is followed instead, RenameCommandSet).
 func (a *App) DeleteCommandSet(name string) error {
+	// "" is no set's name, but it is every schedule's 「各機器のセット」:
+	// stopSchedSet would stop them all.
+	if strings.TrimSpace(name) == "" {
+		return errNameEmpty
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -1907,6 +2147,10 @@ func (a *App) SaveMyBastions(chain []model.Bastion) error {
 }
 
 func (a *App) SaveSettings(s model.Settings) error {
+	// Before anything touches the disk (CheckRoot makes the folder).
+	if a.locked() {
+		return errVaultLocked
+	}
 	// The log folder as it can be used: no quotes or spaces around it, and
 	// one that can be created and written now — refused here with the
 	// reason, not found out by every run afterwards.
@@ -1987,6 +2231,10 @@ type RunDone struct {
 	Results []runpkg.DeviceResult `json:"results"`
 	RunDir  string                `json:"runDir,omitempty"`
 	DryRun  bool                  `json:"dryRun,omitempty"`
+	// Request is what the batch was started with (group, stage, command
+	// set or typed commands, names): the run tab rebuilds itself from it
+	// after a lock, since nothing of a batch is kept in the page's storage.
+	Request *RunRequest `json:"request,omitempty"`
 	// Error: the batch stopped on an internal error (a panic, logged in
 	// data\error.log) instead of finishing.
 	Error string `json:"error,omitempty"`
@@ -2143,6 +2391,7 @@ func (a *App) beginRunLocked(sched string) (context.Context, context.CancelFunc)
 	a.runCancel = cancel
 	a.runActive = true
 	a.runSched = sched
+	a.runReq = nil
 	return ctx, cancel
 }
 
@@ -2159,10 +2408,12 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	defer func() {
 		if r := recover(); r != nil {
 			msg := logPanic("execBatch", r)
-			a.runner.HostKeys = a
+			a.runner.HostKeys = a.hostKeys()
 			a.mu.Lock()
 			a.runActive = false
 			a.runSched = ""
+			a.runReq = nil
+			a.runProg = runCounts{}
 			done = RunDone{DryRun: req.DryRun, Error: msg}
 			if sched == "" {
 				a.lastDone = &done
@@ -2177,10 +2428,22 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	// the vault can be locked mid-run (ロック), and a locked vault knows no
 	// keys — every device would have looked new, a replaced one included.
 	a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
-	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: schedLogStage(dir, req.Stage)}, emit)
+	// The lock screen's counts (GetRunCounts) follow the batch's events.
+	a.mu.Lock()
+	a.runProg, a.runSeen = runCounts{Running: true, Total: len(snap.Devices)}, nil
+	if sched == "" {
+		r := req
+		a.runReq = &r
+	}
+	a.mu.Unlock()
+	counted := func(ev runpkg.Event) {
+		a.noteRunEvent(ev)
+		emit(ev)
+	}
+	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: schedLogStage(dir, req.Stage)}, counted)
 	// Back to the vault before the next batch may start (runActive below):
 	// restored later, it could undo the next batch's own copy.
-	a.runner.HostKeys = a
+	a.runner.HostKeys = a.hostKeys()
 	if runDir != "" {
 		writeRunSummary(runDir, snap, req, sched, dir != "", started, results)
 	}
@@ -2188,11 +2451,74 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	a.mu.Lock()
 	a.runActive = false
 	a.runSched = ""
+	a.runReq = nil
+	a.runProg = countsOf(results)
 	if sched == "" {
+		r := req
+		done.Request = &r
 		a.lastDone = &done
 	}
 	a.mu.Unlock()
 	return done
+}
+
+// runCounts is what GetRunCounts tells the lock screen: whether a batch is
+// running, how far it is, and — once it ended — how it went. Numbers only:
+// no device, group or schedule name reaches a locked page.
+type runCounts struct {
+	Running  bool `json:"running"`
+	Done     int  `json:"done"`
+	Total    int  `json:"total"`
+	Failed   int  `json:"failed"`
+	Finished bool `json:"finished"` // a batch ended since the app started
+}
+
+// countsOf is the counts of a finished batch.
+func countsOf(results []runpkg.DeviceResult) runCounts {
+	c := runCounts{Finished: true, Total: len(results), Done: len(results)}
+	for _, r := range results {
+		if !r.Success {
+			c.Failed++
+		}
+	}
+	return c
+}
+
+// noteRunEvent keeps runProg up to date from the batch's events: a
+// device's final event (done / error / canceled) counts it once, however
+// many final events it sends (a device stopped alone reports twice).
+func (a *App) noteRunEvent(ev runpkg.Event) {
+	failed := false
+	switch ev.Phase {
+	case runpkg.PhaseDone:
+	case runpkg.PhaseError, runpkg.PhaseCanceled:
+		failed = true
+	default:
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.runSeen[ev.Device] {
+		return
+	}
+	if a.runSeen == nil {
+		a.runSeen = map[string]bool{}
+	}
+	a.runSeen[ev.Device] = true
+	a.runProg.Done++
+	if failed {
+		a.runProg.Failed++
+	}
+}
+
+// GetRunCounts is the running (or last) batch in numbers, for the lock
+// screen: usable while locked, since it names nothing.
+func (a *App) GetRunCounts() runCounts {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := a.runProg
+	c.Running = a.runActive
+	return c
 }
 
 // writeRunSummary records the batch in its log folder for the 実行履歴 tab.
@@ -2366,8 +2692,67 @@ func (a *App) SaveChecklist(cl model.Checklist) error {
 	return a.persist()
 }
 
+// ChecklistExists reports whether a checklist of that name is there (the
+// page's check before creating one, so a typo does not replace another).
+func (a *App) ChecklistExists(name string) bool {
+	name = strings.TrimSpace(name)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.inv == nil {
+		return false
+	}
+	for _, c := range a.inv.Checklists {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// RenameChecklist renames a checklist in one save (the page used to delete
+// the old one and save the new, and a failed save lost both). A name
+// another checklist has is refused.
+func (a *App) RenameChecklist(oldName, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("チェックリスト名を入力してください")
+	}
+	if strings.TrimSpace(oldName) == "" {
+		return errNameEmpty
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	if oldName == newName {
+		a.mu.Unlock()
+		return nil
+	}
+	idx := -1
+	for i := range a.inv.Checklists {
+		if a.inv.Checklists[i].Name == newName {
+			a.mu.Unlock()
+			return fmt.Errorf("同名のチェックリスト「%s」が既にあります", newName)
+		}
+		if a.inv.Checklists[i].Name == oldName {
+			idx = i
+		}
+	}
+	if idx < 0 {
+		a.mu.Unlock()
+		return fmt.Errorf("チェックリスト「%s」がありません", oldName)
+	}
+	a.inv.Checklists[idx].Name = newName
+	a.mu.Unlock()
+	return a.persist()
+}
+
 // DeleteChecklist removes a checklist.
 func (a *App) DeleteChecklist(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return errNameEmpty
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
@@ -2474,22 +2859,31 @@ func (a *App) ExportCompareReport(in ReportIn) (string, error) {
 	if len(in.Devices) == 0 {
 		return "", fmt.Errorf("書き出す機器がありません")
 	}
-	ri := history.ReportInput{Title: in.Title, RunA: in.RunA, RunB: in.RunB, Work: in.Work, Headline: in.Headline, Lang: in.Lang}
+	// The report is made to be shared: a typed secret value in the page's
+	// check text goes in masked (maskSecretLine).
+	ri := history.ReportInput{Title: in.Title, RunA: in.RunA, RunB: in.RunB, Work: in.Work, Headline: maskSecretLine(in.Headline), Lang: in.Lang}
 	for _, d := range in.Devices {
-		rd := history.ReportDevice{Name: d.Name, Verdict: d.Verdict, Check: d.Check, Error: d.Error}
+		rd := history.ReportDevice{Name: d.Name, Verdict: d.Verdict, Check: maskSecretLine(d.Check), Error: maskSecretLine(d.Error)}
 		if rd.Error == "" {
 			for _, p := range []string{d.PathA, d.PathB} {
 				if err := a.underLogRoot(p); err != nil {
 					return "", err
 				}
 			}
+			// A read error names the file, not the OS's message with
+			// its absolute path (the report leaves this PC). In the
+			// report's language: the page does not translate the file.
+			cannotRead := "ログを読めません: "
+			if in.Lang == "en" {
+				cannotRead = "Cannot read the log: "
+			}
 			ba, err := os.ReadFile(d.PathA)
 			if err != nil {
-				rd.Error = err.Error()
+				rd.Error = cannotRead + filepath.Base(d.PathA)
 			}
 			bb, err := os.ReadFile(d.PathB)
 			if err != nil {
-				rd.Error = err.Error()
+				rd.Error = cannotRead + filepath.Base(d.PathB)
 			}
 			rd.LogA, rd.LogB = string(ba), string(bb)
 		}
@@ -2572,21 +2966,42 @@ func (a *App) DeviceVersions(name string) ([]DeviceVersion, error) {
 		return nil, err
 	}
 	var out []DeviceVersion
+	var stats []os.FileInfo
 	for _, r := range runs {
 		for _, d := range r.Devices {
 			if d.Name != name || d.LogPath == "" {
+				continue
+			}
+			// A summary file's logFile may point outside its folder (one
+			// written by hand): nothing outside the log folder is read.
+			if a.underLogRoot(d.LogPath) != nil {
 				continue
 			}
 			st, err := os.Stat(d.LogPath)
 			if err != nil {
 				continue
 			}
-			v := DeviceVersion{Dir: r.Dir, RunName: r.Name, StartedAt: r.StartedAt, Stage: r.Stage, Group: r.Group, External: r.External, Status: d.Status, LogPath: d.LogPath, File: filepath.Base(d.LogPath), Size: st.Size()}
-			v.Fingerprint = configFingerprintOf(d.LogPath, st)
-			v.HasConfig = v.Fingerprint != ""
-			out = append(out, v)
+			out = append(out, DeviceVersion{Dir: r.Dir, RunName: r.Name, StartedAt: r.StartedAt, Stage: r.Stage, Group: r.Group, External: r.External, Status: d.Status, LogPath: d.LogPath, File: filepath.Base(d.LogPath), Size: st.Size()})
+			stats = append(stats, st)
 		}
 	}
+	// The fingerprints: a few logs at a time (hundreds of large logs in an
+	// external folder, read one after the other, held the page for
+	// seconds); a log that did not change comes from the cache.
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 4)
+	for i := range out {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			defer recoverGo("DeviceVersions fingerprint")
+			out[i].Fingerprint = configFingerprintOf(out[i].LogPath, stats[i])
+			out[i].HasConfig = out[i].Fingerprint != ""
+		}(i)
+	}
+	wg.Wait()
 	sort.SliceStable(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
 	if len(out) > 500 {
 		out = out[:500]
@@ -2690,8 +3105,9 @@ func underRoot(root, p, msg string) error {
 // whether the batch is still going, and the last batch's results in case it
 // finished while nobody was listening.
 type RunStatus struct {
-	Active bool     `json:"active"`
-	Last   *RunDone `json:"last,omitempty"`
+	Active  bool        `json:"active"`
+	Request *RunRequest `json:"request,omitempty"` // the active batch's request (started by hand)
+	Last    *RunDone    `json:"last,omitempty"`
 }
 
 // GetRunStatus returns the RunStatus (it needs no unlocked vault).
@@ -2702,10 +3118,25 @@ func (a *App) GetRunStatus() RunStatus {
 		return RunStatus{} // the last results name devices: after unlocking
 	}
 	// Active is about a batch started by hand: a 予約 runs apart from the run tab.
-	return RunStatus{Active: a.runActive && a.runSched == "", Last: a.lastDone}
+	st := RunStatus{Active: a.runActive && a.runSched == "", Last: a.lastDone}
+	if st.Active && a.runReq != nil {
+		r := *a.runReq
+		st.Request = &r
+	}
+	return st
 }
 
 func (a *App) CancelRun() {
+	// The lock screen cannot stop a batch (a 予約's night run included).
+	if a.locked() {
+		return
+	}
+	a.cancelRun()
+}
+
+// cancelRun stops the running batch (CancelRun, and the main window's
+// exit, locked or not).
+func (a *App) cancelRun() {
 	a.mu.Lock()
 	c := a.runCancel
 	a.mu.Unlock()
@@ -2718,7 +3149,7 @@ func (a *App) CancelRun() {
 // on its row); the other devices go on. False when nothing is running.
 func (a *App) CancelDevice(name string) bool {
 	a.mu.Lock()
-	active := a.runActive
+	active := a.runActive && a.inv != nil
 	a.mu.Unlock()
 	return active && a.runner.CancelDevice(name)
 }
@@ -2852,7 +3283,24 @@ func (a *App) StrictVerify(workPaths []string, beforePath, afterPath string) (*h
 		return nil, err
 	}
 	r := history.StrictVerifyLogs(work, bf, af)
+	// The typed lines go to the page (and from there to the CSV, the HTML
+	// report and the clipboard): a secret value typed in the work — one
+	// the log masking did not know — is masked here.
+	for i := range r.Commands {
+		c := &r.Commands[i]
+		c.Line, c.Match = maskSecretLine(c.Line), maskSecretLine(c.Match)
+	}
 	return &r, nil
+}
+
+// maskSecretLine hides the value after a secret word in one line
+// (history.MaskSecretLine): "username ops password <value>" shows as
+// "username ops password ●●●". Lines without one come back as they are.
+func maskSecretLine(s string) string {
+	if s == "" {
+		return s
+	}
+	return history.MaskSecretLine(s)
 }
 
 // ExportCompareResult writes the run history comparison, as the UI shows
@@ -2865,6 +3313,12 @@ func (a *App) ExportCompareResult(rows [][]string) (string, error) {
 	}
 	if len(rows) < 2 {
 		return "", fmt.Errorf("書き出す行がありません")
+	}
+	// A typed secret value (StrictVerify's lines) goes out masked.
+	for i := range rows {
+		for j := range rows[i] {
+			rows[i][j] = maskSecretLine(rows[i][j])
+		}
 	}
 	text, err := csvio.ExportTable(rows)
 	if err != nil {
@@ -2972,6 +3426,10 @@ type termClosed struct {
 	Device  string `json:"device"`
 	Error   string `json:"error,omitempty"`
 	LogPath string `json:"logPath,omitempty"`
+	// Kind says what Error is, so the page need not read the Japanese:
+	// "hostkey" (a host key differs from the pinned one), "masterpw" (the
+	// master password typed in the window is wrong), "" (anything else).
+	Kind string `json:"kind,omitempty"`
 	// Takeover: the automatic login failed but the line is still open, and
 	// the window offers to hand it to the keyboard (Term.Takeover).
 	Takeover bool `json:"takeover,omitempty"`
@@ -3060,9 +3518,11 @@ func (a *App) spawnTerminal(id string, manual, direct bool, extra []string) (*te
 	a.termsMu.Lock()
 	a.termSeq++
 	child := newTermChild(stdin, a.termSeq)
+	child.name = label
 	a.terms[cmd] = child
 	a.termsMu.Unlock()
 	go func() {
+		defer recoverGo("terminal window stdout")
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024) // relayed keys (bcastChunk) fit
 		for sc.Scan() {
@@ -3179,7 +3639,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.25"
+const appVersion = "1.9.26"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
@@ -3370,7 +3830,7 @@ func (a *App) ImportCommandSetFile() (FileImport, error) {
 	if err != nil || path == "" {
 		return FileImport{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFileLimited(path, maxJSONImport)
 	if err != nil {
 		return FileImport{}, err
 	}
@@ -3418,7 +3878,7 @@ func (a *App) ImportOSProfileFile() (FileImport, error) {
 	if err != nil || path == "" {
 		return FileImport{}, err
 	}
-	data, err := os.ReadFile(path)
+	data, err := readFileLimited(path, maxJSONImport)
 	if err != nil {
 		return FileImport{}, err
 	}
@@ -3470,7 +3930,10 @@ type BundleExportInfo struct {
 // half-edited) is overwritten.
 func (a *App) BundleExportTarget(group string) BundleExportInfo {
 	info := BundleExportInfo{Dir: bundleDir(group)}
-	b, err := os.ReadFile(filepath.Join(info.Dir, bundle.ManifestName))
+	if a.locked() {
+		return info
+	}
+	b, err := readFileLimited(filepath.Join(info.Dir, bundle.ManifestName), maxJSONImport)
 	if err != nil {
 		return info
 	}
@@ -3491,14 +3954,19 @@ func (a *App) BundleExportTarget(group string) BundleExportInfo {
 //
 // noBastionCreds leaves the jump hosts' logins out (each person's own key;
 // the receiver's 自分の踏み台認証 fills them in).
-func (a *App) ExportBundle(group string, noBastionCreds bool) (string, error) {
+//
+// noDeviceCreds leaves the devices' own logins and the groups' default
+// credentials out too (a list handed to a colleague, who adds the
+// passwords on their side: a read-in keeps the receiver's credentials
+// where the file's are empty).
+func (a *App) ExportBundle(group string, noBastionCreds, noDeviceCreds bool) (string, error) {
 	defer recoverBound(a.ctx, "ExportBundle")
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return "", fmt.Errorf("vault is locked")
 	}
-	c := bundle.Select(a.inv, group, noBastionCreds)
+	c := bundle.SelectWith(a.inv, group, noBastionCreds, noDeviceCreds)
 	c.Lang = a.lang
 	a.mu.Unlock()
 	if group != "" && len(c.Devices) == 0 {
@@ -3621,7 +4089,12 @@ func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bund
 		a.mu.Unlock()
 		return nil, fmt.Errorf("vault is locked")
 	}
+	before := slices.Clone(a.inv.Devices)
 	s, changed := bundle.Apply(a.inv, c, bundle.Options{TargetGroup: targetGroup, OverwriteShared: overwriteShared})
+	// A 予約 on a group the bundle added devices to (or changed addresses
+	// in) would log into devices nobody confirmed: it stops until it is
+	// enabled again, and the 実行記録 says why.
+	stopped := schedImportChanged(a.inv, before)
 	a.mu.Unlock()
 	for _, p := range changed {
 		a.profiles.Add(profile.Quote(p))
@@ -3629,6 +4102,7 @@ func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bund
 	if err := a.persist(); err != nil {
 		return nil, err
 	}
+	a.logStopped(stopped)
 	return &s, nil
 }
 
@@ -3692,6 +4166,9 @@ func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (s
 // OpenExportFolder opens a folder under export\ in Explorer (offered after
 // 一式書出). Anything outside export\ is refused.
 func (a *App) OpenExportFolder(dir string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
@@ -3700,6 +4177,60 @@ func (a *App) OpenExportFolder(dir string) error {
 		return err
 	}
 	return startExplorer(abs)
+}
+
+// OpenExportFile opens a file written under export\ (a comparison's HTML
+// report or CSV) in the program Windows has for it, straight from the
+// 書き出し toast. Only a file under export\ is opened — the same rule as
+// OpenExportFolder — never a folder or anything the page names elsewhere.
+func (a *App) OpenExportFile(path string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if err := underRoot(filepath.Join(exeDir(), "export"), abs, "export フォルダの外は開けません"); err != nil {
+		return err
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("ファイルが見つかりません: %s", filepath.Base(abs))
+	}
+	if st.IsDir() {
+		return fmt.Errorf("ファイルではありません: %s", filepath.Base(abs))
+	}
+	return openWithDefaultApp(abs)
+}
+
+// maxJSONImport / maxCSVImport bound what a file the user picked is read up
+// to (a command set, a profile, a bundle manifest / a devices CSV): the
+// same limits as 一覧の取り込み's rule files and lists.
+const (
+	maxJSONImport = 4 << 20
+	maxCSVImport  = 64 << 20
+)
+
+// readFileLimited reads path whole, refusing one over max bytes before
+// (by its size) and while (by the read) reading it.
+func readFileLimited(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() > max {
+		return nil, fmt.Errorf("ファイルが大きすぎます（%d MB まで）: %s", max>>20, filepath.Base(path))
+	}
+	data, err := io.ReadAll(io.LimitReader(f, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > max {
+		return nil, fmt.Errorf("ファイルが大きすぎます（%d MB まで）: %s", max>>20, filepath.Base(path))
+	}
+	return data, nil
 }
 
 // ReorderDeviceGroups sets the display order of groups to match the given list
@@ -3791,14 +4322,4 @@ func (a *App) ReorderProfiles(order []string) error {
 	reorderSlots(a.inv.CustomProfiles, func(p profile.Profile) string { return p.Key }, order)
 	a.mu.Unlock()
 	return a.persist()
-}
-
-// ProfileKeys returns sorted profile keys (helper for the UI).
-func (a *App) ProfileKeys() []string {
-	var keys []string
-	for _, p := range a.profiles.List() {
-		keys = append(keys, p.Key)
-	}
-	sort.Strings(keys)
-	return keys
 }

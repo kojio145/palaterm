@@ -16,13 +16,32 @@ function $(sel) { return document.querySelector(sel); }
 let toastTimer;
 // An error stays long enough to be read (a validation message can be a
 // sentence or two) and any toast goes on click.
-function toast(msg, kind) {
+// While the lock screen shows, a toast from elsewhere (a schedule's result
+// with device names, an internal error) is held back and shown after the
+// unlock: the lock screen names nothing. opts.lock shows it on the lock
+// screen anyway (the lock screen's own messages); opts.ms sets how long.
+const toastQueue = [];
+function toast(msg, kind, opts) {
+  const o = opts || {};
+  // The main window only (the child windows hide #app and have no lock
+  // screen of this kind): held while #lock shows.
+  const lockEl = $("#lock");
+  if (!o.lock && lockEl && !lockEl.classList.contains("hidden") && window.go && window.go.main && window.go.main.App) {
+    toastQueue.push([msg, kind]);
+    while (toastQueue.length > 5) toastQueue.shift();
+    return;
+  }
   const el = $("#toast");
   el.textContent = msg;
   el.className = "toast " + (kind || "");
   el.onclick = () => el.classList.add("hidden");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.add("hidden"), kind === "err" ? 9000 : 3200);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), o.ms || (kind === "err" ? 9000 : 3200));
+}
+// The toasts held back during the lock, one after another.
+function flushToasts() {
+  const q = toastQueue.splice(0);
+  q.forEach(([msg, kind], i) => setTimeout(() => toast(msg, kind), 400 + i * 3600));
 }
 
 // An input that keeps a form from being saved is shown at the field itself:
@@ -190,21 +209,25 @@ function guardDiscard(node, cancelSel, extra, after) {
 // row; Shift+クリック applies the clicked state to the whole range since the
 // previously clicked row. boxes must be in visual order with data-enable set.
 // The anchor row is remembered per table key because every toggle re-renders
-// the table (and would otherwise forget where the range started).
+// the table (and would otherwise forget where the range started). It is the
+// row's id, not its index: a sort or a filter typed between the two clicks
+// gives the rows new positions, and the range is the rows between the two
+// clicked ones as they stand now (an anchor filtered out is no anchor).
 const _rangeAnchor = {};
 function wireShiftRange(key, boxes, apply) {
   boxes.forEach((cb, i) => {
     cb.addEventListener("click", async e => {
-      const last = _rangeAnchor[key] ?? -1;
+      const anchor = _rangeAnchor[key];
+      const last = anchor == null ? -1 : boxes.findIndex(b => b.dataset.enable === anchor);
       let names;
-      if (e.shiftKey && last >= 0 && last !== i && last < boxes.length) {
+      if (e.shiftKey && last >= 0 && last !== i) {
         const [a, b] = [Math.min(last, i), Math.max(last, i)];
         names = [];
         for (let j = a; j <= b; j++) names.push(boxes[j].dataset.enable);
       } else {
         names = [cb.dataset.enable];
       }
-      _rangeAnchor[key] = i;
+      _rangeAnchor[key] = cb.dataset.enable;
       await apply(names, cb.checked);
     });
     // Shift+クリックの巻き添えでテキスト選択が走るのを防ぐ。
@@ -255,7 +278,13 @@ function listViewApply(key, items, searchOf, sortVal, selOf) {
 function listViewTh(key, col, label, style) {
   const v = listView(key);
   const arrow = v.sort.key === col ? (v.sort.dir > 0 ? " ▲" : " ▼") : "";
-  return `<th ${style ? `style="${style}"` : ""} class="sortable" data-lv="${esc(key)}" data-sort="${esc(col)}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${arrow}</th>`;
+  return `<th ${style ? `style="${style}"` : ""} class="sortable" tabindex="0" data-lv="${esc(key)}" data-sort="${esc(col)}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${arrow}</th>`;
+}
+// A sortable header sorts on Enter / Space too (it is a tab stop).
+function wireSortKeys(el) {
+  el.onkeydown = e => {
+    if ((e.key === "Enter" || e.key === " ") && !e.isComposing && !e.repeat) { e.preventDefault(); el.click(); }
+  };
 }
 // The filter row: a text box, optional selects ({id, label, values}), and
 // the clear buttons that appear while something is on.
@@ -478,10 +507,13 @@ function listViewWire(key, root, rerender, focus) {
   root.querySelectorAll(`.lv-sel[data-lv="${CSS.escape(key)}"]`).forEach(s => s.onchange = () => { v.sel[s.dataset.sel] = s.value; rerender(); });
   root.querySelectorAll(`.lv-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.text = ""; v.sel = {}; rerender(); });
   root.querySelectorAll(`.lv-sort-clear[data-lv="${CSS.escape(key)}"]`).forEach(b => b.onclick = () => { v.sort = { key: "", dir: 1 }; rerender(); });
-  root.querySelectorAll(`th.sortable[data-lv="${CSS.escape(key)}"]`).forEach(el => el.onclick = () => {
-    const k = el.dataset.sort;
-    v.sort = v.sort.key === k ? { key: k, dir: -v.sort.dir } : { key: k, dir: 1 };
-    rerender();
+  root.querySelectorAll(`th.sortable[data-lv="${CSS.escape(key)}"]`).forEach(el => {
+    el.onclick = () => {
+      const k = el.dataset.sort;
+      v.sort = v.sort.key === k ? { key: k, dir: -v.sort.dir } : { key: k, dir: 1 };
+      rerender();
+    };
+    wireSortKeys(el);
   });
 }
 
@@ -601,11 +633,16 @@ function saveColWidths(key, w) {
 // The panel's top is measured as if the page were not scrolled: a render
 // while .content is scrolled (a long page left inside its tab) would else
 // give a cap taller than the window.
+// The main window's page zoom (wireMainZoom): getBoundingClientRect and the
+// pointer are in window pixels, a style length is in page pixels, and the
+// two differ by this factor while the page is zoomed.
+function uiZoom() { return parseFloat(document.documentElement.style.zoom) || 1; }
 function fitPanels(root) {
+  const z = uiZoom();
   (root || document).querySelectorAll(".panel.scrollx").forEach(p => {
     const sc = p.closest(".content");
-    const top = p.getBoundingClientRect().top + (sc ? sc.scrollTop : 0);
-    const h = Math.max(160, Math.floor(window.innerHeight - top - 28));
+    const top = p.getBoundingClientRect().top + (sc ? sc.scrollTop * z : 0);
+    const h = Math.max(160, Math.floor((window.innerHeight - top) / z - 28));
     p.style.maxHeight = h + "px";
   });
 }
@@ -698,16 +735,17 @@ function wireColResize(root) {
         // spare width and the column jumped under the pointer. Every column
         // is pinned at its drawn width first; the last one is left free to
         // take up whatever the drag gives or takes.
-        ths.forEach((t, j) => { t.style.width = j === ths.length - 1 ? "" : Math.round(t.getBoundingClientRect().width) + "px"; });
-        const x0 = e.clientX, w0 = th.getBoundingClientRect().width;
+        const z = uiZoom();
+        ths.forEach((t, j) => { t.style.width = j === ths.length - 1 ? "" : Math.round(t.getBoundingClientRect().width / z) + "px"; });
+        const x0 = e.clientX, w0 = th.getBoundingClientRect().width / z;
         grip.setPointerCapture(e.pointerId);
         table.classList.add("resizing");
-        const move = ev => { th.style.width = Math.max(40, Math.round(w0 + ev.clientX - x0)) + "px"; };
+        const move = ev => { th.style.width = Math.max(40, Math.round(w0 + (ev.clientX - x0) / z)) + "px"; };
         const up = () => {
           grip.removeEventListener("pointermove", move);
           grip.removeEventListener("pointerup", up);
           table.classList.remove("resizing");
-          saved[i] = Math.round(th.getBoundingClientRect().width);
+          saved[i] = Math.round(th.getBoundingClientRect().width / z);
           saveColWidths(key, saved);
         };
         grip.addEventListener("pointermove", move);
@@ -996,9 +1034,10 @@ function showCtxMenu(items, e) {
     ctxMenu.appendChild(b);
   });
   ctxMenu.classList.remove("hidden");
+  const z = uiZoom();
   const w = ctxMenu.offsetWidth, h = ctxMenu.offsetHeight;
-  ctxMenu.style.left = Math.min(e.clientX, window.innerWidth - w - 4) + "px";
-  ctxMenu.style.top = Math.min(e.clientY, window.innerHeight - h - 4) + "px";
+  ctxMenu.style.left = Math.min(e.clientX / z, window.innerWidth / z - w - 4) + "px";
+  ctxMenu.style.top = Math.min(e.clientY / z, window.innerHeight / z - h - 4) + "px";
 }
 document.addEventListener("mousedown", e => { if (!ctxMenu.contains(e.target)) closeCtxMenu(); }, true);
 // Esc closes only the menu while it is open (in the log viewer Esc would
@@ -1029,12 +1068,13 @@ document.addEventListener("mouseover", e => {
   tipEl.textContent = text;
   tipEl.style.left = "0px"; tipEl.style.top = "0px";
   tipEl.classList.remove("hidden");
+  const z = uiZoom();
   const r = el.getBoundingClientRect();
   const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
   // Above the hovered cell; falls back to below at the top of the window.
-  let x = r.left, y = r.top - th - 8;
-  if (x + tw > window.innerWidth - 12) x = Math.max(12, window.innerWidth - tw - 12);
-  if (y < 12) y = r.bottom + 8;
+  let x = r.left / z, y = r.top / z - th - 8;
+  if (x + tw > window.innerWidth / z - 12) x = Math.max(12, window.innerWidth / z - tw - 12);
+  if (y < 12) y = r.bottom / z + 8;
   tipEl.style.left = x + "px"; tipEl.style.top = y + "px";
 });
 document.addEventListener("mouseout", e => {
@@ -1111,6 +1151,7 @@ async function boot() {
     return;
   }
   App().SetLang(LANG).catch(() => {});
+  wireMainZoom();
   // × with terminal windows open or a batch running: the backend holds the
   // close and asks here (Windows' own Yes/No box looked out of place).
   // キャンセル has the focus.
@@ -1132,8 +1173,13 @@ async function boot() {
   restoredTab = restoreUIState();
   const exists = await App().VaultExists();
   // Reloaded with the vault still open (the language switch): straight
-  // back in. After ロック the backend is locked and this is false.
-  if (exists && await App().Unlocked().catch(() => false)) { await enterApp(); return; }
+  // back in. After ロック the backend is locked and this is false. A load
+  // that fails (an inventory the backend could not give) lands on the lock
+  // screen with the reason, not on an empty app.
+  if (exists && await App().Unlocked().catch(() => false)) {
+    try { await enterApp(); return; }
+    catch (e) { toast(t("読み込みに失敗しました") + ": " + terr(e), "err", { lock: true }); }
+  }
   renderLock(exists);
 }
 
@@ -1165,6 +1211,7 @@ function renderLock(exists) {
     App().SchedulesWaitUnlock().then(w => {
       if (w && $("#unlock")) $("#unlock").insertAdjacentHTML("afterend", `<div style="margin-top:12px;font-size:12px;line-height:1.7;color:var(--warn)">${esc(t("⏸ 予約はロック解除まで動きません。その間に来た回は、解除したときに「見逃し」として記録します"))}</div>`);
     }).catch(() => {});
+    lockRunCounts();
   } else {
     body.innerHTML = `
       <div class="muted" style="margin-bottom:16px;font-size:13px;line-height:1.7">
@@ -1180,6 +1227,29 @@ function renderLock(exists) {
   }
 }
 
+// The lock screen's own line about a batch that goes on behind it: counts
+// only, no names (GetRunCounts answers while locked). Asked every 5 seconds
+// while the lock screen shows and a batch is running; the line stays once
+// the batch has finished, until the unlock.
+let lockRunTimer = 0;
+function lockRunCounts() {
+  clearInterval(lockRunTimer); lockRunTimer = 0;
+  if (typeof App().GetRunCounts !== "function") return;
+  const ask = async () => {
+    const box = $("#lock-run");
+    if (!box || $("#lock").classList.contains("hidden")) { clearInterval(lockRunTimer); lockRunTimer = 0; return; }
+    const c = await App().GetRunCounts().catch(() => null);
+    if (!c || (!c.running && !c.finished)) { box.textContent = ""; return; }
+    box.textContent = c.running
+      ? t("▶ 一括実行中（完了 {a} / {b}・失敗 {c}）", { a: c.done || 0, b: c.total || 0, c: c.failed || 0 })
+      : t("✓ 一括実行は終わりました（成功 {a}・失敗 {b}）", { a: Math.max(0, (c.done || 0) - (c.failed || 0)), b: c.failed || 0 });
+    if (!c.running) { clearInterval(lockRunTimer); lockRunTimer = 0; }
+  };
+  if ($("#unlock") && !$("#lock-run")) $("#unlock").insertAdjacentHTML("afterend", `<div id="lock-run" style="margin-top:12px;font-size:12px;line-height:1.7;color:var(--text-dim)"></div>`);
+  ask();
+  lockRunTimer = setInterval(ask, 5000);
+}
+
 async function doUnlock() {
   const pw = $("#pw").value;
   if (!pw) return;
@@ -1191,7 +1261,7 @@ async function doUnlock() {
       // The backend tells a wrong password from a file it could not read (a
       // sync client holding it, a permission): say which, so the password is
       // not retyped at a file problem.
-      toast(t("ロックを解除できません") + ": " + terr(e), "err");
+      toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
       return;
     }
   }
@@ -1199,7 +1269,10 @@ async function doUnlock() {
     await enterApp();
     unlockNotices();
   } catch (e) {
-    toast(t("ロックを解除できません") + ": " + terr(e), "err");
+    // The inventory could not be read: back on the lock screen with the
+    // reason (the vault is open in the backend; another try may do).
+    renderLock(true);
+    toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
   }
 }
 
@@ -1208,17 +1281,25 @@ async function doCreate() {
   if (!pw) { fieldError($("#pw"), t("パスワードを入力してください")); return; }
   if (pw !== pw2) { fieldError($("#pw2"), t("確認用パスワードが一致しません")); return; }
   try { await App().CreateVault(pw); await enterApp(); }
-  catch (e) { toast(t("作成に失敗しました") + ": " + terr(e), "err"); }
+  catch (e) { renderLock(true); toast(t("作成に失敗しました") + ": " + terr(e), "err", { lock: true }); }
 }
 
 async function enterApp() {
-  $("#lock").classList.add("hidden");
-  $("#app").classList.remove("hidden");
+  // The lock screen stays until the inventory is in: a failure here leaves
+  // the caller on the lock screen, not on an app with empty tabs.
   PROFILES = await App().ListProfiles();
   SERIAL = await App().ListSerialPorts() || [];
   await refreshInventory();
+  clearInterval(lockRunTimer); lockRunTimer = 0;
+  $("#lock").classList.add("hidden");
+  $("#app").classList.remove("hidden");
+  // The run tab's results are not kept in Web storage across the lock (they
+  // name devices and quote what they showed): the backend's copy comes back
+  // here, for a batch still going and for one that finished.
+  await restoreRunFromBackend();
   switchTab(restoredTab || "devices");
   restoredTab = null;
+  flushToasts();
   // The idle lock closed a dialog that was being edited: say so, instead
   // of leaving the user to find the edit gone.
   try {
@@ -1227,44 +1308,88 @@ async function enterApp() {
       toast(t("自動ロックのため、編集中だった内容（ダイアログ・変換ルール・設定）は破棄されました"), "warn");
     }
   } catch (e) { }
-  // Locked while a batch ran: it went on meanwhile. Still going -> keep
-  // following it (■ 中止 works); finished -> show the results it left.
-  if (running) {
-    const st = await App().GetRunStatus().catch(() => null);
-    if (st && st.active) {
-      clearInterval(etaTimer); etaTimer = setInterval(updateEta, 1000);
-      if (document.querySelector("#tab-run.active")) renderRun();
-    } else if (st && st.last) applyRunDone(st.last);
-    else { running = false; if (document.querySelector("#tab-run.active")) renderRun(); }
+}
+
+// Locked while a batch ran (or after one finished): the backend kept the
+// batch's state, and the table is built from it again here. A batch still
+// going is followed on (■ 中止 works); one that finished shows the results
+// it left, with ↻ 失敗・中止のみ再実行. Nothing of it was written to Web
+// storage (see saveUIState), so the group is read back from the request the
+// backend reports — or, on a build without it, from the result names.
+async function restoreRunFromBackend() {
+  const st = await App().GetRunStatus().catch(() => null);
+  if (!st || (!st.active && !st.last)) { running = false; cancelling = false; return; }
+  // st.last is the last batch that finished: while another is active it is
+  // the one before, so an active batch's rows come from the request (or,
+  // without one, from the events that reached the page since the reload).
+  const req = st.request || (!st.active && st.last && st.last.request) || null;
+  const names = req && req.names ? req.names : st.active ? Object.keys(runState) : (st.last && st.last.results || []).map(r => r.device);
+  if (req) {
+    runGroupSel = req.ungrouped ? RUN_UNGROUPED : (req.group || runGroupSel);
+    runStage = req.stage || "";
+    runDirect = !!req.direct;
+    lastRunDry = !!req.dryRun;
+    if (req.adHoc && req.adHoc.length) { runSetSel = RUN_ADHOC; runAdHoc = req.adHoc.map(c => c.text).join("\n"); }
+    else runSetSel = req.commandSet || "";
+    lastRunReq = { ...req };
+  } else if (names.length && !runGroupSel) {
+    // The group whose devices the names fit best (a name is unique only
+    // within its group).
+    const set = new Set(names);
+    let best = "", bestN = 0;
+    const count = {};
+    (INV.devices || []).forEach(d => { if (set.has(d.name)) { const g = d.group || RUN_UNGROUPED; count[g] = (count[g] || 0) + 1; } });
+    for (const g in count) if (count[g] > bestN) { best = g; bestN = count[g]; }
+    runGroupSel = best;
+    lastRunReq = names.length ? { names, group: runGroupName(), ungrouped: runGroupSel === RUN_UNGROUPED, stage: runStage, dryRun: !!(st.last && st.last.dryRun), direct: runDirect, commandSet: runSetSel && runSetSel !== RUN_ADHOC ? runSetSel : "", adHoc: [] } : null;
+  }
+  if (st.active) {
+    running = true;
+    // Rows the events since the reload have not touched yet start as queued.
+    names.forEach(n => { if (!runState[n]) runState[n] = { phase: "queued" }; });
+    if (!runTargets.length) runTargets = names.slice();
+    if (!runStartMs) runStartMs = Date.now();
+    clearInterval(etaTimer); etaTimer = setInterval(updateEta, 1000);
+  } else if (st.last) {
+    // The run:done event may have reached the locked page already and
+    // filled the table: then there is nothing to apply (and no second toast).
+    const done = names.length && names.every(n => runState[n] && ["done", "error", "canceled"].includes(runState[n].phase));
+    if (done) { running = false; cancelling = false; return; }
+    running = true; // applyRunDone applies once, to a running table
+    lastRunDry = !!st.last.dryRun;
+    applyRunDone({ ...st.last, restored: true });
   }
 }
 
 // Locking reloads the page, which used to drop the run tab's results (and
 // with them ↻ 失敗・中断のみ再実行) and the device list's place — a batch
-// left with failures over lunch came back to an empty table. They are kept
-// in sessionStorage across the lock (this window only, nothing secret: the
-// table's status and messages, the run choices, the open group) and put back
-// once, at the next unlock.
+// left with failures over lunch came back to an empty table. What is kept
+// in sessionStorage across the lock is the choices only: the tab, the
+// run's stage and set, the flags. No device name, group name, message,
+// device output, log path or typed command goes into Web storage (WebView2
+// writes it to disk unencrypted); the results come back from the backend
+// at unlock (restoreRunFromBackend).
 const UI_STATE_KEY = "palaterm_ui_state";
 function saveUIState() {
   try {
     const tab = document.querySelector(".tab.active");
     sessionStorage.setItem(UI_STATE_KEY, JSON.stringify({
       tab: tab ? tab.id.replace("tab-", "") : "devices",
-      runState, runGroupSel, runStage, runSetSel, runAdHoc, lastRunReq, lastRunDry, lastRunDir, deviceView,
+      runStage, runSetSel: runSetSel === RUN_ADHOC ? "" : runSetSel, runDirect, lastRunDry,
       // A batch still running goes on in the backend; its progress keeps
       // arriving after the reload (and is checked again at unlock).
-      running, cancelling, runTargets, runTotals, runStartMs,
+      running, cancelling, runStartMs,
     }));
   } catch (e) { }
 }
-// Where the user was (the tab, the device list's group) comes back after a
-// restart too: nothing secret, kept in localStorage.
+// Where the user was (the tab) comes back after a restart too: kept in
+// localStorage. The device list's group is not (a group is a customer or
+// site name): the list opens on its chooser.
 const UI_PLACE_KEY = "palaterm_ui_place";
 function savePlace() {
   try {
     const tab = document.querySelector(".tab.active");
-    localStorage.setItem(UI_PLACE_KEY, JSON.stringify({ tab: tab ? tab.id.replace("tab-", "") : "devices", deviceView }));
+    localStorage.setItem(UI_PLACE_KEY, JSON.stringify({ tab: tab ? tab.id.replace("tab-", "") : "devices" }));
   } catch (e) { }
 }
 function restoreUIState() {
@@ -1273,16 +1398,12 @@ function restoreUIState() {
   if (!v) {
     let pl = null;
     try { pl = JSON.parse(localStorage.getItem(UI_PLACE_KEY) || "null"); } catch (e) { }
-    if (pl && pl.deviceView && typeof pl.deviceView === "object") deviceView = pl.deviceView;
     return pl && pl.tab && pl.tab !== "settings" ? pl.tab : null;
   }
-  for (const k in runState) delete runState[k];
-  Object.assign(runState, v.runState || {});
-  runGroupSel = v.runGroupSel || ""; runStage = v.runStage || ""; runSetSel = v.runSetSel || ""; runAdHoc = v.runAdHoc || "";
-  lastRunReq = v.lastRunReq || null; lastRunDry = !!v.lastRunDry; lastRunDir = v.lastRunDir || "";
-  if (v.deviceView) deviceView = v.deviceView;
+  runStage = v.runStage || ""; runSetSel = v.runSetSel || ""; runDirect = !!v.runDirect;
+  lastRunDry = !!v.lastRunDry;
   running = !!v.running; cancelling = !!v.cancelling;
-  runTargets = v.runTargets || []; runTotals = v.runTotals || {}; runStartMs = v.runStartMs || 0;
+  runStartMs = v.runStartMs || 0;
   return v.tab === "settings" ? "devices" : v.tab;
 }
 // The tab to open after the next unlock (restored at page load, so a batch's
@@ -1519,19 +1640,28 @@ function renderTab(name) {
 
 // ---- idle auto-lock ----
 // The vault locks itself after Settings.autoLockMin minutes without keyboard
-// or mouse input (default 30, 0 = off), the way a screen saver would — never
-// in the middle of a batch, whose progress table would be lost with the
-// reload. The interactive windows are separate processes and are not
-// affected. Runs only in the main window (INV is null in a terminal window).
+// or mouse input (default 30, 0 = off), the way a screen saver would — a
+// batch in the middle of its run is no exception: it goes on in the backend
+// behind the lock screen, and enterApp picks its table up again at the
+// unlock (restoreRunFromBackend). The interactive windows are separate
+// processes and are not affected. Runs only in the main window (INV is null
+// in a terminal window). A minute before the lock a toast says so; any
+// key or mouse move cancels it, as in the terminal window.
 let lastActivityMs = Date.now();
+let lockWarned = false;
 ["mousemove", "mousedown", "keydown", "wheel", "touchstart"].forEach(ev =>
-  document.addEventListener(ev, () => { lastActivityMs = Date.now(); }, { passive: true }));
+  document.addEventListener(ev, () => { lastActivityMs = Date.now(); lockWarned = false; }, { passive: true }));
 setInterval(async () => {
   if (!INV || !INV.settings || $("#app").classList.contains("hidden")) return;
   const s = INV.settings;
   const min = s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30);
   if (!min) return;
-  if (Date.now() - lastActivityMs < min * 60000) return;
+  const idle = Date.now() - lastActivityMs;
+  if (idle >= min * 60000 - 60000 && idle < min * 60000 && !lockWarned) {
+    lockWarned = true;
+    toast(t("あと 1 分ほどでロックします（キーかマウスを動かすと延長）"), "warn", { ms: 8000 });
+  }
+  if (idle < min * 60000) return;
   // A device GUI window being used counts as activity: locking closes those
   // windows, and a policy edited there for forty minutes went with them.
   const guiAgo = await App().GUIActiveAgoMs().catch(() => -1);
@@ -1553,6 +1683,58 @@ function ruleEditUnsaved() { return typeof liDirty === "function" && typeof LI !
 function profileName(key) {
   const p = PROFILES.find(p => p.key === key);
   return p ? p.name : key;
+}
+
+// Ctrl+F in the main window goes to the filter box of the list on screen
+// (WebView2 has no find bar of its own here). Not over a dialog, and not
+// where the key already means something (the table editor's own find).
+document.addEventListener("keydown", e => {
+  if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== "f" || e.isComposing) return;
+  if (!INV || $("#app").classList.contains("hidden") || modalOpen()) return;
+  const tab = document.querySelector(".tab.active");
+  const box = tab && tab.querySelector('#run-filter, input[id^="lv-text-"], #g-filter');
+  if (!box) return;
+  e.preventDefault();
+  box.focus();
+  if (box.select) box.select();
+});
+
+// ---- page zoom of the main window ----
+// Ctrl+wheel, Ctrl+plus / minus and Ctrl+0 zoom the whole page (70–150 %),
+// and A− / A+ at the foot of the sidebar do the same; the choice is kept
+// per PC. The child windows have their own font size (wireFontZoom).
+// Only keys nothing else took: the table editor uses Ctrl+plus / minus for
+// its rows and stops them before they get here.
+const ZOOM_KEY = "palaterm_zoom";
+function wireMainZoom() {
+  const min = 70, max = 150, step = 10;
+  let pct = 100;
+  try { pct = parseInt(localStorage.getItem(ZOOM_KEY) || "100", 10) || 100; } catch (e) { }
+  const apply = () => {
+    pct = Math.min(max, Math.max(min, Math.round(pct / step) * step));
+    document.documentElement.style.zoom = pct === 100 ? "" : (pct / 100).toString();
+    const lab = $("#zoom-pct");
+    if (lab) lab.textContent = pct + "%";
+    try { localStorage.setItem(ZOOM_KEY, String(pct)); } catch (e) { }
+    fitPanels(document);
+    window.dispatchEvent(new Event("resize"));
+  };
+  const set = n => { pct = n; apply(); };
+  apply();
+  const inc = $("#zoom-in"), dec = $("#zoom-out");
+  if (inc) inc.onclick = () => set(pct + step);
+  if (dec) dec.onclick = () => set(pct - step);
+  document.addEventListener("keydown", e => {
+    if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.isComposing) return;
+    if (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd") { e.preventDefault(); set(pct + step); }
+    else if (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract") { e.preventDefault(); set(pct - step); }
+    else if (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0") { e.preventDefault(); set(100); }
+  });
+  document.addEventListener("wheel", e => {
+    if (!e.ctrlKey || e.defaultPrevented) return;
+    e.preventDefault();
+    set(pct + (e.deltaY < 0 ? step : -step));
+  }, { passive: false });
 }
 
 // Boot once every script has run. app.js is loaded before views*.js and

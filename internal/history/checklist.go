@@ -57,18 +57,22 @@ func VerifyChecklist(lines []CheckLine, afterLog string) ChecklistResult {
 			continue
 		}
 		cr := CheckResult{Text: text, Block: strings.TrimSpace(l.Block)}
-		// The line as if it had been typed during the work: the verdict's
-		// matcher then does the looking up.
-		var sb strings.Builder
-		sb.WriteString("chk#configure terminal\n")
+		// A block the log does not list cannot hold the line, and the same
+		// text in some other block says nothing: "?" rather than PASS
+		// (review 2026-11-01, A-8).
 		if cr.Block != "" {
-			sb.WriteString("chk(config)#" + cr.Block + "\n")
-			sb.WriteString("chk(config-sub)#" + text + "\n")
-		} else {
-			sb.WriteString("chk(config)#" + text + "\n")
+			if _, b := after.block(cr.Block); b == nil {
+				cr.Status, cr.Note = "unverified", "noBlock"
+				res.Unverified++
+				res.Results = append(res.Results, cr)
+				continue
+			}
 		}
-		sb.WriteString("chk(config)#end\nchk#\n")
-		sr := StrictVerifyLogs([]string{sb.String()}, "", afterLog)
+		// The line as if it had been typed during the work: the verdict's
+		// matcher then does the looking up. A FortiOS block ("config system
+		// ntp / config ntpserver / edit 1") is typed the way FortiOS answers
+		// it, so the nested entry is the line's context.
+		sr := StrictVerifyLogs([]string{checkTranscript(text, cr.Block)}, "", afterLog)
 		var cc *CommandCheck
 		want := normKey(text)
 		for i := range sr.Commands {
@@ -114,9 +118,38 @@ func VerifyChecklist(lines []CheckLine, afterLog string) ChecklistResult {
 	return res
 }
 
+// checkTranscript writes an expected line as a work log that typed it:
+// Cisco-style prompts, or FortiOS's for a "config … / edit …" block.
+func checkTranscript(text, block string) string {
+	var sb strings.Builder
+	if strings.HasPrefix(strings.ToLower(block), "config ") {
+		// FortiOS answers each head with its last word as the prompt's
+		// context ("config system ntp" → "chk (ntp) #").
+		prompt := "chk # "
+		for _, part := range strings.Split(block, nestSep) {
+			part = strings.TrimSpace(part)
+			sb.WriteString(prompt + part + "\n")
+			f := strings.Fields(normKey(part))
+			prompt = "chk (" + f[len(f)-1] + ") # "
+		}
+		sb.WriteString(prompt + text + "\n" + prompt + "end\nchk # \n")
+		return sb.String()
+	}
+	sb.WriteString("chk#configure terminal\n")
+	if block != "" {
+		sb.WriteString("chk(config)#" + block + "\n")
+		sb.WriteString("chk(config-sub)#" + text + "\n")
+	} else {
+		sb.WriteString("chk(config)#" + text + "\n")
+	}
+	sb.WriteString("chk(config)#end\nchk#\n")
+	return sb.String()
+}
+
 // sameSettingLine finds a line of the listing that makes the same setting
 // as text (same leading words, another value), in the same block when one
-// is named.
+// is named: the block itself or a block nested in it ("interface
+// gigabitethernet0/1" is not "…0/10").
 func sameSettingLine(cfg []cfgLine, text, block string) string {
 	key := leafKey2(normKey(text))
 	if key == "" {
@@ -124,7 +157,7 @@ func sameSettingLine(cfg []cfgLine, text, block string) string {
 	}
 	bk := normKey(block)
 	for _, l := range cfg {
-		if bk != "" && l.block != bk && !strings.HasPrefix(l.block, bk) {
+		if bk != "" && l.block != bk && l.nest != bk && !strings.HasPrefix(l.nest, bk+nestSep) {
 			continue
 		}
 		if bk == "" && l.block != "" {
@@ -161,7 +194,7 @@ func ChecklistTemplate(family, kind string, values []string) []CheckLine {
 			add("set hostname "+q(vals[0]), "config system global")
 		case "ntp":
 			for i, v := range vals {
-				add("set server "+q(v), fmt.Sprintf("config system ntp / edit %d", i+1))
+				add("set server "+q(v), fmt.Sprintf("config system ntp / config ntpserver / edit %d", i+1))
 			}
 		case "dns":
 			add("set primary "+vals[0], "config system dns")

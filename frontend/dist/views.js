@@ -147,6 +147,7 @@ function duplicateGroupDialog(name) {
     const nn = node.querySelector("#dg-name").value.trim();
     const suffix = node.querySelector("#dg-suffix").value;
     if (!nn) { toast(t("グループ名を入力してください"), "err"); return; }
+    if (!groupNameOK(node.querySelector("#dg-name"))) return;
     try {
       const cnt = await App().CopyDeviceGroup(name, nn, suffix);
       closeModal(); await refreshInventory();
@@ -242,9 +243,10 @@ function newGroupPrompt() {
   const create = async () => {
     const name = node.querySelector("#ng-name").value.trim();
     if (!name) { toast(t("グループ名を入力してください"), "err"); return; }
+    if (!groupNameOK(node.querySelector("#ng-name"))) return;
     if ((INV.deviceGroups || []).some(g => g.name === name)) { toast(t("同名のグループが既にあります"), "err"); return; }
     try {
-      await App().SaveDeviceGroup({ name });
+      await App().CreateDeviceGroup({ name });
       closeModal();
       await refreshInventory();
       deviceView = { mode: "list", group: name };
@@ -260,6 +262,14 @@ function newGroupPrompt() {
 // deviceView.group for the （グループ未設定） card: the devices without a group.
 // Same value as the run tab's RUN_UNGROUPED, so switching tabs carries it over.
 const DEV_UNGROUPED = "__ungrouped__";
+// A group name must not look like one of the markers above ("__ALL__",
+// "__ungrouped__"): a group so named would open as the wrong view. Checked
+// at every place a group name is typed (the backend checks again).
+function groupNameOK(inp) {
+  if (!inp || !inp.value.trim().startsWith("__")) return true;
+  fieldError(inp, t("「__」で始まる名前は使えません（内部の目印と重なります）"));
+  return false;
+}
 
 // Devices ticked in the list's first column for a bulk change / delete. Kept
 // across re-renders (inline edits, filtering); IDs that no longer exist drop
@@ -353,7 +363,10 @@ function renderDeviceList() {
   // Forget ticks on devices that are gone; count the ones in this view.
   const allIds = new Set((INV.devices || []).map(d => d.id));
   [...devSel].forEach(id => { if (!allIds.has(id)) devSel.delete(id); });
-  const selCount = devs.filter(d => devSel.has(d.id)).length;
+  // As on the run tab: a bulk change or delete takes the ticked rows that
+  // are shown; ticked rows the filter hides are counted and left out.
+  const selCount = visible.filter(d => devSel.has(d.id)).length;
+  const selHidden = devs.filter(d => devSel.has(d.id) && !visible.includes(d)).length;
   const scopeLabel = scopeGroup ? esc(t("グループ「{g}」", { g: scopeGroup.name })) : esc(ungroupedView ? t("（グループ未設定）") : t("全機器"));
   renderListTab(root, `
     <div class="page-head">
@@ -376,7 +389,7 @@ function renderDeviceList() {
     </div>
     ${devs.length ? listViewBar(LV, allView ? t("絞り込み（機器名・IP・グループ・拠点・役割・接続・OS・コマンドセット）") : t("絞り込み（機器名・IP・拠点・役割・接続・OS・コマンドセット）"),
       (allView && groupNames.length ? [{ id: "group", label: t("グループ: すべて"), values: groupNames }] : []).concat([{ id: "site", label: t("拠点: すべて"), values: sites }])) : ""}
-    <div id="dev-selbar">${devSelBar(selCount)}</div>
+    <div id="dev-selbar">${devSelBar(selCount, selHidden)}</div>
     <div class="panel scrollx">
       ${devs.length === 0
         ? `<div class="empty" style="line-height:2">${esc(scopeGroup ? t("このグループに機器がありません。") : t("機器がありません。"))}<br>
@@ -440,6 +453,7 @@ function renderDeviceList() {
       const rename = async () => {
         const nn = node.querySelector("#rn-name").value.trim();
         if (!nn) { toast(t("名前を入力してください"), "err"); return; }
+        if (!groupNameOK(node.querySelector("#rn-name"))) return;
         try {
           await App().RenameDeviceGroup(scopeGroup.name, nn);
           closeModal(); await refreshInventory();
@@ -515,13 +529,15 @@ function renderDeviceList() {
   // Bulk selection: tick boxes (Shift+クリック = range), header = visible rows.
   // A tick redraws only the boxes and the selection bar, not the 300-row
   // table (each row carries two selects of a dozen options or more).
-  const selIds = () => devs.filter(d => devSel.has(d.id)).map(d => d.id);
+  // The ticked rows that are shown: what 一括変更 / 一括削除 act on.
+  const selIds = () => visible.filter(d => devSel.has(d.id)).map(d => d.id);
+  const hiddenSel = () => devs.filter(d => devSel.has(d.id) && !visible.includes(d)).length;
   const syncSel = () => {
     root.querySelectorAll(".dev-sel").forEach(cb => { cb.checked = devSel.has(cb.dataset.enable); });
     const all = document.getElementById("dev-chk-all");
     if (all) all.checked = visible.length > 0 && visible.every(d => devSel.has(d.id));
     const bar = document.getElementById("dev-selbar");
-    if (bar) { bar.innerHTML = devSelBar(selIds().length); wireSelBar(); }
+    if (bar) { bar.innerHTML = devSelBar(selIds().length, hiddenSel()); wireSelBar(); }
   };
   const applySel = (ids, on) => { ids.forEach(id => on ? devSel.add(id) : devSel.delete(id)); syncSel(); };
   wireShiftRange("devsel", [...root.querySelectorAll(".dev-sel")], applySel);
@@ -537,9 +553,11 @@ function renderDeviceList() {
     const bDel = document.getElementById("bulk-del");
     if (bDel) bDel.onclick = async () => {
       const ids = selIds();
-      const names = devs.filter(d => devSel.has(d.id)).map(d => d.name);
+      if (!ids.length) return;
+      const names = visible.filter(d => devSel.has(d.id)).map(d => d.name);
       const list = names.slice(0, 20).join(", ") + (names.length > 20 ? " …" : "");
-      if (!(await uiConfirm({ title: t("機器を一括削除"), message: t("選択した <b>{n} 台</b>を削除しますか？", { n: ids.length }) + `<br><span class="muted" style="font-size:12px">${esc(list)}</span>`, okLabel: t("削除"), danger: true }))) return;
+      const hid = hiddenSel();
+      if (!(await uiConfirm({ title: t("機器を一括削除"), message: t("選択した <b>{n} 台</b>を削除しますか？", { n: ids.length }) + `<br><span class="muted" style="font-size:12px">${esc(list)}</span>` + (hid ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ 絞り込みで非表示のチェック済み {n} 台は削除しません", { n: hid }))}</span>` : ""), okLabel: t("削除"), danger: true }))) return;
       try { const n = await App().DeleteDevices(ids); ids.forEach(id => devSel.delete(id)); await refreshInventory(); toast(t("{n} 台を削除しました", { n }), "ok"); }
       catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
     };
@@ -559,6 +577,26 @@ async function tiledConnect(ids, direct) {
   const usable = ids.filter(id => { const d = devById(id); return d && !d.cliOff; });
   if (!usable.length) { toast(t("接続できる機器がありません（GUI だけの機器は対象外です）"), "err"); return; }
   if (usable.length > max) { toast(t("並べて接続できるのは {m} 台までです（{n} 台選択中）", { m: max, n: usable.length }), "err"); return; }
+  // Opening with 同時入力 on while windows from before are still joined: a
+  // key typed in the new windows would reach the old ones (another
+  // customer's devices). Asked, with turning those off as the default.
+  if ((INV.settings || {}).tiledBroadcast && typeof App().JoinedTerminals === "function") {
+    const joined = await App().JoinedTerminals().catch(() => []) || [];
+    if (joined.length) {
+      const list = joined.slice(0, 10).join(", ") + (joined.length > 10 ? " …" : "");
+      const off = await uiConfirm({
+        title: t("同時入力オンの窓が開いています"),
+        message: t("同時入力オンの窓が <b>{n} 台</b>（{list}）開いています。それらの同時入力をオフにしてから開きますか？", { n: joined.length, list: esc(list) })
+          + `<br><span class="muted" style="font-size:12px">${esc(t("「そのまま開く」では、新しい窓で打ったキーがそれらの窓にも届きます"))}</span>`,
+        okLabel: t("オフにしてから開く"),
+        cancelLabel: t("そのまま開く"),
+      });
+      if (off) {
+        try { await App().LeaveAllBroadcast(); }
+        catch (e) { toast(t("同時入力をオフにできませんでした") + ": " + terr(e), "err"); return; }
+      }
+    }
+  }
   try {
     const rep = await App().SpawnTiled(usable, !!direct) || {};
     const bc = " " + ((INV.settings || {}).tiledBroadcast ? t("（同時入力オン）") : t("（同時入力はオフ。必要な窓で「同時入力」を押してください）"));
@@ -571,11 +609,14 @@ async function tiledConnect(ids, direct) {
   } catch (e) { toast(t("接続失敗") + ": " + terr(e), "err"); }
 }
 
-// The bar above the list while devices are ticked ("" when none).
-function devSelBar(selCount) {
-  if (!selCount) return "";
+// The bar above the list while devices are ticked ("" when none shown;
+// hiddenCount: ticked rows the filter hides, which the buttons leave out).
+function devSelBar(selCount, hiddenCount) {
+  if (!selCount && !hiddenCount) return "";
+  if (!selCount) return `<div class="row-inline info-box" style="gap:8px;margin:-4px 0 10px"><span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。一括変更・一括削除には含まれません（含めるには絞り込みを解除）", { n: hiddenCount }))}</span></div>`;
   return `<div class="row-inline info-box" style="gap:8px;margin:-4px 0 10px">
       <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
+      ${hiddenCount ? `<span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。一括変更・一括削除には含まれません（含めるには絞り込みを解除）", { n: hiddenCount }))}</span>` : ""}
       <button class="btn sm primary" id="bulk-tile" data-tip="${esc(t("選択した機器の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）"))}">${esc(t("並べて接続"))}</button>
       <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
       <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
@@ -804,20 +845,30 @@ function exportBundleDialog(defaultGroup) {
     <div class="muted" style="font-size:12px">${esc(t("機器CSV（devices.csv）と、その機器が使うコマンドセット・OSタイププロファイルを export\\bundles\\グループ名\\ にまとめて書き出します。「全機器」はコマンドセット・プロファイルも全件含む完全なバックアップです。"))}</div>
     <div class="field" style="margin-top:10px;margin-bottom:0"><label style="font-weight:normal"><input type="checkbox" id="cx-nobc" style="width:auto" ${exportNoBastionCreds() ? "checked" : ""}>
       <span data-tip="${esc(t("機器ごとに登録した踏み台のユーザー名・パスワード・秘密鍵ファイル・鍵のパスフレーズを空欄にして書き出します（踏み台のホストや通り方は残ります）。「自分の踏み台を使う」機器は、もともと踏み台の IP や認証情報が書き出されません。機器自身のユーザー名・パスワードは書き出されます"))}">${esc(t("踏み台の認証情報を含めない（人に渡す用） ⓘ"))}</span></label></div>
-    <div style="font-size:12px;margin-top:6px;color:var(--warn)" id="cx-backup-warn" class="hidden">${esc(t("⚠ このチェックが入っていると、「全機器」でも機器ごとの踏み台の認証情報が入らず、完全なバックアップになりません"))}</div>
+    <div class="field" style="margin-top:6px;margin-bottom:0"><label style="font-weight:normal"><input type="checkbox" id="cx-nodev" style="width:auto">
+      <span data-tip="${esc(t("機器のユーザー名・パスワード・enable パスワード・秘密鍵ファイル・鍵のパスフレーズと、グループ既定の認証情報を空欄にして書き出します。受け取った人は読み込んだあとに自分の認証情報を入れます（認証情報の欄が空の行は、既存の機器の今の値を残して読み込まれます）"))}">${esc(t("機器の認証情報を含めない（人に渡す用） ⓘ"))}</span></label></div>
+    <div style="font-size:12px;margin-top:6px;color:var(--warn)" id="cx-backup-warn" class="hidden">${esc(t("⚠ 認証情報を含めないチェックが入っていると、「全機器」でも完全なバックアップになりません"))}</div>
     <div class="muted" style="font-size:12px;margin-top:8px" id="cx-plain-note">${esc(t("※パスワードも平文で書き出されます。編集後は削除してください。"))}</div>
     <div class="modal-actions"><button class="btn" id="cx-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="cx-ok">${esc(t("書き出す"))}</button></div>
   </div>`);
   openModal(node, "mid");
-  const syncWarn = () => node.querySelector("#cx-backup-warn").classList.toggle("hidden", !(node.querySelector("#cx-nobc").checked && node.querySelector("#cx-grp").value === "__ALL__"));
+  const syncWarn = () => {
+    const strip = node.querySelector("#cx-nobc").checked || node.querySelector("#cx-nodev").checked;
+    node.querySelector("#cx-backup-warn").classList.toggle("hidden", !(strip && node.querySelector("#cx-grp").value === "__ALL__"));
+    node.querySelector("#cx-plain-note").classList.toggle("hidden", node.querySelector("#cx-nodev").checked && node.querySelector("#cx-nobc").checked);
+  };
   node.querySelector("#cx-nobc").onchange = syncWarn;
+  node.querySelector("#cx-nodev").onchange = syncWarn;
   node.querySelector("#cx-grp").onchange = syncWarn;
   syncWarn();
   node.querySelector("#cx-cancel").onclick = closeModal;
   node.querySelector("#cx-ok").onclick = async () => {
     const v = node.querySelector("#cx-grp").value;
     const noBC = node.querySelector("#cx-nobc").checked;
+    // Off by default and not remembered: a hand-over is the exception, a
+    // backup the rule.
+    const noDev = node.querySelector("#cx-nodev").checked;
     try { localStorage.setItem("palaterm.exportNoBastionCreds", noBC ? "1" : "0"); } catch (_) {}
     closeModal();
     try {
@@ -835,7 +886,7 @@ function exportBundleDialog(defaultGroup) {
         });
         if (!ok) return;
       }
-      const dir = await App().ExportBundle(grp, noBC);
+      const dir = await App().ExportBundle(grp, noBC, noDev);
       if (!dir) return;
       if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(dir)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
         try { await App().OpenExportFolder(dir); } catch (e) { toast(terr(e), "err"); }
@@ -951,6 +1002,12 @@ function importSummaryLines(pv) {
   if ((s.duplicate || []).length) lines.push(t("⚠ 同じグループに同じ機器名の行が重複しているため、2 行目以降は読み込みません: {g}", { g: s.duplicate.join(", ") }));
   if ((s.jumpCommands || []).length) lines.push(t("⚠ 踏み台のジャンプコマンドが設定された行があります。この文字列は踏み台でそのまま実行されるので、内容を確認してください: {g}", { g: s.jumpCommands.join(" ／ ") }));
   if ((s.secretCommands || []).length) lines.push(t("⚠ パスワードを送るコマンド（{password} / {enable}）を含むコマンドセットがあります。どこへ送る行か確認してください（このセットの実行ログは常にパスワードを伏せて保存します）: {g}", { g: s.secretCommands.join(" ／ ") }));
+  // Login steps of a profile that type a password at a prompt that does
+  // not ask for one (a trap in a shared profile), and devices set to log in
+  // with their group's defaults where the group has none (they would fail).
+  if ((s.secretSteps || []).length) lines.push(t("⚠ OSタイプのログイン手順に、パスワード以外のプロンプトへパスワードを送る行があります。内容を確認してください: {g}", { g: s.secretSteps.map(x => typeof x === "string" ? x : `${x.profile || ""} #${x.step ?? "?"} (${x.expect || ""})`).join(" ／ ") }));
+  const gnc = s.groupNoCreds || s.groupsWithoutCreds || [];
+  if (gnc.length) lines.push(t("⚠ 「グループ既定を使う」機器がありますが、そのグループに既定の認証情報がありません（機器自身の認証情報で接続します。読み込み後に「グループ既定の認証情報…」で設定してください）: {g}", { g: gnc.map(x => typeof x === "string" ? x : t("{g}（{n} 台: {d}）", { g: x.group || t("（グループ未設定）"), n: (x.devices || []).length, d: (x.devices || []).slice(0, 5).join(", ") + ((x.devices || []).length > 5 ? " …" : "") })).join(" ／ ") }));
   if ((s.invalid || []).length) lines.push(t("⚠ 内容に問題があるため読み込まない行（{n} 件）: {g}", { n: s.invalid.length, g: s.invalid.map(x => { const i = x.indexOf(": "); return i < 0 ? terr(x) : x.slice(0, i + 2) + terr(x.slice(i + 2)); }).join(" ／ ") }));
   return lines;
 }
@@ -1162,9 +1219,19 @@ function editDevice(dev, preGroup, template) {
     node.querySelector("#fw-user").style.display = useGroup ? "none" : "";
     node.querySelector("#fw-pwrow").style.display = useGroup ? "none" : "";
     const note = node.querySelector("#f-credmode-note");
-    if (!useGroup) note.textContent = "";
-    else if (g && (g.username || g.password || g.enablePassword)) note.textContent = t("グループ「{g}」の既定（ユーザー名: {u}）でログインします", { g: gname, u: g.username || "—" });
-    else note.textContent = t("⚠ グループ「{g}」の既定はまだ未設定です。機器一覧の「グループ既定の認証情報…」で設定してください", { g: gname });
+    // The group's defaults are edited from here (a failed login of such a
+    // device used to mean closing this editor and finding the group's
+    // dialog in the device list); the device editor closes for it.
+    const link = g ? ` <span class="link" id="f-gcreds-edit">${esc(t("グループ既定を編集…"))}</span>` : "";
+    if (!useGroup) note.innerHTML = "";
+    else if (g && (g.username || g.password || g.enablePassword)) note.innerHTML = esc(t("グループ「{g}」の既定（ユーザー名: {u}）でログインします", { g: gname, u: g.username || "—" })) + link;
+    else note.innerHTML = esc(t("⚠ グループ「{g}」の既定はまだ未設定です。機器一覧の「グループ既定の認証情報…」で設定してください", { g: gname })) + link;
+    const le = note.querySelector("#f-gcreds-edit");
+    if (le) le.onclick = async () => {
+      if (!(await subConfirm(esc(t("機器の編集を閉じて、グループ「{g}」の既定の認証情報を開きます（この画面で保存していない変更は失われます）", { g: gname })), t("グループ既定を開く"), null, "primary"))) return;
+      closeModal();
+      groupCredsDialog(gname);
+    };
   }
   credMode.onchange = syncCredMode;
   node.querySelector("#f-group").addEventListener("input", syncCredMode);
@@ -1237,7 +1304,10 @@ function editDevice(dev, preGroup, template) {
       <div class="card" data-bastion-row style="padding:14px 16px;margin:10px 0">
         <div class="row-inline" style="justify-content:space-between;margin-bottom:8px">
           <b>${esc(mine ? t("{n}段目の踏み台（自分の踏み台の後）", { n: i + 1 }) : t("{n}段目の踏み台", { n: i + 1 }))}</b>
-          <button class="btn sm act-del" type="button" data-rm="${i}">${esc(t("削除"))}</button>
+          <span class="row-inline" style="gap:6px">
+            ${dev && dev.id && b.host ? `<button class="btn sm warn-outline" type="button" data-forgetkey="${i}" data-tip="${esc(t("この踏み台のホストキーの記録を消します。踏み台を交換した（鍵が変わった）ときだけ。次の接続で新しい鍵を記録します"))}">${esc(t("この踏み台のホストキーを忘れる（交換したとき）"))}</button>` : ""}
+            <button class="btn sm act-del" type="button" data-rm="${i}">${esc(t("削除"))}</button>
+          </span>
         </div>
         <div class="grid-3">
           <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input class="b-host" value="${esc(b.host || "")}"></div>
@@ -1282,6 +1352,16 @@ function editDevice(dev, preGroup, template) {
       bastions = collectBastions();
       bastions.splice(parseInt(btn.dataset.rm, 10), 1);
       renderBastions();
+    });
+    // A hop replaced (its key changed): forget the pinned key of that hop
+    // as saved, after a confirmation (the device's own key stays).
+    bhost.querySelectorAll("[data-forgetkey]").forEach(btn => btn.onclick = async () => {
+      const i = parseInt(btn.dataset.forgetkey, 10);
+      if (typeof App().ClearHopHostKeys !== "function") { toast(t("この版では踏み台のホストキーを忘れる操作がありません"), "err"); return; }
+      const ok = await subConfirm(esc(t("機器「{n}」の踏み台 {k} 段目のホストキーの記録を消します。次の接続で新しい鍵を記録します。踏み台を交換した／OS を再インストールした場合だけ続けてください。心当たりがなければ、なりすましの可能性があるため続けずネットワーク管理者に確認してください。", { n: dev.name, k: i + 1 })), t("踏み台を交換したので忘れる"), t("キャンセル"));
+      if (!ok) return;
+      try { await App().ClearHopHostKeys(dev.id, i); toast(t("踏み台のホストキーを忘れました。次の接続で新しい鍵を記録します"), "ok"); }
+      catch (e) { toast(terr(e), "err"); }
     });
     bhost.querySelectorAll(".b-key-pick").forEach(btn => btn.onclick = async () => {
       try {
@@ -1364,6 +1444,7 @@ function editDevice(dev, preGroup, template) {
     if (chain.length) out.bastions = chain.slice(0, 5);
     if (chain.length || out.useMyBastion) out.bastionMode = bmode.value;
     if (!out.name) { fieldError(node.querySelector("#f-name"), t("機器名は必須です")); return; }
+    if (out.group.startsWith("__")) { node.querySelector("#f-group-change").click(); groupNameOK(node.querySelector("#f-group")); return; }
     if ((out.guiOn || (!out.cliOff && conn !== "serial")) && !out.host) { fieldError(node.querySelector("#f-host"), t("IPアドレスは必須です")); return; }
     // The 必須 on a hop's user was only a mark: an SSH hop without one fails
     // at the login, so it is checked here (a Telnet hop may ask for none).

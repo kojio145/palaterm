@@ -5,7 +5,7 @@
 // itself runs in Go (internal/listimport); this page only edits the rule
 // and shows what Go worked out.
 
-let LI = { view: "list", rule: null, ruleDirty: false, sample: null, test: null, more: false, imp: null };
+let LI = { view: "list", rule: null, sample: null, test: null, more: false, imp: null };
 let LI_FIELDS = null; // [{key, ja, kind, hop}]
 
 // The fields shown before 「ほかの項目を表示」.

@@ -169,7 +169,7 @@ globals:
 
 	if len(sheets) == 0 && globalsEnd > 0 {
 		// No sheet directory: take the substreams that follow, in order.
-		for p, n := globalsEnd, 1; p < len(ws) && n <= 256; n++ {
+		for p, n := globalsEnd, 1; p < len(ws) && n <= maxSheets; n++ {
 			id, _, _, st := readRec(ws, p)
 			if st != recOK || id != recBOF {
 				break
@@ -178,11 +178,25 @@ globals:
 		}
 		return nil
 	}
+	// Two directory entries at the same offset are one sheet (a hostile
+	// file names a big one thousands of times): read once, and at most
+	// maxSheets in all.
+	seen := map[int]bool{}
+	read := 0
 	for _, s := range sheets {
 		if s.pos <= 0 || s.pos >= len(ws) {
 			b.warn("シート「%s」を読み取れませんでした（位置情報が壊れています）", s.name)
 			(&sheetBuilder{name: s.name}).finish(b)
 			continue
+		}
+		if seen[s.pos] {
+			b.warn("シート「%s」は別のシートと同じ内容を指しているため読み込んでいません", s.name)
+			continue
+		}
+		seen[s.pos] = true
+		if read++; read > maxSheets {
+			b.warn("シートが多すぎるため、%d 枚目以降は読み込んでいません", maxSheets+1)
+			break
 		}
 		r.readSheet(s.pos, s.name)
 	}
@@ -334,7 +348,7 @@ func rkValue(rk uint32) float64 {
 // readSheet parses one worksheet substream starting at its BOF and returns
 // the position after its EOF.
 func (r *biff) readSheet(pos int, name string) int {
-	sb := &sheetBuilder{name: name}
+	sb := &sheetBuilder{name: name, book: r.book}
 	defer sb.finish(r.book)
 	depth := 0
 	type cellPos struct{ row, col int }

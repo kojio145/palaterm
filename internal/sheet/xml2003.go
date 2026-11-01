@@ -51,7 +51,7 @@ func readXML2003(text string) (*Book, error) {
 				if name == "" {
 					name = sheetName(sheets)
 				}
-				sb = &sheetBuilder{name: name}
+				sb = &sheetBuilder{name: name, book: b}
 				row, col = -1, -1
 			case "Row":
 				row = indexAttr(t, row+1)

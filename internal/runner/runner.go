@@ -1045,6 +1045,8 @@ var rejectMarkers = []string{
 	"% invalid", "invalid input detected", "invalid command", "% incomplete command",
 	"% ambiguous command", "% unknown command", "% unrecognized command", "unknown command",
 	"unrecognized command", "command not found", "command fail", "syntax error", "% error",
+	// PAN-OS, FortiOS, VRP (review 2026-11-01)
+	"invalid syntax", "command parse error", "unknown action", "error: wrong parameter", "error: unrecognized",
 }
 
 // rejectedLine returns the first line of a command's output that says the
@@ -1324,13 +1326,43 @@ func lastShown(ctx context.Context, exp *expecter, dev *model.Device, msg string
 }
 
 // reEscape matches terminal escape sequences (colors, cursor moves, title
-// and charset switches), which mean nothing in an error message.
-var reEscape = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-Za-z]|[=>78])`)
+// and charset switches, DCS / APC / PM / SOS strings), which mean nothing in
+// an error message.
+var reEscape = regexp.MustCompile(`\x1b(?:\[[0-9;?]*[ -/]*[@-~]|[\]P_^X][^\x07\x1b]*(?:\x07|\x1b\\)?|[()][0-9A-Za-z]|[=>78])`)
+
+// cleanTerminal is text with its escape sequences (reEscape) and control
+// characters (stripControls) out: what an error message may quote.
+func cleanTerminal(text string) string {
+	return stripControls(reEscape.ReplaceAllString(text, ""))
+}
+
+// stripControls drops the control characters of text — C0 but tab and the
+// line breaks, DEL, the C1 range (U+0080–U+009F) and any byte that is not
+// UTF-8 (an 8-bit CSI, 0x9B, arrives as one). A device's line quoted into
+// an error message is written to the terminal window, where xterm would
+// act on an 8-bit CSI or a DCS string the way it acts on an ESC sequence —
+// clearing the screen under the real error (review 2026-11-01).
+func stripControls(text string) string {
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		r, n := utf8.DecodeRuneInString(text[i:])
+		i += n
+		switch {
+		case r == utf8.RuneError && n == 1: // not UTF-8: a raw high byte
+		case r == '\t' || r == '\r' || r == '\n':
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f || (0x80 <= r && r <= 0x9f):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // lastLine is the last non-blank line of out, trimmed and cut to 100 runes
-// (for an error message), escape sequences removed.
+// (for an error message), escape sequences and control characters removed.
 func lastLine(out string) string {
-	out = reEscape.ReplaceAllString(out, "")
+	out = cleanTerminal(out)
 	lines := strings.Split(strings.ReplaceAll(out, "\r", "\n"), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if l := strings.TrimSpace(lines[i]); l != "" {
@@ -1343,8 +1375,10 @@ func lastLine(out string) string {
 	return ""
 }
 
-// reQuestionTail is output ending in a question: no nudge Enter there.
-const reQuestionTail = `(?i)([?:]|\[confirm\]|\[y(es)?/no?\]|\(y(es)?/no?\))[ \t]*\z`
+// reQuestionTail is output ending in a question: no nudge Enter there. The
+// forms: "?" / ":" / "[confirm]" (IOS), "[y/n]" / "[yes/no]", "[yes,no]
+// (no)" (Junos), "(y or n)" (PAN-OS), "(y/n)? [n]" (NX-OS), "(y,N)" (mkfs).
+const reQuestionTail = `(?i)([?:]|\[confirm\]|\[y(es)?[/,]no?\](\s*\((yes|no)\))?|\(y(es)?\s*(/|,|or)\s*no?\)|\[[yn]\])[ \t]*\z`
 
 // promptNudgeAfter is how long the far end must stay silent, with no prompt
 // at the tail, before waitPrompt types a bare Enter to get the prompt back.
@@ -1372,12 +1406,24 @@ const promptNudgeAfter = time.Second
 // skipped at three seconds left the password unsent and the prompt, when it
 // came, mistaken for a refused enable password. Such a device gets the full
 // timeout.
+//
+// A credential prompt is the line the device is on now — the tail of the
+// output — not its words anywhere in it: a login banner saying "password:"
+// in a sentence matched the step's wait and the next step's "already
+// showing" check, and the password went to the user-name prompt (review
+// 2026-11-01). Like the operational prompt, it must stay the tail for a
+// beat (promptSettle): a banner line that merely ends in the words has more
+// coming.
 func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, ready string, pastFirst bool, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	giveUp := time.Now().Add(min(timeout, authWait))
 	tail := ""
 	if ready != "" {
-		tail = "(?:" + ready + `)[ \t]*\z`
+		tail = tailOf(ready)
+	}
+	pattern = tailOf(pattern)
+	if next != "" {
+		next = tailOf(next)
 	}
 	for {
 		remaining := time.Until(deadline)
@@ -1386,7 +1432,11 @@ func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, r
 		}
 		err := exp.Expect(ctx, pattern, min(remaining, 100*time.Millisecond))
 		if err == nil {
-			return nil
+			time.Sleep(promptSettle)
+			if exp.Idle() >= promptSettle {
+				return nil
+			}
+			continue // more came after the words: not the prompt
 		}
 		if !errors.Is(err, ErrExpectTimeout) {
 			return err // context cancelled or closed
@@ -1421,15 +1471,27 @@ const authWait = 3 * time.Second
 // or a question of some kind, not a line break: where a device waits.
 const reIdleLine = `\S[ \t]*\z`
 
+// tailOf is pattern p as the tail of the output: the line the device is on
+// now, trailing blanks allowed (the rule every prompt is matched by).
+func tailOf(p string) string {
+	return "(?:" + p + `)[ \t]*\z`
+}
+
 // expectOrReady waits for pattern, reporting ready=true instead if the device
 // reaches its operational prompt first. Both are polled in short slices so a
 // step that will never match costs a fraction of a second rather than the full
 // timeout; pattern is checked first each round, so a device that really does
 // show it still takes the normal path.
+//
+// The operational prompt counts only as the tail of the output, settled for
+// a beat: matched anywhere, the "#" of a "####" banner line after the login
+// skipped the "enable" step, and the login then timed out at ">" with a
+// hint about privilege levels (review 2026-11-01).
 func (r *Runner) expectOrReady(ctx context.Context, exp *expecter, pattern, ready string, timeout time.Duration) (bool, error) {
 	if ready == "" {
 		return false, exp.Expect(ctx, pattern, timeout)
 	}
+	tail := tailOf(ready)
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
@@ -1443,8 +1505,11 @@ func (r *Runner) expectOrReady(ctx context.Context, exp *expecter, pattern, read
 		if !errors.Is(err, ErrExpectTimeout) {
 			return false, err // context cancelled or closed
 		}
-		if exp.Seen(ready) {
-			return true, nil
+		if exp.Seen(tail) {
+			time.Sleep(promptSettle)
+			if exp.Seen(tail) && exp.Idle() >= promptSettle {
+				return true, nil
+			}
 		}
 	}
 }

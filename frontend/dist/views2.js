@@ -252,6 +252,8 @@ function editCommandSet(set, tpl) {
   node.querySelector("#save").onclick = async () => {
     const name = node.querySelector("#s-name").value.trim();
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
+    // "__adhoc__" and the like are the run tab's own markers.
+    if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
     const commands = collect().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
     try {
@@ -359,13 +361,19 @@ const STAGES = ["", "before", "during", "after"];
 // VISIBLE checked devices run, so a row the filter hides can never be run
 // by mistake (the toolbar says how many hidden rows are checked).
 let runSort = { key: "", dir: 1 };
-const runFilter = { text: "", site: "", status: "" };
+// exact: one device by its exact name (the history tab's 戻す → 実行タブへ
+// hands over one device; a text filter "lab-sw1" would also show lab-sw10).
+// While set, the table shows that device alone, with a chip to clear it;
+// typing in the text filter or changing the group clears it too.
+const runFilter = { text: "", site: "", status: "", exact: "" };
+function runFilterSetExact(name) { runFilter.exact = name || ""; }
 const PHASE_ORDER = { error: 0, canceled: 1, connecting: 2, login: 3, running: 4, saving: 5, queued: 6, done: 7, off: 8 };
-function runFilterActive() { return !!(runFilter.text || runFilter.site || runFilter.status); }
+function runFilterActive() { return !!(runFilter.text || runFilter.site || runFilter.status || runFilter.exact); }
 function runVisible(devs) {
   const q = runFilter.text.trim().toLowerCase();
   let out = devs.filter(d => {
     const st = runState[d.name] || { phase: d.enabled ? "queued" : "off" };
+    if (runFilter.exact) return d.name === runFilter.exact;
     if (q && ![d.name, d.host, d.site || "", d.role || "", runSetName(d), profileName(d.osType)].some(v => String(v).toLowerCase().includes(q))) return false;
     if (runFilter.site && (d.site || "") !== runFilter.site) return false;
     if (runFilter.status && !(st.phase === runFilter.status || (runFilter.status === "running" && ["connecting", "login", "saving"].includes(st.phase)))) return false;
@@ -451,7 +459,7 @@ function renderRun() {
       : `<div class="pbar" data-tip="${esc(tip)}"><i class="pf-${st.phase}" style="width:${pct}%"></i></div>${pnum}`;
     return `<tr>
       <td><input type="checkbox" data-enable="${esc(d.id)}" ${d.enabled ? "checked" : ""} ${running ? "disabled" : ""}></td>
-      <td><span class="dot st-${st.phase === "off" ? "queued" : st.phase}"></span>${statusLabel(st.phase)}${st.warnings && st.warnings.length ? ` <span class="badge" style="color:var(--warn);border:1px solid var(--warn);background:none" data-tip="${esc(st.warnings.join(String.fromCharCode(10)))}">${esc(t("警告 {n}", { n: st.warnings.length }))}</span>` : ""}${pbar}</td>
+      <td><span class="dot st-${st.phase === "off" ? "queued" : st.phase}"></span>${statusLabel(st.phase)}${st.warnings && st.warnings.length ? ` <span class="badge" style="color:var(--warn);border:1px solid var(--warn);background:none" data-tip="${esc(st.warnings.map(terr).join(String.fromCharCode(10)))}">${esc(t("警告 {n}", { n: st.warnings.length }))}</span>` : ""}${pbar}</td>
       <td><div class="clip" data-tip="${esc(d.name)}"><b>${esc(d.name)}</b></div></td>
       <td class="mono"><div class="clip" data-tip="${esc(d.host)}">${esc(d.host)}</div></td>
       <td><div class="clip" data-tip="${esc(d.site || "")}">${esc(d.site || "")}</div></td>
@@ -461,10 +469,13 @@ function renderRun() {
       <td style="text-align:right;white-space:nowrap">
         ${st.output ? `<span class="link" data-output="${esc(d.name)}" data-tip="${esc(t("接続確認で機器が表示した内容を見ます（ログは残していません）"))}">${esc(t("出力"))}</span> ` : ""}
         ${st.logPath ? `<span class="link" data-watch="${esc(st.logPath)}" data-tip="${esc(t("機器の画面を表示のみで開きます（実行中は出力をそのまま追います）"))}">${esc(t("画面"))}</span> <span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
-        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? `<button class="btn sm warn-outline" data-hk="${esc(d.id)}">${esc(t("鍵を許可して再実行"))}</button> ` : ""}
+        ${!running && /ホストキーが前回接続時と異なります/.test(st.message || "") ? (hopKeyMismatch(st.message)
+          ? `<button class="btn sm warn-outline" data-hopkey="${esc(d.id)}" data-tip="${esc(t("踏み台のホストキーが変わっています。踏み台を交換したときだけ、記録した鍵を忘れて再実行します（機器の鍵は変わりません）"))}">${esc(t("踏み台のホストキーを忘れる…"))}</button> `
+          : `<button class="btn sm warn-outline" data-hk="${esc(d.id)}">${esc(t("鍵を許可して再実行"))}</button> `) : ""}
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
           ? `<button class="btn sm err-outline" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
         ${!running ? `<button class="btn sm act-edit" data-editdev="${esc(d.id)}" data-tip="${esc(t("この機器の設定（アドレス・認証情報・踏み台など）を開きます。失敗の原因をここで直して ↻ で再実行"))}">${esc(t("編集"))}</button> ` : ""}
+        ${!running ? `<button class="btn sm" data-dry1="${esc(d.id)}" data-tip="${esc(t("この 1 台だけ接続とログインを確認します（コマンドは送らず、ログも残しません）。実行対象のチェックは変わりません"))}">⚡</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
     </tr>`;
@@ -479,7 +490,7 @@ function renderRun() {
   const hiddenChecked = filtered ? devs.filter(d => d.enabled && !visible.includes(d)).length : 0;
   const sites = [...new Set(devs.map(d => d.site || "").filter(Boolean))].sort();
   const sortArrow = k => runSort.key === k ? (runSort.dir > 0 ? " ▲" : " ▼") : "";
-  const th = (k, label, w) => `<th ${w ? `style="width:${w}"` : ""} class="sortable" data-sort="${k}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${sortArrow(k)}</th>`;
+  const th = (k, label, w) => `<th ${w ? `style="width:${w}"` : ""} class="sortable" tabindex="0" data-sort="${k}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${sortArrow(k)}</th>`;
   const vals = Object.values(runState);
   const failedCount = vals.filter(s => s.phase === "error").length;
   const canceledCount = vals.filter(s => s.phase === "canceled").length;
@@ -493,10 +504,13 @@ function renderRun() {
   // off for one that has none, so it is never on unseen).
   const anyBastion = devs.some(devHasBastion);
   if (!anyBastion) runDirect = false;
+  // Fewer than half the group checked: the heading says so in the warning
+  // colour (a single device left ticked after a test is easy to miss).
+  const fewChecked = runGroupSel && devs.length > 0 && enabledCount < (filtered ? visible.length : devs.length) / 2;
   const html = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
-        <div class="page-sub">${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
+        <div class="page-sub"${fewChecked ? ' style="color:var(--warn)"' : ""}>${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
       <div class="row-inline" style="gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
         <div class="run-stat" style="margin-left:0">
           <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
@@ -541,6 +555,7 @@ function renderRun() {
       <input id="run-filter" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（機器名・IP・拠点・役割・OS・コマンドセット）"))}" value="${esc(runFilter.text)}">
       <select id="run-filter-site" class="btn" style="padding-right:8px"><option value="">${esc(t("拠点: すべて"))}</option>${sites.map(s => `<option value="${esc(s)}" ${s === runFilter.site ? "selected" : ""}>${esc(s)}</option>`).join("")}</select>
       <select id="run-filter-status" class="btn" style="padding-right:8px"><option value="">${esc(t("状態: すべて"))}</option>${["queued", "off", "done", "error", "canceled", "running"].map(p => `<option value="${p}" ${p === runFilter.status ? "selected" : ""}>${esc(statusLabel(p))}</option>`).join("")}</select>
+      ${runFilter.exact ? `<span class="chip sel" id="run-exact" style="cursor:pointer" data-tip="${esc(t("この機器だけを表示しています。クリックで解除"))}">${esc(t("この機器だけ: {n} ✕", { n: runFilter.exact }))}</span>` : ""}
       ${filtered ? `<button class="btn sm" id="run-filter-clear">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
       ${runSort.key ? `<button class="btn sm" id="run-sort-clear">${esc(t("並び順を戻す"))}</button>` : ""}
       ${hiddenChecked ? `<span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。この実行には含まれません（含めるには絞り込みを解除）", { n: hiddenChecked }))}</span>` : ""}
@@ -566,21 +581,27 @@ function renderRun() {
   const fIn = document.getElementById("run-filter");
   if (fIn && !fIn._lvWired) {
     fIn._lvWired = true;
-    wireFilterInput(fIn, () => { runFilter.text = fIn.value; renderRun(); }, val => { runFilter.text = val; });
+    // Typing a filter ends the one-device view (exact): the text is the filter now.
+    wireFilterInput(fIn, () => { runFilter.text = fIn.value; runFilter.exact = ""; renderRun(); }, val => { runFilter.text = val; runFilter.exact = ""; });
   }
   if (fIn && focusId === "run-filter" && document.activeElement !== fIn) { fIn.focus(); restoreBoxSelection(fIn, focusSel); }
+  const fExact = document.getElementById("run-exact");
+  if (fExact) fExact.onclick = () => { runFilter.exact = ""; renderRun(); };
   const fSite = document.getElementById("run-filter-site");
   if (fSite) fSite.onchange = () => { runFilter.site = fSite.value; renderRun(); };
   const fSt = document.getElementById("run-filter-status");
   if (fSt) fSt.onchange = () => { runFilter.status = fSt.value; renderRun(); };
   const fClr = document.getElementById("run-filter-clear");
-  if (fClr) fClr.onclick = () => { runFilter.text = runFilter.site = runFilter.status = ""; renderRun(); };
+  if (fClr) fClr.onclick = () => { runFilter.text = runFilter.site = runFilter.status = runFilter.exact = ""; renderRun(); };
   const sClr = document.getElementById("run-sort-clear");
   if (sClr) sClr.onclick = () => { runSort = { key: "", dir: 1 }; renderRun(); };
-  root.querySelectorAll("th.sortable").forEach(el => el.onclick = () => {
-    const k = el.dataset.sort;
-    runSort = runSort.key === k ? { key: k, dir: -runSort.dir } : { key: k, dir: 1 };
-    renderRun();
+  root.querySelectorAll("th.sortable").forEach(el => {
+    el.onclick = () => {
+      const k = el.dataset.sort;
+      runSort = runSort.key === k ? { key: k, dir: -runSort.dir } : { key: k, dir: 1 };
+      renderRun();
+    };
+    wireSortKeys(el);
   });
   wireColResize(root);
   root.querySelectorAll("[data-hk]").forEach(b => b.onclick = async () => {
@@ -597,6 +618,31 @@ function renderRun() {
     if ((await confirmRerun([n])) === false) return;
     try { await App().ClearHostKeys(dev.id); doRun([n], lastRunDry, true); }
     catch (e) { toast(terr(e), "err"); }
+  });
+  // A jump host's key changed: its pin is shared by every device behind it,
+  // so the device's own 許可 would not help (and ClearHostKeys never touched
+  // it). Forget the hop's pin after a confirmation, then re-run this device.
+  root.querySelectorAll("[data-hopkey]").forEach(b => b.onclick = async () => {
+    const dev = devById(b.dataset.hopkey);
+    if (!dev) return;
+    const st = runState[dev.name] || {};
+    if (!(await forgetHopKeys(dev, st.message || ""))) return;
+    if ((await confirmRerun([dev.name])) === false) return;
+    doRun([dev.name], lastRunDry, true);
+  });
+  // ⚡ on a row: a dry run of this one device, the checkboxes untouched (a
+  // test of one device used to mean 全解除 → tick one → ⚡ → forget to
+  // tick the rest back). The other rows stay as they are.
+  root.querySelectorAll("[data-dry1]").forEach(b => b.onclick = async () => {
+    const dev = devById(b.dataset.dry1);
+    if (!dev || running) return;
+    const keepDry = lastRunDry, keepReq = lastRunReq;
+    toast(t("「{n}」1 台だけ接続確認を始めました", { n: dev.name }), "ok");
+    // Built from the toolbar as shown (not partial: lastRunReq may be
+    // another group's); keepRows leaves the other rows' results in place.
+    await doRun([dev.name], true, false, true);
+    // A later ↻ belongs to the batch before this check, not to the check.
+    lastRunDry = keepDry; lastRunReq = keepReq;
   });
 
   document.getElementById("btn-run").onclick = () => startRun(false);
@@ -632,14 +678,18 @@ function renderRun() {
     if (!ok || !running) return;
     cancelling = true;
     renderRun();
-    App().CancelRun();
+    // A cancel the backend could not take (an internal error) must not leave
+    // the button on 中止中… until the batch ends on its own.
+    try { await App().CancelRun(); }
+    catch (e) { cancelling = false; renderRun(); toast(t("中止できませんでした") + ": " + terr(e), "err"); }
   };
   const btnRetry = document.getElementById("btn-retry");
   if (btnRetry) btnRetry.onclick = retryUnfinished;
   const btnFailCsv = document.getElementById("btn-fail-csv");
   if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
-  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; renderRun(); };
+  // The 📂 button belongs to the results: it goes with them.
+  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const btnRunDir = document.getElementById("btn-rundir");
   if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
@@ -661,13 +711,18 @@ function renderRun() {
       if (!ok) { runGrp.value = runGroupSel; return; }
     }
     for (const k in runState) delete runState[k];
+    lastRunDir = ""; // the 📂 folder was the previous group's run
+    runFilter.exact = ""; // the one-device view named a device of the previous group
     // Each device keeps its own チェック state — switching groups no longer
     // rewrites Enabled flags, so selections survive group changes.
     runGroupSel = runGrp.value;
     // 踏み台を使わない is for the group it was chosen for: another group
-    // starts from its devices' own settings again.
+    // starts from its devices' own settings again — said, since on site
+    // the choice has to be made again for every group.
+    const wasDirect = runDirect;
     runDirect = false;
     renderRun(); // the heading names the group: no toast on top
+    if (wasDirect && runGroupSel) toast(t("踏み台の選択を「機器の設定どおり」に戻しました（グループごとに選び直してください）"), "warn");
   };
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
@@ -696,8 +751,45 @@ function renderRun() {
 // The message cell: the warnings of a run that finished with refused
 // commands come first (the log path is behind ログ表示 anyway).
 function runMsg(st) {
-  if (st.warnings && st.warnings.length) return "⚠ " + st.warnings.join(" ／ ");
+  if (st.warnings && st.warnings.length) return "⚠ " + st.warnings.map(terr).join(" ／ ");
   return fmtRunMsg(st.message);
+}
+// A host-key mismatch of a jump host rather than of the device itself: the
+// hop's number (1-based) as the message names it, "mine" for 自分の踏み台,
+// null for the device's own key.
+function hopKeyMismatch(msg) {
+  const s = String(msg || "");
+  if (!/ホストキーが前回接続時と異なります/.test(s)) return null;
+  if (/自分の踏み台/.test(s)) return "mine";
+  const m = /踏み台(\d+)段目/.exec(s);
+  return m ? parseInt(m[1], 10) : null;
+}
+// Forget the pinned key of the jump host the message names, after a
+// confirmation that spells out what that means. Resolves true when done.
+async function forgetHopKeys(dev, msg) {
+  const hop = hopKeyMismatch(msg);
+  if (hop == null) return false;
+  const mine = hop === "mine";
+  if (typeof App().ClearHopHostKeys !== "function" || typeof App().ClearMyBastionHostKeys !== "function") {
+    toast(t("この版では踏み台のホストキーを忘れる操作がありません"), "err");
+    return false;
+  }
+  const ok = await uiConfirm({
+    title: t("踏み台のホストキーを忘れる"),
+    message: (mine
+      ? t("自分の踏み台のホストキーが前回接続時と変わっています。記録した鍵を忘れると、次の接続で新しい鍵を記録します。")
+      : t("機器「<b>{n}</b>」の踏み台 {k} 段目のホストキーが前回接続時と変わっています。記録した鍵を忘れると、次の接続で新しい鍵を記録します。", { n: esc(dev.name), k: hop }))
+      + "<br>" + t("<b>踏み台を交換した／OSを再インストールした</b>場合だけ続けてください。心当たりがなければ、なりすましの可能性があるため続けずネットワーク管理者に確認してください。"),
+    okLabel: t("踏み台を交換したので忘れる"),
+    danger: true,
+  });
+  if (!ok) return false;
+  try {
+    if (mine) await App().ClearMyBastionHostKeys();
+    else await App().ClearHopHostKeys(dev.id, hop - 1);
+    toast(t("踏み台のホストキーを忘れました。次の接続で新しい鍵を記録します"), "ok");
+    return true;
+  } catch (e) { toast(terr(e), "err"); return false; }
 }
 // The message as the table shows it: a finished device's log path (the
 // whole absolute path took the column; ログ表示 is right beside it) becomes
@@ -712,14 +804,32 @@ function runMsgShort(st) {
 function showRunMessage(name) {
   const st = runState[name];
   if (!st) return;
+  const dev = runDev(name);
+  // The ways out of the two common failures, right here: a device that
+  // logs in with its group's defaults is fixed in the group's dialog (not
+  // in the device editor, whose fields are hidden then); a jump host whose
+  // key changed is forgotten here (the device's own 許可 would not help).
+  const grp = dev && dev.useGroupCreds && dev.group ? dev.group : "";
+  const hop = !running && dev ? hopKeyMismatch(st.message) : null;
   const node = h(`<div>
     <h3>${esc(name)} <span class="muted" style="font-size:13px;font-weight:400">/ ${esc(statusLabel(st.phase))}</span></h3>
     <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto">${esc(runMsg(st))}</div>
+    ${grp && st.phase === "error" ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("この機器はグループ「{g}」の既定の認証情報でログインします。", { g: grp }))} <span class="link" id="rm-gcreds">${esc(t("グループ既定を編集…"))}</span></div>` : ""}
+    ${hop != null ? `<div style="margin-top:8px"><button class="btn sm warn-outline" id="rm-hopkey">${esc(t("踏み台のホストキーを忘れる…"))}</button> <span class="muted" style="font-size:12px">${esc(t("踏み台を交換したときだけ。設定タブ（自分の踏み台）と機器の編集（踏み台カード）にも同じボタンがあります"))}</span></div>` : ""}
     <div class="modal-actions"><button class="btn" id="rm-close" autofocus>${esc(t("閉じる"))}</button><button class="btn primary" id="rm-copy">${esc(t("コピー"))}</button></div>
   </div>`);
   openModal(node, "mid");
   node.querySelector("#rm-close").onclick = closeModal;
   node.querySelector("#rm-copy").onclick = () => copyText(runMsg(st), t("コピーしました"));
+  const gc = node.querySelector("#rm-gcreds");
+  if (gc) gc.onclick = () => { closeModal(); groupCredsDialog(grp); };
+  const hk = node.querySelector("#rm-hopkey");
+  if (hk) hk.onclick = async () => {
+    closeModal();
+    if (!(await forgetHopKeys(dev, st.message || ""))) return;
+    if ((await confirmRerun([dev.name])) === false) return;
+    doRun([dev.name], lastRunDry, true);
+  };
 }
 // What the device showed during a failed 接続確認のみ (no log is written
 // for a dry run, so this is the only place to read the hop's banner or the
@@ -801,7 +911,12 @@ async function startRun(dryRun) {
   // Only the checked devices of the selected group run (RunSelected), so
   // checkbox states in other groups are never touched.
   const targets = runTargetDevices().map(d => d.name);
-  if (!targets.length) return;
+  if (!targets.length) {
+    // The one-device view (戻す → 実行タブへ) lists a device whose 実行対象
+    // box may be off: silence here looked like a dead button.
+    if (runFilter.exact) toast(t("「{n}」の実行対象のチェックが外れています。チェックしてから ▶ を押してください", { n: runFilter.exact }), "warn");
+    return;
+  }
   const scope = (runGroupSel ? t("グループ「<b>{g}</b>」の ", { g: esc(runGroupLabel()) }) : "") + (runFilterActive() ? t("（絞り込み表示中の）") : "");
   // Rows of a run already on the table whose every target failed or was
   // cut short (the 状態: エラー filter, then ▶): the rows that finished
@@ -1264,10 +1379,26 @@ function applyRunDone(payload) {
   if (active && active.id === "tab-run") renderRun();
   // Clear the "実行中" notice on the settings tab (unless mid-edit).
   else if (active && active.id === "tab-settings" && !settingsDirty && !myLoginsDirty) renderSettings();
+  // Results the backend kept across a lock (restoreRunFromBackend): back on
+  // the table, without the completion toasts of a run that just ended.
+  if (payload && payload.restored) {
+    toast(t("ロック前の一括実行の結果を表に戻しました"), "ok");
+    return;
+  }
   if (internalErr) {
     toast(t("一括実行が内部エラーで止まりました") + ": " + internalErr, "err");
     return;
   }
+  // The stage moves on with the work: a finished 作業前 run makes the next
+  // one 作業後 (the one most often forgotten at 3 a.m.), and a finished
+  // 作業後 run leaves no stage behind for the next night. A 接続確認 and a
+  // cancelled run change nothing; a re-run of failures goes by the stage
+  // of its batch (lastRunReq) and so lands the same way.
+  const ranStage = lastRunReq ? (lastRunReq.stage || "") : runStage;
+  let stageNote = "";
+  if (!wasDry && !wasCancel && ranStage === "before" && runStage === "before") { runStage = "after"; stageNote = " " + t("次は「作業後」として実行します"); }
+  else if (!wasDry && !wasCancel && ranStage === "after" && runStage === "after") { runStage = ""; stageNote = " " + t("作業タイミングを「指定なし」に戻しました"); }
+  if (stageNote && active && active.id === "tab-run") renderRun();
   if (wasCancel) {
     const v = Object.values(runState);
     toast(t("中止しました（完了 {a}・失敗 {b}・中止/未実行 {c}）", {
@@ -1275,9 +1406,9 @@ function applyRunDone(payload) {
   } else if (wasDry) {
     const v = Object.values(runState);
     toast(t("接続確認が完了しました（OK {a}・失敗 {b}）", { a: v.filter(s => s.phase === "done").length, b: v.filter(s => s.phase === "error").length }), "ok");
-  } else if (runStage === "after" && runDir) {
-    toast(t("実行が完了しました。実行履歴・比較タブで作業前のログと比較できます"), "ok");
-  } else toast(t("実行が完了しました"), "ok");
+  } else if (ranStage === "after" && runDir) {
+    toast(t("実行が完了しました。実行履歴・比較タブで作業前のログと比較できます") + stageNote, "ok", { ms: 6000 });
+  } else toast(t("実行が完了しました") + stageNote, "ok", stageNote ? { ms: 6000 } : undefined);
   // Refused commands are easy to miss in a long table: say so once more.
   const warned = Object.values(runState).filter(s => s.warnings && s.warnings.length).length;
   if (warned && !wasDry) setTimeout(() => toast(t("⚠ {n} 台で機器に拒否されたコマンドがあります（状態列の「警告」）", { n: warned }), "err"), 1500);
@@ -1370,6 +1501,7 @@ function renderSettings() {
       <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書き出し・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
       <div id="mb-rows"></div>
       <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
+      ${(INV.myBastions || []).some(b => b.host) ? `<button class="btn sm warn-outline" id="mb-forget-keys" type="button" style="margin:6px 0 0 8px" data-tip="${esc(t("自分の踏み台のホストキーの記録を消します。踏み台を交換した（鍵が変わった）ときだけ。次の接続で新しい鍵を記録します"))}">${esc(t("この踏み台のホストキーを忘れる（交換したとき）"))}</button>` : ""}
       <div class="modal-actions"><button class="btn primary" id="mb-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button></div>
     </div>
     ${screenColorsPanelHTML()}
@@ -1381,6 +1513,19 @@ function renderSettings() {
   renderMyBastion();
   wireScreenColorsPanel();
   document.getElementById("set-reset").onclick = resetVaultFlow;
+  const mbForget = document.getElementById("mb-forget-keys");
+  if (mbForget) mbForget.onclick = async () => {
+    if (typeof App().ClearMyBastionHostKeys !== "function") { toast(t("この版では踏み台のホストキーを忘れる操作がありません"), "err"); return; }
+    const ok = await uiConfirm({
+      title: t("踏み台のホストキーを忘れる"),
+      message: t("自分の踏み台（全段）のホストキーの記録を消します。次の接続で新しい鍵を記録します。<br><b>踏み台を交換した／OSを再インストールした</b>場合だけ続けてください。心当たりがなければ、なりすましの可能性があるため続けずネットワーク管理者に確認してください。"),
+      okLabel: t("踏み台を交換したので忘れる"),
+      danger: true,
+    });
+    if (!ok) return;
+    try { await App().ClearMyBastionHostKeys(); toast(t("踏み台のホストキーを忘れました。次の接続で新しい鍵を記録します"), "ok"); }
+    catch (e) { toast(terr(e), "err"); }
+  };
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = myLoginsDirty = false;

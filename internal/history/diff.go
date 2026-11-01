@@ -65,17 +65,21 @@ var noise = []*regexp.Regexp{
 
 // configStamps match the whole lines every configuration listing carries
 // and that change with each save or by themselves: Cisco's size and
-// last-change comments and the clock-period it tunes, FortiGate's file
-// version, Junos's last commit, AlaxalA's last modification. Without these,
+// last-change comments and the clock-period it tunes (IOS-XR's with "!!",
+// NX-OS's "!Running configuration last done at:" and "!Time:"), ASA's
+// ": Written by …", FortiGate's file version, Junos's last commit,
+// AlaxalA's last modification, Yamaha's "# Reporting Date:". Without these,
 // two listings of the same configuration differed. Unlike noise they never
 // cut into a configuration line, so the work verdict uses them alone.
 var configStamps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*current configuration\s*:.*$`),
-	regexp.MustCompile(`(?i)^\s*!\s*(last configuration change|nvram config last updated|no configuration change since).*$`),
+	regexp.MustCompile(`(?i)^\s*!!?\s*(last configuration change|nvram config last updated|no configuration change since|running configuration last done|startup config saved at|time:).*$`),
+	regexp.MustCompile(`(?i)^\s*:\s*written by\b.*$`),
 	regexp.MustCompile(`(?i)^\s*ntp clock-period\s+\d+\s*$`),
 	regexp.MustCompile(`(?i)^\s*#(conf_file_ver|config-version)=.*$`),
 	regexp.MustCompile(`(?i)^\s*## last (commit|changed):.*$`),
 	regexp.MustCompile(`(?i)^\s*#\s*last modified by\b.*$`),
+	regexp.MustCompile(`(?i)^\s*#\s*reporting date:.*$`),
 }
 
 // stripStamps blanks a line that is one of the configStamps.
@@ -113,12 +117,7 @@ func blankClock(line string) string {
 }
 
 func normalize(line string) string {
-	line = strings.TrimRight(line, " \t\r")
-	// AlaxalA's "!" before the prompt only says a change is not saved yet.
-	if strings.HasPrefix(line, "!") && promptLine.MatchString(line) {
-		line = line[1:]
-	}
-	line = stripStamps(line)
+	line = normalizeConfig(line)
 	line = blankClock(line)
 	for _, re := range noise {
 		line = re.ReplaceAllString(line, "")
@@ -126,11 +125,29 @@ func normalize(line string) string {
 	return strings.TrimSpace(line)
 }
 
+// normalizeConfig is the normaliser for the lines of a configuration
+// listing: only the listing's own stamps are dropped (and AlaxalA's "!"
+// before a prompt). The clock and counter noise of normalize is for show
+// output — inside a listing it cut real settings ("description used for
+// backup", ASA's "timeout conn 1:00:00", a remark with a date), and a
+// changed value then compared equal (review 2026-11-01, S-5). The
+// structured comparison, the fingerprint and the command generator use
+// this one for listing lines.
+func normalizeConfig(line string) string {
+	line = strings.TrimRight(line, " \t\r")
+	// AlaxalA's "!" before the prompt only says a change is not saved yet.
+	if strings.HasPrefix(line, "!") && promptLine.MatchString(line) {
+		line = line[1:]
+	}
+	return strings.TrimSpace(stripStamps(line))
+}
+
 // barePrompt matches a line that is nothing but a prompt ("R1#", "IX-A(config)# ",
-// "user@host:~$"): the device reprints it for every Enter and for timing
-// reasons, so two captures differ in how many of these they hold. AlaxalA
-// puts "!" before the prompt while a change is not saved.
-var barePrompt = regexp.MustCompile(`^!?[\w.@~:/()\-]*[#>$%]\s*$`)
+// "user@host:~$", Comware's "<lab-sw1>" / "[lab-sw1]", SR OS's
+// "*A:lab-sw1>config#"): the device reprints it for every Enter and for
+// timing reasons, so two captures differ in how many of these they hold.
+// AlaxalA puts "!" before the prompt while a change is not saved.
+var barePrompt = regexp.MustCompile(`^(!?[\w.@~:/()\-]*[#>$%]|<[^<>\s]+>|\[[^\[\]\s]+\]|\*?[A-Z]:[^#\s]+#)\s*$`)
 
 // Diff compares two transcripts line by line. With ignoreNoise, lines that
 // differ only in timestamps, uptimes and counters count as equal, and blank

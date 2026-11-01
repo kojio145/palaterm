@@ -188,3 +188,71 @@ func TestResolveLineEditsCSI(t *testing.T) {
 		t.Errorf("readline edit: %q", cmds)
 	}
 }
+
+// Exec-style words typed inside a sub-mode (reset / restart / request) run
+// something; they are not settings and must not count as missing.
+func TestStrictVerifyExecWordsNotSettings(t *testing.T) {
+	before := "R1#show run\ninterface Cellular0\n!\n"
+	work := strings.Join([]string{
+		"R1#conf t",
+		"R1(config)#interface Cellular0",
+		"R1(config-if)#profile lab",
+		"R1(config-if)#reset",
+		"R1(config-if)#restart",
+		"R1(config-if)#end",
+		"R1#reset counters",
+		"R1#request system reboot",
+	}, "\n") + "\n"
+	after := "R1#show run\ninterface Cellular0\n profile lab\n!\n"
+	r := StrictVerify(work, before, after)
+	for _, c := range r.Commands {
+		switch c.Line {
+		case "reset", "restart", "reset counters", "request system reboot":
+			t.Errorf("%q counted as a setting (%s)", c.Line, c.Status)
+		}
+	}
+	if r.Missing != 0 {
+		t.Errorf("missing = %d, want 0", r.Missing)
+	}
+}
+
+func TestIsNotSettingBothWays(t *testing.T) {
+	exec := []string{
+		"reset", "reset counters", "restart", "request system reboot", "reload in 5",
+		"clear counters", "write memory", "copy running-config startup-config",
+		"display current-configuration", "save", "return", "system-view", "reboot",
+		"screen-length 0 temporary", "screen-length disable", "startup saved-configuration flash:/a.cfg",
+		"execute ping 192.0.2.1", "diagnose sys top", "get system status", "fnsysctl ls",
+		"commit", "rollback 1", "validate", "check pending-changes", "revert config",
+		"set cli screen-length 0", "clock set 10:00:00 1 Jan 2026", "calendar set 10:00:00 1 Jan 2026",
+		"cold start", "administrator", "ppupdate", "checkpoint c1", "tac-pac", "attach module 1",
+		"packet-tracer input inside tcp 192.0.2.1 1 192.0.2.2 80", "bash", "sudo systemctl status",
+		"expert", "cpstat fw", "cphaprob stat", "lock database override", "tmsh", "list ltm pool",
+		"reset-stats ltm pool", "tools dump router", "admin save", "oam ping", "file list",
+		"start shell", "monitor traffic interface ge-0/0/0", "test aaa group lab ops x legacy",
+		"erase startup-config", "format flash:", "upgrade rom-monitor file flash:a.bin",
+		"install add file bootflash:a.bin", "backup running-config to flash:/a.cfg", "release dhcp",
+		"transfer download start", "halt", "poweroff", "q", "y", "no", "send log test",
+	}
+	for _, c := range exec {
+		if !isNotSetting(c) {
+			t.Errorf("%q should be an exec-style line", c)
+		}
+	}
+	setting := []string{
+		"monitor session 1 source interface GigabitEthernet0/1", "monitor event-trace all-traces",
+		"history size 100", "telnet server enable", "ssh server enable", "ssh user ops authentication-type password",
+		"ftp server enable", "file prompt quiet", "file verify auto", "backup interface Serial0/0",
+		"cli alias name wr copy run start", "install feature-set fex", "shell processing full",
+		"upgrade fpd auto", "screen-length 0", "shutdown", "no shutdown", "no ip domain-lookup",
+		"import map LAB-IN", "export map LAB-OUT", "enable secret 0 lab", "enable password lab",
+		"delete 5", "move 5 before 3", "clone 1 to 9", "purge", "boot system flash:a.bin",
+		"archive", "license boot level lab", "delete ssh", "set system host-name lab1",
+		"deactivate interfaces ge-0/0/0", "undo info-center enable", "info-center enable",
+	}
+	for _, c := range setting {
+		if isNotSetting(c) {
+			t.Errorf("%q should stay a setting line", c)
+		}
+	}
+}

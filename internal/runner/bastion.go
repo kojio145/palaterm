@@ -27,8 +27,14 @@ const (
 	// OpenSSH on a hop asking for the passphrase of a key kept on that hop
 	// ("Enter passphrase for key '/home/u/.ssh/id_rsa':"): the next hop or
 	// the device takes the key that lives on the jump host, not one on this PC.
-	rePassphrase = `(?i)passphrase for key`
-	reShellDone  = `[>#$%\]]\s*$` // a generic shell prompt after landing on a hop
+	// It is the whole of the line the hop is on now, head to tail: the words
+	// inside a far end's banner must not be answered with the passphrase of
+	// a key on the hop (review 2026-11-01).
+	rePassphrase = `(?i)(?:^|[\r\n])[ \t]*enter passphrase for key '[^'\r\n]*':[ \t]*\z`
+	// reShellDone is a generic shell prompt ending the output, after landing
+	// on a hop (the tail, like reShellTail: "$" alone ran through line
+	// breaks, so a MOTD line ending in "%" passed for the prompt).
+	reShellDone = `[>#$%\]][ \t]*\z`
 	// reShellTail is a shell prompt as the line the hop is on now: with the
 	// far end silent on it for a while, the hop is in (see expectHop).
 	reShellTail = `[>#$%\]][ \t]*\z`
@@ -48,8 +54,13 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 			return nil, hopFailure(1, err)
 		}
 	} else {
-		// Wait until the first SSH bastion's shell prompt appears.
-		_ = exp.Expect(ctx, reShellDone, timeout)
+		// Wait until the first SSH bastion's shell prompt appears: a prompt
+		// character ending the output, and silence after it (atShell). The
+		// first such character anywhere stopped inside a MOTD ("Memory
+		// usage: 23%", "# Authorized use only #"), and that line, saved as
+		// the hop's prompt, disarmed the back-at-the-hop checks below
+		// (review 2026-11-01).
+		waitShell(ctx, exp, timeout)
 	}
 
 	// Hop from each bastion to the next. The jump command is typed on the
@@ -83,11 +94,29 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 		method = model.BastionSSH
 	}
 	last := bastions[len(bastions)-1]
-	to := &landing{target: dev.Host, prompt: currentLine(exp.Transcript()), mark: exp.Mark()}
-	if _, err := jumpToKey(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, dev.AuthMethod, dev.KeyPassphrase, dev.LegacyAlgos, timeout); err != nil {
+	to := &landing{target: dev.Host, prompt: currentLine(exp.Transcript()), mark: exp.Mark(),
+		// An SSH device on a password shows a login or password prompt
+		// before any shell: none seen, nothing was logged into (see check).
+		needLogin: method == model.BastionSSH && dev.AuthMethod != model.AuthPublicKey}
+	keyed, err := jumpToKey(ctx, exp, last.JumpCommand, method, dev.Host, dev.Username, dev.Port, dev.AuthMethod, dev.KeyPassphrase, dev.LegacyAlgos, timeout)
+	if err != nil {
 		return nil, fmt.Errorf("機器へのジャンプに失敗: %w", err)
 	}
+	to.keyed = keyed
 	return to, nil
+}
+
+// waitShell waits, up to timeout, for the hop to sit at a shell prompt
+// (atShell). Nothing to report: what follows reads the prompt line itself.
+func waitShell(ctx context.Context, exp *expecter, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) && !atShell(exp) && !exp.Closed() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // A jump that fails does not always say so at once. A refused port answers
@@ -105,12 +134,12 @@ func (r *Runner) traverseBastions(ctx context.Context, exp *expecter, bastions [
 //   - the hop's prompt line, as it stood before the jump command, coming
 //     back at the tail before anything was logged into;
 //   - after the login, a prompt identical to that hop's (see landing.check).
-var reJumpFailed = regexp.MustCompile(`(?im)(connection refused|connection timed out|operation timed out|no route to host|network is unreachable|host is unreachable|could not resolve|name or service not known|unknown host|connection closed by|closed by foreign host|connection reset by|unable to connect to remote host|host key verification failed|kex_exchange_identification|permission denied \(|command not found|^[ \t]*%[ \t]*(connection|destination unreachable|unknown command or computer name|bad ip address|host|invalid input))`)
+var reJumpFailed = regexp.MustCompile(`(?im)(connection refused|connection timed out|operation timed out|no route to host|network is unreachable|host is unreachable|could not resolve|name or service not known|unknown host|connection closed by|closed by foreign host|connection reset by|unable to connect to remote host|host key verification failed|kex_exchange_identification|permission denied \(|command not found|too many authentication failures|received disconnect from|disconnected from|connection to \S+ closed|bad port|^[ \t]*%[ \t]*(connection|destination unreachable|unknown command or computer name|bad ip address|host|invalid input))`)
 
 // jumpFailLine is the hop's line saying the jump failed ("" for none), cut
-// to a readable length, escape sequences out.
+// to a readable length, escape sequences and control characters out.
 func jumpFailLine(text string) string {
-	text = reEscape.ReplaceAllString(text, "")
+	text = cleanTerminal(text)
 	loc := reJumpFailed.FindStringIndex(text)
 	if loc == nil {
 		return ""
@@ -251,27 +280,59 @@ func distinctPrompt(p string) bool {
 }
 
 // landing is a jump about to be made: where to (target), the prompt of the
-// hop it is typed on, and where in the transcript it starts.
+// hop it is typed on, and where in the transcript it starts. needLogin says
+// the far end must show a login or password prompt before any shell (an
+// SSH device on a password); keyed that the hop's ssh went straight in with
+// a key (jumpToKey), so none is due after all.
 type landing struct {
-	target string
-	prompt string
-	mark   int
+	target    string
+	prompt    string
+	mark      int
+	needLogin bool
+	keyed     bool
 }
 
-// check refuses a login that ended on the hop the jump was typed on: the
-// prompt reached is that hop's own. A login that worked would show the far
-// end's prompt; the same line means the hop's ssh or telnet gave up (late,
-// after the login steps had started) and the hop's shell took the login's
-// place. Run there, the command set would run on the jump host.
+// check refuses a login that ended on the hop the jump was typed on rather
+// than on the far end. Run there, the command set would run on the jump
+// host (review 2026-10-22). The evidence, each on its own:
+//
+//   - the hop's words for a jump that failed (reJumpFailed), before any
+//     login prompt of the far end — a hop's ssh giving up late, after the
+//     login steps had started. Read whatever the hop's prompt looks like:
+//     behind a prompt that names nothing ("# ", "$ ") it went unread, and
+//     the hop's "# " then passed for the device's "#" (review 2026-11-01);
+//   - the prompt line being the hop's own, named or not: a login that
+//     worked shows the far end's prompt, and two shells on the same bare
+//     "$ " are not told apart either way;
+//   - for an SSH device on a password (needLogin), no login or password
+//     prompt having shown since the jump: nothing was logged into, whatever
+//     prompt is there now (a hop whose ssh entered with a key, keyed, is
+//     the exception: no prompt is due then).
 func (l *landing) check(exp *expecter) error {
-	if l == nil || !atPrompt(exp.Transcript(), l.prompt) {
+	if l == nil {
 		return nil
 	}
 	since := exp.Since(l.mark)
-	if line := jumpFailLine(since); line != "" {
+	before := since
+	loggedIn := false
+	if loc := reLoginOrPassword.FindStringIndex(since); loc != nil {
+		// After the far end's first login prompt the text is the far end's
+		// (a banner may well say "connection closed").
+		before, loggedIn = since[:loc[0]], true
+	}
+	if line := jumpFailLine(before); line != "" {
 		return failedJump(l.target, line)
 	}
-	return &jumpError{fmt.Sprintf("ログイン後のプロンプト（%q）が踏み台のプロンプトと同じため、中止しました。踏み台から %s への接続に失敗して、踏み台に戻っている可能性があります。機器と踏み台のホスト名が同じ場合は、どちらかのホスト名を変えてください", l.prompt, l.target)}
+	if l.prompt != "" && currentLine(exp.Transcript()) == l.prompt {
+		if !distinctPrompt(l.prompt) {
+			return &jumpError{fmt.Sprintf("ログイン後のプロンプト（%q）が踏み台のプロンプトと同じため、中止しました。踏み台から %s への接続に失敗して、踏み台に戻っている可能性があります。踏み台のプロンプトにホスト名が無い（「$ 」「# 」だけ）場合は、踏み台のプロンプト（PS1 など）にホスト名を入れると区別できます", l.prompt, l.target)}
+		}
+		return &jumpError{fmt.Sprintf("ログイン後のプロンプト（%q）が踏み台のプロンプトと同じため、中止しました。踏み台から %s への接続に失敗して、踏み台に戻っている可能性があります。機器と踏み台のホスト名が同じ場合は、どちらかのホスト名を変えてください", l.prompt, l.target)}
+	}
+	if l.needLogin && !l.keyed && !loggedIn {
+		return &jumpError{fmt.Sprintf("踏み台から %s へ入った後、ログインやパスワードの入力待ちが一度も出ないままプロンプトになったため、中止しました。踏み台から機器への接続に失敗して、踏み台に戻っている可能性があります。踏み台の上の鍵で入る機器なら、その機器の SSH 認証方式を「公開鍵」にしてください", l.target)}
+	}
+	return nil
 }
 
 // failed explains a login through the jump that did not complete: the hop
@@ -453,7 +514,7 @@ func answerPassphrase(ctx context.Context, exp *expecter, host, passphrase strin
 	if passphrase == "" {
 		return fmt.Errorf("%s で %s へ入る鍵のパスフレーズを聞かれましたが、「秘密鍵のパスフレーズ」が空です。その機器（踏み台なら踏み台）の SSH 認証方式を「公開鍵」にし、踏み台の上にある鍵のパスフレーズを「秘密鍵のパスフレーズ」欄に入れてください（踏み台経由では秘密鍵ファイル欄は使いません）", shellName(exp), host)
 	}
-	_ = exp.Expect(ctx, rePassphrase+`[^\r\n]*:`, time.Second)
+	_ = exp.Expect(ctx, rePassphrase, time.Second)
 	exp.Drain()
 	if err := exp.Send(passphrase); err != nil {
 		return err
@@ -535,11 +596,14 @@ func lastNegotiateLine(transcript string) string {
 	return strings.TrimSpace(line)
 }
 
+// reUserAtHost is a "user@host" as a shell prompt shows it.
+var reUserAtHost = regexp.MustCompile(`\[?([A-Za-z0-9._-]+@[A-Za-z0-9._-]+)`)
+
 // shellName names the hop in an error: the last "user@host" prompt seen, or
 // just 踏み台 when the prompt gives nothing away.
 func shellName(exp *expecter) string {
 	tr := exp.Transcript()
-	if m := regexp.MustCompile(`\[?([A-Za-z0-9._-]+@[A-Za-z0-9._-]+)`).FindAllStringSubmatch(tr, -1); len(m) > 0 {
+	if m := reUserAtHost.FindAllStringSubmatch(tr, -1); len(m) > 0 {
 		return "踏み台 " + m[len(m)-1][1]
 	}
 	return "踏み台"

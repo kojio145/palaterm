@@ -6,6 +6,8 @@
 
 const WEEKDAYS = ["日", "月", "火", "水", "木", "金", "土"];
 let schedRenderTimer = 0;
+// The 予約 editor's option for a command set that was deleted since.
+const SC_SET_GONE = "__gone__";
 
 function fmtSchedTime(iso) { return iso ? fmtRunTime(iso) : ""; }
 
@@ -59,14 +61,17 @@ function schedCommandsLabel(sc) {
 }
 
 function schedKindLabel(e) {
-  return ({ run: t("実行"), missed: t("見逃し"), skipped: t("スキップ"), refused: t("拒否"), error: t("エラー"), stopped: t("停止") })[e.kind] || e.kind;
+  return ({ run: t("実行"), missed: t("見逃し"), skipped: t("スキップ"), refused: t("拒否"), error: t("エラー"), stopped: t("停止"), changed: t("対象変更") })[e.kind] || e.kind;
 }
 
 let schedRenderGen = 0;
 // The tab shows one list at a time — the schedules or their 実行記録 — in
 // a panel that fills the window like every other tab's list (its own
 // scroll, header row fixed, columns resizable, sort and filter).
-const schedTab = { view: "list", data: null };
+// logLimit: how many 実行記録 lines are read (the newest; さらに表示 adds a
+// page).
+const SCHED_LOG_PAGE = 100;
+const schedTab = { view: "list", data: null, logLimit: SCHED_LOG_PAGE };
 async function renderSchedules() {
   const root = document.getElementById("tab-schedule");
   // Draws overlap (an event, a button): only the newest one is shown, not
@@ -74,7 +79,7 @@ async function renderSchedules() {
   const gen = ++schedRenderGen;
   let list = [], st = {}, log = [];
   try {
-    [list, st, log] = await Promise.all([App().ListSchedules(), App().GetScheduleStatus(), App().ScheduleLog(100)]);
+    [list, st, log] = await Promise.all([App().ListSchedules(), App().GetScheduleStatus(), App().ScheduleLog(schedTab.logLimit)]);
   } catch (e) {
     if (gen === schedRenderGen) root.innerHTML = pageError(t("予約"), t("読み込み失敗") + ": " + terr(e));
     return;
@@ -157,14 +162,20 @@ function renderSchedulesView() {
       </div></td>
     </tr>`).join("");
   const nFinished = list.filter(finished).length;
+  // The devices that failed in a round come first, in red, with why (logs[]
+  // carries ok / error since v1.9.26; an older record has neither, and is
+  // listed as before): a failure a week ago is found without opening
+  // thirty logs.
+  const logFiles = e => (e.logs || []).slice().sort((x, y) => (x.ok === false ? 0 : 1) - (y.ok === false ? 0 : 1));
+  const failedFiles = e => (e.logs || []).filter(l => l.ok === false);
   const logRows = shownLog.map(e => `
     <tr>
       <td class="mono" style="width:170px">${esc(fmtSchedTime(e.due))}</td>
       <td><div class="clip" data-tip="${esc(e.schedule)}">${esc(e.schedule)}${e.manual ? ` <span class="badge">${esc(t("今すぐ"))}</span>` : ""}</div></td>
       <td style="width:90px"><span class="dot st-${e.kind === "run" ? (e.failed ? "error" : "done") : e.kind === "missed" || e.kind === "skipped" || e.kind === "stopped" ? "canceled" : "error"}"></span>${esc(schedKindLabel(e))}</td>
       <td style="width:120px">${e.kind === "run" ? `<span style="color:var(--ok)">${e.ok || 0}</span> / <span style="color:var(--err)">${e.failed || 0}</span>` : ""}</td>
-      <td class="muted"><div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
-      <td style="text-align:right"><div class="clip">${(e.logs || []).map(l => `<span class="link" data-log="${esc(l.path)}" data-tip="${esc(t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join(t("　"))}</div></td>
+      <td class="muted">${failedFiles(e).map(l => `<div class="clip" style="color:var(--err)" data-tip="${esc(l.device + ": " + terr(l.error || t("失敗")))}">${esc(l.device)}: ${esc(terr(l.error || t("失敗")))}</div>`).join("")}<div class="clip" data-tip="${esc(terr(e.message || ""))}">${esc(terr(e.message || ""))}</div></td>
+      <td style="text-align:right"><div class="clip">${logFiles(e).map(l => `<span class="link" data-log="${esc(l.path)}" ${l.ok === false ? 'style="color:var(--err)"' : ""} data-tip="${esc(l.ok === false ? t("{d} のログを表示（失敗: {e}）", { d: l.device, e: terr(l.error || "") }) : t("{d} のログを表示", { d: l.device }))}">${esc((e.logs.length > 1 ? l.device + " " : "") + t("ログ表示"))}</span>`).join(t("　"))}</div></td>
     </tr>`).join("");
   // A redraw (a repeat every 10 seconds sends one each round) keeps the
   // list where the user scrolled it: renderListTab keeps the panel while
@@ -176,6 +187,7 @@ function renderSchedulesView() {
       <div class="row-inline"><button class="btn primary" id="sc-add">${esc(t("＋ 予約を追加"))}</button></div>
     </div>
     <div class="panel" style="padding:14px 18px;margin-bottom:16px;font-size:13px;line-height:1.9">
+      ${st.fileError ? `<div style="color:var(--err)"><b>${esc(t("⚠ 予約の記録ファイルを書けません"))}</b> ${esc(String(st.fileError).split("\n").map(terr).join(t("　")))}</div>` : ""}
       ${st.running ? `<div style="color:var(--run)"><b>${esc(t("▶ 実行中: {n}", { n: st.running }))}</b> ${esc(t("（{d} / {t} 台）", { d: st.done, t: st.total }))} <button class="btn sm" id="sc-cancel">${esc(t("■ 中止"))}</button></div>` : ""}
       ${st.queued ? `<div style="color:var(--warn)">${esc(t("順番待ち: {n} 件（ほかの一括実行が終わりしだい実行。30 分を過ぎたらスキップ）", { n: st.queued }))}</div>` : ""}
       <div>${esc(sleepLine)}</div>
@@ -191,7 +203,7 @@ function renderSchedulesView() {
     </div>
     <div class="row-inline" style="gap:6px;margin-bottom:12px">
       <button class="btn" data-scview="list" style="${schedTab.view === "list" ? "border-color:var(--accent);font-weight:600" : ""}">${esc(t("予約一覧（{n}）", { n: list.length }))}</button>
-      <button class="btn" data-scview="log" style="${schedTab.view === "log" ? "border-color:var(--accent);font-weight:600" : ""}">${esc(t("予約の実行記録（{n}）", { n: log.length }))}</button>
+      <button class="btn" data-scview="log" style="${schedTab.view === "log" ? "border-color:var(--accent);font-weight:600" : ""}" data-tip="${esc(t("直近 {n} 件を読んでいます（「さらに表示」で前の記録も）", { n: schedTab.logLimit }))}">${esc(log.length >= schedTab.logLimit ? t("予約の実行記録（直近 {n} 件）", { n: log.length }) : t("予約の実行記録（{n}）", { n: log.length }))}</button>
       <span style="margin-left:auto"></span>
       ${schedTab.view === "list" && nFinished ? `<span class="link" id="sc-del-finished" style="font-size:12px;margin-right:8px">${esc(t("終了した予約（{n} 件）をまとめて削除", { n: nFinished }))}</span>` : ""}
       <button class="btn" id="sc-logdir" data-tip="${esc(t("ログの保存先フォルダを開きます（予約のログは、予約ごとのフォルダに入ります）"))}">${esc(t("ログフォルダを開く"))}</button>
@@ -208,13 +220,16 @@ function renderSchedulesView() {
       ${!log.length ? `<div class="empty">${esc(t("まだ記録はありません"))}</div>`
         : !shownLog.length ? `<div class="empty">${esc(t("絞り込みに一致する記録がありません"))}</div>`
         : `<table class="fixed" data-colw="schedlog"><thead><tr>${listViewTh(LG, "due", t("予定日時"), "width:170px")}${listViewTh(LG, "schedule", t("予約"), "width:200px")}${listViewTh(LG, "kind", t("結果"), "width:90px")}${listViewTh(LG, "result", t("成功 / 失敗"), "width:120px")}<th>${esc(t("メッセージ"))}</th><th style="width:220px"></th></tr></thead><tbody>${logRows}</tbody></table>`}
-    </div>`}`, [schedTab.view, listView(schedTab.view === "list" ? LV : LG)]);
+      ${log.length >= schedTab.logLimit ? `<div style="padding:10px 14px;text-align:center"><span class="muted" style="font-size:12px">${esc(t("直近 {n} 件を表示しています", { n: log.length }))}</span>　<button class="btn" id="sc-log-more">${esc(t("さらに表示"))}</button></div>` : ""}
+    </div>`}`, [schedTab.view, listView(schedTab.view === "list" ? LV : LG), schedTab.logLimit]);
 
   listViewWire(LV, root, renderSchedulesView, focus);
   listViewWire(LG, root, renderSchedulesView, focus);
   wireColResize(root);
   root.querySelectorAll("[data-scview]").forEach(b => b.onclick = () => { schedTab.view = b.dataset.scview; renderSchedulesView(); });
   root.querySelectorAll("[data-lastlog]").forEach(b => b.onclick = () => { schedTab.view = "log"; renderSchedulesView(); });
+  const logMore = root.querySelector("#sc-log-more");
+  if (logMore) logMore.onclick = () => { schedTab.logLimit += SCHED_LOG_PAGE; renderSchedules(); };
   root.querySelector("#sc-add").onclick = () => editSchedule(null);
   root.querySelector("#sc-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const ka = root.querySelector("#sc-keepawake");
@@ -227,7 +242,7 @@ function renderSchedulesView() {
   };
   const cancel = root.querySelector("#sc-cancel");
   if (cancel) cancel.onclick = async () => {
-    if (await uiConfirm({ title: t("予約の実行を中止"), message: t("実行中の予約「{n}」を中止しますか？", { n: esc(st.running) }), okLabel: t("中止する"), danger: true })) App().CancelScheduledRun();
+    if (await uiConfirm({ title: t("予約の実行を中止"), message: t("実行中の予約「{n}」を中止しますか？", { n: esc(st.running) }), okLabel: t("中止する"), danger: true })) App().CancelScheduledRun(st.runningId || "").catch(err => toast(terr(err), "err"));
   };
   root.querySelectorAll("[data-stop]").forEach(b => b.onclick = async () => {
     const sc = list.find(x => x.id === b.dataset.stop);
@@ -377,6 +392,10 @@ function editSchedule(sc, prefill) {
       orig: sc ? { date: x.date || "", time: x.time || "", untilDate: ud || "" } : null };
   });
   const grpVal = s.ungrouped ? RUN_UNGROUPED : (s.group || "");
+  // The schedule's command set no longer exists: shown as such, selected,
+  // and the save refuses it (the first option used to be picked quietly,
+  // which changed what the schedule runs).
+  const setGone = !!s.commandSet && !(INV.commandSets || []).some(cs => cs.name === s.commandSet);
   const node = h(`<div>
     <h3>${esc(sc ? t("予約を編集") : t("予約を追加"))}</h3>
 
@@ -405,8 +424,10 @@ function editSchedule(sc, prefill) {
       <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-cmdmode" value="set" style="width:auto" ${typed.length ? "" : "checked"}> ${esc(t("コマンドセットから選ぶ"))}</label>
       <select id="sc-set" style="margin:4px 0 8px 26px;width:calc(100% - 26px)">
         <option value="">${esc(t("機器ごとに割り当てたコマンドセット"))}</option>
+        ${setGone ? `<option value="${SC_SET_GONE}" selected disabled>${esc(t("（削除済み: {n}）", { n: s.commandSet }))}</option>` : ""}
         ${(INV.commandSets || []).map(cs => `<option value="${esc(cs.name)}" ${cs.name === s.commandSet ? "selected" : ""}>${esc(cs.name)}</option>`).join("")}
       </select>
+      ${setGone ? `<div style="font-size:12px;margin:-4px 0 8px 26px;color:var(--err)">${esc(t("この予約のコマンドセット「{n}」は削除されています。別のコマンドセットを選ぶか、コマンドを直接入力してください", { n: s.commandSet }))}</div>` : ""}
       <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-cmdmode" value="typed" style="width:auto" ${typed.length ? "checked" : ""}> ${esc(t("コマンドを直接入力する（1 行に 1 コマンド）"))}</label>
       <textarea id="sc-cmds" class="mono" rows="3" style="margin:4px 0 0 26px;width:calc(100% - 26px);font-size:13px" placeholder="show interface status&#10;show logging | include %LINK">${esc(typed.join("\n"))}</textarea>
       <div class="muted" style="font-size:12px;margin:4px 0 0 26px">${esc(t("※ conf t・write など、設定を変えるコマンドは使えません"))}</div></div>
@@ -455,9 +476,12 @@ function editSchedule(sc, prefill) {
       node.querySelector("#sc-count").textContent = t("選択中 {a} / {b} 台", { a: groupDevs().filter(d => picked.has(d.name)).length, b: groupDevs().length });
     }));
   }
+  // Another group: every device of it is picked (a schedule only collects).
+  // The run tab's check marks used to decide it, and a copy for a second
+  // group came out with a few devices and no visible reason.
   grpSel.onchange = () => {
     const g = grpSel.value;
-    picked = new Set((INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && d.enabled && !d.cliOff).map(d => d.name));
+    picked = new Set((INV.devices || []).filter(d => (g === RUN_UNGROUPED ? !d.group : d.group === g) && !d.cliOff).map(d => d.name));
     filterIn.value = ""; lastClick = -1;
     renderDevs();
   };
@@ -576,8 +600,15 @@ function editSchedule(sc, prefill) {
     const typedMode = node.querySelector('input[name="sc-cmdmode"]:checked').value === "typed";
     const commands = typedMode ? cmdBox.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean) : [];
     if (typedMode && !commands.length) { toast(t("③ に実行するコマンドを入力してください"), "err"); return; }
+    if (!typedMode && setSel.value === SC_SET_GONE) { toast(t("③ のコマンドセットは削除されています。別のコマンドセットを選ぶか、コマンドを直接入力してください"), "err"); return; }
     const p2 = n => String(n).padStart(2, "0");
     const stamp = d => `${ymd(d)} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+    // What the backend refuses is said here, before the confirmation (a
+    // weekly slot without a day, a period under 10 seconds, an end before
+    // the start).
+    for (const x of slots) {
+      if (x.kind === "weekly" && !(x.weekdays || []).length) { toast(t("① の曜日を 1 つ以上チェックしてください"), "err"); return; }
+    }
     for (const x of slots) {
       // A one-off at a time already past would be refused by the backend —
       // but only after the confirmation; said here instead, like the
@@ -590,12 +621,14 @@ function editSchedule(sc, prefill) {
       if (x.kind !== "interval") continue;
       const sec = x.every * x.unit;
       if (!(sec > 0) || Math.abs(sec - Math.round(sec)) > 1e-6) { toast(t("① の間隔は秒単位で割り切れる数で入れてください（例 1.5 時間 = 90 分）"), "err"); return; }
+      if (Math.round(sec) < 10) { toast(t("① の間隔は 10 秒以上にしてください"), "err"); return; }
       if (x.end === "count" && !(Number.isInteger(x.count) && x.count >= 1)) { toast(t("① の回数を 1 以上の整数で入れてください"), "err"); return; }
       // A start already behind would silently drop the firings before now
       // (they are never caught up on) — unless it is the saved one, kept.
-      const start = `${x.date} ${x.time}`;
+      const start = x.startNow ? stamp(new Date()) : `${x.date} ${x.time}`;
       const kept = x.orig && x.date === x.orig.date && x.time === x.orig.time;
       if (!x.startNow && !kept && start < stamp(new Date())) { toast(t("① の開始日時が過ぎています。「保存したらすぐ」を選ぶか、今より後の時刻にしてください"), "err"); return; }
+      if (x.end === "until" && `${x.untilDate} ${x.untilTime}` <= start) { toast(t("① の終わりの日時が開始より前（または同じ）です。開始より後の時刻にしてください"), "err"); return; }
     }
     // 保存したらすぐ: the first firing a few seconds after the save itself —
     // taken again once the confirmation is answered (the backend only runs

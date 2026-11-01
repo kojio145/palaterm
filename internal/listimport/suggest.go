@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/sheet"
@@ -70,26 +71,74 @@ func isNumberish(v string) bool {
 // fieldWords are the words a header holds for each field, tried in this
 // order (enablePassword before password: "enable パスワード" is the
 // former), and the words that rule a header out ("接続先" is a contact,
-// "メールアドレス" no device address).
+// "メールアドレス" no device address). words match anywhere in the header;
+// tokenWords only as a whole word of it (headerTokens): a wrong guess for a
+// secret field cannot be seen in the preview (the values are masked), so
+// "Enabled" must not be the enable password nor "電源(PWR)" the password,
+// and "Description" is no IP address.
 var fieldWords = []struct {
-	key       string
-	words     []string
-	notWords  []string
-	exactOnly []string
+	key        string
+	words      []string
+	tokenWords []string
+	notWords   []string
 }{
 	{key: "name", words: []string{"ホスト名", "hostname", "機器名", "装置名", "ノード名", "nodename", "devicename", "機器名称", "ホスト"}, notWords: []string{"ip", "アドレス"}},
-	{key: "host", words: []string{"ipアドレス", "管理ip", "ipaddress", "ip", "アドレス", "address"}, notWords: []string{"メール", "mail", "mac", "住所"}},
+	{key: "host", words: []string{"ipアドレス", "管理ip", "ipaddress", "ipaddr", "アドレス", "address"}, tokenWords: []string{"ip", "ipv4"}, notWords: []string{"メール", "mail", "mac", "住所", "description", "desc", "zip", "郵便"}},
 	{key: "conn", words: []string{"接続方式", "プロトコル", "protocol", "接続"}, notWords: []string{"接続先"}},
 	{key: "port", words: []string{"ポート", "port"}, notWords: []string{"ポート数", "スイッチ"}},
 	{key: "site", words: []string{"拠点", "設置場所", "設置先", "サイト", "site"}, notWords: []string{"コード", "code"}},
 	{key: "role", words: []string{"役割", "用途", "role", "区分"}, notWords: []string{"網", "回線"}},
-	{key: "enablePassword", words: []string{"enable", "特権"}},
+	{key: "enablePassword", words: []string{"特権"}, tokenWords: []string{"enable", "enablepassword", "enablepasswd", "enablepw", "enablepwd", "enablesecret"}, notWords: []string{"enabled"}},
 	{key: "username", words: []string{"ユーザ", "user", "ログインid", "アカウント", "account"}, notWords: []string{"パスワード", "password"}},
-	{key: "password", words: []string{"パスワード", "password", "passwd", "pw"}, notWords: []string{"enable", "特権"}},
+	{key: "password", words: []string{"パスワード"}, tokenWords: []string{"password", "passwd", "pwd", "pw"}, notWords: []string{"enable", "特権", "期限", "変更", "expir", "hint", "ヒント"}},
 }
 
 func normWord(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(norm.NFKC.String(s)), ""))
+}
+
+// headerTokens splits a header into its words: at anything that is not a
+// letter or digit ("enable_pw", "IP Address", "電源(PWR)"), where Latin
+// meets another script ("管理IP", "IPアドレス") and at a camel-case step
+// ("enablePassword"), lower-cased and NFKC-folded (full-width letters).
+func headerTokens(s string) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, strings.ToLower(string(cur)))
+			cur = cur[:0]
+		}
+	}
+	var prev rune
+	for _, r := range norm.NFKC.String(s) {
+		switch {
+		case !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			flush()
+		case len(cur) > 0 && (r <= unicode.MaxASCII) != (prev <= unicode.MaxASCII):
+			flush()
+			cur = append(cur, r)
+		case len(cur) > 0 && unicode.IsUpper(r) && unicode.IsLower(prev):
+			flush()
+			cur = append(cur, r)
+		default:
+			cur = append(cur, r)
+		}
+		prev = r
+	}
+	flush()
+	return out
+}
+
+func hasToken(tokens, words []string) bool {
+	for _, t := range tokens {
+		for _, w := range words {
+			if t == w {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reRepeated is the mark ReadTable gives the second and later columns of a
@@ -124,7 +173,10 @@ func Suggest(s *sheet.Sheet, r model.ImportRule) Suggestion {
 				continue // a repeated header is the second device's
 			}
 			w := normWord(h.Name)
-			if !hasAny(w, fw.words) || hasAny(w, fw.notWords) {
+			if !hasAny(w, fw.words) && !hasToken(headerTokens(h.Name), fw.tokenWords) {
+				continue
+			}
+			if hasAny(w, fw.notWords) {
 				continue
 			}
 			used[h.Col] = true

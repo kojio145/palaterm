@@ -105,7 +105,7 @@ async function bootTerminalWindow() {
       <div id="tw-title" style="color:var(--text);font-size:13px;flex:1 1 120px;min-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t("対話接続"))}</div>
       <div class="tw-tools" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">
         <span id="tw-bc-pill" class="pill hidden" style="background:#7c2d12;color:#fed7aa;border:1px solid #f97316"></span>
-        <button class="btn sm" id="tw-bcast" data-tip="${esc(t("オンにした窓どうしで、この窓で打ったキーをすべての窓へ同時に送ります（Tera Term のブロードキャストコマンドのリアルタイムモードと同じ）。ログイン中・切断中・ロック中の窓には送りません"))}">${esc(t("同時入力"))}</button>
+        <button class="btn sm" id="tw-bcast" data-tip="${esc(t("オンにした窓どうしで、この窓で打ったキーをすべての窓へ同時に送ります（Tera Term のブロードキャストコマンドのリアルタイムモードと同じ）。ログイン中・切断中・ロック中の窓には送りません（Alt+Shift+B でオン／オフ）"))}">${esc(t("同時入力"))}</button>
         <button class="btn sm" id="tw-tile" data-tip="${esc(t("開いている端末窓をすべて、この窓のある画面いっぱいに並べます（開いた順）"))}">${esc(t("並べ直す"))}</button>
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
         <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての端末窓に反映）"))}">${esc(t("色"))}</button>
@@ -186,7 +186,8 @@ async function bootTerminalWindow() {
         <div id="tw-pw-field">
           <input id="tw-pw-in" type="password" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px" autofocus>
         </div>
-        <button class="btn primary" id="tw-pw-ok" style="width:100%;margin-top:12px">${esc(t("接続"))}</button>
+        <div id="tw-pw-err" style="color:#f87171;font-size:12px;min-height:18px;margin-top:6px"></div>
+        <button class="btn primary" id="tw-pw-ok" style="width:100%;margin-top:6px">${esc(t("接続"))}</button>
       </div>
     </div>
   </div>`);
@@ -246,6 +247,7 @@ async function bootTerminalWindow() {
   document.getElementById("tw-color").onclick = e => openScreenColorPanel("term", e.currentTarget, applyTermColors, () => term.focus());
   let closed = false;
   let locked = false; // the lock overlay is up: keys go nowhere
+  let pwPrompt = null; // asks for the master password in the window (set after Start when it is needed)
 
   // 貼り付けキー。xterm.js の既定は Ctrl+V を制御文字 ^V として機器へ送り、Shift+Insert も
   // ESC[2~ を送ってしまい、どちらもブラウザ既定の貼り付けを抑止する（Ctrl+Shift+V だけが貼り付く）。
@@ -258,6 +260,9 @@ async function bootTerminalWindow() {
   term.attachCustomKeyEventHandler(e => {
     if (locked || hkOpen) return false;
     if (e.type !== "keydown" || e.metaKey) return true;
+    // Alt+Shift+B toggles 同時入力 (before Alt+B below, which would send a
+    // break on a serial line).
+    if (e.altKey && e.shiftKey && !e.ctrlKey && (e.code === "KeyB" || e.key === "b" || e.key === "B")) { toggleBcast(); return false; }
     // Alt+B = break, on a serial line only; elsewhere it stays the shell's /
     // IOS's "back one word" (Esc-B).
     if (e.altKey && !e.ctrlKey && (e.code === "KeyB" || e.key === "b" || e.key === "B") && !breakBtn.classList.contains("hidden")) { sendBreak(); return false; }
@@ -327,6 +332,9 @@ async function bootTerminalWindow() {
   }
   function closePasteDialog() { pasteDlg.classList.add("hidden"); term.focus(); }
   function confirmPaste() {
+    // Emptied in the dialog: nothing goes, not even the Enter (the paste
+    // window's backend refuses an empty text the same way).
+    if (!pasteText.value) { closePasteDialog(); return; }
     let s = pasteText.value.replace(/\r\n|\r|\n/g, "\r");
     if (pasteCr.checked && !s.endsWith("\r")) s += "\r";
     closePasteDialog();
@@ -386,7 +394,8 @@ async function bootTerminalWindow() {
     if (document.activeElement === term.textarea || !idleFocus()) return; // xterm's handler above has it
     const isV = e.code === "KeyV" || e.key === "v" || e.key === "V";
     const isIns = e.code === "Insert" || e.key === "Insert";
-    if (e.altKey && !e.ctrlKey && isV) { e.preventDefault(); term.focus(); pasteFromClipboard(true); }
+    if (e.altKey && e.shiftKey && !e.ctrlKey && (e.code === "KeyB" || e.key === "b" || e.key === "B")) { e.preventDefault(); toggleBcast(); }
+    else if (e.altKey && !e.ctrlKey && isV) { e.preventDefault(); term.focus(); pasteFromClipboard(true); }
     else if ((e.ctrlKey && isV) || (e.shiftKey && !e.ctrlKey && isIns)) { e.preventDefault(); term.focus(); pasteFromClipboard(false); }
   });
   // Right-click follows the 設定 tab, as Tera Term's 2 options: paste at
@@ -607,8 +616,8 @@ async function bootTerminalWindow() {
     stateEl.textContent = ev.manual ? t("接続済み（手動）") : t("接続済み"); stateEl.className = "pill ok";
     reconnectBtn.classList.add("hidden");
     breakBtn.classList.toggle("hidden", ev.conn !== "serial");
-    titleEl.textContent = `${ev.device}  ${ev.host} / ${ev.conn}` + (ev.hops ? `  ${t("踏み台 {n} 段経由", { n: ev.hops })}` : "") + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
-    setOSTitle(ev.device, ev.host, "");
+    titleEl.textContent = `${ev.group ? ev.group + " / " : ""}${ev.device}  ${ev.host} / ${ev.conn}` + (ev.hops ? `  ${t("踏み台 {n} 段経由", { n: ev.hops })}` : "") + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
+    setOSTitle(ev.device, ev.host, "", ev.group || "");
     // A console opened by hand shows nothing until the device answers; say
     // which port this is and what to do, so a wrong COM port or baud rate
     // is the first thing checked rather than the last.
@@ -688,12 +697,16 @@ async function bootTerminalWindow() {
     Term().Discard().catch(() => {});
   };
   // The OS window title (the taskbar's label): eight windows side by side
-  // tell a disconnected one from a live one by it.
-  let osTitleDev = "", osTitleHost = "";
-  function setOSTitle(dev, host, state) {
-    if (dev) { osTitleDev = dev; osTitleHost = host || ""; }
-    const base = "PalaTerm - " + osTitleDev + (osTitleHost ? " - " + osTitleHost : "");
-    try { rt().WindowSetTitle(base + (state ? " - " + state : "")); } catch (e) {}
+  // tell a disconnected one from a live one by it. The group goes first
+  // (names are unique within a group only). While locked the title says
+  // only that (no device, no host); the state is kept for the unlock.
+  let osTitleDev = "", osTitleHost = "", osTitleGroup = "", osTitleState = "";
+  function setOSTitle(dev, host, state, group) {
+    if (dev) { osTitleDev = dev; osTitleHost = host || ""; osTitleGroup = group || ""; }
+    osTitleState = state || "";
+    if (locked) return;
+    const base = "PalaTerm - " + (osTitleGroup ? osTitleGroup + " / " : "") + osTitleDev + (osTitleHost ? " - " + osTitleHost : "");
+    try { rt().WindowSetTitle(base + (osTitleState ? " - " + osTitleState : "")); } catch (e) {}
   }
   rt().EventsOn("term:closed", ev => {
     closed = true;
@@ -709,15 +722,20 @@ async function bootTerminalWindow() {
     stateEl.textContent = ev.error ? failState : t("切断");
     stateEl.className = "pill err";
     setOSTitle("", "", ev.error ? failState : t("切断"));
-    if (ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) {
-      showHk(terr(ev.error));
-    }
+    // Why it closed, by ev.kind (terminal_app.go); the message text is the
+    // fallback for a backend without it.
+    const isHostKey = ev.kind === "hostkey" || (!ev.kind && !!ev.error && /ホストキーが前回接続時と異なります/.test(ev.error));
+    const isMasterPw = ev.kind === "masterpw" || (!ev.kind && /マスターパスワード/.test(ev.error || ""));
+    if (isHostKey) showHk(terr(ev.error || ""));
     if (ev.error) term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(ev.error) + "\x1b[0m\r\n");
     else term.write("\r\n\x1b[33m" + t("[切断されました]") + "\x1b[0m\r\n");
     if (ev.logPath) term.write("\x1b[36m" + t("[ログ保存] ") + ev.logPath + "\x1b[0m\r\n");
+    // A wrong master password typed in this window: ask again (the window
+    // used to be dead — nothing to press but ×).
+    if (isMasterPw && pwPrompt) pwPrompt(terr(ev.error || ""));
     // A session that ended (not a takeover offer, not a host-key question)
     // can be opened again from here.
-    if (!ev.takeover && !(ev.error && /ホストキーが前回接続時と異なります/.test(ev.error)) && !/マスターパスワード/.test(ev.error || "")) {
+    if (!ev.takeover && !isHostKey && !isMasterPw) {
       reconnectBtn.classList.remove("hidden");
       term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
     }
@@ -786,6 +804,8 @@ async function bootTerminalWindow() {
     lockEl.classList.remove("hidden");
     document.getElementById("tw-lock-err").textContent = "";
     lockIn.value = ""; setTimeout(() => lockIn.focus(), 50);
+    // The taskbar label too: the device and its host stayed readable there.
+    try { rt().WindowSetTitle("PalaTerm - " + t("ロック中")); } catch (e) {}
   }
   let unlocking = false;
   async function tryUnlock() {
@@ -796,11 +816,16 @@ async function bootTerminalWindow() {
     try { await doUnlock(); } finally { unlocking = false; okBtn.disabled = false; }
   }
   async function doUnlock() {
-    if (await Term().Unlock(lockIn.value)) {
+    // The field is emptied as soon as the password is taken: it stayed in
+    // the hidden element in clear until the next lock.
+    const pw = lockIn.value;
+    lockIn.value = "";
+    if (await Term().Unlock(pw)) {
       locked = false; setInert(false); lockEl.classList.add("hidden"); lastInput = Date.now();
+      setOSTitle("", "", osTitleState); // the title from before the lock
       if (hkOpen) showHk(); else term.focus();
     }
-    else { document.getElementById("tw-lock-err").textContent = t("マスターパスワードが違います"); lockIn.select(); }
+    else { document.getElementById("tw-lock-err").textContent = t("マスターパスワードが違います"); lockIn.focus(); }
   }
   document.getElementById("tw-lock-ok").onclick = tryUnlock;
   lockIn.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); tryUnlock(); } });
@@ -843,7 +868,7 @@ async function bootTerminalWindow() {
   // Keys arriving from another window (同時入力) are use of this window too:
   // otherwise every window but the one typed in would lock on its own idle
   // time and drop out of 同時入力 in the middle of the work.
-  rt().EventsOn("term:remote-input", () => { if (!locked) { lastInput = Date.now(); lockWarned = false; wrap.dataset.remoteInput = String(lastInput); } });
+  rt().EventsOn("term:remote-input", () => { if (!locked) { lastInput = Date.now(); lockWarned = false; } });
   ["keydown", "mousedown", "mousemove", "wheel"].forEach(ev => document.addEventListener(ev, () => { if (!locked) { lastInput = Date.now(); lockWarned = false; } }, { passive: true }));
   setInterval(async () => {
     if (locked) return;
@@ -915,6 +940,10 @@ async function bootTerminalWindow() {
   const bcFrame = h(`<div id="tw-bc-frame" class="hidden" style="position:absolute;inset:0;border:3px solid #f97316;pointer-events:none;z-index:25"></div>`);
   wrap.appendChild(bcFrame);
   let bc = { join: false, ready: false, joined: 0, readyN: 0 };
+  // The names of the windows that take part (the BCN line carries them
+  // since v1.9.26: ev.names, the ones that take keys now in ev.readyNames);
+  // an older backend sends the counts alone.
+  const bcNames = k => Array.isArray(bc[k]) ? bc[k].filter(Boolean) : [];
   function renderBcast() {
     bcBtn.classList.toggle("bc-on", bc.join);
     bcBtn.textContent = bc.join ? t("同時入力 オン") : t("同時入力");
@@ -922,20 +951,25 @@ async function bootTerminalWindow() {
     bcPill.classList.toggle("hidden", !bc.join);
     if (bc.join) {
       bcPill.textContent = bc.joined > 1 ? t("同時入力中（{r} / {n} 台）", { r: bc.readyN, n: bc.joined }) : t("同時入力: 相手の窓なし");
-      bcPill.dataset.tip = t("同時入力がオンの窓 {n} 台のうち、いまキーを受け取れる窓が {r} 台です（ログイン中・切断中・ロック中の窓は受け取りません）", { n: bc.joined, r: bc.readyN });
+      const names = bcNames("names"), readyNames = bcNames("readyNames");
+      bcPill.dataset.tip = t("同時入力がオンの窓 {n} 台のうち、いまキーを受け取れる窓が {r} 台です（ログイン中・切断中・ロック中の窓は受け取りません）", { n: bc.joined, r: bc.readyN })
+        + (names.length ? "\n" + t("オンの窓: {s}", { s: names.join(", ") }) : "")
+        + (readyNames.length ? "\n" + t("いま受け取れる窓: {s}", { s: readyNames.join(", ") }) : "");
     }
   }
   rt().EventsOn("term:bcast", ev => { bc = ev || bc; renderBcast(); });
   // How many other windows get what is typed here now.
   function bcPeers() { return bc.join ? Math.max(0, (bc.readyN || 0) - (bc.ready ? 1 : 0)) : 0; }
   Term().BroadcastState().then(ev => { bc = ev || bc; renderBcast(); }).catch(() => {});
-  bcBtn.onclick = () => {
+  // The button, and Alt+Shift+B.
+  function toggleBcast() {
     Term().SetBroadcast(!bc.join).then(ev => {
       bc = ev || bc; renderBcast();
       flashNote(bc.join ? t("同時入力をオンにしました") : t("同時入力をオフにしました"));
     }).catch(e => flashNote(terr(e), 0, "err"));
     term.focus();
-  };
+  }
+  bcBtn.onclick = toggleBcast;
   document.getElementById("tw-tile").onclick = () => { Term().Tile().catch(e => flashNote(terr(e), 0, "err")); term.focus(); };
 
   // Kick off: use the stdin password if present, else prompt in-window.
@@ -947,16 +981,25 @@ async function bootTerminalWindow() {
   // Only an automatic login can be switched away from.
   showSwitch(!res.manual);
   if (res.needPassword) {
-    const pwOverlay = document.getElementById("tw-pw");
-    pwOverlay.classList.remove("hidden");
+    const pwOverlay = document.getElementById("tw-pw"), pwIn = document.getElementById("tw-pw-in"), pwErr = document.getElementById("tw-pw-err");
     const submit = () => {
-      const pw = document.getElementById("tw-pw-in").value;
+      const pw = pwIn.value;
       if (!pw) return;
+      pwIn.value = ""; // not left in the hidden field in clear
+      pwErr.textContent = "";
       pwOverlay.classList.add("hidden");
       Term().StartWithPassword(pw);
     };
+    // Shown at start, and again after a wrong password (term:closed,
+    // kind "masterpw") with why.
+    pwPrompt = err => {
+      pwErr.textContent = err || "";
+      pwOverlay.classList.remove("hidden");
+      pwIn.value = "";
+      setTimeout(() => pwIn.focus(), 30);
+    };
     document.getElementById("tw-pw-ok").onclick = submit;
-    document.getElementById("tw-pw-in").addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
-    document.getElementById("tw-pw-in").focus();
+    pwIn.addEventListener("keydown", e => { if (e.key === "Enter") submit(); });
+    pwPrompt("");
   }
 }

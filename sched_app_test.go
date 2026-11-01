@@ -88,7 +88,7 @@ func TestChangeCommandsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = changeCommandsErr(snap)
-	if err == nil || !errors.Is(err, errChangeCommands) || !strings.Contains(err.Error(), "configure terminal / write memory") {
+	if err == nil || !errors.Is(err, errChangeCommands) || !strings.Contains(err.Error(), "1 行目（") || strings.Contains(err.Error(), "configure terminal") {
 		t.Fatalf("got %v", err)
 	}
 	if strings.Count(err.Error(), "「change」") != 1 {

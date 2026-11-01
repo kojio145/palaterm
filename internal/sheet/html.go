@@ -86,7 +86,7 @@ func spanAttr(n *html.Node, key string, maxSpan int) int {
 }
 
 func readHTMLTable(t *html.Node, name string, b *Book) {
-	sb := &sheetBuilder{name: name}
+	sb := &sheetBuilder{name: name, book: b}
 	defer sb.finish(b)
 	// busy[c] is the first row at which column c is free again, so cells
 	// covered by an earlier rowspan push later cells to the right.

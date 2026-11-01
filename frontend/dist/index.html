@@ -46,6 +46,13 @@
       <button class="nav-btn" data-tab="ostypes" data-i18n="メニュー:OSタイプ">OSタイプ</button>
       <button class="nav-btn" data-tab="settings">設定</button>
       <div class="side-spacer"></div>
+      <!-- Page zoom (app.js wireMainZoom): A− / A+, also Ctrl+wheel,
+           Ctrl+plus / minus, Ctrl+0. -->
+      <div class="zoom-bar" data-tip="Ctrl + / Ctrl - / Ctrl 0">
+        <button class="btn sm" id="zoom-out" type="button" aria-label="zoom out">A−</button>
+        <span id="zoom-pct" class="zoom-pct">100%</span>
+        <button class="btn sm" id="zoom-in" type="button" aria-label="zoom in">A+</button>
+      </div>
       <select id="lang-select" class="lang-select" data-tip="Language">
         <option value="en">🌐 English</option>
         <option value="ja">🌐 日本語</option>

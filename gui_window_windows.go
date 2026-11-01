@@ -56,13 +56,14 @@ const (
 	swShow             = 5
 	idcArrow           = 32512
 
-	menuBrowser = 1
-	menuReload  = 2
-	menuRelogin = 3
-	menuAllow   = 4
-	menuBack    = 5
-	menuForward = 6
-	menuCopyURL = 7
+	menuBrowser  = 1
+	menuReload   = 2
+	menuRelogin  = 3
+	menuAllow    = 4
+	menuBack     = 5
+	menuForward  = 6
+	menuCopyURL  = 7
+	menuCopyUser = 8
 
 	wmGUINavigate = 0x8000 + 20
 
@@ -164,6 +165,10 @@ type guiWin struct {
 	c14       uintptr // ICoreWebView2_14 (certificate errors), 0 if the runtime is older
 	ready     bool
 	dataDir   string // this window's own WebView2 profile, removed on exit
+	// noSettings: the WebView2 settings could not be read, so DevTools,
+	// autofill and the browser's shortcut keys could not be turned off; no
+	// device page is opened in that state (said instead).
+	noSettings bool
 	// activeSent: when the last ACTIVE line went to the main window.
 	activeSent time.Time
 }
@@ -238,8 +243,10 @@ func (w *guiWin) removeProfile() {
 
 // cleanStaleGUIProfiles deletes the profiles left behind by GUI windows
 // that were killed: only those whose process is gone — another open
-// window's files must not be touched. Run by a closing GUI window and by
-// the main window at startup.
+// window's files must not be touched. A process of the same ID started
+// after the folder was made is another process (the ID reused), not the
+// window. Run by a closing GUI window, by the main window at startup and
+// when its last GUI window has ended.
 func cleanStaleGUIProfiles() {
 	if ents, err := os.ReadDir(guiProfileRoot()); err == nil {
 		for _, e := range ents {
@@ -248,12 +255,32 @@ func cleanStaleGUIProfiles() {
 			if !e.IsDir() || !strings.HasPrefix(e.Name(), "w-") {
 				continue
 			}
-			if n, _ := fmt.Sscanf(e.Name(), "w-%d-%d", &pid, &ns); n != 2 || pid == uint32(os.Getpid()) || processAlive(pid) {
+			if n, _ := fmt.Sscanf(e.Name(), "w-%d-%d", &pid, &ns); n != 2 || pid == uint32(os.Getpid()) {
+				continue
+			}
+			if processAlive(pid) && !processStartedAfter(pid, ns) {
 				continue
 			}
 			_ = os.RemoveAll(filepath.Join(guiProfileRoot(), e.Name()))
 		}
 	}
+}
+
+// processStartedAfter reports that process pid was created after the Unix
+// time ns (a reused process ID, not the process that made the folder named
+// with ns). False when its creation time cannot be read: a window that
+// might still be running keeps its profile.
+func processStartedAfter(pid uint32, ns int64) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var created, exit, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exit, &kernel, &user) != nil {
+		return false
+	}
+	return created.Nanoseconds() > ns
 }
 
 // processAlive reports that a process with this ID is running.
@@ -375,6 +402,7 @@ func (w *guiWin) create() error {
 	add(menuReload, "再読み込み", "Reload")
 	add(menuRelogin, "ログインし直す", "Log in again")
 	add(menuCopyURL, "URL をコピー", "Copy URL")
+	add(menuCopyUser, "ユーザー名をコピー", "Copy username")
 	add(menuBrowser, "既定のブラウザで開く（自動ログインなし）", "Open in default browser (no auto login)")
 	// Created hidden, then sized for the monitor's scaling and placed over
 	// the main window (the other child windows do the same; this one used
@@ -397,20 +425,32 @@ func (w *guiWin) create() error {
 	if guiProbeArgs != "" {
 		c.AdditionalBrowserArgs = []string{guiProbeArgs}
 	}
-	c.SetErrorCallback(func(err error) { w.alert("WebView2: " + err.Error()); os.Exit(1) })
+	// A WebView2 failure ends the window; its profile (whatever the browser
+	// wrote before failing) goes with it, as on a normal close.
+	c.SetErrorCallback(func(err error) { w.alert("WebView2: " + err.Error()); w.removeProfile(); os.Exit(1) })
 	c.MessageCallback = w.onMessage
-	c.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) { w.onNavigated() }
+	c.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, args *edge.ICoreWebView2NavigationCompletedEventArgs) {
+		w.onNavigated(uintptr(unsafe.Pointer(args)))
+	}
 	w.chromium = c
 	c.Embed(hwnd)
 	c.Resize()
 	// No DevTools (a typed password would be one click away), no autofill or
-	// saved passwords of the browser's own.
+	// saved passwords of the browser's own, no browser shortcut keys (Ctrl+S
+	// saves the logged-in page, Ctrl+P prints it; the menu has back, forward
+	// and reload). Settings that cannot be read are settings that cannot be
+	// turned off: the device page is then not opened (open says so).
 	if st, err := c.GetSettings(); err == nil && st != nil {
 		_ = st.PutAreDevToolsEnabled(false)
+		if s3 := st.GetICoreWebView2Settings3(); s3 != nil {
+			_ = s3.PutAreBrowserAcceleratorKeysEnabled(false)
+		}
 		if s4 := st.GetICoreWebView2Settings4(); s4 != nil {
 			_ = s4.PutIsGeneralAutofillEnabled(false)
 			_ = s4.PutIsPasswordAutosaveEnabled(false)
 		}
+	} else {
+		w.noSettings = true
 	}
 	w.hook()
 	c.Init(guiPageScript(jsOrigin(w.base)))
@@ -568,6 +608,12 @@ func (w *guiWin) open() {
 	w.mu.Lock()
 	w.badShown, w.noCert = false, false
 	w.mu.Unlock()
+	if w.noSettings {
+		w.chromium.NavigateToString(guiNotice(winWord(
+			"この PC の WebView2 では保護設定（開発者ツールや自動入力、ブラウザのショートカットキーの無効化）を適用できなかったため、GUI を開きません。Windows Update で Microsoft Edge WebView2 Runtime を更新するか、メニューの「既定のブラウザで開く」を使ってください。",
+			"This PC's WebView2 did not accept the protective settings (DevTools, autofill and browser shortcut keys off), so the GUI is not opened. Update the Microsoft Edge WebView2 Runtime, or use \"Open in default browser\" in the menu.")))
+		return
+	}
 	if w.c14 == 0 {
 		if w.base.Scheme == "https" {
 			w.chromium.NavigateToString(guiNotice(winWord(
@@ -691,13 +737,18 @@ func (w *guiWin) certificateError(_, args uintptr) {
 // certificate check nor the page script.
 func (w *guiWin) newWindow(_, args uintptr) {
 	uri := comString(args, slotNewWinArgsGetUri)
-	// A window opened empty (about:blank) and written into by the page's
-	// script has no address to judge; handling it would make it vanish, so
-	// WebView2 opens it as it would on its own.
+	comCall(args, slotNewWinArgsPutHandled, 1)
+	// A window opened empty (about:blank) and written into or sent
+	// elsewhere by the page's script afterwards: left to WebView2 it would
+	// be a plain browser window on this window's profile (the device's
+	// session) with neither the certificate check nor the page script, so
+	// it is this window instead, emptied — what the script does next goes
+	// through the checks above like any navigation.
 	if uri == "" || strings.HasPrefix(strings.ToLower(uri), "about:blank") {
+		guiNavigate.Store("about:blank")
+		pPostMessage.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
 		return
 	}
-	comCall(args, slotNewWinArgsPutHandled, 1)
 	if w.sameOrigin(uri) {
 		guiNavigate.Store(uri)
 		pPostMessage.Call(uintptr(w.hwnd), wmGUINavigate, 0, 0)
@@ -757,9 +808,20 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 				comCall(c, slotGoForward)
 			}
 		case menuCopyURL:
-			if s := w.source(); s != "" {
+			// Without the query and fragment: older GUIs carry the session
+			// in them, and a pasted URL would carry the session along.
+			if s, stripped := bareURL(w.source()); s != "" {
 				setClipboardText(w.hwnd, s)
-				w.title(winWord("URL をコピーしました", "URL copied"))
+				if stripped {
+					w.title(winWord("URL をコピーしました（? 以降は除きました）", "URL copied (without the part after ?)"))
+				} else {
+					w.title(winWord("URL をコピーしました", "URL copied"))
+				}
+			}
+		case menuCopyUser:
+			if w.cfg.User != "" {
+				setClipboardText(w.hwnd, w.cfg.User)
+				w.title(winWord("ユーザー名をコピーしました", "username copied"))
 			}
 		case menuBrowser:
 			src := w.cfg.URL
@@ -776,7 +838,7 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			// remembered refusal, as 証明書の変更を許可 does).
 			w.mu.Lock()
 			w.autoSent, w.formSeen, w.loggedIn = false, false, false
-			w.badCert, w.badShown = "", false
+			w.badCert, w.badShown, w.swappedNow = "", false, false // a swap is noted again
 			w.mu.Unlock()
 			w.title("")
 			w.open()
@@ -812,9 +874,29 @@ func (w *guiWin) wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	return r
 }
 
-// onNavigated shows why a page was refused for its certificate (once: the
-// notice page completes a navigation of its own).
-func (w *guiWin) onNavigated() {
+// slotNavArgsGetIsSuccess is ICoreWebView2NavigationCompletedEventArgs::
+// get_IsSuccess (IUnknown's three first).
+const slotNavArgsGetIsSuccess = 3
+
+// onNavigated takes note of a device page that loaded with a certificate
+// the browser trusts (noteTrustedLocked: whether or not a login form is
+// found on it), and shows why a page was refused for its certificate (once:
+// the notice page completes a navigation of its own).
+func (w *guiWin) onNavigated(args uintptr) {
+	var success int32
+	if args != 0 {
+		comCall(args, slotNavArgsGetIsSuccess, uintptr(unsafe.Pointer(&success)))
+	}
+	swapped := false
+	if success != 0 && w.onDevicePage() {
+		w.mu.Lock()
+		swapped = w.noteTrustedLocked()
+		w.mu.Unlock()
+	}
+	if swapped {
+		w.title(winWord("前回は自己署名の証明書でしたが、今回はこの PC が信頼する証明書です。心当たりがあればメニューの「証明書の変更を許可」を押してください", "the certificate changed from self-signed to a trusted one; allow it in the menu if expected"))
+		w.showAllowMenu()
+	}
 	w.mu.Lock()
 	bad, shown, nocert := w.badCert, w.badShown, w.noCert
 	if bad != "" || nocert {
@@ -881,40 +963,43 @@ func (w *guiWin) onMessage(msg string) {
 			w.mu.Unlock()
 			return
 		}
+		// The page script may find the form before the navigation completes:
+		// the trusted-certificate note is taken here too (once, either way).
+		swappedNow := w.noteTrustedLocked()
+		swapped := w.swappedNow
 		// Sent on its own only once per window, and not on a certificate seen
-		// for the first time just now; a plain https page without any
-		// certificate error is one the browser trusted ("ca" recorded).
-		if w.base.Scheme == "https" && !w.certErr && w.cfg.Pin == "" {
-			w.cfg.Pin = "ca"
-			fmt.Printf("%s %s\n", guiEventCert, "ca")
-		}
-		// The pin is a self-signed fingerprint but this page came with no
-		// certificate error: the device now presents a certificate this PC
-		// trusts — a renewal, or something in between with a CA of its own.
-		// Filled in, not sent; the user decides (and 証明書の変更を許可
-		// records the new state).
-		swapped := w.base.Scheme == "https" && !w.certErr && w.cfg.Pin != "" && w.cfg.Pin != "ca"
+		// for the first time just now, or one that swapped to a trusted one.
 		submit := w.loginSubmit(swapped)
+		// The form is back after this window sent the login: refused (a
+		// wrong password, most likely). Told to the main window, which keeps
+		// the next window from sending the same credentials again.
+		refused := w.autoSent && !submit
 		if submit {
 			w.autoSent = true
 		}
 		w.formSeen = true
-		tofu, noCred := w.tofuNow, !w.hasCredentials()
-		if swapped {
-			w.badCert, w.swappedNow = "ca", true
-		}
+		tofu, noCred, noAuto := w.tofuNow, !w.hasCredentials(), w.cfg.NoAutoLogin
 		w.mu.Unlock()
-		w.chromium.Eval(guiFillScript(w.cfg.User, w.cfg.Password, submit))
+		if refused {
+			fmt.Println(guiEventLoginFail)
+		}
+		w.chromium.Eval(guiFillScript(jsOrigin(w.base), w.cfg.User, w.cfg.Password, submit))
 		switch {
 		case submit:
 			w.title("") // a "no login form" note from an earlier page goes
-		case swapped:
+		case swappedNow:
 			w.title(winWord("前回は自己署名の証明書でしたが、今回はこの PC が信頼する証明書です。心当たりがあればメニューの「証明書の変更を許可」を押してください", "the certificate changed from self-signed to a trusted one; allow it in the menu if expected"))
 			w.showAllowMenu()
+		case swapped:
+			// Noted at the navigation already: its title and menu stand.
 		case tofu:
 			w.title(winWord("初めて開く機器です。証明書を記録しました。内容を確かめて「ログイン」を押してください", "first time: certificate recorded; check and log in"))
 		case noCred:
 			w.title(winWord("ユーザー名かパスワードが登録されていないため自動ログインしません。手で入力してください", "no username or password recorded: log in by hand"))
+		case noAuto:
+			w.title(winWord("前回の自動ログインが受け付けられなかったため、今回は送信しません。内容を確かめてログインしてください（認証情報を直すと再び自動ログインします）", "the last auto login was refused, so this one is not sent; check and log in (editing the credentials turns auto login back on)"))
+		case refused:
+			w.title(winWord("自動ログインが受け付けられなかったようです。内容を確かめてログインしてください（自動ログインは1回だけです）", "the auto login seems to have been refused; check and log in (auto login runs once)"))
 		case !submit:
 			w.title(winWord("自動ログインは1回だけです。内容を確かめてログインしてください", "auto login runs once; check and log in"))
 		}
@@ -931,11 +1016,12 @@ func (w *guiWin) onMessage(msg string) {
 		w.mu.Unlock()
 		if noForm {
 			// The first page of the device, and no login form the script
-			// recognises on it: said so, with the username, instead of a
-			// blank login page the user cannot tell from "still looking".
-			w.title(winWord(
-				fmt.Sprintf("ログイン欄を見つけられませんでした。手で入力してください（ユーザー名: %s）", w.cfg.User),
-				fmt.Sprintf("no login form found: log in by hand (username: %s)", w.cfg.User)))
+			// recognises on it: said so instead of a blank login page the
+			// user cannot tell from "still looking". The username is on the
+			// menu (ユーザー名をコピー), not in the title: a title is read by
+			// the taskbar, Alt+Tab and any process on the PC.
+			w.title(winWord("ログイン欄を見つけられませんでした。手で入力してください（メニューの「ユーザー名をコピー」）",
+				"no login form found: log in by hand (menu: Copy username)"))
 			return
 		}
 		w.title("")
@@ -961,28 +1047,71 @@ func (w *guiWin) hasCredentials() bool { return w.cfg.User != "" && w.cfg.Passwo
 
 // loginSubmit decides (under w.mu) whether the login form found now is
 // pressed: once per window, not on a certificate seen for the first time
-// or one that swapped to a trusted one, and never without both a username
-// and a password — an empty one sent is a failed login the device counts
-// towards locking that user out, and a GUI window opened a few times would
-// have done just that.
+// or one that swapped to a trusted one, not when an earlier window had
+// these credentials refused (NoAutoLogin), and never without both a
+// username and a password — an empty one sent is a failed login the device
+// counts towards locking that user out, and a GUI window opened a few times
+// would have done just that.
 func (w *guiWin) loginSubmit(swapped bool) bool {
-	return !w.autoSent && !w.tofuNow && !swapped && w.hasCredentials()
+	return !w.autoSent && !w.tofuNow && !swapped && !w.cfg.NoAutoLogin && w.hasCredentials()
+}
+
+// noteTrustedLocked (under w.mu) takes note of a page of the device that
+// loaded over https without any certificate error — one the browser
+// trusted — whether or not it has a login form (a form the script does not
+// recognise must not leave the device "never seen", or a self-signed
+// certificate swapped in later would be recorded as its first). With no
+// pin yet, "ca" is recorded. With a self-signed fingerprint pinned, the
+// device now presents a certificate this PC trusts — a renewal, or
+// something in between with a CA of its own: the login is filled in but
+// not sent, and the user decides (証明書の変更を許可 records the new state).
+// It reports whether that swap was noted just now (told once).
+func (w *guiWin) noteTrustedLocked() bool {
+	if w.base.Scheme != "https" || w.certErr {
+		return false
+	}
+	switch {
+	case w.cfg.Pin == "":
+		w.cfg.Pin = "ca"
+		fmt.Printf("%s %s\n", guiEventCert, "ca")
+	case w.cfg.Pin != "ca" && !w.swappedNow:
+		w.badCert, w.swappedNow = "ca", true
+		return true
+	}
+	return false
+}
+
+// bareURL is raw without its query and fragment (the session of an older
+// GUI rides there); stripped says whether anything was taken off. "" for
+// anything that is not an http(s) URL.
+func bareURL(raw string) (s string, stripped bool) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", false
+	}
+	stripped = u.RawQuery != "" || u.Fragment != "" || u.ForceQuery
+	u.RawQuery, u.Fragment, u.ForceQuery, u.RawFragment = "", "", false, ""
+	return u.String(), stripped
 }
 
 // guiFillScript fills the login form the page script found (and presses
 // its button when submit). Values are set the way typing does, so the
-// GUIs built on a framework (React, Vue, Angular) see them.
-func guiFillScript(user, pass string, submit bool) string {
+// GUIs built on a framework (React, Vue, Angular) see them. It runs in
+// whatever document is on top when it is evaluated: a page that took the
+// device's place in between (a redirect right after the form was found)
+// is told by origin and gets nothing.
+func guiFillScript(origin, user, pass string, submit bool) string {
+	jo, _ := json.Marshal(origin)
 	ju, _ := json.Marshal(user)
 	jp, _ := json.Marshal(pass)
-	return fmt.Sprintf(`(function(u,p,submit){var f=window.__ptFind&&window.__ptFind();if(!f)return;
+	return fmt.Sprintf(`(function(o,u,p,submit){if(location.origin!==o)return;var f=window.__ptFind&&window.__ptFind();if(!f)return;
 function set(el,v){if(!el||v==="")return;var d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),"value");if(d&&d.set)d.set.call(el,v);else el.value=v;
 el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));}
 set(f.u,u);set(f.p,p);if(!submit)return;
 setTimeout(function(){var b=f.btn;if(b){b.click();return;}
 if(f.form){if(f.form.requestSubmit)f.form.requestSubmit();else f.form.submit();return;}
 f.p.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",code:"Enter",keyCode:13,which:13,bubbles:true}));},150);
-})(%s,%s,%v)`, ju, jp, submit)
+})(%s,%s,%s,%v)`, jo, ju, jp, submit)
 }
 
 // guiPageScript runs in every page of the window: on the device's own

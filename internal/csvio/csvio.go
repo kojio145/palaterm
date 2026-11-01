@@ -211,11 +211,27 @@ func importWith(text string) ([]model.Device, func(string) bool, error) {
 			alias[strings.ToLower(hopJa(n, f))] = strings.ToLower(hopKey(n, f))
 		}
 	}
+	// A device column twice (an English and a Japanese export merged in
+	// Excel: "password" and 「パスワード」) is refused rather than the
+	// right-hand one silently winning — empty, it imported a device without
+	// its password. Columns PalaTerm does not read may repeat.
+	known := map[string]bool{"bastions": true, "bastionextras": true}
+	for _, c := range deviceCols {
+		known[strings.ToLower(c.key)] = true
+	}
+	for n := 1; n <= model.MaxBastions; n++ {
+		for _, f := range hopFields {
+			known[strings.ToLower(hopKey(n, f))] = true
+		}
+	}
 	idx := map[string]int{}
 	for i, name := range rows[0] {
 		h := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(name, BOM)))
 		if k, ok := alias[h]; ok {
 			h = k
+		}
+		if j, dup := idx[h]; dup && known[h] {
+			return nil, nil, fmt.Errorf("1 行目（見出し）に「%s」の列が 2 つあります（%d 列目と %d 列目）", strings.TrimSpace(name), j+1, i+1)
 		}
 		idx[h] = i
 	}
@@ -509,7 +525,21 @@ func itoa(i int) string {
 	}
 	return strconv.Itoa(i)
 }
-func atoi(s string) int { n, _ := strconv.Atoi(strings.TrimSpace(s)); return n }
+
+// atoi reads a numeric cell: empty is 0 (the field's default); text that is
+// no number ("2,222", "２２２２") is model.BadNumber, which Validate names,
+// rather than 0 and the default port dialed in silence.
+func atoi(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return model.BadNumber
+	}
+	return n
+}
 func parseBool(s string, def bool) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "true", "1", "yes", "y", "on", "はい", "○", "◯", "有効":

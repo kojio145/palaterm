@@ -63,6 +63,11 @@ const (
 // MaxBastions is the deepest jump-host chain PalaTerm will traverse.
 const MaxBastions = 5
 
+// BadNumber marks a numeric field whose text could not be read as a number
+// (a CSV cell "2,222" or "２２２２"): the importer sets it so Validate names
+// the cell, instead of the default port being dialed in silence.
+const BadNumber = -1
+
 // Bastion describes one jump host in a chain placed in front of a device.
 // Method is how this hop is reached from the previous one (or, for the first
 // hop, the transport used to connect).
@@ -485,7 +490,8 @@ func (inv *Inventory) Group(name string) *DeviceGroup {
 
 // ResolveCredentials returns a copy of d with the group's default
 // credentials substituted when the device asks for them. A device whose
-// group no longer exists keeps its own fields, so a deleted group never
+// group no longer exists, or has no default credentials (a group a bundle
+// import created without them), keeps its own fields, so neither ever
 // silently empties a login.
 //
 // A device that uses the user's own jump host (UseMyBastion) gets it as
@@ -496,7 +502,7 @@ func (inv *Inventory) ResolveCredentials(d Device) Device {
 		return d
 	}
 	g := inv.Group(d.Group)
-	if g == nil {
+	if g == nil || !g.HasCreds() {
 		return d
 	}
 	d.Username, d.Password, d.EnablePassword = g.Username, g.Password, g.EnablePassword
@@ -557,6 +563,11 @@ func ValidateMyBastions(chain []Bastion) error {
 		}
 		if isUNCPath(b.KeyFile) {
 			return fmt.Errorf("自分の踏み台%d段目の秘密鍵にネットワーク上のパスは指定できません: %q", n, b.KeyFile)
+		}
+		// Typed on the hop's shell as it is: a line break in it runs a
+		// second command there.
+		if err := CheckCommandText(b.JumpCommand); err != nil {
+			return fmt.Errorf("自分の踏み台%d段目のジャンプコマンドに%w", n, err)
 		}
 	}
 	return nil
@@ -1033,9 +1044,28 @@ func (s Settings) EffectiveAutoLockMin() int {
 
 // Validate checks a device's fields and returns a human-readable (Japanese)
 // error describing the first problem, or nil if it is acceptable to save.
+// ReservedNameMsg says why a name starting with "__" is refused: the page
+// uses such names as markers (every group, no group, the typed commands).
+const ReservedNameMsg = "「__」で始まる名前は使えません（内部の目印と重なります）"
+
+// ReservedName reports a name the page keeps for its markers.
+func ReservedName(name string) bool { return strings.HasPrefix(strings.TrimSpace(name), "__") }
+
 func (d *Device) Validate() error {
 	if strings.TrimSpace(d.Name) == "" {
 		return errors.New("名前は必須です")
+	}
+	// The labels name log files and are shown on one line: a line break in
+	// one fails the log file at run time, and hides what follows it on the
+	// import screen.
+	for _, f := range []struct{ label, v string }{{"名前", d.Name}, {"グループ", d.Group}, {"拠点", d.Site}, {"役割", d.Role}} {
+		if err := CheckCommandText(f.v); err != nil {
+			return fmt.Errorf("%sに%w", f.label, err)
+		}
+	}
+	// "__ALL__" / "__ungrouped__" / "__adhoc__" are the page's own markers.
+	if ReservedName(d.Name) || ReservedName(d.Group) {
+		return errors.New(ReservedNameMsg)
 	}
 	// Addresses are saved as they will be dialed: a blank pasted around one
 	// passed the checks below and then failed the name lookup on connecting.
@@ -1057,10 +1087,16 @@ func (d *Device) Validate() error {
 		if !validHostOrIP(d.Host) {
 			return fmt.Errorf("IPアドレスの形式が不正です: %q", d.Host)
 		}
+		if d.Port == BadNumber {
+			return errors.New("ポート番号が数字ではありません")
+		}
 		if d.Port < 0 || d.Port > 65535 {
 			return fmt.Errorf("ポート番号が範囲外です: %d（0〜65535）", d.Port)
 		}
 	case ConnSerial:
+		if d.Baud == BadNumber {
+			return errors.New("ボーレートが数字ではありません")
+		}
 		if d.Baud < 0 {
 			return errors.New("ボーレートが不正です")
 		}
@@ -1069,6 +1105,9 @@ func (d *Device) Validate() error {
 	}
 	if isUNCPath(d.KeyFile) {
 		return fmt.Errorf("秘密鍵にネットワーク上のパス（\\\\サーバー\\…）は指定できません: %q", d.KeyFile)
+	}
+	if d.GUIPort == BadNumber {
+		return errors.New("GUIポートが数字ではありません")
 	}
 	if d.GUIPort < 0 || d.GUIPort > 65535 {
 		return fmt.Errorf("GUIポートが範囲外です: %d（0〜65535）", d.GUIPort)
@@ -1093,6 +1132,14 @@ func (d *Device) Validate() error {
 		return nil
 	}
 	bastions := d.ActiveBastions()
+	// The page and the CSV stop at MaxBastions; the API must too, or the
+	// user's own chain in front makes more hops than a dial traverses.
+	if len(bastions) > MaxBastions {
+		return fmt.Errorf("踏み台は %d 段までです", MaxBastions)
+	}
+	if d.AuthMethod != "" && d.AuthMethod != AuthPassword && d.AuthMethod != AuthPublicKey {
+		return fmt.Errorf("認証方式が不正です: %q（password / publickey）", d.AuthMethod)
+	}
 	if d.BastionMode != BastionViaShell && d.BastionMode != BastionViaTunnel {
 		return fmt.Errorf("踏み台の通り方が不正です: %q", d.BastionMode)
 	}
@@ -1126,8 +1173,19 @@ func (d *Device) Validate() error {
 		if tunnel && b.Method != BastionSSH {
 			return fmt.Errorf("SSH トンネルで通る踏み台はすべて SSH にしてください（%d段目が %s）", i+1, b.Method)
 		}
+		if b.Port == BadNumber {
+			return fmt.Errorf("踏み台%d段目のポート番号が数字ではありません", i+1)
+		}
 		if b.Port < 0 || b.Port > 65535 {
 			return fmt.Errorf("踏み台%d段目のポート番号が範囲外です: %d（0〜65535）", i+1, b.Port)
+		}
+		if b.AuthMethod != "" && b.AuthMethod != AuthPassword && b.AuthMethod != AuthPublicKey {
+			return fmt.Errorf("踏み台%d段目の認証方式が不正です", i+1)
+		}
+		// Typed on the hop's shell as it is (a tunnel types nothing, but
+		// the text is kept with the device, so it is checked either way).
+		if err := CheckCommandText(b.JumpCommand); err != nil {
+			return fmt.Errorf("踏み台%d段目のジャンプコマンドに%w", i+1, err)
 		}
 	}
 	return nil

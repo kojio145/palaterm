@@ -115,15 +115,17 @@ func TestJumpFailLine(t *testing.T) {
 }
 
 // E1: a prompt identical to the hop's after the login is refused; another
-// prompt, or a hop prompt that names nothing, is not.
+// prompt is not. A hop prompt that names nothing ("$") coming back is
+// refused too (review 2026-11-01: two shells on the same bare "$ " are not
+// told apart, and the words say what to do about it).
 func TestLandingCheck(t *testing.T) {
 	for _, c := range []struct {
 		hop, after string
-		fail       bool
+		want       string // substring of the error; "" = no error
 	}{
-		{"jump1#", "telnet 192.0.2.30\r\n% Connection timed out; remote host not responding\r\n\r\njump1#", true},
-		{"jump1#", "telnet 192.0.2.30\r\nUsername: ops\r\nPassword:\r\nsw30#", false},
-		{"$", "ssh 192.0.2.30\r\n$ ", false},
+		{"jump1#", "telnet 192.0.2.30\r\n% Connection timed out; remote host not responding\r\n\r\njump1#", "Connection timed out"},
+		{"jump1#", "telnet 192.0.2.30\r\nUsername: ops\r\nPassword:\r\nsw30#", ""},
+		{"$", "ssh 192.0.2.30\r\n$ ", "ホスト名が無い"},
 	} {
 		dev, exp := atHop(t, c.hop)
 		l := &landing{target: "192.0.2.30", prompt: currentLine(exp.Transcript()), mark: exp.Mark()}
@@ -131,11 +133,11 @@ func TestLandingCheck(t *testing.T) {
 		waitSeen(context.Background(), exp, `[#$]\s*$`, 2*time.Second)
 		time.Sleep(50 * time.Millisecond)
 		err := l.check(exp)
-		if (err != nil) != c.fail {
+		switch {
+		case c.want == "" && err != nil:
 			t.Errorf("hop %q then %q: err %v", c.hop, c.after, err)
-		}
-		if c.fail && !strings.Contains(err.Error(), "Connection timed out") {
-			t.Errorf("the hop's words are missing: %v", err)
+		case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+			t.Errorf("hop %q then %q: err %v, want %q", c.hop, c.after, err, c.want)
 		}
 		exp.Close()
 	}

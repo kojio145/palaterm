@@ -48,9 +48,16 @@ var defaults = []Profile{
 		Answers:    ciscoAnswers,
 	},
 	{
+		// The operational prompt is "user@host> " — with its trailing
+		// space, which is what tells it from the ">" closing an XML tag:
+		// "| display xml" output paused for a beat on "</interface>" was
+		// taken for the prompt, and the next command went into it (review
+		// 2026-11-01). An XML tag's ">" is followed by a line break, never
+		// a space. (A vault seeded earlier keeps its own copy of this
+		// profile: edit its prompt to "> " in OSタイプ設定 to get the same.)
 		Key:        "juniper-junos",
 		Name:       "Juniper JUNOS",
-		Prompt:     ">",
+		Prompt:     "> ",
 		MorePrompt: "---(more",
 		Login: []Step{
 			{Expect: "ogin:", Send: "{user}"},
@@ -89,6 +96,16 @@ var defaults = []Profile{
 		},
 	},
 	{
+		// NEC QX (Comware-based, like hpe-comware below): the login ends in
+		// system-view, the configuration view, and the command set runs
+		// THERE — "display …" works in it, and so does every configuration
+		// command, so a typo in a set is a setting, not a "% Unrecognized
+		// command". The legacy macro operated the device that way. The
+		// change warning before a run lists the commands that change the
+		// device (Comware's "undo …", "sysname", "ip route-static" among
+		// them); to run strictly non-intrusively, remove the system-view
+		// row in OSタイプ設定 and set the prompt to ">" — display commands
+		// work in the user view.
 		Key:    "nec-qx",
 		Name:   "NEC QX",
 		Prompt: "]",
@@ -110,9 +127,13 @@ var defaults = []Profile{
 			{Expect: "ogin:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
 		},
-		// The pager commands change the unit's console setting for good, and
-		// a VDOM-enabled unit refuses them outside "config global": the
-		// --More-- net keeps a long show moving either way.
+		// The pager commands change the unit's console setting for good —
+		// "config system console / set output standard" is a configuration
+		// change the unit's audit log records, made by every run, a
+		// show-only one included — and a VDOM-enabled unit refuses them
+		// outside "config global": the --More-- net keeps a long show
+		// moving either way. To leave the unit untouched, empty the pager
+		// rows in OSタイプ設定 and let --More-- be answered as it comes.
 		MorePrompt: "--More--",
 		Pager: []Step{
 			{Send: "config system console"},
@@ -138,6 +159,9 @@ var defaults = []Profile{
 		Disconnect: []Step{{Send: "exit"}},
 	},
 	{
+		// Like NEC QX above: the login ends in system-view (the "]" prompt),
+		// where display commands and configuration commands alike run. See
+		// the note there for the trade-off and how to stay in the user view.
 		Key:    "hpe-comware",
 		Name:   "HPE (Comware)",
 		Prompt: "]",
@@ -209,7 +233,13 @@ var defaults = []Profile{
 		Login: []Step{
 			{Expect: "sername:", Send: "{user}"},
 			{Expect: "assword:", Send: "{password}"},
-			{Expect: "#", Enter: true},
+			// ArubaOS-Switch shows "Press any key to continue" after the
+			// login on many models and waits for a key: the Enter goes once
+			// that is on screen (the "#" the row used to wait for does not
+			// show until then, so the row ran into the command timeout). A
+			// switch that lands on "#" straight away skips the row (the
+			// prompt is up). Unverified on hardware (review 2026-11-01).
+			{Expect: "continue", Enter: true},
 		},
 		Pager:      []Step{{Send: "no page"}},
 		Disconnect: []Step{{Send: "exit"}},

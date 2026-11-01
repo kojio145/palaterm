@@ -151,7 +151,9 @@ func readDelimited(text string) (*Book, error) {
 	comma := ','
 	first, rest, _ := strings.Cut(text, "\n")
 	first = strings.TrimRight(first, "\r")
-	if strings.HasPrefix(strings.ToLower(first), "sep=") && utf8.RuneCountInString(first) == 5 {
+	// Excel writes one ASCII character after "sep=": counted in bytes, so a
+	// full-width "；" is not taken as the delimiter.
+	if strings.HasPrefix(strings.ToLower(first), "sep=") && len(first) == 5 {
 		r, _ := utf8.DecodeRuneInString(first[4:])
 		if r != '"' && r != '\r' && r != '\n' && r != utf8.RuneError {
 			comma, text = r, rest
@@ -164,7 +166,7 @@ func readDelimited(text string) (*Book, error) {
 		format = "tsv"
 	}
 	b := newBook(format)
-	sb := &sheetBuilder{name: strings.ToUpper(format)}
+	sb := &sheetBuilder{name: strings.ToUpper(format), book: b}
 
 	cr := csv.NewReader(strings.NewReader(text))
 	cr.Comma = comma

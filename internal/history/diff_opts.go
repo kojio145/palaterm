@@ -60,11 +60,20 @@ type DiffSummary struct {
 // Limits of the jump lists.
 const maxJumps = 3000
 
-// pagerLine: a line that is nothing but the pager's prompt, or the
-// pager's text left inside a line.
+// morePrompt is the pager marker the vendors print, as the runner's
+// genericMore (internal/runner/runner.go) knows it: "--More--", "---- More
+// ----", "-- MORE --, next page: …" (ArubaOS), "---(more 25%)---" (Junos).
+// The two are kept the same text: a pager the run could not turn off
+// leaves exactly these lines in the log.
+const morePrompt = `-{2,}\s*\(?\s*more`
+
+// pagerLine: a line that is nothing but the pager's prompt (morePrompt
+// with whatever follows it on the line, "More: …", "Press any key to
+// continue", EXOS's "Press <SPACE> to continue or <Q> to quit:", "<space>
+// …"); pagerText is the pager's marker left inside a line.
 var (
-	pagerLine = regexp.MustCompile(`(?i)^\s*(-+\s*more\s*-+|more:\s.*|press any key to continue.*|<space>.*|---\s*more\s*---.*)\s*$`)
-	pagerText = regexp.MustCompile(`(?i)-+\s*more\s*-+`)
+	pagerLine = regexp.MustCompile(`(?i)^\s*(` + morePrompt + `\b.*|more:\s.*|press\s+(any key|<space>|<enter>|q\b).*|<space>.*)\s*$`)
+	pagerText = regexp.MustCompile(`(?i)` + morePrompt + `(?:\s+\d+%)?\s*\)?\s*-*`)
 )
 
 // DiffWith compares two captures with the structured comparison.
@@ -73,13 +82,19 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 	selA, kindA := configSectionIdx(la)
 	selB, kindB := configSectionIdx(lb)
 	res := DiffResult{Mode: "whole", ConfigA: kindA != noListing, ConfigB: kindB != noListing}
+	// The listing's lines get the listing normaliser (normalizeConfig):
+	// every compared line when the listings alone are compared, the lines
+	// of a listing found among the show commands when the whole logs are.
+	var cfgA, cfgB []bool
 	if o.ConfigOnly && res.ConfigA && res.ConfigB {
 		res.Mode = "config"
+		cfgA, cfgB = listingSet(len(la), selA, oneListing), listingSet(len(lb), selB, oneListing)
 	} else {
+		cfgA, cfgB = listingSet(len(la), selA, kindA), listingSet(len(lb), selB, kindB)
 		selA, selB = allIdx(len(la)), allIdx(len(lb))
 	}
-	da, leadA, na, sa := prepLines(la, selA, o)
-	db, leadB, nb, sb := prepLines(lb, selB, o)
+	da, leadA, na, sa := prepLines(la, selA, cfgA, o)
+	db, leadB, nb, sb := prepLines(lb, selB, cfgB, o)
 	res.NoiseLines, res.SecretLines = na+nb, sa+sb
 	p := &pairer{}
 	for i := range leadA {
@@ -132,11 +147,31 @@ func allIdx(n int) []int {
 	return s
 }
 
+// listingSet marks, for a capture of n lines, the lines that belong to its
+// configuration listing (sel and kind from configSectionIdx); none unless
+// the capture holds a listing among its show commands (a file with no
+// prompts at all may be a saved listing or a saved show output: compared
+// whole, it keeps the noise rules).
+func listingSet(n int, sel []int, kind int) []bool {
+	cfg := make([]bool, n)
+	if kind != oneListing {
+		return cfg
+	}
+	for _, k := range sel {
+		if k >= 0 {
+			cfg[k] = true
+		}
+	}
+	return cfg
+}
+
 // prepLines turns the selected lines of a capture into compared lines:
 // each with its key and depth, the noise left out (and counted), the
 // secret lines hung on the line before them. lead holds the secret lines
-// before the first compared line.
-func prepLines(lines []string, sel []int, o DiffOpts) (out []dline, lead []dline, noise, secret int) {
+// before the first compared line. cfg says which lines are the
+// configuration listing's: those lose only the listing's stamps, the rest
+// the clock and counter noise too (see normalizeConfig).
+func prepLines(lines []string, sel []int, cfg []bool, o DiffOpts) (out []dline, lead []dline, noise, secret int) {
 	raw := make([]string, 0, len(sel))
 	for _, k := range sel {
 		if k < 0 {
@@ -147,10 +182,15 @@ func prepLines(lines []string, sel []int, o DiffOpts) (out []dline, lead []dline
 	}
 	mask := secretMask(raw, o.IgnoreSecrets)
 	last := -1 // index into out of the line secrets hang on
+	// bannerDelim: the delimiter of a Cisco banner that is open, so its
+	// closing line ("#", "$" — which reads as a bare prompt) is kept and
+	// buildTree sees where the banner ends (C S-9, with H2's bannerBlock).
+	bannerDelim := ""
 	for n, k := range sel {
 		if k < 0 {
 			out = append(out, dline{brk: true})
 			last = -1
+			bannerDelim = ""
 			continue
 		}
 		l := lines[k]
@@ -171,10 +211,20 @@ func prepLines(lines []string, sel []int, o DiffOpts) (out []dline, lead []dline
 				noise++
 				continue
 			}
-			key = normalize(pagerText.ReplaceAllString(key, ""))
-			if key == "" || barePrompt.MatchString(key) {
+			key = pagerText.ReplaceAllString(key, "")
+			if cfg[k] {
+				key = normalizeConfig(key)
+			} else {
+				key = normalize(key)
+			}
+			if bannerDelim != "" && strings.Contains(strings.TrimSpace(l), bannerDelim) {
+				bannerDelim = "" // the banner's closing delimiter: kept
+			} else if key == "" || barePrompt.MatchString(key) {
 				noise++
 				continue
+			}
+			if _, d, ok := bannerBlock(key); ok {
+				bannerDelim = d
 			}
 		}
 		out = append(out, dline{text: l, key: key, idx: k, depth: depth})
@@ -231,7 +281,7 @@ func jumps(lines []DiffLine, commands bool) (sections, cmds []Jump) {
 		if !commands {
 			continue
 		}
-		m := promptLine.FindStringSubmatch(strings.TrimRight(text, " \t"))
+		m := promptParts(strings.TrimRight(text, " \t"))
 		if m == nil {
 			continue
 		}

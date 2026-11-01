@@ -320,6 +320,9 @@ func CheckRoot(root string) error {
 	if why := RootNameProblem(root); why != "" {
 		return fmt.Errorf("ログの保存先フォルダ「%s」を作れません: %s", printable(dir), why)
 	}
+	if why := RootPlaceProblem(dir); why != "" {
+		return fmt.Errorf("ログの保存先フォルダ「%s」は使えません: %s", printable(dir), why)
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("ログの保存先フォルダ「%s」を作れません: %w", dir, err)
 	}
@@ -387,6 +390,40 @@ func RootNameProblem(root string) string {
 		}
 	}
 	return ""
+}
+
+// RootPlaceProblem says why a resolved log root (see ResolveRoot) must not
+// be the log folder, "" when it may: the root of a drive, the exe's own
+// folder, or the data\ and export\ folders under it (or anything inside
+// them). Everything under the log root is opened, compared and listed as a
+// log, so a root that wide would reach the vault and the exports (review
+// 2026-11-01, A-12).
+func RootPlaceProblem(dir string) string {
+	dir = filepath.Clean(dir)
+	if filepath.Dir(dir) == dir && !strings.HasPrefix(dir, `\\`) {
+		return "ドライブ直下は指定できません。ログ専用のフォルダを指定してください（例: " + dir + "logs）"
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	exeDir := filepath.Clean(filepath.Dir(exe))
+	if strings.EqualFold(dir, exeDir) {
+		return "PalaTerm.exe のあるフォルダそのものは指定できません。ログ専用のフォルダ（例: logs）を指定してください"
+	}
+	for _, sub := range []string{"data", "export"} {
+		if sameOrUnder(dir, filepath.Join(exeDir, sub)) {
+			return "PalaTerm.exe の data・export フォルダの中は指定できません。ログ専用のフォルダ（例: logs）を指定してください"
+		}
+	}
+	return ""
+}
+
+// sameOrUnder: dir is base or a folder inside it (case-insensitive, as
+// Windows paths are).
+func sameOrUnder(dir, base string) bool {
+	d, b := strings.ToLower(filepath.Clean(dir)), strings.ToLower(filepath.Clean(base))
+	return d == b || strings.HasPrefix(d, b+string(filepath.Separator))
 }
 
 // printable shows a path in a message with its control characters as □

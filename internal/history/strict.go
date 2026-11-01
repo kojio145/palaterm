@@ -68,11 +68,95 @@ type ChangedLine struct {
 // ("!sw(config)# interface vlan 10"): every line typed after the first
 // change has it, and missing it left those lines out (user report
 // 2026-10-20).
-var promptLine = regexp.MustCompile(`^(!?[A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?:\s\([^)]*\))?\s?[#>])\s*(\S.*)$`)
+// Comware / VRP put the name in brackets ("<lab-sw1>display …", "[lab-sw1-
+// GigabitEthernet1/0/1]shutdown"), SR OS has "*A:lab-sw1>config>router#",
+// and Yamaha's prompt is a bare "# " / "> " at the left margin (see
+// yamahaPrompt). Without them a whole Comware log read as one listing and
+// its show output came back as settings (review 2026-11-01).
+var promptLine = regexp.MustCompile(`^(!?[A-Za-z0-9][\w.\-@~:/]*(?:\([^)]*\))?(?:\s\([^)]*\))?\s?[#>]|<[^<>\s]+>|\[[^\[\]\s]+\]|\*?[A-Z]:[^#\s]+#)\s*(\S.*)$`)
 
-// notSetting lists command words that read, navigate, save or run things
-// rather than configure them. Vendor-mixed on purpose.
-var notSetting = regexp.MustCompile(`(?i)^(show|sh|get|display|dir|more|ping|traceroute|tracert|telnet|ssh|exit|end|quit|logout|configure|conf|config|svintr-config|terminal|term|write|wr|copy|commit|save|rollback|execute|exec|diagnose|clear|debug|undebug|reload|reboot|enable(\s+\d+)?\s*$|disable(\s+\d+)?\s*$|do|run|cls|help|\?|history|where|top|up|edit|next|abort|discard|load|compare|monitor|test|verify|y|yes|n|no\s*$)(\s|$)`)
+// yamahaPrompt: Yamaha's "# command" / "> command". The listing's own
+// comment lines ("# RTX1210 Rev…", "# Reporting Date: …") start with a
+// capital, a command with a lower-case word, so only the latter is a prompt.
+var yamahaPrompt = regexp.MustCompile(`^([#>])\s+([a-z][\w\-]*(?:\s.*)?)$`)
+
+// promptParts is promptLine.FindStringSubmatch with the Yamaha form too:
+// nil, or [line, prompt, command].
+func promptParts(line string) []string {
+	if m := promptLine.FindStringSubmatch(line); m != nil {
+		return m
+	}
+	return yamahaPrompt.FindStringSubmatch(line)
+}
+
+// notSettingWords lists command words that read, navigate, save or run
+// things rather than configure them. Vendor-mixed on purpose (IOS / NX-OS /
+// ASA / IOS-XR, Junos, FortiOS, Comware / VRP, Yamaha, NEC IX, AlliedWare,
+// EOS, PAN-OS, VyOS, Gaia, tmsh, ACOS, SR OS and a Linux shell). A word
+// that configures something on one vendor and runs something on another
+// (delete / move / rename / clone / purge / boot / archive / image / import /
+// export / license) is left
+// out: a setting counted as "missing" is a visible question, a setting
+// silently ignored is not.
+var notSettingWords = []string{
+	// read / inspect
+	"show", "sh", "get", "display", "dir", "more", "list", "info", "stat", "status",
+	"cat", "ls", "tail", "less", "grep", "watch", "tcpdump", "uptime", "where", "pwd",
+	// reachability / remote
+	"ping", "traceroute", "tracert", "telnet", "ssh", "scp", "tftp", "ftp", "transfer",
+	// navigation / mode
+	"exit", "end", "quit", "q", "logout", "return", "back", "top", "up", "edit", "next",
+	"configure", "conf", "config", "svintr-config", "system-view", "terminal", "term",
+	`screen-length\s+(\d+\s+temporary|disable)`, "cli", "admin", "expert", "shell", "bash", "tmsh", "python", "guestshell",
+	"attach", "do", "run", "cls", "help", `\?`, "history", "cd", "su", "sudo",
+	`enable(\s+\d+)?\s*$`, `disable(\s+\d+)?\s*$`, `administrator\s*$`,
+	// save / commit / undo
+	"write", "wr", "copy", "commit", "save", "rollback", "revert", "discard", "abort",
+	"load", "compare", "validate", "check", "checkpoint", "backup", "restore", "startup",
+	"boot-loader", "erase", "format", "mkdir", "rmdir",
+	// run / operate
+	"execute", "exec", "diagnose", "fnsysctl", "clear", "debug", "undebug", "debugging",
+	"reload", "reboot", "reset", "reset-stats", "restart", "request", "halt", "poweroff",
+	`cold\s+start`, "install", "upgrade", "ppupdate", "release", "renew", "generate", "send",
+	"monitor", "test", "verify", "tools", "oam", "file", "start", "sleep", "echo",
+	"tac-pac", "packet-tracer", "axdebug", "lock", "unlock", "fw", "cpstat", "cphaprob",
+	"cpstop", "cpstart", "cpinfo", "bigstart", "tmctl", "environment",
+	// exec-mode forms of words that are settings with other arguments
+	`set\s+cli`, `clock\s+set`, `calendar\s+set`,
+	// answers to prompts
+	"y", "yes", "n", `no\s*$`,
+}
+
+var notSetting = regexp.MustCompile(`(?i)^(` + strings.Join(notSettingWords, "|") + `)(\s|$)`)
+
+// settingDespiteWord lists lines that start with one of the words above but
+// configure something on some vendor: a SPAN session or event trace, a
+// line's history size, the Telnet / SSH / FTP server of Comware / VRP,
+// IOS's file prompt, dial backup under an interface, NX-OS's cli alias and
+// install feature-set, IOS-XE's shell processing.
+var settingDespiteWord = regexp.MustCompile(`(?i)^(monitor\s+(session|event-trace|connectivity|layer1|server)|history\s+size|(telnet|ssh|ftp|tftp|scp)\s+(server|client|user|authentication|authorization)|file\s+(prompt|verify)|backup\s+(interface|delay|load)|cli\s+alias|install\s+feature-set|upgrade\s+fpd|shell\s+processing)(\s|$)`)
+
+// isNotSetting reports whether a typed line runs, reads, navigates or saves
+// rather than configures, so the strict verification leaves it out.
+func isNotSetting(cmd string) bool {
+	return notSetting.MatchString(cmd) && !settingDespiteWord.MatchString(cmd)
+}
+
+// settingAtConfigPrompt: ssh / telnet lines that are settings when typed at
+// a (config) prompt — ASA's "ssh 192.0.2.0 255.255.255.0 inside" and "ssh
+// timeout 30", NX-OS's "ssh key rsa 2048" and "ssh login-attempts 3" — and
+// exec commands anywhere else ("ssh ops@192.0.2.10" at "#"). isNotSetting
+// alone dropped them silently (review 2026-11-01, A-5).
+var settingAtConfigPrompt = regexp.MustCompile(`(?i)^(ssh|telnet)\s+(\d|timeout|version|key|key-exchange|login-attempts|cipher|kex|mac|pubkey|scopy|stricthostkeycheck)`)
+
+// isExecAt: the typed line is not a setting, given the prompt it was typed
+// at.
+func isExecAt(cmd, prompt string) bool {
+	if strings.HasPrefix(promptMode(prompt), "config") && settingAtConfigPrompt.MatchString(cmd) {
+		return false
+	}
+	return isNotSetting(cmd)
+}
 
 var ws = regexp.MustCompile(`\s+`)
 
@@ -99,6 +183,9 @@ func ResolveLineEdits(line string) string {
 	rs := []rune(line)
 	buf := make([]rune, 0, len(rs))
 	cur := 0 // cursor column in buf
+	// A cursor move cannot go further right than the line could reach: a
+	// stray "ESC[50000000C" in a foreign log padded 50 MB of spaces.
+	maxCur := len(rs) + 4096
 	put := func(r rune) {
 		for cur > len(buf) {
 			buf = append(buf, ' ')
@@ -159,9 +246,9 @@ func ResolveLineEdits(line string) string {
 					cur = 0
 				}
 			case 'C': // cursor right
-				cur += max(n, 1)
+				cur = min(cur+max(n, 1), maxCur)
 			case 'G': // cursor to column (1-based)
-				cur = max(n, 1) - 1
+				cur = min(max(n, 1)-1, maxCur)
 			case 'P': // delete characters at the cursor
 				if cur < len(buf) {
 					e := cur + max(n, 1)
@@ -181,12 +268,16 @@ func ResolveLineEdits(line string) string {
 }
 
 // csiParam reads the leading number of a CSI parameter string ("3;1" → 3,
-// "?25" → 25) and whether there was one.
+// "?25" → 25) and whether there was one. Six digits at most: no terminal
+// has a column beyond that, and a longer run is a damaged log.
 func csiParam(p []rune) (int, bool) {
-	n, has := 0, false
+	n, has, digits := 0, false, 0
 	for _, r := range p {
 		if r >= '0' && r <= '9' {
-			n = n*10 + int(r-'0')
+			if digits < 6 {
+				n = n*10 + int(r-'0')
+			}
+			digits++
 			has = true
 			continue
 		}
@@ -248,11 +339,26 @@ func ExtractConfigCommands(workLog string) ([]string, int) {
 // prompt; "" for a global line or when that is not known).
 type typedCmd struct {
 	line, key, parent string
-	last              int // position of its last occurrence in the work log
+	// ctx: the FortiOS table and entry the line was typed in, as the typed
+	// "config …" / "edit …" lines name them ("config system ntp / config
+	// ntpserver / edit 1"); "" elsewhere. It names the block the way parent
+	// does (see scope), but is kept apart so CommandCheck.Parent stays what
+	// it was.
+	ctx  string
+	last int // position of its last occurrence in the work log
 	// blocks: the head lines of the blocks it was typed into, as the logs
 	// name them (one, or each member of an "interface range"; none for a
 	// global line), worked out once per verification (see parentHeads).
 	blocks []string
+}
+
+// scope is the block a line is looked up in: its parent, else its FortiOS
+// context.
+func (c typedCmd) scope() string {
+	if c.parent != "" {
+		return c.parent
+	}
+	return c.ctx
 }
 
 // junosEdit matches Junos's "[edit interfaces ge-0/0/0]" context banner.
@@ -280,18 +386,69 @@ func extractTyped(workLog string) ([]typedCmd, int) {
 type sessionEntry struct {
 	prompt, cmd, junos string
 	after              []string
+	// ctx: the FortiOS context the line was typed in (see typedCmd.ctx).
+	ctx string
+}
+
+// fgHead matches FortiOS's "config system ntp" / "edit 1" lines, which open
+// a table or an entry, typed or listed.
+var fgHead = regexp.MustCompile(`(?i)^(config|edit)\s+\S`)
+
+// fortiContext works out the FortiOS table and entry each line was typed
+// in, from the typed "config …" / "edit …" lines and the prompts that
+// confirm them: "config system ntp" at "FG #" is answered by "FG (ntp) #",
+// "edit 1" by "FG (1) #"; "next" closes the entry, "end" / "abort" the
+// table, and a prompt with no context at all closes everything. The
+// second result lists every context a head line opened (the typed heads
+// themselves, for the changes outside the work). A line answered by a
+// (config…) prompt is Cisco-style gear, not a FortiOS table.
+func fortiContext(entries []sessionEntry) ([]string, []string) {
+	ctx := make([]string, len(entries))
+	var stack, heads []string
+	for i, e := range entries {
+		ctx[i] = strings.Join(stack, " / ")
+		next := ""
+		if i+1 < len(entries) {
+			next = promptMode(entries[i+1].prompt)
+		}
+		cmd := normKey(e.cmd)
+		f := strings.Fields(cmd)
+		switch {
+		case next == "":
+			stack = nil
+		case strings.HasPrefix(next, "config"):
+			// Cisco-style modes: no FortiOS context
+		case fgHead.MatchString(cmd) && next == f[len(f)-1]:
+			stack = append(stack, cmd)
+			heads = append(heads, strings.Join(stack, " / "))
+		case cmd == "next":
+			if n := len(stack); n > 0 && strings.HasPrefix(stack[n-1], "edit ") {
+				stack = stack[:n-1]
+			}
+		case cmd == "end" || cmd == "abort":
+			for n := len(stack); n > 0; n-- {
+				if strings.HasPrefix(stack[n-1], "config ") {
+					stack = stack[:n-1]
+					break
+				}
+				stack = stack[:n-1]
+			}
+		}
+	}
+	return ctx, heads
 }
 
 // sessionEntries reads one session's log into its prompt lines, the block
-// each was typed in, and whether the gear has (config) prompts. isHead, when
-// given, tells a line that names a block of the before / after logs
-// ("interface vlan10" typed in config-if opens that block).
-func sessionEntries(log string, isHead func(string) bool) ([]sessionEntry, []string, bool) {
+// each was typed in, the FortiOS contexts the session opened, and whether
+// the gear has (config) prompts. isHead, when given, tells a line that
+// names a block of the before / after logs ("interface vlan10" typed in
+// config-if opens that block).
+func sessionEntries(log string, isHead func(string) bool) ([]sessionEntry, []string, []string, bool) {
 	var entries []sessionEntry
 	junos := ""
 	for _, raw := range splitLines(log) {
 		line := strings.TrimRight(raw, " \t")
-		if m := promptLine.FindStringSubmatch(line); m != nil {
+		if m := promptParts(line); m != nil {
 			entries = append(entries, sessionEntry{prompt: m[1], cmd: strings.TrimSpace(m[2]), junos: junos})
 			continue
 		}
@@ -335,7 +492,7 @@ func sessionEntries(log string, isHead func(string) bool) ([]sessionEntry, []str
 		out := modeIndex(stack, next)
 		switch {
 		case !isSubMode(next):
-			if isSubMode(mode) && !notSetting.MatchString(e.cmd) {
+			if isSubMode(mode) && !isNotSetting(e.cmd) {
 				parents[i] = ""
 			}
 			parent, stack = "", nil
@@ -363,8 +520,33 @@ func sessionEntries(log string, isHead func(string) bool) ([]sessionEntry, []str
 			break
 		}
 	}
-	return entries, parents, modal
+	ctx, fgHeads := fortiContext(entries)
+	for i := range entries {
+		entries[i].ctx = ctx[i]
+	}
+	return entries, parents, fgHeads, modal
 }
+
+// helpList: the output between a line and its longer retyping is a list of
+// candidates ("?" help or an ambiguous Tab): words, "<cr>", "A.B.C.D", each
+// with a description after two spaces or more, and no "%" message. A
+// warning the device printed after a real command ("% Warning: …") is not
+// a help list, and the command before it stays counted (review 2026-11-01,
+// A-6).
+func helpList(after []string) bool {
+	for _, l := range after {
+		t := strings.TrimSpace(l)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "%") || !helpItem.MatchString(t) {
+			return false
+		}
+	}
+	return true
+}
+
+var helpItem = regexp.MustCompile(`^(<[^>]+>|\S+)(\s{2,}\S.*)?$`)
 
 // modeIndex is where mode m is on the stack of modes entered, or -1.
 func modeIndex(stack []string, m string) int {
@@ -388,7 +570,15 @@ func isRange(cmd string) bool {
 // the block of the last line before a reconnect is not lost to the next
 // session's first prompt. isHead: see sessionEntries.
 func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int) {
+	cmds, _, typed := extractTypedAll(logs, isHead)
+	return cmds, typed
+}
+
+// extractTypedAll is extractTypedLogs with the FortiOS tables and entries
+// the work opened (see fortiContext) as well.
+func extractTypedAll(logs []string, isHead func(string) bool) ([]typedCmd, []string, int) {
 	var out []typedCmd
+	var fgHeads []string
 	seen := map[string]int{}
 	typed := 0 // also the position across all sessions, for "typed later"
 	type session struct {
@@ -400,8 +590,9 @@ func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int)
 	var sessions []session
 	modal := false
 	for _, log := range logs {
-		e, p, m := sessionEntries(log, isHead)
+		e, p, h, m := sessionEntries(log, isHead)
 		sessions = append(sessions, session{e, p})
+		fgHeads = append(fgHeads, h...)
 		modal = modal || m
 	}
 	for _, ss := range sessions {
@@ -409,7 +600,7 @@ func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int)
 		for i, e := range entries {
 			typed++
 			cmd := e.cmd
-			if cmd == "" || notSetting.MatchString(cmd) || strings.HasSuffix(cmd, "?") || strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#") {
+			if cmd == "" || isExecAt(cmd, e.prompt) || strings.HasSuffix(cmd, "?") || strings.HasPrefix(cmd, "!") || strings.HasPrefix(cmd, "#") {
 				// "!" / "#" typed at a prompt is a comment (pasted configuration)
 				continue
 			}
@@ -419,7 +610,7 @@ func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int)
 			if refused(e.after) {
 				continue
 			}
-			if i+1 < len(entries) && len(e.after) > 0 {
+			if i+1 < len(entries) && len(e.after) > 0 && helpList(e.after) {
 				next := entries[i+1]
 				if next.prompt == e.prompt && len(next.cmd) > len(cmd) && strings.HasPrefix(strings.ToLower(next.cmd), strings.ToLower(cmd)) {
 					continue // redrawn after help / completion candidates
@@ -433,16 +624,16 @@ func extractTypedLogs(logs []string, isHead func(string) bool) ([]typedCmd, int)
 					}
 				}
 			}
-			par := parents[i]
-			if k, ok := seen[par+"\x00"+key]; ok {
+			par, ctx := parents[i], e.ctx
+			if k, ok := seen[par+"\x00"+ctx+"\x00"+key]; ok {
 				out[k].last = typed // typed again: "shutdown, no shutdown, shutdown"
 				continue
 			}
-			seen[par+"\x00"+key] = len(out)
-			out = append(out, typedCmd{line: cmd, key: key, parent: par, last: typed})
+			seen[par+"\x00"+ctx+"\x00"+key] = len(out)
+			out = append(out, typedCmd{line: cmd, key: key, parent: par, ctx: ctx, last: typed})
 		}
 	}
-	return out, typed
+	return out, fgHeads, typed
 }
 
 // sameKind: a line typed at a sub-mode prompt that opens another block of

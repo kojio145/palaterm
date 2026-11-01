@@ -154,6 +154,7 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 	t.inQ = newLineQueue(t.bcastSend)
 	t.placeQ = newLineQueue(t.doPlace)
 	go func() {
+		defer recoverGo("terminal window stdin")
 		sc := bufio.NewScanner(os.Stdin)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024) // INPUT lines (bcastChunk)
 		if sc.Scan() {
@@ -180,6 +181,10 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 				t.bcastIn(strings.TrimPrefix(line, termLineInput+" "))
 			case strings.HasPrefix(line, termLineBcN+" "):
 				t.bcastCounts(strings.TrimPrefix(line, termLineBcN+" "))
+			case strings.HasPrefix(line, termLineBcNames+" "):
+				t.bcastNamesLine(strings.TrimPrefix(line, termLineBcNames+" "))
+			case line == termLineBcOff:
+				t.SetBroadcast(false) // the main window's 同時入力をすべてオフ
 			case strings.HasPrefix(line, termLinePlace+" "):
 				if r, ok := parseRect(strings.TrimPrefix(line, termLinePlace+" ")); ok {
 					// Flagged and queued under one lock, as startup reads
@@ -253,7 +258,7 @@ type TermStart struct {
 func (t *Term) Start() TermStart {
 	select {
 	case pw := <-t.pwCh:
-		go t.connect(pw)
+		t.startConnect(pw)
 		return TermStart{NeedPassword: false, Name: t.label, Manual: t.manual}
 	case <-time.After(500 * time.Millisecond):
 		return TermStart{NeedPassword: true, Name: t.label, Manual: t.manual}
@@ -261,15 +266,40 @@ func (t *Term) Start() TermStart {
 }
 
 // StartWithPassword connects using a password entered in the window.
-func (t *Term) StartWithPassword(pw string) { go t.connect(pw) }
+func (t *Term) StartWithPassword(pw string) { t.startConnect(pw) }
+
+// startConnect runs connect in the background, unless one is running or a
+// session is up: Enter twice in the password box used to start two
+// connects, the second's session replacing the first's (its log stream
+// left open, its session never closed). True when it started one.
+func (t *Term) startConnect(pw string) bool {
+	t.mu.Lock()
+	if t.connecting || t.send != nil {
+		t.mu.Unlock()
+		return false
+	}
+	t.connecting = true // connect sets it again; claimed here so a second call sees it
+	t.mu.Unlock()
+	go t.connect(pw)
+	return true
+}
 
 // termReady carries device info to the UI once connected.
 type termReady struct {
 	Device string `json:"device"`
+	Group  string `json:"group,omitempty"` // the device's group, for the title ("lab / lab-sw1")
 	Host   string `json:"host"`
 	Conn   string `json:"conn"`
 	Manual bool   `json:"manual"` // opened without automatic login
 	Hops   int    `json:"hops"`   // jump hosts on the way (0 = direct)
+}
+
+// closedKind is termClosed.Kind for err (see termClosed).
+func closedKind(err error) string {
+	if err != nil && session.MismatchedHostKey(err) != "" {
+		return "hostkey"
+	}
+	return ""
 }
 
 // termWinState names the terminal window's remembered size
@@ -314,7 +344,7 @@ func (t *Term) connect(pw string) {
 	}()
 	inv, err := vault.Load(t.vaultPath, pw)
 	if err != nil {
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "マスターパスワードが違うか、vaultを開けません"})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "マスターパスワードが違うか、vaultを開けません", Kind: "masterpw"})
 		return
 	}
 	inv.NormalizeGroups()
@@ -406,7 +436,7 @@ func (t *Term) connect(pw string) {
 		stopProgress()
 		t.noteMismatch(err)
 		if err != nil {
-			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
+			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Kind: closedKind(err)})
 			return
 		}
 		t.attach(exp, dev, inv.Settings, false)
@@ -455,13 +485,13 @@ func (t *Term) connect(pw string) {
 		shown := exp != nil // the login so far is on screen (tee)
 		if exp == nil {
 			if err != nil && !errors.Is(err, context.Canceled) {
-				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err), Kind: closedKind(err)})
 				return
 			}
 			exp, err = t.runner.Open(context.Background(), dev, inv.Settings)
 			t.noteMismatch(err)
 			if err != nil {
-				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err)})
+				runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: manualUnavailable(dev, err), Kind: closedKind(err)})
 				return
 			}
 		}
@@ -471,7 +501,7 @@ func (t *Term) connect(pw string) {
 	}
 	if err != nil {
 		if exp == nil {
-			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error()})
+			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Kind: closedKind(err)})
 			return
 		}
 		// What the device said is already on screen above the error line
@@ -487,7 +517,7 @@ func (t *Term) connect(pw string) {
 		}
 		t.pending, t.pendingDev, t.pendingSet = exp, dev, inv.Settings
 		t.mu.Unlock()
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Takeover: true, AtJump: runpkg.AtJumpHost(err), AtJumpLogin: runpkg.AtJumpLogin(err)})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Kind: closedKind(err), Takeover: true, AtJump: runpkg.AtJumpHost(err), AtJumpLogin: runpkg.AtJumpLogin(err)})
 		return
 	}
 	t.attach(exp, dev, inv.Settings, true)
@@ -646,7 +676,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	if tr := exp.Transport(); tr != "" {
 		host = tr
 	}
-	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
+	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Group: d.Group, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
 }
 
 // seedHostKeys builds a window's host-key store from the vault's pins,
@@ -697,7 +727,7 @@ func (t *Term) AllowHostKeyChange() error {
 	}
 	t.mu.Unlock()
 	childLine(termEventClearHostKey + " " + dev.ID)
-	go t.connect(pw)
+	t.startConnect(pw)
 	return nil
 }
 
@@ -796,11 +826,13 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 	t.pasteProc = cmd.Process
 	t.mu.Unlock()
 	go func() {
+		defer recoverGo("paste window stdin")
 		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR, Bcast: peers, Single: single})
 		_ = stdin.Close()
 	}()
 	go func() {
 		defer t.pasteDone()
+		defer recoverGo("paste window stdout")
 		var res pasteRes
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
@@ -920,6 +952,9 @@ func (t *Term) Resize(cols, rows int) error {
 // (Tera Term-style copy on select). Done in Go because the browser Clipboard
 // API inside WebView2 is not reliably available to the page.
 func (t *Term) SetClipboard(text string) error {
+	if t.isLocked() {
+		return errLocked
+	}
 	return runtime.ClipboardSetText(t.ctx, text)
 }
 
@@ -975,6 +1010,9 @@ func (t *Term) Lock() {
 	if pp != nil {
 		_ = pp.Kill()
 	}
+	// The log viewer opened from this window shows the session: it goes
+	// with the lock too.
+	closeViewerWindows()
 	if ctx != nil {
 		runtime.EventsEmit(ctx, "term:lock")
 	}
@@ -1044,7 +1082,7 @@ func (t *Term) Reconnect() error {
 	if live {
 		return nil
 	}
-	go t.connect(pw)
+	t.startConnect(pw)
 	return nil
 }
 

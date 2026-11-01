@@ -441,7 +441,7 @@ func TestSchedCopyIsAnAllowlist(t *testing.T) {
 	if c.MyBastions != nil || c.ImportRules != nil || c.ImportRecords != nil || c.GridDrafts != nil || c.KnownGUICerts != nil || c.CustomProfiles != nil {
 		t.Errorf("more than the list was copied: %+v", c)
 	}
-	if c.KnownHostKeys["192.0.2.1:22"] != "SHA256:abc" || len(c.CommandSets) != 2 || len(c.Schedules) != 1 || len(c.DeviceGroups) != 2 {
+	if c.KnownHostKeys["192.0.2.1:22"] != "SHA256:abc" || len(c.CommandSets) != 1 || len(c.Schedules) != 1 || len(c.DeviceGroups) != 2 {
 		t.Errorf("the list was not all copied: %+v", c)
 	}
 	for _, g := range c.DeviceGroups {

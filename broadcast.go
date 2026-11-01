@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -26,7 +27,10 @@ import (
 //	                                                its session takes keys now
 //	child → main  "PALATERM tile <l,t,r,b>"         並べ直す, with its monitor's work area
 //	main → child  "INPUT <base64>"                  keys typed in another window
+//	main → child  "BCNAMES <json array>"            which windows take part (device names,
+//	                                                oldest first), sent just before each BCN
 //	main → child  "BCN <joined> <ready>"            how many windows take part
+//	main → child  "BCOFF"                           turn 同時入力 off (LeaveAllBroadcast)
 //	main → child  "PLACE <l,t,r,b>"                 where to sit (physical pixels)
 //
 // A window takes INPUT only while 同時入力 is on there and its session is
@@ -39,6 +43,8 @@ const (
 	termEventTile    = "PALATERM tile"
 	termLineInput    = "INPUT"
 	termLineBcN      = "BCN"
+	termLineBcNames  = "BCNAMES"
+	termLineBcOff    = "BCOFF"
 	termLinePlace    = "PLACE"
 
 	// tileEnv / bcastEnv start a terminal window at its grid cell, and with
@@ -61,9 +67,10 @@ const (
 // termsMu, every other window — until it read again.
 type termChild struct {
 	out   *lineQueue
-	seq   int  // the order it was opened in (並べ直す keeps it)
-	join  bool // 同時入力 on
-	ready bool // connected and unlocked: INPUT reaches its device
+	seq   int    // the order it was opened in (並べ直す keeps it)
+	name  string // its device's name (the BCN list, JoinedTerminals)
+	join  bool   // 同時入力 on
+	ready bool   // connected and unlocked: INPUT reaches its device
 }
 
 func newTermChild(in io.WriteCloser, seq int) *termChild {
@@ -100,7 +107,12 @@ func newLineQueue(consume func(string)) *lineQueue {
 			l.q[0] = ""
 			l.q = l.q[1:]
 			l.mu.Unlock()
-			consume(s)
+			// A panic in one line's consumer is logged and the queue goes
+			// on with the next (the process, and every window, lives).
+			func() {
+				defer recoverGo("lineQueue")
+				consume(s)
+			}()
 		}
 	}()
 	return l
@@ -315,15 +327,66 @@ func bcastCounts(terms map[*exec.Cmd]*termChild) (joined, ready int) {
 	return joined, ready
 }
 
-// sendBcastCounts tells every window the current counts.
+// bcastNames lists the windows with 同時入力 on by device name, in the
+// order they were opened (caller holds termsMu).
+func bcastNames(terms map[*exec.Cmd]*termChild) []string {
+	list := make([]*termChild, 0, len(terms))
+	for _, c := range terms {
+		if c.join {
+			list = append(list, c)
+		}
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].seq < list[j].seq })
+	names := make([]string, 0, len(list))
+	for _, c := range list {
+		names = append(names, c.name)
+	}
+	return names
+}
+
+// sendBcastCounts tells every window the current counts, and which windows
+// they are: the names go first (BCNAMES, a JSON array — a name may hold a
+// space), kept quietly by the window, and the BCN line behind them is what
+// it reports to its page, names included.
 func (a *App) sendBcastCounts() {
 	a.termsMu.Lock()
 	defer a.termsMu.Unlock()
 	j, r := bcastCounts(a.terms)
+	names, _ := json.Marshal(bcastNames(a.terms))
+	namesLine := termLineBcNames + " " + string(names)
 	line := termLineBcN + " " + strconv.Itoa(j) + " " + strconv.Itoa(r)
 	for _, c := range a.terms {
+		c.put(namesLine)
 		c.put(line)
 	}
+}
+
+// JoinedTerminals names the terminal windows with 同時入力 on, oldest first
+// (the question before 並べて接続 opens more with it on). Nothing while
+// locked: device names are the vault's.
+func (a *App) JoinedTerminals() []string {
+	if a.locked() {
+		return []string{}
+	}
+	a.termsMu.Lock()
+	defer a.termsMu.Unlock()
+	return bcastNames(a.terms)
+}
+
+// LeaveAllBroadcast turns 同時入力 off in every open terminal window (each
+// reports back, and the counts follow).
+func (a *App) LeaveAllBroadcast() error {
+	if a.locked() {
+		return errVaultLocked
+	}
+	a.termsMu.Lock()
+	defer a.termsMu.Unlock()
+	for _, c := range a.terms {
+		if c.join {
+			c.put(termLineBcOff)
+		}
+	}
+	return nil
 }
 
 // retile is 並べ直す: the open terminal windows (up to maxTiled), in the

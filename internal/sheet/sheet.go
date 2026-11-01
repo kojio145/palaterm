@@ -38,6 +38,8 @@ type Book struct {
 	Format   string // "xls", "xlsx", "html", "xml2003", "csv", "tsv"
 	Sheets   []Sheet
 	Warnings []string // Japanese, user-facing, short
+
+	cells int // the slots all sheets hold together (see maxBookCells)
 }
 
 const (
@@ -54,6 +56,12 @@ const (
 	// would else be 200 million string slots (3 GB) from a small file.
 	// Merged areas filled in later (listimport) count against it too.
 	MaxCells = 5000000
+	// maxBookCells caps the cells of a whole file: MaxCells is per sheet,
+	// and a file whose sheet directory names one big sheet many times over
+	// would else allocate it that many times.
+	maxBookCells = 2 * MaxCells
+	// maxSheets caps the sheets read from one file (xls, xlsx).
+	maxSheets = 256
 )
 
 var (
@@ -135,10 +143,12 @@ func (b *Book) warn(format string, args ...any) {
 // sheetBuilder collects cells and merges with the size caps applied.
 type sheetBuilder struct {
 	name    string
+	book    *Book // charged for the slots (maxBookCells); nil: this sheet alone
 	rows    [][]string
 	merges  []Range
 	clipped bool
 	cells   int // the slots the rows hold (see MaxCells)
+	bookful bool
 }
 
 func (s *sheetBuilder) set(r, c int, v string) {
@@ -157,12 +167,20 @@ func (s *sheetBuilder) set(r, c int, v string) {
 	}
 	row := s.rows[r]
 	if c >= len(row) {
-		if s.cells+c+1-len(row) > MaxCells {
+		grow := c + 1 - len(row)
+		if s.cells+grow > MaxCells {
 			s.clipped = true
 			return
 		}
-		s.cells += c + 1 - len(row)
-		row = append(row, make([]string, c+1-len(row))...)
+		if s.book != nil && s.book.cells+grow > maxBookCells {
+			s.bookful = true
+			return
+		}
+		s.cells += grow
+		if s.book != nil {
+			s.book.cells += grow
+		}
+		row = append(row, make([]string, grow)...)
 	}
 	row[c] = v
 	s.rows[r] = row
@@ -187,6 +205,9 @@ func (s *sheetBuilder) merge(r1, c1, r2, c2 int) {
 func (s *sheetBuilder) finish(b *Book) {
 	if s.clipped {
 		b.warn("シート「%s」が大きすぎるため、%d 行・%d 列（合計 %d セル）を超える部分は読み込んでいません", s.name, maxGridRows, maxGridCols, MaxCells)
+	}
+	if s.bookful {
+		b.warn("ファイル全体のセル数が上限（%d）を超えたため、シート「%s」の一部は読み込んでいません", maxBookCells, s.name)
 	}
 	rows := s.rows
 	if rows == nil {

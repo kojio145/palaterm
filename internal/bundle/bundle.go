@@ -23,6 +23,7 @@ package bundle
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -62,6 +63,11 @@ type Manifest struct {
 	// in after the bundle is read elsewhere. Absent in bundles from before
 	// group credentials existed.
 	Groups []model.DeviceGroup `json:"groups,omitempty"`
+	// DeviceCredsOmitted says the devices' own logins (username, password,
+	// enable password, key passphrase) and the groups' default credentials
+	// were left out on export (機器の認証情報を含めない): the receiving
+	// PalaTerm keeps the credentials it has for a device the bundle updates.
+	DeviceCredsOmitted bool `json:"deviceCredsOmitted,omitempty"`
 }
 
 // Contents is what a bundle carries, in memory.
@@ -86,7 +92,17 @@ type Contents struct {
 // い): those are each person's own key, filled in on the receiving PalaTerm
 // from its 自分の踏み台認証.
 func Select(inv *model.Inventory, group string, noBastionCreds bool) Contents {
-	c := Contents{Manifest: Manifest{Group: group}}
+	return SelectWith(inv, group, noBastionCreds, false)
+}
+
+// SelectWith is Select with noDeviceCreds too: the devices' own logins
+// (username, password, enable password, key passphrase) and the groups'
+// default credentials are left out (機器の認証情報を含めない — a list handed
+// to a colleague, who fills them in on their side; an import leaves the
+// credentials a device already has when the row's are empty), and the
+// manifest says so (DeviceCredsOmitted).
+func SelectWith(inv *model.Inventory, group string, noBastionCreds, noDeviceCreds bool) Contents {
+	c := Contents{Manifest: Manifest{Group: group, DeviceCredsOmitted: noDeviceCreds}}
 	if inv == nil {
 		return c
 	}
@@ -100,6 +116,9 @@ func Select(inv *model.Inventory, group string, noBastionCreds bool) Contents {
 		d.NormalizeBastions()
 		if noBastionCreds {
 			d.StripBastionCredentials()
+		}
+		if noDeviceCreds {
+			d.Username, d.Password, d.EnablePassword, d.KeyPassphrase = "", "", "", ""
 		}
 		c.Devices = append(c.Devices, d)
 		useSet[d.CommandSet] = true
@@ -117,6 +136,9 @@ func Select(inv *model.Inventory, group string, noBastionCreds bool) Contents {
 	}
 	for _, g := range inv.DeviceGroups {
 		if all || g.Name == group {
+			if noDeviceCreds {
+				g = model.DeviceGroup{Name: g.Name}
+			}
 			c.Manifest.Groups = append(c.Manifest.Groups, model.DeviceGroup{
 				Name: g.Name, Username: g.Username, Password: g.Password, EnablePassword: g.EnablePassword})
 		}
@@ -127,8 +149,12 @@ func Select(inv *model.Inventory, group string, noBastionCreds bool) Contents {
 // keepCredentials fills the credentials d leaves empty from cur, the
 // device it replaces: a row written without them (cells blanked by hand,
 // or a 共有用 export from v1.6.5 and earlier) must not wipe what this
-// PalaTerm already has. A jump hop takes over only from the hop at the same position with the same
-// host. Reports whether anything was taken over.
+// PalaTerm already has. A row that says useGroupCreds does not take the
+// device's own username, password and enable password over: it logs in
+// with the group's, and blanking them was the point of the row (a secret
+// that stays behind, unused, is one more copy of it). A jump hop takes over
+// only from the hop at the same position with the same host. Reports
+// whether anything was taken over.
 func keepCredentials(d *model.Device, cur model.Device) bool {
 	kept := false
 	fill := func(dst *string, src string) {
@@ -136,9 +162,11 @@ func keepCredentials(d *model.Device, cur model.Device) bool {
 			*dst, kept = src, true
 		}
 	}
-	fill(&d.Username, cur.Username)
-	fill(&d.Password, cur.Password)
-	fill(&d.EnablePassword, cur.EnablePassword)
+	if !d.UseGroupCreds {
+		fill(&d.Username, cur.Username)
+		fill(&d.Password, cur.Password)
+		fill(&d.EnablePassword, cur.EnablePassword)
+	}
 	fill(&d.KeyFile, cur.KeyFile)
 	fill(&d.KeyPassphrase, cur.KeyPassphrase)
 	for j := range d.Bastions {
@@ -287,7 +315,7 @@ func WriteProfileJSON(dir string, p profile.Profile) (string, error) {
 		return "", err
 	}
 	name := FileNameSafe(p.Name) + ".json"
-	return name, os.WriteFile(filepath.Join(dir, name), append(data, '\r', '\n'), 0o644)
+	return name, os.WriteFile(filepath.Join(dir, name), append(data, '\r', '\n'), 0o600)
 }
 
 // ParseProfileJSON reads one exported profile, applying the same checks the
@@ -320,8 +348,11 @@ func ParseProfileJSON(data []byte) (profile.Profile, error) {
 func Write(dir string, c Contents, app string) (string, error) {
 	setDir := filepath.Join(dir, "command-sets")
 	profDir := filepath.Join(dir, "os-profiles")
+	// Everything in a bundle is as private as devices.csv: a command set
+	// may carry a clear-text "enable secret …" line (0o600, folders 0o700;
+	// no effect on Windows, kept for every other OS the code runs on).
 	for _, d := range []string{dir, setDir, profDir} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
+		if err := os.MkdirAll(d, 0o700); err != nil {
 			return "", err
 		}
 	}
@@ -335,6 +366,9 @@ func Write(dir string, c Contents, app string) (string, error) {
 		CommandSets: []FileRef{},
 		OSProfiles:  []FileRef{},
 		Groups:      c.Manifest.Groups,
+		// The receiver's read-in keeps its own credentials where these are
+		// empty; the manifest says they were left out on purpose.
+		DeviceCredsOmitted: c.Manifest.DeviceCredsOmitted,
 	}
 	text, err := csvio.ExportLang(c.Devices, c.Lang)
 	if err != nil {
@@ -346,7 +380,7 @@ func Write(dir string, c Contents, app string) (string, error) {
 	taken := map[string]bool{}
 	for _, s := range c.CommandSets {
 		name := uniqueFile(taken, FileNameSafe(s.Name), ".csv")
-		if err := os.WriteFile(filepath.Join(setDir, name), []byte(FormatCommandSet(s)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(setDir, name), []byte(FormatCommandSet(s)), 0o600); err != nil {
 			return "", err
 		}
 		m.CommandSets = append(m.CommandSets, FileRef{Name: s.Name, File: "command-sets/" + name})
@@ -358,7 +392,7 @@ func Write(dir string, c Contents, app string) (string, error) {
 			return "", err
 		}
 		name := uniqueFile(taken, FileNameSafe(p.Name), ".json")
-		if err := os.WriteFile(filepath.Join(profDir, name), append(data, '\r', '\n'), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(profDir, name), append(data, '\r', '\n'), 0o600); err != nil {
 			return "", err
 		}
 		m.OSProfiles = append(m.OSProfiles, FileRef{Name: p.Name, File: "os-profiles/" + name})
@@ -373,11 +407,41 @@ func Write(dir string, c Contents, app string) (string, error) {
 	return mp, os.WriteFile(mp, append(data, '\r', '\n'), 0o600)
 }
 
+// File size caps: a manifest or profile JSON is a few KB, a command set a
+// few hundred lines, a device CSV at most some thousands of rows. Checked
+// with Stat before reading, and the read is limited anyway (a file that
+// grows meanwhile).
+const (
+	maxJSONFile = 4 << 20
+	maxCSVFile  = 64 << 20
+)
+
+// readLimited reads a file of at most limit bytes.
+func readLimited(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	tooLarge := fmt.Errorf("ファイルが大きすぎます（上限 %d MB）", limit>>20)
+	if st, err := f.Stat(); err == nil && st.Size() > limit {
+		return nil, tooLarge
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, tooLarge
+	}
+	return data, nil
+}
+
 // Read loads a bundle from its manifest path. Every file the manifest names
 // must be present and valid; a bundle is read whole or not at all.
 func Read(manifestPath string) (Contents, error) {
 	var c Contents
-	data, err := os.ReadFile(manifestPath)
+	data, err := readLimited(manifestPath, maxJSONFile)
 	if err != nil {
 		return c, err
 	}
@@ -402,7 +466,7 @@ func Read(manifestPath string) (Contents, error) {
 		if err != nil {
 			return c, err
 		}
-		text, err := os.ReadFile(p)
+		text, err := readLimited(p, maxCSVFile)
 		if err != nil {
 			return c, fmt.Errorf("機器CSVが読めません: %w", err)
 		}
@@ -415,7 +479,7 @@ func Read(manifestPath string) (Contents, error) {
 		if err != nil {
 			return c, err
 		}
-		text, err := os.ReadFile(p)
+		text, err := readLimited(p, maxCSVFile)
 		if err != nil {
 			return c, fmt.Errorf("コマンドセット「%s」が読めません: %w", ref.Name, err)
 		}
@@ -435,7 +499,7 @@ func Read(manifestPath string) (Contents, error) {
 		if err != nil {
 			return c, err
 		}
-		data, err := os.ReadFile(p)
+		data, err := readLimited(p, maxJSONFile)
 		if err != nil {
 			return c, fmt.Errorf("OSプロファイル「%s」が読めません: %w", ref.Name, err)
 		}
@@ -451,7 +515,7 @@ func Read(manifestPath string) (Contents, error) {
 // ReadDevicesCSV loads a bare devices CSV as a bundle with only devices, so
 // the one import path handles both.
 func ReadDevicesCSV(path string) (Contents, error) {
-	data, err := os.ReadFile(path)
+	data, err := readLimited(path, maxCSVFile)
 	if err != nil {
 		return Contents{}, err
 	}
@@ -524,6 +588,17 @@ type Summary struct {
 	// CredsKept lists existing devices whose row left some credentials
 	// empty and that therefore kept their own (see keepCredentials).
 	CredsKept []string `json:"credsKept"`
+	// SecretSteps lists the bundle's profile steps that send {password} or
+	// {enable} to something other than a password prompt ("profile: ログイン
+	// 手順 2: 「sername:」 → {password}", see model.SecretSteps): shown on
+	// the import screen like SecretCommands.
+	SecretSteps []string `json:"secretSteps"`
+	// GroupNoCreds lists imported devices that log in with their group's
+	// default credentials (useGroupCreds) while that group has none here
+	// (a group this import created without them, or an existing one left
+	// alone): the device keeps logging in with its own fields until the
+	// group's are entered.
+	GroupNoCreds []string `json:"groupNoCreds"`
 }
 
 // Preview reports what Apply would do without changing inv.
@@ -554,6 +629,8 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.JumpCommands = []string{}
 	s.SecretCommands = []string{}
 	s.CredsKept = []string{}
+	s.SecretSteps = []string{}
+	s.GroupNoCreds = []string{}
 	// A file without 端末の色 (older than v1.8.0) leaves the devices'
 	// colours as they are rather than clearing them: a display preference,
 	// not worth a warning. The other missing columns go back to defaults.
@@ -579,6 +656,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	}
 	for _, p := range c.Profiles {
 		s.Profiles++
+		for _, line := range model.SecretSteps(p) {
+			s.SecretSteps = append(s.SecretSteps, p.Name+": "+line)
+		}
 		i, keyHit := profByKey[p.Key]
 		// The same key under another name is the same profile only when it
 		// still is: the same steps, renamed. A profile keeps its key when
@@ -737,6 +817,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 			d.OSType = k
 		}
 		ensureGroup(d.Group)
+		if d.UseGroupCreds && !d.CLIOff && !inv.Group(d.Group).HasCreds() {
+			s.GroupNoCreds = append(s.GroupNoCreds, label)
+		}
 		if d.CommandSet != "" {
 			if _, ok := setByName[d.CommandSet]; !ok && !missingSet[d.CommandSet] {
 				missingSet[d.CommandSet] = true

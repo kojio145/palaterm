@@ -123,15 +123,14 @@ func TestKeepaliveStopsWhenClientClosed(t *testing.T) {
 	}
 }
 
-// The レガシー暗号 hint is offered only where the toggle can help: a key
-// exchange or cipher the device insists on. An old MAC or host-key
-// algorithm fails the same way with it on, so that gets a different word.
+// The レガシー暗号 hint is offered where the toggle can help — since review
+// 2026-11-01 that is every category (it adds host-key and MAC algorithms
+// too), and never once it is on.
 func TestAlgorithmHint(t *testing.T) {
 	mk := func(what string) error {
 		return fmt.Errorf("ssh: handshake failed: ssh: no common algorithm for %s; we offered: [\"a\"], peer offered: [\"b\"]", what)
 	}
 	legacy := "レガシー暗号を許可」を有効"
-	other := "この不一致には効きません"
 	cases := []struct {
 		what   string
 		legacy bool
@@ -141,8 +140,9 @@ func TestAlgorithmHint(t *testing.T) {
 		{"client to server cipher", false, legacy},
 		{"server to client cipher", false, legacy},
 		{"key exchange", true, ""},
-		{"client to server MAC", false, other},
-		{"host key", false, other},
+		{"client to server MAC", false, legacy},
+		{"host key", false, legacy},
+		{"host key", true, ""},
 	}
 	for _, c := range cases {
 		got := algorithmHint(mk(c.what), DialOpts{Legacy: c.legacy})

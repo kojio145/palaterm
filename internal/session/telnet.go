@@ -53,6 +53,15 @@ func dialTelnet(host string, port int, timeout time.Duration) (Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("telnet dial %s: %w", addr, err)
 	}
+	// Telnet has no keepalive of its own: a terminal window left open on a
+	// quiet session was dropped by a NAT router or firewall after a few
+	// minutes, as SSH sessions were before startKeepalive. TCP keepalive at
+	// the SSH sender's interval keeps the flow alive (a tunneled Telnet
+	// channel rides the jump host's SSH keepalive instead).
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.SetKeepAlive(true)
+		_ = tc.SetKeepAlivePeriod(keepaliveEvery)
+	}
 	return &telnetSession{conn: conn}, nil
 }
 
