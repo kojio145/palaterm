@@ -43,6 +43,8 @@ type DiffResult struct {
 	ConfigB     bool   `json:"configB,omitempty"`
 	Sections    []Jump `json:"sections,omitempty"`
 	Commands    []Jump `json:"commands,omitempty"`
+	// Impact: the reading of the configuration changes (Mode "config" only).
+	Impact *ImpactResult `json:"impact,omitempty"`
 }
 
 // noise matches the parts of a line that differ between any two captures of

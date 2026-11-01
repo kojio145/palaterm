@@ -86,6 +86,27 @@ func readWatching(path string) ([]byte, bool, error) {
 	return data, writing, nil
 }
 
+// Commands makes the rollback (B → A) or forward (A → B) commands for the
+// two logs (history.GenerateCommands); the window shows them for copying.
+func (d *DiffWin) Commands(direction string) history.CmdGen {
+	ba, err := os.ReadFile(d.a)
+	if err != nil {
+		return history.CmdGen{Warnings: []string{err.Error()}, Empty: true}
+	}
+	bb, err := os.ReadFile(d.b)
+	if err != nil {
+		return history.CmdGen{Warnings: []string{err.Error()}, Empty: true}
+	}
+	if direction != "forward" {
+		direction = "rollback"
+	}
+	g := history.GenerateCommands(string(ba), string(bb), direction, "")
+	if g.Lines == nil {
+		g.Lines = []history.CmdLine{}
+	}
+	return g
+}
+
 // OpenLog opens side "a" or "b" in a viewer window.
 func (d *DiffWin) OpenLog(side string) error {
 	p := d.a

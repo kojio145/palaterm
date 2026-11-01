@@ -9,7 +9,9 @@ const HIST_PAGE = 200;
 
 // Which run rows are expanded, and the two runs picked for comparison. Kept
 // across re-renders of the tab.
-const histState = { open: {}, failedOnly: {}, a: "", b: "", c: "", runs: [], limit: HIST_PAGE };
+const histState = { open: {}, failedOnly: {}, a: "", b: "", c: "", k: "", runs: [], limit: HIST_PAGE };
+// The checklist chosen for the comparison ("" / "-" = none).
+function cmpChecklist() { return histState.k && histState.k !== "-" ? histState.k : ""; }
 // Runs that represent the work itself: a batch tagged 作業中, or an
 // interactive session (stage "work"). An external folder may be the work
 // log whatever it is called, so every one of them is offered.
@@ -164,6 +166,7 @@ function renderHistoryView() {
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読み込み"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
+        <button class="btn" id="hist-versions" ${runs.length ? "" : "disabled"} data-tip="${esc(t("機器を 1 台選ぶと、すべての実行のログがその機器の「版」として新しい順に並びます。設定が前の版から変わったかの印つき。任意の 2 版を差分窓で比べられます"))}">${esc(t("機器ごとの版"))}</button>
       </div>
     </div>
     <div class="panel" style="padding:14px 18px;margin-bottom:16px">
@@ -177,6 +180,11 @@ function renderHistoryView() {
       <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
         <span class="muted" style="font-size:12px" data-tip="${esc(t("A と B の間に行った作業（作業中の一括実行、または対話接続）。選ぶと、その作業内容と、作業前→作業後の差分から「変更が反映されたか」の結論を出します"))}">${esc(t("作業中（任意） ⓘ"))}</span><select id="cmp-c" class="btn" style="max-width:420px" data-tip="${esc(histState.c && histState.c !== "-" ? runTipOf(histState.c) : "")}">${workOpt}</select>
         <span class="muted" style="font-size:12px">${esc(t("同じ機器名のログ同士を比べます（A=作業前・B=作業後）"))}</span>
+      </div>
+      <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
+        <span class="muted" style="font-size:12px" data-tip="${esc(t("「あるべき設定行」の一覧。選ぶと、作業後（B）のログに各行があるかを機器ごとに PASS / FAIL（値が違う）/ MISSING（無い）で判定します"))}">${esc(t("チェックリスト（任意） ⓘ"))}</span>
+        <select id="cmp-k" class="btn" style="max-width:320px"><option value="">${esc(t("（なし）"))}</option>${(INV.checklists || []).map(c => `<option value="${esc(c.name)}" ${cmpChecklist() === c.name ? "selected" : ""}>${esc(c.name)}（${c.lines.length}）</option>`).join("")}</select>
+        <button class="btn sm" id="cmp-k-edit">${esc(t("チェックリストを編集…"))}</button>
       </div>
       <div id="cmp-result"></div>
     </div>
@@ -200,6 +208,7 @@ function renderHistoryView() {
   const more = document.getElementById("hist-more");
   if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
+  document.getElementById("hist-versions").onclick = deviceVersionsDialog;
   root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistoryView(); });
   root.querySelectorAll(".hist-failed-only").forEach(el => el.onchange = () => { histState.failedOnly[el.dataset.dir] = el.checked; renderHistoryView(); });
   root.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
@@ -212,6 +221,8 @@ function renderHistoryView() {
   document.getElementById("cmp-a").onchange = e => { histState.a = e.target.value || "-"; histState.c = ""; renderHistoryView(); };
   document.getElementById("cmp-b").onchange = e => { histState.b = e.target.value || "-"; histState.c = ""; renderHistoryView(); };
   document.getElementById("cmp-c").onchange = e => { histState.c = e.target.value || "-"; renderHistoryView(); };
+  document.getElementById("cmp-k").onchange = e => { histState.k = e.target.value || "-"; renderHistoryView(); };
+  document.getElementById("cmp-k-edit").onclick = () => checklistEditor();
   document.getElementById("cmp-go").onclick = compareRuns;
   // The tab was redrawn (a sort, a filter, a row opened): the comparison of
   // the same A / B / 作業中 is still valid, so it is drawn again as it was.
@@ -331,7 +342,12 @@ async function compareRuns() {
       r.added = d.whole.added; r.removed = d.whole.removed; r.changed = d.whole.changed || 0; r.moved = d.whole.moved || 0;
       r.cfgDiff = r.hasConfig ? n(d.config) : 0;
       r.anyDiff = n(d.whole);
+      r.impact = d.impact || ""; r.high = d.high || 0; r.mid = d.mid || 0;
     } catch (err) { r.err = terr(err); }
+    if (cmpChecklist() && !r.err) {
+      try { r.check = await App().VerifyChecklist(cmpChecklist(), e.b); }
+      catch (err) { r.check = { err: terr(err) }; }
+    }
     if (work && !r.err) {
       const paths = works.map(w => devFor(w, r.name, e.pairedWith)).filter(d => d && d.logPath).map(d => d.logPath);
       r.workLogs = paths.length;
@@ -362,12 +378,13 @@ function cmpSorted(C) {
   return C.rows.map((r, i) => ({ r, i, k: cmpRank(r) })).sort((x, y) => x.k - y.k || x.i - y.i);
 }
 
-function cmpKey() { return [histState.a, histState.b, histState.c].join("|"); }
+function cmpKey() { return [histState.a, histState.b, histState.c, cmpChecklist()].join("|"); }
 
 // How much attention a device's row needs: shown in this order.
 function cmpRank(r) {
   const s = r.strict;
   if (r.err || (s && s.err)) return 0;
+  if (r.check && (r.check.fail || r.check.missing)) return 1;
   if (r.hasConfig && r.cfgDiff) return 1;
   if (s && s.missing) return 1;
   if (s && s.unexpectedCount) return 2;
@@ -387,6 +404,30 @@ function cmpDiffText(r) {
   return r.anyDiff ? t("差分あり（設定が見当たらない）") : t("差分なし（設定が見当たらない）");
 }
 function cmpDiffColor(r) { return r.err ? "err" : r.hasConfig ? (r.cfgDiff ? "warn" : r.anyDiff ? "muted" : "ok") : (r.anyDiff ? "warn" : "ok"); }
+// The impact badge: the reading order of the devices.
+function cmpImpactHTML(r) {
+  if (r.err || !r.hasConfig || !r.cfgDiff) return `<span class="muted">—</span>`;
+  const m = { high: ["高", "var(--err)"], mid: ["中", "var(--warn)"], low: ["低", "var(--muted)"] }[r.impact];
+  if (!m) return `<span class="muted">—</span>`;
+  return `<span style="color:${m[1]};font-weight:600" data-tip="${esc(t("影響が大きい行 {h}・中 {m}（アドレス・経路・ACL・ポリシー・ポートの up/down が「高」）", { h: r.high || 0, m: r.mid || 0 }))}">${esc(t(m[0]))}${r.high ? ` ${r.high}` : ""}</span>`;
+}
+// The checklist column: counts and the lines that are not as expected.
+function cmpCheckText(c) {
+  if (!c) return "";
+  if (c.err) return c.err;
+  if (c.noConfig) return t("判定不能（設定の表示なし）");
+  return t("PASS {p} / FAIL {f} / MISSING {m}", { p: c.pass, f: c.fail, m: c.missing }) + (c.unverified ? t("（要確認 {u}）", { u: c.unverified }) : "");
+}
+function cmpCheckHTML(c) {
+  if (!c) return "";
+  const text = cmpCheckText(c);
+  if (c.err) return `<span style="color:var(--err)">${esc(text)}</span>`;
+  if (c.noConfig) return `<span class="muted">${esc(text)}</span>`;
+  const bad = c.fail + c.missing;
+  const mark = st => st === "pass" ? `<span style="color:var(--ok)">✓</span>` : st === "fail" ? `<span style="color:var(--err)">✗</span>` : st === "missing" ? `<span style="color:var(--err)">－</span>` : `<span style="color:var(--warn)">？</span>`;
+  const lines = (c.results || []).map(x => `<div class="mono" style="font-size:11px;white-space:nowrap"${x.block ? ` data-tip="${esc(t("ブロック: {p}", { p: x.block }))}"` : ""}>${mark(x.status)} ${esc(x.text)}${x.status === "fail" && x.found ? ` <span class="muted">→ ${esc(x.found)}</span>` : ""}${x.status === "missing" ? ` <span class="muted">${esc(t("（無い）"))}</span>` : ""}</div>`).join("");
+  return `<details ${bad ? "open" : ""}><summary style="cursor:pointer"><span style="color:var(--${bad ? "err" : c.unverified ? "warn" : "ok"})">${esc(text)}</span></summary><div style="margin-top:4px;max-height:160px;overflow:auto">${lines}</div></details>`;
+}
 // "+a / -b / ~c / ↕d" for one count set.
 function cmpCountsHTML(c) {
   if (!c) return "";
@@ -502,14 +543,15 @@ function drawCompare() {
       <span style="flex:1"></span>
       <button class="btn sm" id="cmp-copy" data-tip="${esc(t("結論と機器ごとの結果を、Excel や作業報告に貼れる形（タブ区切り）でコピーします"))}">${esc(t("結果をコピー"))}</button>
       <button class="btn sm" id="cmp-csv" data-tip="${esc(t("機器ごとの結果を export\\compare に CSV で書き出します"))}">${esc(t("CSV に書き出す"))}</button>
+      <button class="btn sm" id="cmp-html" data-tip="${esc(t("機器ごとの結果と設定の差分（左右・変わった部分の強調つき）を 1 枚の HTML に書き出します（export\\compare。外部通信なし・スクリプトなし）"))}">${esc(t("HTML レポート"))}</button>
     </div>`;
   out.innerHTML = groupWarn + banner + tools + `
     ${failRows.length ? `<div style="margin-top:10px;font-size:13px;color:var(--err)">${esc(t("⚠ {n} 台は A または B で失敗しているため比較していません（下の表の先頭に赤で示します）", { n: failRows.length }))}</div>` : ""}
-    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:150px">${esc(t("差分"))}</th><th style="width:150px" data-tip="${esc(t("show running-config 等の出力だけを比べた行数（追加 / 削除 / 変更 / 順序）"))}">${esc(t("設定（行）"))}</th><th style="width:150px" data-tip="${esc(t("設定以外（show の出力など）の行数。設定が見当たらないときはログ全体"))}">${esc(t("その他（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
+    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:150px">${esc(t("差分"))}</th><th style="width:150px" data-tip="${esc(t("show running-config 等の出力だけを比べた行数（追加 / 削除 / 変更 / 順序）"))}">${esc(t("設定（行）"))}</th><th style="width:150px" data-tip="${esc(t("設定以外（show の出力など）の行数。設定が見当たらないときはログ全体"))}">${esc(t("その他（行）"))}</th><th style="width:70px" data-tip="${esc(t("設定の変更の影響の大きさ（読む順番の目安）。アドレス・経路・ACL・ポリシー・ポートの up/down は高、VLAN・管理系は中、説明文は低"))}">${esc(t("影響"))}</th>${cmpChecklist() ? `<th>${esc(t("期待値（チェックリスト）"))}</th>` : ""}${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
       ${failRows.map(r => `<tr style="background:rgba(239,68,68,.08)">
         <td><b>${esc(r.name)}</b></td>
         <td><span style="color:var(--err)">${esc(t("{w} で失敗", { w: r.fail }))}</span></td>
-        <td colspan="${work ? 3 : 2}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
+        <td colspan="${3 + (work ? 1 : 0) + (cmpChecklist() ? 1 : 0)}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
         <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
       ${rows.map(r => `<tr>
@@ -517,19 +559,31 @@ function drawCompare() {
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
         <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
         <td class="mono">${r.err ? "" : cmpCountsHTML(r.hasConfig ? cmpRest(r) : r.whole)}</td>
+        <td>${cmpImpactHTML(r)}</td>
+        ${cmpChecklist() ? `<td>${cmpCheckHTML(r.check)}</td>` : ""}
         ${work ? `<td>${verdict(r)}</td>` : ""}
-        <td style="text-align:right">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}</td>
+        <td style="text-align:right;white-space:nowrap">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}${r.err || !(r.hasConfig && r.cfgDiff) ? "" : ` <button class="btn sm" data-cmd="rollback" data-dev="${esc(r.name)}" data-tip="${esc(t("作業後（B）の機器を作業前（A）の設定に戻すコマンドを差分から作ります（実行はしません）"))}">${esc(t("戻す"))}</button> <button class="btn sm" data-cmd="forward" data-dev="${esc(r.name)}" data-tip="${esc(t("作業前（A）の機器を作業後（B）と同じにするコマンドを差分から作ります（別の機器への横展開に。実行はしません）"))}">${esc(t("揃える"))}</button>`}</td>
       </tr>`).join("")}
     </tbody></table>
     ${onlyNg ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("ほか {n} 台は問題なし（チェックを外すと表示）", { n: all.length - rows.length }))}</div>` : ""}
     ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("片方の実行にしか含まれていない機器:"))} ${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}`;
   out.querySelectorAll("[data-diff]").forEach(btn => btn.onclick = () => showDiff(btn.dataset.diff, byName[btn.dataset.diff].a, byName[btn.dataset.diff].b));
+  out.querySelectorAll("[data-cmd]").forEach(btn => btn.onclick = () => cmdDialog(btn.dataset.dev, byName[btn.dataset.dev].a, byName[btn.dataset.dev].b, btn.dataset.cmd, b.group || a.group || ""));
   out.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
   const only = document.getElementById("cmp-only-ng");
   if (only) only.onchange = () => { histState.cmpOnlyNg = only.checked; drawCompare(); };
   document.getElementById("cmp-copy").onclick = async () => {
     const tsv = cmpTable(true).map(r => r.map(v => String(v).replace(/[\t\r\n]+/g, " / ")).join("\t")).join("\n");
     await copyText(tsv, t("比較結果をコピーしました"));
+  };
+  document.getElementById("cmp-html").onclick = async () => {
+    const devices = C.failRows.map(r => ({ name: r.name, error: t("{w} で失敗", { w: r.fail }) + ": " + r.msg })).concat(cmpSorted(C).map(({ r }) => ({ name: r.name, pathA: byName[r.name].a, pathB: byName[r.name].b, verdict: work ? cmpVerdictText(r, work) : "", check: cmpChecklist() ? cmpCheckText(r.check) : "", error: r.err || "" })));
+    try {
+      const path = await App().ExportCompareReport({ title: t("比較レポート") + " " + (a.group || ""), runA: runTitle(a), runB: runTitle(b), work: work ? runTitle(work) : "", headline: C.headline || "", lang: LANG, devices });
+      if (await uiConfirm({ title: t("書き出しました"), message: `<span class="muted" style="font-size:12px">${esc(path)}</span>`, okLabel: t("フォルダを開く"), cancelLabel: t("閉じる") })) {
+        try { await App().OpenExportFolder(path.slice(0, Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/")))); } catch (e) { toast(terr(e), "err"); }
+      }
+    } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
   };
   document.getElementById("cmp-csv").onclick = async () => {
     try {
@@ -547,7 +601,8 @@ function drawCompare() {
 function cmpTable(withTitle) {
   const C = histState.cmp;
   const { a, b, work } = C;
-  const head = [t("機器名"), t("組にした名前"), t("差分"), t("追加（行）"), t("削除（行）"), t("設定 追加"), t("設定 削除"), t("設定 変更"), t("設定 順序"), t("その他 追加"), t("その他 削除")];
+  const head = [t("機器名"), t("組にした名前"), t("差分"), t("追加（行）"), t("削除（行）"), t("設定 追加"), t("設定 削除"), t("設定 変更"), t("設定 順序"), t("その他 追加"), t("その他 削除"), t("影響")];
+  if (cmpChecklist()) head.push(t("期待値"), t("期待値に合わない行"));
   if (work) head.push(t("結論"), t("未反映"), t("要確認"), t("作業外の変更"), t("未反映・要確認の行"), t("作業外の変更の行"));
   const out = [];
   if (withTitle) {
@@ -557,11 +612,13 @@ function cmpTable(withTitle) {
   }
   out.push(head);
   // A failed device: why, in the 差分 column (there with or without a work).
-  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", "", "", "", "", "", "", ""]));
+  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", "", "", "", "", "", "", "", ""]));
   for (const { r } of cmpSorted(C)) {
     const cfg = r.hasConfig ? r.config : null, rest = r.err ? null : (r.hasConfig ? cmpRest(r) : r.whole);
     const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : cmpDiffText(r), r.err ? "" : r.added, r.err ? "" : r.removed,
-      cfg ? cfg.added : "", cfg ? cfg.removed : "", cfg ? (cfg.changed || 0) : "", cfg ? (cfg.moved || 0) : "", rest ? rest.added : "", rest ? rest.removed : ""];
+      cfg ? cfg.added : "", cfg ? cfg.removed : "", cfg ? (cfg.changed || 0) : "", cfg ? (cfg.moved || 0) : "", rest ? rest.added : "", rest ? rest.removed : "",
+      r.err || !r.cfgDiff ? "" : ({ high: t("高"), mid: t("中"), low: t("低") }[r.impact] || "")];
+    if (cmpChecklist()) row.push(cmpCheckText(r.check), ((r.check && r.check.results) || []).filter(x => x.status !== "pass").map(x => `${x.status === "fail" ? "✗" : x.status === "missing" ? "－" : "？"} ${x.text}${x.found ? " → " + x.found : ""}`).join("\n"));
     if (work) {
       const s = r.strict || {};
       const lines = (s.commands || []).filter(c => c.status === "missing" || c.status === "unverified")
@@ -579,6 +636,208 @@ function cmpRest(r) {
   const w = r.whole, c = r.config;
   const z = n => Math.max(0, n);
   return { added: z(w.added - c.added), removed: z(w.removed - c.removed), changed: z((w.changed || 0) - (c.changed || 0)), moved: z((w.moved || 0) - (c.moved || 0)) };
+}
+
+// Checklists: the expected configuration lines, written like a configuration
+// excerpt (an indented line belongs to the margin line above it, which is
+// its block). Saved in the vault; chosen in the comparison panel.
+async function checklistEditor() {
+  let lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
+  let cur = lists.find(c => c.name === cmpChecklist()) || lists[0] || null;
+  const node = h(`<div>
+    <h3>${esc(t("チェックリスト（あるべき設定行）"))}</h3>
+    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("設定の抜き書きのように書きます: 行頭から書いた行はそのまま探す行、字下げした行はその上の行（ブロック）の中で探します。省略形・暗号化されたパスワード・まとめられた VLAN 一覧も照合されます。「!」「#」で始まる行は無視します。"))}</p>
+    <div class="row-inline" style="gap:8px;flex-wrap:wrap">
+      <select id="ck-sel" class="btn" style="max-width:260px"></select>
+      <button class="btn sm" id="ck-new">${esc(t("＋ 新しいチェックリスト"))}</button>
+      <span style="flex:1"></span>
+      <button class="btn sm" id="ck-del">${esc(t("削除"))}</button>
+    </div>
+    <div class="field" style="margin-top:8px"><label>${esc(t("名前"))}</label><input id="ck-name" placeholder="${esc(t("例: 標準設定（拠点ルータ）"))}"></div>
+    <div class="field"><label>${esc(t("あるべき設定行"))}</label><textarea id="ck-text" class="mono" style="min-height:220px;font-size:12px" spellcheck="false" placeholder="hostname sw-lab-01&#10;ntp server 192.0.2.123&#10;interface GigabitEthernet0/1&#10; switchport mode trunk"></textarea></div>
+    <div class="row-inline" style="gap:6px;flex-wrap:wrap;font-size:12px">
+      <span class="muted">${esc(t("雛形から足す"))}</span>
+      <select id="ck-fam" class="btn sm"><option value="cisco">${esc(t("Cisco IOS 系"))}</option><option value="fortigate">FortiGate</option><option value="junos">Junos</option><option value="yamaha">Yamaha RTX</option></select>
+      <select id="ck-kind" class="btn sm"><option value="hostname">${esc(t("ホスト名"))}</option><option value="ntp">NTP</option><option value="dns">DNS</option><option value="syslog">Syslog</option><option value="snmp">${esc(t("SNMP コミュニティ"))}</option><option value="gateway">${esc(t("既定ゲートウェイ"))}</option></select>
+      <input id="ck-vals" placeholder="${esc(t("値（複数はカンマ区切り）"))}" style="width:260px">
+      <button class="btn sm" id="ck-add">${esc(t("足す"))}</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="ck-close">${esc(t("閉じる"))}</button>
+      <button class="btn primary" id="ck-save">${esc(t("保存"))}</button>
+    </div>
+  </div>`);
+  openModal(node, "wide");
+  const sel = node.querySelector("#ck-sel"), nameIn = node.querySelector("#ck-name"), ta = node.querySelector("#ck-text");
+  async function show() {
+    sel.innerHTML = lists.map(c => `<option value="${esc(c.name)}" ${cur && c.name === cur.name ? "selected" : ""}>${esc(c.name)}（${c.lines.length}）</option>`).join("") || `<option value="">${esc(t("（まだありません）"))}</option>`;
+    nameIn.value = cur ? cur.name : "";
+    ta.value = cur ? await App().FormatChecklistLines(cur.lines) : "";
+    node.querySelector("#ck-del").disabled = !cur;
+  }
+  sel.onchange = () => { cur = lists.find(c => c.name === sel.value) || null; show(); };
+  node.querySelector("#ck-new").onclick = () => { cur = null; show(); nameIn.focus(); };
+  node.querySelector("#ck-add").onclick = async () => {
+    const vals = node.querySelector("#ck-vals").value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
+    if (!vals.length) { toast(t("値を入力してください"), "err"); return; }
+    const lines = await App().ChecklistTemplate(node.querySelector("#ck-fam").value, node.querySelector("#ck-kind").value, vals);
+    if (!lines.length) { toast(t("この組み合わせの雛形はありません"), "warn"); return; }
+    const add = await App().FormatChecklistLines(lines);
+    ta.value = (ta.value.replace(/\s+$/, "") + "\n" + add).replace(/^\n/, "");
+  };
+  node.querySelector("#ck-save").onclick = async () => {
+    const name = nameIn.value.trim();
+    if (!name) { toast(t("名前を入力してください"), "err"); return; }
+    const lines = await App().ParseChecklistText(ta.value);
+    if (!lines.length) { toast(t("あるべき設定行を 1 行以上書いてください"), "err"); return; }
+    if (cur && cur.name !== name) { try { await App().DeleteChecklist(cur.name); } catch (e) { /* renamed: the old one may be gone already */ } }
+    try { await App().SaveChecklist({ name, lines }); } catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); return; }
+    await refreshInventory();
+    lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
+    cur = lists.find(c => c.name === name) || null;
+    histState.k = name;
+    toast(t("チェックリスト「{n}」を保存しました（{c} 行）", { n: name, c: lines.length }), "ok");
+    show();
+  };
+  node.querySelector("#ck-del").onclick = async () => {
+    if (!cur) return;
+    if (!(await uiConfirm({ title: t("チェックリストを削除しますか？"), message: esc(cur.name), okLabel: t("削除"), cancelLabel: t("キャンセル"), danger: true }))) return;
+    try { await App().DeleteChecklist(cur.name); } catch (e) { toast(terr(e), "err"); return; }
+    await refreshInventory();
+    lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
+    if (histState.k === cur.name) histState.k = "";
+    cur = lists[0] || null;
+    show();
+  };
+  node.querySelector("#ck-close").onclick = () => { closeModal(); renderHistoryView(); };
+  await show();
+}
+
+// 機器ごとの版: every log of one device across the runs, newest first, with
+// whether its configuration differs from the version before; any two open
+// in the diff window (the older as A).
+const dvState = { name: "", a: null, b: null };
+async function deviceVersionsDialog() {
+  const names = [...new Set((histState.runs || []).flatMap(r => (r.devices || []).filter(d => d.logPath).map(d => d.name)))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
+  if (!names.length) { toast(t("ログのある機器がありません"), "warn"); return; }
+  if (!names.includes(dvState.name)) { dvState.name = names[0]; dvState.a = dvState.b = null; }
+  const node = h(`<div>
+    <h3>${esc(t("機器ごとの版"))}</h3>
+    <div class="row-inline" style="gap:10px;flex-wrap:wrap">
+      <span class="muted" style="font-size:12px">${esc(t("機器"))}</span>
+      <select id="dv-name" class="btn" style="max-width:320px">${names.map(n => `<option value="${esc(n)}" ${n === dvState.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      <span id="dv-summary" class="muted" style="font-size:12px"></span>
+      <span style="flex:1"></span>
+      <button class="btn primary" id="dv-diff" disabled>${esc(t("A と B の差分を開く"))}</button>
+    </div>
+    <div id="dv-body" style="margin-top:10px;max-height:60vh;overflow:auto"></div>
+    <div class="modal-actions"><button class="btn" id="dv-close">${esc(t("閉じる"))}</button></div>
+  </div>`);
+  openModal(node, "wide");
+  node.querySelector("#dv-close").onclick = closeModal;
+  const body = node.querySelector("#dv-body"), sum = node.querySelector("#dv-summary"), go = node.querySelector("#dv-diff");
+  let vers = [];
+  const fmtSize = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+  function draw() {
+    const pick = v => v && vers.find(x => x.logPath === v);
+    const va = pick(dvState.a), vb = pick(dvState.b);
+    go.disabled = !(va && vb && va.logPath !== vb.logPath);
+    body.innerHTML = vers.length ? `<table><thead><tr><th style="width:150px">${esc(t("日時"))}</th><th style="width:90px">${esc(t("作業"))}</th><th>${esc(t("グループ"))}</th><th>${esc(t("ファイル"))}</th><th style="width:80px">${esc(t("大きさ"))}</th><th style="width:70px">${esc(t("設定"))}</th><th style="width:90px" data-tip="${esc(t("show running-config 等の出力を、時刻・カウンタ・証明書等を除いて 1 つ古い版と比べた結果"))}">${esc(t("前の版から"))}</th><th style="width:170px"></th></tr></thead><tbody>
+      ${vers.map(v => `<tr${v.logPath === dvState.a || v.logPath === dvState.b ? ' style="background:rgba(96,165,250,.10)"' : ""}>
+        <td class="mono">${esc(fmtRunTime(v.startedAt))}</td><td>${stageBadge(v.stage)}${v.external ? ` <span class="badge">${esc(t("外部"))}</span>` : ""}</td><td>${esc(v.group || "")}</td>
+        <td class="mono" style="font-size:12px"><div class="clip" data-tip="${esc(v.logPath)}">${esc(v.file)}</div></td><td class="mono">${esc(fmtSize(v.size))}</td>
+        <td>${v.hasConfig ? `<span style="color:var(--ok)">${esc(t("あり"))}</span>` : `<span class="muted">${esc(t("なし"))}</span>`}</td>
+        <td>${!v.hasConfig ? "" : v.changed ? `<span style="color:var(--warn)">${esc(t("⚡ 変更"))}</span>` : v.first ? `<span class="muted">${esc(t("（最古）"))}</span>` : `<span class="muted">—</span>`}</td>
+        <td style="text-align:right;white-space:nowrap"><button class="btn sm ${v.logPath === dvState.a ? "primary" : ""}" data-dv-a="${esc(v.logPath)}">A</button> <button class="btn sm ${v.logPath === dvState.b ? "primary" : ""}" data-dv-b="${esc(v.logPath)}">B</button> <button class="btn sm" data-dv-log="${esc(v.logPath)}">${esc(t("ログ表示"))}</button></td>
+      </tr>`).join("")}</tbody></table>` : `<div class="empty">${esc(t("この機器のログがありません"))}</div>`;
+    const withCfg = vers.filter(v => v.hasConfig).length, changed = vers.filter(v => v.changed).length;
+    sum.textContent = vers.length ? t("{n} 版（設定あり {c}・設定が変わった版 {m}）", { n: vers.length, c: withCfg, m: changed }) : "";
+    body.querySelectorAll("[data-dv-a]").forEach(b => b.onclick = () => { dvState.a = dvState.a === b.dataset.dvA ? null : b.dataset.dvA; draw(); });
+    body.querySelectorAll("[data-dv-b]").forEach(b => b.onclick = () => { dvState.b = dvState.b === b.dataset.dvB ? null : b.dataset.dvB; draw(); });
+    body.querySelectorAll("[data-dv-log]").forEach(b => b.onclick = () => showLog(b.dataset.dvLog));
+  }
+  async function load() {
+    body.innerHTML = `<div class="muted" style="font-size:13px">${esc(t("読み込み中…"))}</div>`;
+    try { vers = await App().DeviceVersions(dvState.name); } catch (e) { vers = []; toast(terr(e), "err"); }
+    vers = vers || [];
+    // The oldest version with a configuration has nothing to be compared with.
+    for (let i = vers.length - 1; i >= 0; i--) if (vers[i].hasConfig) { vers[i].first = true; break; }
+    if (!vers.some(v => v.logPath === dvState.a)) dvState.a = null;
+    if (!vers.some(v => v.logPath === dvState.b)) dvState.b = null;
+    draw();
+  }
+  node.querySelector("#dv-name").onchange = e => { dvState.name = e.target.value; dvState.a = dvState.b = null; load(); };
+  go.onclick = () => {
+    let va = vers.find(x => x.logPath === dvState.a), vb = vers.find(x => x.logPath === dvState.b);
+    if (!va || !vb) return;
+    if ((va.startedAt || "") > (vb.startedAt || "")) { [va, vb] = [vb, va]; toast(t("古い方を A（前）、新しい方を B（後）にして開きます"), "ok"); }
+    showDiff(dvState.name, va.logPath, vb.logPath);
+  };
+  await load();
+}
+
+// 戻す / 揃える: the commands made from the comparison of one device, in a
+// dialog to copy, save as a command set, or put into the run tab's 今回だけ
+// 入力 (never sent from here).
+// The command lines of the dialog's text: comments ("!" / "#") and blank
+// lines dropped, indentation dropped (a device ignores it; a leading blank
+// would be typed to one that does not).
+function cmdLinesOf(text) { return text.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith("!") && !s.startsWith("#")); }
+function cmdDirLabel(dir) { return dir === "forward" ? t("揃える（A → B）") : t("戻す（B → A）"); }
+function cmdFamilyLabel(f) { return { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", generic: t("不明（一覧のみ）") }[f] || f; }
+async function cmdDialog(name, pathA, pathB, dir, group) {
+  const dev = (INV.devices || []).find(d => d.name === name && (d.group || "") === (group || "")) || (INV.devices || []).find(d => d.name === name);
+  let g;
+  try { g = await App().GenerateCommands(pathA, pathB, dir, dev ? dev.osType || "" : ""); }
+  catch (e) { toast(t("コマンドを作れません") + ": " + terr(e), "err"); return; }
+  const text = (g.lines || []).map(l => l.text).join("\n");
+  const notes = [];
+  if (g.noConfig) notes.push(t("A か B のログに設定の表示（show running-config 等）が無いため作れません"));
+  else if (g.empty) notes.push(t("差分はありますが、コマンドにできる行がありませんでした"));
+  if (g.manual) notes.push(t("「! 手で確認」の行が {n} 行あります（機械的に逆にできない行）", { n: g.manual }));
+  if (g.skipped) notes.push(t("証明書・暗号化値・UUID の差分 {n} 行は対象外です", { n: g.skipped }));
+  if (g.reordered) notes.push(t("依存関係（参照 → 定義）の順に並べ替えています"));
+  (g.warnings || []).forEach(w => notes.push(w));
+  const node = h(`<div>
+    <h3>${esc(t("{d}: {n}", { d: cmdDirLabel(dir), n: name }))}</h3>
+    <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("差分から機械的に作ったコマンドです。投入前に必ず目で確認してください。機器の種類は「{f}」と判断しました（{by}）。", { f: cmdFamilyLabel(g.family), by: g.familyBy === "osType" ? t("OS タイプから") : t("設定の内容から") }))}</p>
+    ${notes.length ? `<div class="warn-box" style="font-size:12px">${notes.map(esc).join("<br>")}</div>` : ""}
+    <div class="field"><textarea id="cg-text" class="mono" style="min-height:260px;font-size:12px" spellcheck="false">${esc(text)}</textarea></div>
+    <div class="row-inline" style="gap:8px;flex-wrap:wrap">
+      <input id="cg-name" placeholder="${esc(t("コマンドセット名"))}" value="${esc((dir === "forward" ? t("揃える") : t("戻す")) + "-" + name + "-" + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "").replace(/^(\d{8})(\d{4})$/, "$1_$2"))}" style="flex:1;min-width:200px">
+      <button class="btn" id="cg-save" ${text ? "" : "disabled"}>${esc(t("コマンドセットとして保存"))}</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="cg-close">${esc(t("閉じる"))}</button>
+      <button class="btn" id="cg-copy" ${text ? "" : "disabled"}>${esc(t("コピー"))}</button>
+      <button class="btn primary" id="cg-run" ${text && dev ? "" : "disabled"} data-tip="${esc(dev ? t("実行タブを開き、この機器 1 台に絞って「今回だけ入力」にコマンドを入れます。実行はまだしません") : t("この機器は機器一覧に無いため、実行タブへは渡せません（コピーして使ってください）"))}">${esc(t("実行タブへ（今回だけ入力）"))}</button>
+    </div>
+  </div>`);
+  openModal(node, "wide");
+  const ta = node.querySelector("#cg-text");
+  node.querySelector("#cg-close").onclick = closeModal;
+  node.querySelector("#cg-copy").onclick = () => copyText(ta.value, t("コマンドをコピーしました"));
+  node.querySelector("#cg-save").onclick = async () => {
+    const nm = node.querySelector("#cg-name").value.trim();
+    if (!nm) { toast(t("コマンドセット名を入力してください"), "err"); return; }
+    const cmds = cmdLinesOf(ta.value).map(s => ({ text: s, pauseSec: 1, serialSec: 1 }));
+    if (!cmds.length) { toast(t("コマンドがありません"), "err"); return; }
+    if ((INV.commandSets || []).some(s => s.name === nm) && !(await uiConfirm({ title: t("上書きしますか？"), message: esc(t("同じ名前のコマンドセット「{n}」があります。上書きします", { n: nm })), okLabel: t("上書き"), cancelLabel: t("キャンセル") }))) return;
+    try { await App().SaveCommandSet({ name: nm, commands: cmds, pauseOff: false }); await refreshInventory(); toast(t("コマンドセット「{n}」を保存しました", { n: nm }), "ok"); }
+    catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); }
+  };
+  node.querySelector("#cg-run").onclick = async () => {
+    if (!dev) return;
+    const lines = cmdLinesOf(ta.value);
+    if (!lines.length) { toast(t("コマンドがありません"), "err"); return; }
+    for (const k in runState) delete runState[k];
+    runGroupSel = dev.group || RUN_UNGROUPED;
+    runFilter.text = dev.name; runFilter.site = ""; runFilter.status = "";
+    runSetSel = RUN_ADHOC; runAdHoc = lines.join("\n");
+    closeModal();
+    await switchTab("run");
+    toast(t("「{n}」1 台に絞り、「今回だけ入力」にコマンドを入れました。内容を確かめてから「▶ 一括実行」を押してください（作業タイミングは「作業中」がおすすめ）", { n: dev.name }), "ok");
+  };
 }
 
 // The diff opens in its own WinMerge-style window (PalaTerm.exe --diff).

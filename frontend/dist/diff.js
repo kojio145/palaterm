@@ -23,6 +23,7 @@ async function bootDiffWindow() {
     <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
       <div id="dw-title" style="color:var(--text);font-size:13px;font-weight:600;white-space:nowrap"></div>
       <div id="dw-verdict" style="font-size:13px;font-weight:600;padding:3px 10px;border-radius:999px;white-space:nowrap"></div>
+      <button class="btn sm hidden" id="dw-impact" data-tip="${esc(t("設定の変更の影響の大きさ（読む順番の目安）と、変わったオブジェクトを参照している行。クリックで一覧")) }"></button>
       <div id="dw-writing" class="hidden" style="font-size:12px;color:var(--warn);white-space:nowrap">${esc(t("⚠ 取得中のログです（内容が増える可能性があります）"))}</div>
       <div style="flex:1"></div>
       <button class="btn sm" id="dw-prev" data-tip="${esc(t("前の差分（Alt+↑ / F7）"))}">▲ ${esc(t("前の差分"))}</button>
@@ -32,6 +33,8 @@ async function bootDiffWindow() {
       <button class="btn sm" id="dw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
       <button class="btn sm" id="dw-font-inc" data-tip="${esc(t("文字を大きく（Ctrl++）"))}">A+</button>
       <button class="btn sm" id="dw-find" data-tip="${esc(t("検索（Ctrl+F）"))}">${esc(t("検索"))}</button>
+      <button class="btn sm" id="dw-cmd-back" data-tip="${esc(t("B の機器を A の設定に戻すコマンドを差分から作って右に表示します（コピー用。実行はしません）"))}">${esc(t("戻す"))}</button>
+      <button class="btn sm" id="dw-cmd-fwd" data-tip="${esc(t("A の機器を B と同じにするコマンドを差分から作って右に表示します（コピー用。実行はしません）"))}">${esc(t("揃える"))}</button>
     </div>
     <div style="display:flex;align-items:center;gap:10px;padding:4px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;font-size:12px;color:#c7d0dc">
       <label style="display:flex;align-items:center;gap:5px;white-space:nowrap">${esc(t("範囲"))}
@@ -63,6 +66,15 @@ async function bootDiffWindow() {
     <div style="flex:1;min-height:0;display:flex">
       <div id="dw-map" data-tip="${esc(t("クリックでその位置へ"))}" style="width:22px;position:relative;background:#0b0e13;border-right:1px solid var(--border);cursor:pointer"></div>
       <div id="dw-body" class="dw-body" style="flex:1;overflow:auto;background:#0b0e13"></div>
+      <div id="dw-cmdpane" class="hidden" style="width:38%;min-width:280px;border-left:1px solid var(--border);display:flex;flex-direction:column;background:var(--panel)">
+        <div style="display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid var(--border);font-size:12px">
+          <b id="dw-cmd-title" style="color:var(--text)"></b><span style="flex:1"></span>
+          <button class="btn sm" id="dw-cmd-copy">${esc(t("コピー"))}</button>
+          <button class="btn sm" id="dw-cmd-close" data-tip="${esc(t("閉じる"))}">✕</button>
+        </div>
+        <div id="dw-cmd-note" class="muted" style="font-size:11px;padding:4px 10px;border-bottom:1px solid var(--border)"></div>
+        <pre id="dw-cmd-text" class="mono" style="flex:1;margin:0;padding:8px 10px;overflow:auto;font-size:12px;white-space:pre;color:var(--text)"></pre>
+      </div>
     </div>
     <div id="dw-status" class="muted" style="font-size:11px;padding:3px 12px;border-top:1px solid var(--border);display:flex;gap:18px;flex-wrap:wrap">
       <span><i class="dw-sw" style="background:rgba(250,204,21,.35)"></i> ${esc(t("変更された行"))}</span>
@@ -382,6 +394,12 @@ async function bootDiffWindow() {
     fillSelect($("dw-sec"), r.sections || [], t("-- セクションへ移動 --"));
     fillSelect($("dw-cmd"), r.commands || [], t("-- コマンドへ移動 ({n}) --", { n: (r.commands || []).length }));
     const changed = r.added + r.removed + (r.changed || 0) + (r.moved || 0) > 0;
+    const ib = $("dw-impact");
+    if (r.impact && changed) {
+      const lvl = { high: ["高", "#f87171"], mid: ["中", "#fbbf24"], low: ["低", "#9ca3af"], none: ["—", "#9ca3af"] }[r.impact.level] || ["—", "#9ca3af"];
+      ib.innerHTML = `${esc(t("影響"))}: <b style="color:${lvl[1]}">${esc(t(lvl[0]))}</b> ${r.impact.high ? esc(t("高 {n}", { n: r.impact.high })) : ""}${r.impact.refs && r.impact.refs.length ? " · " + esc(t("参照 {n}", { n: r.impact.refs.length })) : ""}`;
+      ib.classList.remove("hidden");
+    } else ib.classList.add("hidden");
     const v = $("dw-verdict");
     v.textContent = changed ? t("差分あり: 追加 {a} / 削除 {b} / 変更 {c} / 順序 {d}（{e} か所）", { a: r.added, b: r.removed, c: r.changed || 0, d: r.moved || 0, e: blocks.length }) : t("差分なし（A と B は同じ内容）");
     v.style.background = changed ? "rgba(250,204,21,.18)" : "rgba(34,197,94,.18)";
@@ -404,6 +422,53 @@ async function bootDiffWindow() {
   $("dw-noise").onchange = load;
   $("dw-secrets").onchange = load;
   $("dw-range").onchange = load;
+  // 戻す / 揃える: the commands made from the comparison, in a pane on the
+  // right for copying (the compare tab also saves and hands them to the
+  // run tab; this window has no vault).
+  let cmdText = "";
+  async function showCommands(dir) {
+    const g = await D().Commands(dir);
+    const pane = $("dw-cmdpane");
+    pane.classList.remove("hidden");
+    $("dw-cmd-title").textContent = dir === "forward" ? t("揃える（A → B）") : t("戻す（B → A）");
+    const fam = { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", generic: t("不明（一覧のみ）") }[g.family] || g.family;
+    const notes = [t("機器の種類は「{f}」と判断（設定の内容から）。投入前に必ず目で確認してください", { f: fam })];
+    if (g.noConfig) notes.push(t("A か B のログに設定の表示（show running-config 等）が無いため作れません"));
+    else if (g.empty) notes.push(t("差分はありますが、コマンドにできる行がありませんでした"));
+    if (g.manual) notes.push(t("「! 手で確認」の行が {n} 行あります（機械的に逆にできない行）", { n: g.manual }));
+    if (g.skipped) notes.push(t("証明書・暗号化値・UUID の差分 {n} 行は対象外です", { n: g.skipped }));
+    if (g.reordered) notes.push(t("依存関係（参照 → 定義）の順に並べ替えています"));
+    (g.warnings || []).forEach(w => notes.push(w));
+    $("dw-cmd-note").textContent = notes.join("　");
+    cmdText = (g.lines || []).map(l => l.text).join("\n");
+    $("dw-cmd-text").innerHTML = (g.lines || []).map(l => `<span class="${l.context ? "dw-cmd-ctx" : ""}${l.note ? " dw-cmd-manual" : ""}"${l.note ? ` data-tip="${esc(l.note)}"` : ""}>${esc(l.note ? "! " + t("手で確認") + ": " + l.text : l.text)}</span>`).join("\n");
+    updateView();
+  }
+  // 影響: the impact items and the references of changed objects, in the
+  // same pane; a click on an item goes to its row.
+  function showImpact() {
+    const imp = doc && doc.result && doc.result.impact;
+    if (!imp) return;
+    const pane = $("dw-cmdpane");
+    pane.classList.remove("hidden");
+    $("dw-cmd-title").textContent = t("影響の読み方");
+    $("dw-cmd-note").textContent = t("高 {h}・中 {m}・低 {l}。アドレス・経路・ACL・ポリシー・ポートの up/down は「高」、VLAN・管理系は「中」、説明文は「低」。行をクリックするとその場所へ", { h: imp.high, m: imp.mid, l: imp.low });
+    const lv = { high: ["高", "#f87171"], mid: ["中", "#fbbf24"], low: ["低", "#9ca3af"] };
+    const items = (imp.items || []).slice().sort((x, y) => (["high", "mid", "low"].indexOf(x.level)) - (["high", "mid", "low"].indexOf(y.level)));
+    let html = items.map(it => `<span class="dw-imp" data-row="${it.row}" style="cursor:pointer"><b style="color:${lv[it.level][1]}">${esc(t(lv[it.level][0]))}</b> ${esc(it.text)}${it.section ? ` <span class="muted">［${esc(it.section)}］</span>` : ""} <span class="muted">— ${esc(it.reason)}</span></span>`).join("\n");
+    if (imp.refs && imp.refs.length) {
+      html += "\n\n" + esc(t("変わったオブジェクトの参照先:")) + "\n" + imp.refs.map(r => `<b>${esc(r.name)}</b> ← ` + r.rows.map(row => `<span class="dw-imp" data-row="${row}" style="cursor:pointer;text-decoration:underline">${esc(rowText(rows[row] || { a: "", b: "" }).trim())}</span>`).join("　")).join("\n");
+    }
+    cmdText = items.map(it => `${lv[it.level][0]} ${it.text}${it.section ? " [" + it.section + "]" : ""} - ${it.reason}`).join("\n");
+    $("dw-cmd-text").innerHTML = html || esc(t("変更はありません"));
+    $("dw-cmd-text").querySelectorAll(".dw-imp").forEach(el => el.onclick = () => { const i = parseInt(el.dataset.row, 10); jumpRow = i; reveal(i); render(); setTimeout(() => { jumpRow = -1; render(); }, 2500); });
+    updateView();
+  }
+  $("dw-impact").onclick = showImpact;
+  $("dw-cmd-back").onclick = () => showCommands("rollback").catch(e => toast(terr(e), "err"));
+  $("dw-cmd-fwd").onclick = () => showCommands("forward").catch(e => toast(terr(e), "err"));
+  $("dw-cmd-copy").onclick = () => copyText(cmdText, t("コマンドをコピーしました"));
+  $("dw-cmd-close").onclick = () => { $("dw-cmdpane").classList.add("hidden"); updateView(); };
   $("dw-open-a").onclick = () => D().OpenLog("a").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   $("dw-open-b").onclick = () => D().OpenLog("b").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   // Font size (wireFontZoom, app.js).

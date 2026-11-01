@@ -102,6 +102,20 @@ func buildTree(lines []dline) []*node {
 			if closed {
 				continue
 			}
+			// A closer with no block to close ("!" after a flat line)
+			// belongs to the line before it, so two listings that differ
+			// in the number of separators do not differ in lines.
+			for len(stack) > 0 && stack[len(stack)-1].line.depth >= l.depth {
+				stack = stack[:len(stack)-1]
+			}
+			parent := root
+			if len(stack) > 0 {
+				parent = stack[len(stack)-1]
+			}
+			if k := len(parent.kids); k > 0 {
+				parent.kids[k-1].trailer = append(parent.kids[k-1].trailer, *l)
+				continue
+			}
 		}
 		for len(stack) > 0 && stack[len(stack)-1].line.depth >= l.depth {
 			stack = stack[:len(stack)-1]
@@ -284,9 +298,9 @@ func (p *pairer) pairLine(a, b *dline, head, moved, highlight bool) {
 }
 
 // pair writes two nodes that stand for each other and, for blocks, pairs
-// what is under them.
-func (p *pairer) pair(a, b *node, moved bool) {
-	hl := a.line.key == b.line.key || similarity(a.line.key, b.line.key) >= pairHighlight
+// what is under them. A flat line and a block with the same heading pair
+// too (an interface that gained its first setting).
+func (p *pairer) pair(a, b *node, moved, hl bool) {
 	p.pairLine(&a.line, &b.line, a.head || b.head, moved, hl)
 	if a.head || b.head {
 		p.kids(a.kids, b.kids, b.line.key)
@@ -421,18 +435,14 @@ func (p *pairer) kids(a, b []*node, parentKey string) {
 	for _, op := range ops {
 		switch op.kind {
 		case '=':
-			p.pair(a[op.i], b[op.j], false)
+			p.pair(a[op.i], b[op.j], false, true)
 		case '-':
 			if pa[op.i] < 0 {
 				p.one(a[op.i], 'a')
 			}
 		case '+':
 			if i := pb[op.j]; i >= 0 {
-				if a[i].head || b[op.j].head {
-					p.pair(a[i], b[op.j], moved[i])
-				} else {
-					p.pairLine(&a[i].line, &b[op.j].line, false, moved[i], hl[i])
-				}
+				p.pair(a[i], b[op.j], moved[i], hl[i])
 			} else {
 				p.one(b[op.j], 'b')
 			}
@@ -440,13 +450,9 @@ func (p *pairer) kids(a, b []*node, parentKey string) {
 	}
 }
 
-// pairKey keeps a heading and a plain line with the same text apart.
-func pairKey(n *node) string {
-	if n.head {
-		return "H\x00" + n.line.key
-	}
-	return "L\x00" + n.line.key
-}
+// pairKey: a heading and a plain line with the same text pair (a block
+// that gained its first indented line is still the same block).
+func pairKey(n *node) string { return n.line.key }
 
 func fill(n, v int) []int {
 	s := make([]int, n)

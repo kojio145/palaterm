@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.24</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.25</div>
   </header>
 
   <nav class="toc">
@@ -642,6 +642,11 @@
       <li><strong>結論を出す（設定行の照合）</strong>: 「作業中（任意）」に A と B の間に行った作業（作業タイミング「作業中」の一括実行、または対話接続）を選ぶと、<strong>作業中のログから投入した設定コマンド行を抜き出し</strong>（<code>show</code> 系・<code>exit</code>/<code>end</code>・<code>write</code> などのほか、機器に拒否された行＝打ち間違いや <code>% Invalid input</code>、<code>?</code> ヘルプや Tab 補完の途中で再表示された行も除外）、<strong>作業後のログ（<code>show running-config</code> など）にその行があるかを 1 件ずつ照合</strong>します。<code>no …</code> は、その行自体が設定に残る機器（NEC IX・Juniper など）ではその行があれば、Cisco のように対象の行が消える機器では消えていれば反映です。インタフェースなどの中で打った行は、作業後ログのそのブロックの中で探します。機器は打った文字のままではなく自分の書式で保存するため、<strong>省略形</strong>（<code>int gi0/1</code> → <code>interface GigabitEthernet0/1</code>）・<strong>暗号化されたパスワード</strong>・<strong>まとめられた VLAN 一覧</strong>（<code>allowed vlan add 30</code> → <code>allowed vlan 10,20,30</code>）・機器が語を足した行（<code>spanning-tree portfast</code> → <code>… edge</code>）・FortiGate の引用符・Juniper の <code>{ }</code> 形式も照合します（説明文と数値・IP は打ったとおりのときだけ一致）。<strong>ログからは判定できない行は「？ 要確認」</strong>（別のブロックにある行・<code>interface range</code> や <code>crypto key generate</code> など設定に残らないコマンド・表示されない既定値・作業後のログに設定が無い場合など）とし、未反映には数えません。機器ごとに「✅ n 件すべて反映／⚠ m / n 件が未反映」と各行の ✓ ✗ ？（＝は作業前からあった行、「→」の後は照合に使った行）を表示し、全体の結論は「作業中に設定した内容（c 件）が、作業後に全 n 台で反映されています」／「…のうち m / c 件が、作業後に反映されていません」です。作業後の取得に <code>show running-config</code> 相当のコマンドを含めておいてください。A と B を選ぶと、その間の作業は自動で候補に入ります。作業中に打ち直した行（<code>shutdown</code> → <code>no shutdown</code>、IP アドレスの打ち直しなど）は前の行を「↷ 後の行で取り消し・上書き」とし、未反映に数えません。接続が切れて作業ログが複数に分かれたときは、A と B の間の作業ログを合わせて照合します。</li>
       <li><strong>作業外の変更</strong>: 作業前→作業後で変わった設定のうち、作業中に打った行では説明できないもの（別のポートを変えてしまった、ほかの人の変更、機器が自動で加えた行など）を、機器ごとに「⚠ 作業外の変更 n 行」として表示します。設定のバイト数や最終変更日時など、取るたびに変わる行は差分に数えません。</li>
       <li><strong>並び順・絞り込み・書き出し</strong>: 結果は設定の差分がある機器・未反映・作業外の変更・要確認のある機器から順に並び、チェックでそれらの機器だけに絞り込めます。<strong>「結果をコピー」</strong>で Excel や作業報告に貼れる形（タブ区切り）でコピー、<strong>「CSV に書き出す」</strong>で <code>export\compare</code> に CSV を書き出します（設定 追加／削除／変更／順序・その他 追加／削除 の列つき）。</li>
+      <li><strong>戻す／揃えるコマンド</strong>（v1.9.25）: 設定の差分がある機器の行に<strong>「戻す」「揃える」</strong>のボタンが出ます。<strong>戻す</strong>は作業後（B）の機器を作業前（A）の設定に戻すコマンド、<strong>揃える</strong>は作業前（A）の機器を作業後（B）と同じにするコマンド（別の機器へ横展開するときは、見本の機器を A・対象の機器を B にして比べます）。差分から機器の種類ごとの規則で作ります — Cisco IOS 系（<code>no</code> の付け外し・<code>default interface</code>・番号付き ACL は全消し再投入・VLAN 一覧は <code>add</code>／<code>remove</code>・参照を外してからオブジェクトを消し、オブジェクトを作ってから参照する順）、FortiGate（正しい <code>config</code>／<code>edit</code> の中で <code>unset</code>／<code>delete</code>・ポリシーの順序は <code>move</code>）、Juniper（<code>set</code>↔<code>delete</code>・<code>{ }</code> 形式も）、Yamaha RTX（<code>no</code> の付け外し・<code>save</code>）。それ以外の機器は一覧だけです。機械的に逆にできない行は <code>! 手で確認</code> として残します（黙って落としません）。ダイアログのテキストは編集でき、<strong>「コピー」</strong>／<strong>「コマンドセットとして保存」</strong>（vault に保存）／<strong>「実行タブへ（今回だけ入力）」</strong>（実行タブがその機器 1 台に絞られ、「今回だけ入力」にコマンドが入ります。<strong>「▶ 一括実行」を押すまで何も送りません</strong>）。差分窓にも同じ 2 つのボタンがあり、右のパネルに表示してコピーできます。<strong>投入前に必ず全行を目で確認してください。</strong></li>
+      <li><strong>機器ごとの版</strong>（v1.9.25）: タブ上部の<strong>「機器ごとの版」</strong>で機器を 1 台選ぶと、すべての実行のログがその機器の版として新しい順に並びます（日時・作業・大きさ・設定の有無・<strong>前の版から設定が変わったか</strong>＝時刻・カウンタ・証明書等を除いた設定の指紋で判定）。任意の 2 版を A / B に選んで「A と B の差分を開く」と差分窓が開きます（古い方が A になります）。</li>
+      <li><strong>チェックリスト（期待値の検証）</strong>（v1.9.25）: 比較パネルの<strong>「チェックリスト（任意）」</strong>に「あるべき設定行」の一覧を選ぶと、作業後（B）のログに各行があるかを機器ごとに <strong>PASS</strong>（ある）／<strong>FAIL</strong>（同じ設定で値が違う。見つかった行を併記）／<strong>MISSING</strong>（無い）／<strong>？</strong>（ログからは判定できない）で判定し、「期待値」列に件数と行ごとの印を出します。<strong>「チェックリストを編集…」</strong>で作ります: 設定の抜き書きのように書き、行頭から書いた行はそのまま、字下げした行はその上の行（ブロック）の中で探します（省略形・暗号化されたパスワード・まとめられた VLAN 一覧も照合）。「雛形から足す」でホスト名・NTP・DNS・Syslog・SNMP・既定ゲートウェイを機器の種類（Cisco IOS 系・FortiGate・Junos・Yamaha）の書き方で足せます。チェックリストは vault に保存され、コピー・CSV にも列が増えます。</li>
+      <li><strong>影響</strong>（v1.9.25）: 機器ごとの「影響」列と差分窓の「影響」ボタンは、設定の変更の<strong>読む順番の目安</strong>です。アドレス・経路・ACL・ポリシー・ポートの up/down は<strong>高</strong>、VLAN・管理系（NTP・SNMP・AAA 等）は<strong>中</strong>、説明文は<strong>低</strong>。差分窓の一覧では行をクリックするとその場所へ飛び、変わった ACL・route-map・ポリシーなどの<strong>参照先</strong>（どのインタフェースに適用されているか）も示します。判定ではなく目安です。</li>
+      <li><strong>HTML レポート</strong>（v1.9.25）: <strong>「HTML レポート」</strong>で、機器ごとの結果（差分・設定／その他・影響・結論・期待値）と設定の差分（左右・変わった部分の強調・同じ部分は畳む）を <strong>1 枚の HTML</strong> に書き出します（<code>export\compare</code>）。外部通信もスクリプトも無いので、作業報告に添付したり PalaTerm の無い PC で開いたりできます。</li>
     </ol>
     <div class="callout tip"><span class="ic">i</span><p>作業前に「作業タイミング: 作業前」で取得 → 作業 → 「作業後」で取得、という流れにしておくと、A / B を選ぶ手間なく比較できます。「指定なし」で取ったログ同士も比較できます（<code>palaterm-run.json</code> が無い古いフォルダはファイル名から機器名を推定します）。</p></div>
     <div class="callout tip"><span class="ic">i</span><p><strong>他で取ったログも比較できます（外部フォルダ）。</strong>PalaTerm 以外で取った過去の案件のログを、フォルダごと <code>logs\</code> の<strong>直下</strong>に置くと、一覧に<strong>「外部」</strong>バッジ付きで並び、A / B / 作業中のどれにも選べます（フォルダ名に決まった語は要りません。直下のフォルダだけが対象で、その中のフォルダは見ません）。フォルダ名に 前 / 中 / 後、作業前 / 作業中 / 作業後、変更前 / 変更後、before / after / during、pre / post / work、設定した作業タイミングの語があれば既定の選択に使います。機器名はファイル名から日付・時刻・作業語を除いたもの（<code>sw01_前_20261019.txt</code> と <code>sw01_後.log</code> はどちらも sw01）として判定し、A と B で同じ機器名のログ同士を突き合わせます（対象は .txt / .log / .out / .cfg などのテキストファイル）。</p></div>
@@ -768,6 +773,10 @@
     <figure class="shot" data-shot="22_history"><img src="img/manual/22_history.png" alt="実行履歴・比較タブ。実行ごとの行、▸ で機器ごとの結果、A/B/作業中の選択" loading="lazy"><figcaption>実行履歴・比較タブ。実行ごとの行、▸ で機器ごとの結果、A/B/作業中の選択</figcaption></figure>
     <figure class="shot" data-shot="23_compare_verdict"><img src="img/manual/23_compare_verdict.png" alt="作業前と作業後の比較。作業中に設定した行の照合結果と結論" loading="lazy"><figcaption>作業前と作業後の比較。作業中に設定した行の照合結果と結論</figcaption></figure>
     <figure class="shot" data-shot="24_diff_window"><img src="img/manual/24_diff_window.png" alt="差分ウィンドウ（WinMerge 風）。左 A・右 B、変更行は黄で変わった部分が濃く、B のみ緑、並びが変わったブロックは紫の「順序」、証明書は薄く、左端は位置バー" loading="lazy"><figcaption>差分ウィンドウ（WinMerge 風）。左 A・右 B、変更行は黄で変わった部分が濃く、B のみ緑、並びが変わったブロックは紫の「順序」、証明書は薄く表示、左端は位置バー</figcaption></figure>
+    <figure class="shot" data-shot="26_rollback_dialog"><img src="img/manual/26_rollback_dialog.png" alt="「戻す」のダイアログ。差分から作った作業前に戻すコマンド、コピー・コマンドセットとして保存・実行タブへ（今回だけ入力）" loading="lazy"><figcaption>「戻す」のダイアログ（v1.9.25）。差分から作った作業前に戻すコマンド。コピー・コマンドセットとして保存・実行タブへ（今回だけ入力）</figcaption></figure>
+    <figure class="shot" data-shot="27_device_versions"><img src="img/manual/27_device_versions.png" alt="「機器ごとの版」。1 台のログが全実行から新しい順に並び、設定が前の版から変わったかの印、A / B を選んで差分を開く" loading="lazy"><figcaption>「機器ごとの版」（v1.9.25）。1 台のログが全実行から新しい順に並び、設定が前の版から変わったかの印。A / B を選んで差分を開く</figcaption></figure>
+    <figure class="shot" data-shot="28_checklist_editor"><img src="img/manual/28_checklist_editor.png" alt="チェックリストの編集。あるべき設定行を設定の抜き書きのように書き、雛形から足す" loading="lazy"><figcaption>チェックリストの編集（v1.9.25）。あるべき設定行を設定の抜き書きのように書く（字下げした行はその上のブロックの中で探す）。雛形から足せる</figcaption></figure>
+    <figure class="shot" data-shot="29_checklist_impact"><img src="img/manual/29_checklist_impact.png" alt="チェックリストを選んだ比較。機器ごとに影響の高低と、期待値の PASS / FAIL / MISSING と行ごとの印" loading="lazy"><figcaption>チェックリストを選んだ比較（v1.9.25）。機器ごとに「影響」の高低と、「期待値」の PASS / FAIL / MISSING（行ごとの ✓ ✗ －）</figcaption></figure>
     <h2 class="step"><span class="num">6</span>ログを確認する</h2>
     <p class="lead">取得したログは自動でファイル保存され、その場でも確認できます。</p>
 
@@ -912,6 +921,17 @@
     </ul>
   </section>
 
+  <section id="changes-1925">
+    <h2 class="step"><span class="num">9+</span>v1.9.25 での挙動の変更</h2>
+    <ul>
+      <li><strong>戻す／揃えるコマンド</strong>: 比較タブと差分窓から、差分を戻す／揃えるコマンド列を作れます。コピー・コマンドセット保存・実行タブの「今回だけ入力」へ渡す（実行はユーザーが押すまでしません）。Cisco IOS 系・FortiGate・Juniper・Yamaha に対応、それ以外は一覧のみ（<a href="#history">実行履歴・比較</a>）。</li>
+      <li><strong>機器ごとの版</strong>: 1 台の機器のログを全実行から版として並べ、設定が前の版から変わったかを示し、任意の 2 版を差分窓で比べられます。</li>
+      <li><strong>チェックリスト（期待値の検証）</strong>: 「あるべき設定行」を登録し、作業後ログに対して機器ごとに PASS / FAIL / MISSING を判定。雛形（ホスト名・NTP・DNS・Syslog・SNMP・既定 GW）つき。</li>
+      <li><strong>影響</strong>（読む順番の目安）と<strong>HTML レポート</strong>（1 枚の HTML・外部通信なし）。</li>
+      <li>差分の細部: 字下げの無い行の直後の <code>!</code> はその行に付属するものとして扱い、区切りの数だけが違うログを差分にしません。</li>
+    </ul>
+  </section>
+
   <section id="changes-1924">
     <h2 class="step"><span class="num">9+</span>v1.9.24 での挙動の変更</h2>
     <ul>
@@ -1001,7 +1021,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.24 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.25 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>

@@ -50,6 +50,11 @@ type DiffSummary struct {
 	ConfigA bool   `json:"configA"`
 	ConfigB bool   `json:"configB"`
 	Approx  bool   `json:"approx,omitempty"`
+	// Impact of the configuration changes (when both sides have a listing).
+	Impact string `json:"impact,omitempty"` // high / mid / low / none
+	High   int    `json:"high,omitempty"`
+	Mid    int    `json:"mid,omitempty"`
+	Score  int    `json:"score,omitempty"`
 }
 
 // Limits of the jump lists.
@@ -90,6 +95,10 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 	}
 	res.Added, res.Removed, res.Changed, res.Moved, res.Same, res.Approx = p.added, p.removed, p.changed, p.moved, p.same, p.approx
 	res.Sections, res.Commands = jumps(res.Lines, res.Mode == "whole")
+	if res.Mode == "config" {
+		imp := Impact(res)
+		res.Impact = &imp
+	}
 	return res
 }
 
@@ -104,6 +113,9 @@ func Summarize(a, b string, o DiffOpts) DiffSummary {
 		c := DiffWith(a, b, o)
 		s.Config = counts(c)
 		s.Approx = s.Approx || c.Approx
+		if c.Impact != nil {
+			s.Impact, s.High, s.Mid, s.Score = c.Impact.Level, c.Impact.High, c.Impact.Mid, c.Impact.Score
+		}
 	}
 	return s
 }

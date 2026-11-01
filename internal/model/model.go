@@ -403,6 +403,20 @@ type Command struct {
 	Wait string `json:"wait,omitempty"`
 }
 
+// CheckLine is one expected configuration line of a Checklist: the line as
+// the device prints it, and the block it must be in ("" = global).
+type CheckLine struct {
+	Text  string `json:"text"`
+	Block string `json:"block,omitempty"`
+}
+
+// Checklist is a named list of expected configuration lines (「あるべき
+// 設定」): the comparison tab looks each one up in the after log.
+type Checklist struct {
+	Name  string      `json:"name"`
+	Lines []CheckLine `json:"lines"`
+}
+
 // CommandSet is a named, ordered list of commands (e.g. "config-backup").
 type CommandSet struct {
 	Name     string    `json:"name"`
@@ -779,6 +793,9 @@ type Inventory struct {
 	CommandSets  []CommandSet  `json:"commandSets"`
 	DeviceGroups []DeviceGroup `json:"deviceGroups,omitempty"`
 	Settings     Settings      `json:"settings"`
+	// Checklists: the expected configuration lines the comparison tab
+	// checks an after log against (v1.9.25).
+	Checklists []Checklist `json:"checklists,omitempty"`
 
 	// CustomProfiles holds every OS login profile — the default 15 seeded at
 	// vault creation plus user-made ones — all equally editable. The JSON key

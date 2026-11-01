@@ -2339,6 +2339,305 @@ func (a *App) DiffLogFiles(pathA, pathB string, opts history.DiffOpts) (*history
 	return &r, nil
 }
 
+// ---- Checklists (expected configuration lines) ----
+
+// SaveChecklist inserts or updates a checklist by name.
+func (a *App) SaveChecklist(cl model.Checklist) error {
+	cl.Name = strings.TrimSpace(cl.Name)
+	if cl.Name == "" {
+		return fmt.Errorf("チェックリスト名を入力してください")
+	}
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	found := false
+	for i := range a.inv.Checklists {
+		if a.inv.Checklists[i].Name == cl.Name {
+			a.inv.Checklists[i] = cl
+			found = true
+		}
+	}
+	if !found {
+		a.inv.Checklists = append(a.inv.Checklists, cl)
+	}
+	a.mu.Unlock()
+	return a.persist()
+}
+
+// DeleteChecklist removes a checklist.
+func (a *App) DeleteChecklist(name string) error {
+	a.mu.Lock()
+	if a.inv == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("vault is locked")
+	}
+	kept := a.inv.Checklists[:0]
+	for _, c := range a.inv.Checklists {
+		if c.Name != name {
+			kept = append(kept, c)
+		}
+	}
+	a.inv.Checklists = kept
+	a.mu.Unlock()
+	return a.persist()
+}
+
+// ParseChecklistText reads a checklist typed like a configuration excerpt
+// (indented lines belong to the margin line above them).
+func (a *App) ParseChecklistText(text string) []history.CheckLine {
+	out := history.ParseChecklist(text)
+	if out == nil {
+		out = []history.CheckLine{}
+	}
+	return out
+}
+
+// FormatChecklistLines is the inverse of ParseChecklistText.
+func (a *App) FormatChecklistLines(lines []history.CheckLine) string {
+	return history.FormatChecklist(lines)
+}
+
+// ChecklistTemplate gives the lines a family of device prints for a common
+// setting from its values (see history.ChecklistTemplate).
+func (a *App) ChecklistTemplate(family, kind string, values []string) []history.CheckLine {
+	out := history.ChecklistTemplate(family, kind, values)
+	if out == nil {
+		out = []history.CheckLine{}
+	}
+	return out
+}
+
+// VerifyChecklist looks the named checklist's lines up in a saved log.
+func (a *App) VerifyChecklist(name, afterPath string) (*history.ChecklistResult, error) {
+	defer recoverBound(a.ctx, "VerifyChecklist")
+	if a.locked() {
+		return nil, errVaultLocked
+	}
+	if err := a.underLogRoot(afterPath); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	var lines []history.CheckLine
+	found := false
+	if a.inv != nil {
+		for _, c := range a.inv.Checklists {
+			if c.Name == name {
+				found = true
+				for _, l := range c.Lines {
+					lines = append(lines, history.CheckLine{Text: l.Text, Block: l.Block})
+				}
+			}
+		}
+	}
+	a.mu.Unlock()
+	if !found {
+		return nil, fmt.Errorf("チェックリスト「%s」がありません", name)
+	}
+	data, err := os.ReadFile(afterPath)
+	if err != nil {
+		return nil, err
+	}
+	r := history.VerifyChecklist(lines, string(data))
+	return &r, nil
+}
+
+// ReportDeviceIn names the logs of one device for the HTML report.
+type ReportDeviceIn struct {
+	Name    string `json:"name"`
+	PathA   string `json:"pathA"`
+	PathB   string `json:"pathB"`
+	Verdict string `json:"verdict"`
+	Check   string `json:"check"`
+	Error   string `json:"error"`
+}
+
+// ReportIn is what the comparison tab hands ExportCompareReport.
+type ReportIn struct {
+	Title    string           `json:"title"`
+	RunA     string           `json:"runA"`
+	RunB     string           `json:"runB"`
+	Work     string           `json:"work"`
+	Headline string           `json:"headline"`
+	Lang     string           `json:"lang"`
+	Devices  []ReportDeviceIn `json:"devices"`
+}
+
+// ExportCompareReport writes the single-file HTML report of a comparison
+// to export\compare and returns its path.
+func (a *App) ExportCompareReport(in ReportIn) (string, error) {
+	defer recoverBound(a.ctx, "ExportCompareReport")
+	if a.locked() {
+		return "", errVaultLocked
+	}
+	if len(in.Devices) == 0 {
+		return "", fmt.Errorf("書き出す機器がありません")
+	}
+	ri := history.ReportInput{Title: in.Title, RunA: in.RunA, RunB: in.RunB, Work: in.Work, Headline: in.Headline, Lang: in.Lang}
+	for _, d := range in.Devices {
+		rd := history.ReportDevice{Name: d.Name, Verdict: d.Verdict, Check: d.Check, Error: d.Error}
+		if rd.Error == "" {
+			for _, p := range []string{d.PathA, d.PathB} {
+				if err := a.underLogRoot(p); err != nil {
+					return "", err
+				}
+			}
+			ba, err := os.ReadFile(d.PathA)
+			if err != nil {
+				rd.Error = err.Error()
+			}
+			bb, err := os.ReadFile(d.PathB)
+			if err != nil {
+				rd.Error = err.Error()
+			}
+			rd.LogA, rd.LogB = string(ba), string(bb)
+		}
+		ri.Devices = append(ri.Devices, rd)
+	}
+	dir := filepath.Join(exeDir(), "export", "compare")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	return writeNewFile(dir, "compare_"+time.Now().Format("20060102_150405"), ".html", history.ReportHTML(ri))
+}
+
+// DeviceVersion is one capture of a device across the runs (the history
+// tab's 機器ごとの版): its log, whether it holds a configuration listing,
+// and whether that listing differs from the version before it.
+type DeviceVersion struct {
+	Dir         string `json:"dir"`
+	RunName     string `json:"runName"`
+	StartedAt   string `json:"startedAt"`
+	Stage       string `json:"stage,omitempty"`
+	Group       string `json:"group,omitempty"`
+	External    bool   `json:"external,omitempty"`
+	Status      string `json:"status"`
+	LogPath     string `json:"logPath"`
+	File        string `json:"file"`
+	Size        int64  `json:"size"`
+	HasConfig   bool   `json:"hasConfig"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Changed     bool   `json:"changed"`
+}
+
+// fpCache remembers a log's configuration fingerprint by its size and
+// modification time: the versions dialog reads every log of a device, and
+// a log that did not change needs no second read.
+var fpCache = struct {
+	sync.Mutex
+	m map[string]fpEnt
+}{m: map[string]fpEnt{}}
+
+type fpEnt struct {
+	size  int64
+	mtime time.Time
+	fp    string
+}
+
+func configFingerprintOf(path string, st os.FileInfo) string {
+	fpCache.Lock()
+	e, ok := fpCache.m[path]
+	fpCache.Unlock()
+	if ok && e.size == st.Size() && e.mtime.Equal(st.ModTime()) {
+		return e.fp
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	fp := history.ConfigFingerprint(string(data))
+	fpCache.Lock()
+	fpCache.m[path] = fpEnt{st.Size(), st.ModTime(), fp}
+	fpCache.Unlock()
+	return fp
+}
+
+// DeviceVersions lists every log of the named device across the runs,
+// newest first (at most 500), with the configuration fingerprint of each
+// and whether it differs from the next older version that has one.
+func (a *App) DeviceVersions(name string) ([]DeviceVersion, error) {
+	defer recoverBound(a.ctx, "DeviceVersions")
+	if a.locked() {
+		return nil, errVaultLocked
+	}
+	a.mu.Lock()
+	var tok logstore.StageTokens
+	if a.inv != nil {
+		tok = a.inv.Settings.StageTokens()
+	}
+	a.mu.Unlock()
+	runs, err := history.List(a.logRoot(), tok)
+	if err != nil {
+		return nil, err
+	}
+	var out []DeviceVersion
+	for _, r := range runs {
+		for _, d := range r.Devices {
+			if d.Name != name || d.LogPath == "" {
+				continue
+			}
+			st, err := os.Stat(d.LogPath)
+			if err != nil {
+				continue
+			}
+			v := DeviceVersion{Dir: r.Dir, RunName: r.Name, StartedAt: r.StartedAt, Stage: r.Stage, Group: r.Group, External: r.External, Status: d.Status, LogPath: d.LogPath, File: filepath.Base(d.LogPath), Size: st.Size()}
+			v.Fingerprint = configFingerprintOf(d.LogPath, st)
+			v.HasConfig = v.Fingerprint != ""
+			out = append(out, v)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].StartedAt > out[j].StartedAt })
+	if len(out) > 500 {
+		out = out[:500]
+	}
+	prev := ""
+	for i := len(out) - 1; i >= 0; i-- {
+		if !out[i].HasConfig {
+			continue
+		}
+		out[i].Changed = prev != "" && out[i].Fingerprint != prev
+		prev = out[i].Fingerprint
+	}
+	if out == nil {
+		out = []DeviceVersion{}
+	}
+	return out, nil
+}
+
+// GenerateCommands makes the commands that take the device of two saved
+// logs from B back to A ("rollback") or from A to B ("forward"); see
+// history.GenerateCommands. osType is the device's profile key when the
+// caller knows it. Nothing is sent anywhere: the result is shown, copied,
+// saved as a command set or put into the run tab's 今回だけ入力.
+func (a *App) GenerateCommands(pathA, pathB, direction, osType string) (*history.CmdGen, error) {
+	defer recoverBound(a.ctx, "GenerateCommands")
+	if a.locked() {
+		return nil, errVaultLocked
+	}
+	for _, p := range []string{pathA, pathB} {
+		if err := a.underLogRoot(p); err != nil {
+			return nil, err
+		}
+	}
+	ba, err := os.ReadFile(pathA)
+	if err != nil {
+		return nil, err
+	}
+	bb, err := os.ReadFile(pathB)
+	if err != nil {
+		return nil, err
+	}
+	if direction != "forward" {
+		direction = "rollback"
+	}
+	g := history.GenerateCommands(string(ba), string(bb), direction, osType)
+	if g.Lines == nil {
+		g.Lines = []history.CmdLine{}
+	}
+	return &g, nil
+}
+
 // OpenRunFolder opens one run's folder in Explorer (log folder only).
 func (a *App) OpenRunFolder(dir string) error {
 	if a.locked() {
@@ -2880,7 +3179,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.24"
+const appVersion = "1.9.25"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
