@@ -1960,6 +1960,72 @@ const I18N_EN = {
   "PalaTerm.exe のあるフォルダそのものは指定できません。ログ専用のフォルダ（例: logs）を指定してください": "The folder PalaTerm.exe is in cannot be the log folder. Choose a folder of its own (e.g. logs)",
   "PalaTerm.exe の data・export フォルダの中は指定できません。ログ専用のフォルダ（例: logs）を指定してください": "The data and export folders next to PalaTerm.exe cannot be the log folder. Choose a folder of its own (e.g. logs)",
   "「{n}」の実行対象のチェックが外れています。チェックしてから ▶ を押してください": "\"{n}\" is not ticked as a run target. Tick it, then press ▶",
+  // ---- 2026-11-01 full review follow-up (v1.9.26 / before v2.0) ----
+  "⚠ 「グループ既定を使う」機器がありますが、そのグループに既定の認証情報がありません（読み込み後に「グループ既定の認証情報…」で設定するまでログインできません）: {g}": "⚠ Some devices use their group's default credentials, but the group has none (they cannot log in until set under \"Group default credentials…\" after the import): {g}",
+  "踏み台を設定（1 段目をまとめて付ける）": "Set a jump host (hop 1 on all selected devices)",
+  "お客様の共通踏み台など、選択した機器の 1 段目の踏み台をここで一度に設定します。2 段目以降がある機器はそのまま残ります。機器ごとの踏み台は機器の編集で、自分の踏み台は設定タブで変えます。": "Sets hop 1 (a customer's shared jump host, say) on every selected device at once. Devices with hops 2 and later keep them. A single device's hops are edited in the device editor; your own jump host on the Settings tab.",
+  "1 段目の踏み台を設定する": "Set hop 1",
+  "踏み台が無い機器にだけ入れる": "Only on devices that have no jump host",
+  "既存の 1 段目を置き換える": "Replace an existing hop 1",
+  "選択中の {n} 台には踏み台がありません: 全台に 1 段目として入ります": "None of the {n} selected devices has a jump host: all of them get it as hop 1",
+  "選択中 {m} / {n} 台には既に踏み台があります: その {m} 台は変えず、無い {k} 台にだけ入ります": "{m} of the {n} selected devices already have a jump host: those {m} stay as they are, only the {k} without one get it",
+  "⚠ 選択中 {m} / {n} 台の既存の 1 段目を置き換えます（2 段目以降は残ります）": "⚠ Hop 1 of {m} of the {n} selected devices will be replaced (hops 2 and later stay)",
+  "踏み台のホストは必須です": "The jump host's address is required",
+  "踏み台（SSH）のユーザー名は必須です": "An SSH jump host needs a username",
+  "{m} 台の既存の 1 段目の踏み台を「{h}」に置き換えます（2 段目以降は残ります）。よろしいですか？": "Hop 1 of {m} device(s) will be replaced by \"{h}\" (hops 2 and later stay). Continue?",
+  "{n} 台を変更しました。踏み台 1 段目は {m} 台に設定しました": "{n} device(s) changed. Hop 1 set on {m} device(s)",
+  "（{k} 台には既に踏み台があり、変えていません）": " ({k} device(s) already had a jump host and were left as they were)",
+  "「{n}」の設定（グループ・OS タイプ・コマンドセット・踏み台・認証情報）を引き継いでいます。機器名と IP アドレスを入れてください。": "The settings of \"{n}\" (group, OS type, command set, jump hosts, credentials) are carried over. Enter the device name and IP address.",
+  "保存してから、同じグループ・OS タイプ・コマンドセット・踏み台・認証情報の扱いで次の機器の追加を開きます（機器名と IP だけ空）。Ctrl+Shift+Enter": "Saves, then opens the next device with the same group, OS type, command set, jump hosts and credential mode (only the name and IP cleared). Ctrl+Shift+Enter",
+  "保存して次を追加": "Save and add next",
+  "「{n}」を保存しました。次の機器を入力してください": "\"{n}\" saved. Enter the next device",
+  "応答待ちのタイムアウトは OS タイプ（プロンプト・ページャ解除・確認への自動応答）で直します。この機器の OS タイプ「{p}」を開きます": "A wait timeout is fixed in the OS type (prompt, pager-off command, auto-answers). Opens this device's OS type \"{p}\"",
+  "OS タイプ…": "OS type…",
+  "実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します": "Opens the History & compare tab and compares this after-work run (B) with the group's latest before-work run taken before it (A)",
+  "⇄ 作業前と比較": "⇄ Compare with before",
+  "OS タイプ「{k}」のプロファイルが見つかりません（OSタイプタブで確認してください）": "The profile of OS type \"{k}\" was not found (see the OS types tab)",
+  "この機器の OS タイプ「{p}」を編集…": "Edit this device's OS type \"{p}\"…",
+  "ページャの解除・プロンプト・確認への自動応答は OS タイプで直します。保存後は「保存して接続確認へ」で試せます": "The pager-off command, the prompt and the auto-answers live in the OS type. After saving, \"Save and test login\" tries it",
+  "実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます": "Run finished. \"⇄ Compare with before\" compares it with the before-work logs",
+  "並べた端末窓がこの画面（実行タブ）を覆わないようにします。1 画面のときは右端にメイン窓の幅ぶんを空けて並べ、2 画面ならメイン窓と別の画面に並べます。変更は、このあと開く窓から反映されます": "Keeps the tiled terminal windows off this window (the Run tab). On one screen the right edge is left free for the main window's width; with two screens they are tiled on the screen the main window is not on. Applies to windows opened from now on",
+  "並べて接続でメイン窓の場所を空ける（1 画面のとき右端にメイン窓の幅ぶんを空け、2 画面ならメイン窓と別の画面に並べる） ⓘ": "Leave room for the main window when tiling (one screen: the right edge, the main window's width; two screens: the other screen) ⓘ",
+  "この実行が履歴に見つかりません（ログフォルダを確認してください）": "This run is not in the history (check the log folder)",
+  "グループ「{g}」の作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "Group \"{g}\" has no before-work run in the history. Pick A and press Compare",
+  "作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "There is no before-work run in the history. Pick A and press Compare",
+  "ロック前に準備していた貼り付け内容があります": "A paste prepared before the lock is waiting",
+  "ロック前に準備していた貼り付け内容があります（{n} 行）": "A paste prepared before the lock is waiting ({n} lines)",
+  "貼り付けの確認ウィンドウにもう一度表示します（そこで「貼り付け」を押すまで機器へは送りません）": "Shows it in the paste-confirmation window again (nothing goes to the device until you press Paste there)",
+  "再表示": "Show again",
+  "ロック前の貼り付け内容はもうありません": "There is no paste from before the lock any more",
+  // ---- 2026-11-01 full review follow-up (v1.9.26 / before v2.0) ----
+  "再実行先のフォルダがログフォルダの直下にないため、新しいフォルダに保存します": "The folder to retry into is not directly under the log folder, so the logs go to a new folder",
+  "再実行先のフォルダが見つからないため、新しいフォルダに保存します": "The folder to retry into was not found, so the logs go to a new folder",
+  "再実行先のフォルダに PalaTerm の実行記録がないため、新しいフォルダに保存します": "The folder to retry into has no PalaTerm run record, so the logs go to a new folder",
+  "再実行先が予約のフォルダのため、新しいフォルダに保存します": "The folder to retry into belongs to a schedule, so the logs go to a new folder",
+  "再実行先が対話接続の作業フォルダのため、新しいフォルダに保存します": "The folder to retry into is an interactive work folder, so the logs go to a new folder",
+  "再実行先が接続確認（ドライラン）の記録のため、新しいフォルダに保存します": "The folder to retry into is a dry-run record, so the logs go to a new folder",
+  "再実行先のフォルダのグループまたは作業タイミングが今回の実行と違うため、新しいフォルダに保存します": "The group or stage of the folder to retry into differs from this run, so the logs go to a new folder",
+  "作業中を区切る": "Start a new work folder",
+  "次の対話接続から新しい作業中フォルダに記録します": "The next interactive session starts a new work folder",
+  "次の対話接続から新しい作業中フォルダに記録します。": "The next interactive session starts a new work folder. ",
+  "今は「{dir}」（{n} セッション・{d} 台）に続けて記録します": "Right now it would be added to \"{dir}\" ({n} sessions, {d} devices)",
+  "今は新しいフォルダから始まります": "Right now it would start a new folder anyway",
+  "作業中を区切りました。次の対話接続から新しいフォルダに記録します": "Work folder closed. The next interactive session starts a new one",
+  "区切れません": "Cannot close the work folder",
+  "ログは前回と同じフォルダに保存します: {d}": "Logs go into the same folder as before: {d}",
+  "前回のフォルダに追記できなかったため、再実行のログは新しいフォルダに保存しました: {d}": "The previous folder could not be appended to, so the re-run's logs went into a new folder: {d}",
+  "作業中をまとめる時間（時間） ⓘ": "Join work sessions within (hours) ⓘ",
+  "同じグループの対話接続（端末窓）のログを、前のセッションからこの時間以内なら同じ「作業中」フォルダに続けて記録します（1〜168 時間。空欄なら 12 時間）。作業前の一括実行で新しいフォルダに切り替わり、作業後の一括実行で閉じます。実行タブの「作業中を区切る」でいつでも区切れます": "Interactive sessions (terminal windows) of one group are logged into the same \"during\" work folder while the previous session is within this many hours (1-168; blank = 12). A \"before\" batch switches to a new folder, an \"after\" batch closes it. \"Start a new work folder\" on the Run tab closes it at any time",
+  "まとめない（窓ごとに別フォルダ）": "Do not join (a folder per window)",
+  "作業中をまとめる時間は 1〜168 の時間で入力してください（空欄なら 12 時間）": "Enter 1-168 hours for joining work sessions (blank = 12 hours)",
+  "{t} のセッションのログ: {f}": "Log of the session of {t}: {f}",
+  "{n} セッション・{d} 台": "{n} sessions, {d} devices",
+  "この作業中フォルダには {n} セッション分のログがあります（機器ごとに最新のセッションの結果。各セッションのログは右の時刻から開けます）": "This work folder holds the logs of {n} sessions (each device shows its latest session; the times on the right open each session's log)",
+  "同じグループの対話接続 {n} セッション分のログが 1 つの作業中フォルダにまとまっています（{d} 台）。成功 / 失敗は機器ごと（最新のセッション）の数です": "{n} interactive sessions of the group are logged in one work folder ({d} devices). OK / failed count devices (their latest session)",
+  "{s} セッション": "{s} sessions",
+  "ほか {m} フォルダを含む": "plus {m} other folders",
+  "A より前／B より後の作業中が {n} 件あり、含めていません": "{n} work runs before A or after B were not included",
+  "同じ機器のログが {n} 件、最新を使用": "{n} logs of this device; the latest was used",
 };
 
 // ---- 外部一覧の変換 (views6.js, internal/listimport) ----
@@ -2598,4 +2664,14 @@ I18N_EN_PATTERNS.push(
 I18N_EN_PATTERNS.push(
   [/^ログの保存先フォルダ「(.+)」は使えません: /, 'The log folder "$1" cannot be used: '],
   [/^ドライブ直下は指定できません。ログ専用のフォルダを指定してください（例: (.+)）$/, 'The root of a drive cannot be the log folder. Choose a folder of its own (e.g. $1)'],
+);
+
+// 2026-11-01 full review follow-up: new Go-side messages
+I18N_EN_PATTERNS.push(
+  [/^踏み台の入れ方が不正です: "(.*)"（replace \/ fill）$/, 'Invalid jump-host placement: "$1" (replace / fill)'],
+);
+
+// 2026-11-01 full review follow-up: new Go-side messages
+I18N_EN_PATTERNS.push(
+  [/^作業フォルダをまとめる時間は 1〜(\d+) 時間（0 = 既定の (\d+) 時間、-1 = まとめない）で指定してください: (-?\d+)$/, "Hours a work folder stays open to the next window must be 1–$1 (0 = the default of $2 hours, -1 = never join): $3"],
 );

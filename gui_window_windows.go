@@ -420,6 +420,9 @@ func (w *guiWin) create() error {
 	procUpdateWindow.Call(hwnd)
 
 	c := edge.NewChromium()
+	// Browser shortcut keys reach the page except the ones that take the
+	// logged-in page out of the window (guiAcceleratorBlocked).
+	c.AcceleratorKeyCallback = guiAcceleratorBlocked
 	w.dataDir = filepath.Join(guiProfileRoot(), fmt.Sprintf("w-%d-%d", os.Getpid(), time.Now().UnixNano()))
 	c.DataPath = w.dataDir
 	if guiProbeArgs != "" {
@@ -436,14 +439,16 @@ func (w *guiWin) create() error {
 	c.Embed(hwnd)
 	c.Resize()
 	// No DevTools (a typed password would be one click away), no autofill or
-	// saved passwords of the browser's own, no browser shortcut keys (Ctrl+S
-	// saves the logged-in page, Ctrl+P prints it; the menu has back, forward
-	// and reload). Settings that cannot be read are settings that cannot be
-	// turned off: the device page is then not opened (open says so).
+	// saved passwords of the browser's own. Browser shortcut keys stay on
+	// (F5 reloads, Ctrl+F finds — the owner wants them, 2026-11-01) and
+	// guiAcceleratorBlocked swallows the ones that copy the logged-in page
+	// out (Ctrl+S, Ctrl+P, F12, Ctrl+U …). Settings that cannot be read are
+	// settings that cannot be turned off: the device page is then not
+	// opened (open says so).
 	if st, err := c.GetSettings(); err == nil && st != nil {
 		_ = st.PutAreDevToolsEnabled(false)
 		if s3 := st.GetICoreWebView2Settings3(); s3 != nil {
-			_ = s3.PutAreBrowserAcceleratorKeysEnabled(false)
+			_ = s3.PutAreBrowserAcceleratorKeysEnabled(true)
 		}
 		if s4 := st.GetICoreWebView2Settings4(); s4 != nil {
 			_ = s4.PutIsGeneralAutofillEnabled(false)
@@ -1164,4 +1169,81 @@ function reportNoLogin(){ if (!window.__ptFind()) window.chrome.webview.postMess
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ tick(); setTimeout(reportNoLogin, 4000); });
 else { tick(); setTimeout(reportNoLogin, 4000); }
 })();`
+}
+
+var procGetKeyState = user32.NewProc("GetKeyState")
+
+// keyDown reports a modifier key held right now (GetKeyState's high bit).
+func keyDown(vk uintptr) bool {
+	r, _, _ := procGetKeyState.Call(vk)
+	return int16(r) < 0
+}
+
+// guiAcceleratorBlocked is the GUI window's AcceleratorKeyCallback: true
+// swallows the key. Reading the modifiers here because the callback only
+// gets the virtual key.
+func guiAcceleratorBlocked(vk uint) bool {
+	return guiShortcutBlocked(vk, keyDown(0x11), keyDown(0x12), keyDown(0x10)) // VK_CONTROL, VK_MENU, VK_SHIFT
+}
+
+// guiShortcutBlocked decides which browser shortcut keys the device page
+// gets. Kept: F5 / Ctrl+R (reload), Ctrl+F / F3 (find), Esc, editing
+// (Ctrl+C/V/X/A/Z/Y, Ctrl+Shift+Z, Ctrl+arrows / Home / End / Backspace /
+// Delete), zoom (Ctrl + - 0), Alt+Left / Alt+Right (back / forward), and
+// every key without Ctrl / Alt (Tab, arrows, Enter …). Swallowed: the
+// other function keys (F12 DevTools, F11 full screen, F1 help, F7 caret
+// browsing, F10 menu …) and the other Ctrl / Alt combinations (Ctrl+S
+// saves the logged-in page, Ctrl+P prints it, Ctrl+U shows its source,
+// Ctrl+Shift+I / J / C open DevTools, Ctrl+O opens a file, Ctrl+J / H the
+// downloads / history, Ctrl+Shift+Delete browsing data, Alt+Home …).
+func guiShortcutBlocked(vk uint, ctrl, alt, shift bool) bool {
+	const (
+		vkBack   = 0x08
+		vkEsc    = 0x1B
+		vkEnd    = 0x23
+		vkHome   = 0x24
+		vkLeft   = 0x25
+		vkUp     = 0x26
+		vkRight  = 0x27
+		vkDown   = 0x28
+		vkDel    = 0x2E
+		vk0      = 0x30
+		vkNum0   = 0x60
+		vkNumAdd = 0x6B
+		vkNumSub = 0x6D
+		vkF1     = 0x70
+		vkF3     = 0x72
+		vkF5     = 0x74
+		vkF24    = 0x87
+		vkPlus   = 0xBB
+		vkMinus  = 0xBD
+	)
+	if vk >= vkF1 && vk <= vkF24 {
+		return !(vk == vkF5 || vk == vkF3) || alt // F5 / F3 plain or with Ctrl / Shift; Alt+F4 and the like stay the window's
+	}
+	if vk == vkEsc {
+		return false
+	}
+	if !ctrl && !alt {
+		return false
+	}
+	if alt && !ctrl {
+		return !(vk == vkLeft || vk == vkRight)
+	}
+	if shift {
+		// Ctrl+Shift: redo, hard reload and selection keys; the rest are
+		// DevTools (I / J / C), browsing data (Delete), save as (S) …
+		switch vk {
+		case 'Z', 'R', vkLeft, vkRight, vkUp, vkDown, vkHome, vkEnd:
+			return false
+		}
+		return true
+	}
+	switch vk {
+	case 'F', 'R', 'C', 'V', 'X', 'A', 'Z', 'Y',
+		vkPlus, vkMinus, vk0, vkNumAdd, vkNumSub, vkNum0,
+		vkBack, vkDel, vkLeft, vkRight, vkUp, vkDown, vkHome, vkEnd:
+		return false
+	}
+	return true
 }

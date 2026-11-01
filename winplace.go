@@ -6,7 +6,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 )
@@ -150,6 +152,37 @@ func monitorWork(mon uintptr) (monitorInfo, bool) {
 		return mi, false
 	}
 	return mi, mi.Work.R > mi.Work.L && mi.Work.B > mi.Work.T
+}
+
+// Every monitor's work area (並べて接続 with メイン窓の場所を空ける looks for
+// one the main window is not on). The callback is made once (see
+// enumTopCB in winfocus.go); its state is held by enumMonMu for one walk.
+var (
+	pEnumDisplayMonitors = user32.NewProc("EnumDisplayMonitors")
+	enumMonMu            sync.Mutex
+	enumMonFound         []rect
+	enumMonCB            = syscall.NewCallback(enumMonProc)
+)
+
+func enumMonProc(mon, _, _, _ uintptr) uintptr {
+	if mi, ok := monitorWork(mon); ok {
+		enumMonFound = append(enumMonFound, mi.Work)
+	}
+	return 1
+}
+
+// allMonitorsWork lists the work areas of the monitors attached now
+// (screen coordinates); nil when Windows cannot say.
+func allMonitorsWork() []rect {
+	enumMonMu.Lock()
+	defer enumMonMu.Unlock()
+	enumMonFound = nil
+	if ok, _, _ := pEnumDisplayMonitors.Call(0, 0, enumMonCB, 0); ok == 0 {
+		return nil
+	}
+	out := enumMonFound
+	enumMonFound = nil
+	return out
 }
 
 // windowMonitor is the monitor hwnd is on (the nearest one).

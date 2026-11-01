@@ -46,6 +46,47 @@ function runTitle(r) {
   return `${fmtRunTime(r.startedAt)}${r.group ? "  " + r.group : ""}${r.stage ? "  [" + stageLabel(r.stage) + "]" : ""}`;
 }
 
+// A 作業中 folder holds one log per interactive session of the group, so a
+// device name may appear several times in run.devices (oldest first, each
+// with its own startedAt). The list row and the comparison use each
+// device's latest session; every session is still offered as a log link.
+// `sessions` / `deviceCount` / a device's `startedAt` come from newer
+// backends only: without them a name appears once and nothing changes.
+function runSessions(r) { return (r && r.sessions) || 0; }
+const byStart = (x, y) => (x.startedAt || "").localeCompare(y.startedAt || "");
+// Every log of one device name in a run, oldest first.
+function devSessionsOf(run, name) {
+  return (run.devices || []).filter(d => d.name === name).sort(byStart);
+}
+// One entry per device name: the latest session's fields, plus `logs` =
+// every session's entry that has a log (oldest first).
+function latestDevices(run) {
+  const by = new Map();
+  (run.devices || []).forEach(d => { const l = by.get(d.name) || []; l.push(d); by.set(d.name, l); });
+  const out = [];
+  by.forEach(list => {
+    const sorted = list.slice().sort(byStart);
+    out.push({ ...sorted[sorted.length - 1], logs: sorted.filter(d => d.logPath) });
+  });
+  return out;
+}
+// The 成功 / 失敗 / 中止 counts of a run: the summary's for a batch; per
+// device (its latest session) for a work folder of several sessions, so
+// three reconnects to one switch do not read as three devices.
+function runCounts(r) {
+  if (runSessions(r) <= 1) return { ok: r.ok || 0, failed: r.failed || 0, canceled: r.canceled || 0 };
+  const c = { ok: 0, failed: 0, canceled: 0 };
+  latestDevices(r).forEach(d => { if (d.status === "ok") c.ok++; else if (d.status === "error") c.failed++; else if (d.status === "canceled") c.canceled++; });
+  return c;
+}
+// How many distinct devices a run touched.
+function runDeviceCount(r) { return r.deviceCount || new Set((r.devices || []).map(d => d.name)).size; }
+// The time of day of one session's log, the label of its log link.
+function sessionLabel(d, i) {
+  const s = fmtRunTime(d.startedAt);
+  return s ? s.slice(11, 16) : `#${i + 1}`;
+}
+
 // A history row's message: its error, or the commands the device refused.
 function histMsg(d) {
   if (d.warnings && d.warnings.length) return "⚠ " + d.warnings.join(" ／ ");
@@ -55,6 +96,46 @@ function histMsg(d) {
 // The tab opens at once on the runs read last time (if any) and redraws
 // when the fresh list arrives.
 let histLoading = 0;
+// Two run folders the same (the runner's path and the history's may
+// differ in slashes or case on Windows).
+function sameRunDir(x, y) {
+  const n = s => String(s || "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return !!x && n(x) === n(y);
+}
+// ⇄ 作業前と比較 on the run tab: the 作業後 batch that just finished is B,
+// the newest 作業前 of its group taken before it is A, and the comparison
+// runs at once (switching to the tab, checking A and B and pressing 比較する
+// used to be three steps at the end of the night). A list read of its own:
+// the tab's renderHistory may still be reading, and this one supersedes it.
+async function compareAfterRun(afterDir, group) {
+  const seq = ++histLoading;
+  let runs;
+  try { runs = await App().ListRunHistory() || []; }
+  catch (e) { toast(t("履歴を読めません") + ": " + terr(e), "err"); return false; }
+  if (seq !== histLoading) return false;
+  histState.runs = runs;
+  const b = runs.find(r => sameRunDir(r.dir, afterDir));
+  if (!b) {
+    toast(t("この実行が履歴に見つかりません（ログフォルダを確認してください）"), "warn");
+    renderHistoryView();
+    return false;
+  }
+  const g = b.group || group || "";
+  const a = runs.find(r => r.stage === "before" && (r.group || "") === g && r.dir !== b.dir
+    && (!r.startedAt || !b.startedAt || r.startedAt <= b.startedAt));
+  histState.b = b.dir; histState.c = "";
+  if (!a) {
+    histState.a = "";
+    renderHistoryView();
+    toast(g ? t("グループ「{g}」の作業前の実行が履歴にありません。A を選んで「比較する」を押してください", { g })
+      : t("作業前の実行が履歴にありません。A を選んで「比較する」を押してください"), "warn");
+    return false;
+  }
+  histState.a = a.dir;
+  renderHistoryView();
+  await compareRuns();
+  return true;
+}
 async function renderHistory() {
   const root = document.getElementById("tab-history");
   const seq = ++histLoading;
@@ -124,21 +205,31 @@ function renderHistoryView() {
   const stageName = r => (r.stage ? stageLabel(r.stage) : "") + (r.interactive ? " " + t("対話接続") : "") + (r.external ? " " + t("外部") : "");
   const visible = listViewApply(LV, runs,
     r => [fmtRunTime(r.startedAt), r.group, stageName(r), ...r.devices.map(d => d.name)],
-    (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? r.failed * 100000 + r.ok : -1) : (r.group || ""),
+    (r, k) => k === "time" ? (r.startedAt || "") : k === "stage" ? stageName(r) : k === "result" ? (r.hasSummary ? runCounts(r).failed * 100000 + runCounts(r).ok : -1) : (r.group || ""),
     { group: r => r.group || "", stage: r => stageLabel(r.stage || "") });
   const shown = visible.slice(0, histState.limit);
   const rows = shown.map(r => {
     const open = !!histState.open[r.dir];
+    const rc = runCounts(r);
     const counts = r.hasSummary
-      ? `<span style="color:var(--ok)">${r.ok}</span> / <span style="color:var(--err)">${r.failed}</span>${r.canceled ? ` / <span style="color:var(--warn)">${r.canceled}</span>` : ""}`
+      ? `<span style="color:var(--ok)">${rc.ok}</span> / <span style="color:var(--err)">${rc.failed}</span>${rc.canceled ? ` / <span style="color:var(--warn)">${rc.canceled}</span>` : ""}`
       : `<span class="muted">${esc(t("{n} ファイル", { n: r.devices.length }))}</span>`;
     const failedOnly = !!histState.failedOnly[r.dir];
     const ORDER = { error: 0, canceled: 1, unknown: 2, ok: 3 };
-    const devList = r.devices.slice().sort((x, y) => (ORDER[x.status] ?? 2) - (ORDER[y.status] ?? 2));
-    const nFailed = r.devices.filter(d => d.status === "error" || d.status === "canceled").length;
+    // One row per device (its latest session in a work folder of several).
+    const devs = latestDevices(r);
+    const devList = devs.sort((x, y) => (ORDER[x.status] ?? 2) - (ORDER[y.status] ?? 2));
+    const nFailed = devs.filter(d => d.status === "error" || d.status === "canceled").length;
     const shownDevs = failedOnly ? devList.filter(d => d.status === "error" || d.status === "canceled") : devList;
+    const sessions = runSessions(r);
+    // ログ表示 of a device: one link, or one per session (its time of day)
+    // when the work folder holds several of this device.
+    const logLinks = d => d.logs && d.logs.length > 1
+      ? `<span class="muted" style="font-size:11px">${esc(t("ログ"))}</span> ` + d.logs.map((l, i) => `<span class="link" data-log="${esc(l.logPath)}" data-tip="${esc(t("{t} のセッションのログ: {f}", { t: fmtRunTime(l.startedAt) || sessionLabel(l, i), f: l.logFile || l.logPath }))}">${esc(sessionLabel(l, i))}</span>`).join(" ")
+      : d.logPath ? `<span class="link" data-log="${esc(d.logPath)}">${esc(t("ログ表示"))}</span>` : `<span class="muted">${esc(t("ログなし"))}</span>`;
     const devRows = open ? `<tr class="hist-devs"><td colspan="7" style="padding:0">
       ${r.rounds > 1 ? `<div class="muted" style="font-size:12px;padding:6px 48px">${esc(t("各機器の最新の回の結果です。ほかの回のログは「フォルダ」で開けます"))}</div>` : ""}
+      ${sessions > 1 ? `<div class="muted" style="font-size:12px;padding:6px 48px">${esc(t("この作業中フォルダには {n} セッション分のログがあります（機器ごとに最新のセッションの結果。各セッションのログは右の時刻から開けます）", { n: sessions }))}</div>` : ""}
       ${r.devices.length > 10 && nFailed ? `<div style="font-size:12px;padding:6px 48px"><label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" class="hist-failed-only" data-dir="${esc(r.dir)}" style="width:auto" ${failedOnly ? "checked" : ""}> ${esc(t("失敗・中止の {n} 台だけ表示（失敗が先に並びます）", { n: nFailed }))}</label></div>` : ""}
       <table><tbody>${shownDevs.map(d => `<tr>
         <td style="width:36px"></td>
@@ -146,12 +237,12 @@ function renderHistoryView() {
         <td style="width:200px"><b>${esc(d.name)}</b></td>
         <td class="mono" style="width:140px">${esc(d.host || "")}</td>
         <td class="muted mono"><div class="clip" data-tip="${esc(histMsg(d))}">${esc(histMsg(d))}</div></td>
-        <td style="text-align:right;width:120px">${d.logPath ? `<span class="link" data-log="${esc(d.logPath)}">${esc(t("ログ表示"))}</span>` : `<span class="muted">${esc(t("ログなし"))}</span>`}</td>
+        <td style="text-align:right;min-width:120px;white-space:nowrap">${logLinks(d)}</td>
       </tr>`).join("") || `<tr><td class="muted" style="padding:8px 48px">${esc(t("ログファイルがありません"))}</td></tr>`}</tbody></table></td></tr>` : "";
     return `<tr>
       <td style="width:36px"><span class="link" data-toggle="${esc(r.dir)}" style="text-decoration:none">${open ? "▾" : "▸"}</span></td>
       <td style="width:170px" class="mono">${esc(fmtRunTime(r.startedAt))}</td>
-      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("対話接続"))}</span>` : ""}${r.external ? `<span class="badge" data-tip="${esc(t("PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています"))}">${esc(t("外部"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
+      <td style="width:110px">${stageBadge(r.stage)}${r.interactive ? `<span class="badge">${esc(t("対話接続"))}</span>` : ""}${runSessions(r) > 1 ? `<span class="badge" data-tip="${esc(t("同じグループの対話接続 {n} セッション分のログが 1 つの作業中フォルダにまとまっています（{d} 台）。成功 / 失敗は機器ごと（最新のセッション）の数です", { n: runSessions(r), d: runDeviceCount(r) }))}">${esc(t("{n} セッション・{d} 台", { n: runSessions(r), d: runDeviceCount(r) }))}</span>` : ""}${r.external ? `<span class="badge" data-tip="${esc(t("PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています"))}">${esc(t("外部"))}</span>` : ""}${r.schedule ? `<span class="badge" data-tip="${esc(t("予約「{n}」による実行", { n: r.schedule }))}">${esc(t("予約"))}</span>` : ""}</td>
       <td><div class="clip" data-tip="${esc(r.group || "")}">${esc(r.group || "")}</div></td>
       <td style="width:130px">${counts}</td>
       <td style="width:120px;font-size:12px" class="muted">${r.rounds > 1 ? `<span data-tip="${esc(t("この予約で実行した回数（各機器の結果は最新の回）。失敗のあった回: {f}", { f: r.failedRounds || 0 }))}">${esc(t("{n} 回分", { n: r.rounds }))}${r.failedRounds ? ` <span style="color:var(--err)">${esc(t("(失敗 {f})", { f: r.failedRounds }))}</span>` : ""}</span>` : r.hasSummary ? "" : r.external ? esc(t("外部フォルダ")) : esc(t("旧形式"))}</td>
@@ -247,12 +338,40 @@ function namesPair(x, y) {
   return l.startsWith(s) && /[\s　_\-.(（【\[@#]/.test(l[s.length]);
 }
 
-// The devices of a run that stand for name: the exact one, else the only
-// loose match.
-function devFor(run, ...names) {
-  for (const n of names) { const d = n && run.devices.find(d => d.name === n); if (d) return d; }
-  const hits = run.devices.filter(d => names.some(n => namesPair(d.name, n)));
-  return hits.length === 1 ? hits[0] : null;
+// The logs of a run that stand for name: every session of the exact name,
+// else of the only name that loosely matches. Oldest first; empty when
+// none.
+function devsFor(run, ...names) {
+  for (const n of names) { const l = n ? devSessionsOf(run, n) : []; if (l.length) return l; }
+  const hits = [...new Set(run.devices.filter(d => names.some(n => namesPair(d.name, n))).map(d => d.name))];
+  return hits.length === 1 ? devSessionsOf(run, hits[0]) : [];
+}
+
+// Named work runs of the group that lie outside A–B but may belong to the
+// same job: after the last batch (作業前 / 作業後) taken before A, or
+// before the first 作業前 taken after B — a session opened before the
+// 作業前 was taken, or after the 作業後. Earlier jobs' work (before that
+// batch) is not counted. Those already read (works) are not counted either.
+function workRunsOutside(a, b, works) {
+  if (!a || !b || a.external || b.external || !a.startedAt || !b.startedAt) return 0;
+  const g = a.group || b.group || "";
+  const runs = (histState.runs || []).filter(r => r.startedAt && !r.external && (!g || !r.group || r.group === g));
+  const batch = r => (r.stage === "before" || r.stage === "after") && !r.interactive;
+  const lo = runs.filter(r => batch(r) && r.startedAt < a.startedAt).reduce((m, r) => r.startedAt > m ? r.startedAt : m, "");
+  const hi = runs.filter(r => r.stage === "before" && !r.interactive && r.startedAt > b.startedAt).reduce((m, r) => !m || r.startedAt < m ? r.startedAt : m, "");
+  return runs.filter(r => isNamedWork(r) && r.dir !== a.dir && r.dir !== b.dir && !(works || []).includes(r)
+    && ((r.startedAt < a.startedAt && r.startedAt > lo) || (r.startedAt > b.startedAt && (!hi || r.startedAt < hi)))).length;
+}
+
+// The work run's name in the verdict banner, the copied result and the
+// exports: its title, 対話接続, and how many sessions its folder holds and
+// how many other work folders were read with it (0 / 1 left out).
+function cmpWorkName(work, works) {
+  const parts = [];
+  if (runSessions(work) > 1) parts.push(t("{s} セッション", { s: runSessions(work) }));
+  const more = (works || []).filter(w => w !== work).length;
+  if (more) parts.push(t("ほか {m} フォルダを含む", { m: more }));
+  return runTitle(work) + (work.interactive ? "（" + t("対話接続") + "）" : "") + (parts.length ? "（" + parts.join("・") + "）" : "");
 }
 
 // The work runs read for the verdict: the one picked and, when it lies
@@ -296,9 +415,12 @@ async function compareRuns() {
   // Every device of either run is listed. A device that failed in A or B
   // (no log, or a log cut short by an error) is a row of its own, in red,
   // first: three login failures used to hide inside "A のみ: sw3, sw7, sw9".
+  // A name that appears several times in A or B (a work folder of several
+  // sessions picked as A or B): its latest log is compared, and na / nb
+  // let the row say so.
   const byName = {};
-  a.devices.forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "" }; });
-  b.devices.forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; });
+  latestDevices(a).forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "", na: d.logs.length }; });
+  latestDevices(b).forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; e.nb = d.logs.length; });
   // Names that pair nowhere by exact match pair with the only name on the
   // other side they stand for (namesPair), and the row says so.
   const aOnly = Object.keys(byName).filter(n => byName[n].sa && !byName[n].sb);
@@ -308,7 +430,7 @@ async function compareRuns() {
     const hits = bOnly.filter(bn => !loose[bn] && namesPair(an, bn));
     if (hits.length === 1) {
       const bn = hits[0], eb = byName[bn];
-      byName[an].b = eb.b; byName[an].sb = eb.sb; byName[an].eb = eb.eb; byName[an].pairedWith = bn;
+      byName[an].b = eb.b; byName[an].sb = eb.sb; byName[an].eb = eb.eb; byName[an].nb = eb.nb; byName[an].pairedWith = bn;
       loose[bn] = true; delete byName[bn];
     }
   }
@@ -356,7 +478,11 @@ async function compareRuns() {
       catch (err) { r.check = { err: terr(err) }; }
     }
     if (work && !r.err) {
-      const paths = works.map(w => devFor(w, r.name, e.pairedWith)).filter(d => d && d.logPath).map(d => d.logPath);
+      // Every session's log of this device across the work folders, oldest
+      // first (a device's own startedAt, else its folder's): StrictVerify
+      // reads them as one work.
+      const paths = works.flatMap(w => devsFor(w, r.name, e.pairedWith).map(d => ({ p: d.logPath, at: d.startedAt || w.startedAt || "" })))
+        .filter(x => x.p).sort((x, y) => x.at.localeCompare(y.at)).map(x => x.p);
       r.workLogs = paths.length;
       if (!paths.length) r.strict = { noLog: true };
       else {
@@ -474,6 +600,16 @@ function cmpNoteText(c) {
 
 function cmpChangedText(u) { return `${u.kind} ${u.line}${u.block ? "  ［" + u.block + "］" : ""}`; }
 
+// A or B held several logs of this device (a work folder of several
+// sessions): the latest was compared, and the row says so.
+function cmpDupNote(e) {
+  if (!e) return "";
+  const parts = [];
+  if (e.na > 1) parts.push("A: " + t("同じ機器のログが {n} 件、最新を使用", { n: e.na }));
+  if (e.nb > 1) parts.push("B: " + t("同じ機器のログが {n} 件、最新を使用", { n: e.nb }));
+  return parts.length ? `<div class="muted" style="font-size:11px;font-weight:400">${esc(parts.join(" ／ "))}</div>` : "";
+}
+
 // Draws the comparison kept in histState.cmp, when it is the comparison of
 // the runs selected now.
 function drawCompare() {
@@ -511,7 +647,11 @@ function drawCompare() {
     if (unexDev) notes.push(t("⚠ 作業中に打っていない設定の変化が {d} 台・{n} 行あります（各機器の「作業外の変更」で確認してください）", { d: unexDev, n: unexLines }));
     if (unvCmd && (ngDev || noCfg)) notes.push(t("？ 要確認 {u} 件（ログからは判定できない行。未反映には数えていません）", { u: unvCmd }));
     if (noCfg) notes.push(t("{n} 台は作業後のログに設定の表示（show running-config 等）が見当たらないため照合できません", { n: noCfg }));
-    const workName = runTitle(work) + (work.interactive ? "（" + t("対話接続") + "）" : "") + (works.length > 1 ? t(" ほか {n} 件（同じ作業の別セッション）", { n: works.length - 1 }) : "");
+    // Work of the group outside A–B that was not read: said, so a session
+    // opened before the 作業前 (or after the 作業後) is not taken as absent.
+    const outside = workRunsOutside(a, b, works);
+    if (outside) notes.push(t("A より前／B より後の作業中が {n} 件あり、含めていません", { n: outside }));
+    const workName = cmpWorkName(work, works);
     C.headline = headline;
     banner = `<div style="margin-top:12px;padding:10px 14px;border-radius:8px;border:1px solid var(--${cls});font-size:14px;font-weight:600;color:var(--${cls})">${esc(headline)}
       ${notes.length ? `<div style="font-size:12px;font-weight:400;margin-top:4px;color:var(--warn)">${notes.map(esc).join("<br>")}</div>` : ""}
@@ -564,7 +704,7 @@ function drawCompare() {
         <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
       ${rows.map(r => `<tr>
-        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}</td>
+        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
         <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
         <td class="mono">${r.err ? "" : cmpCountsHTML(r.hasConfig ? cmpRest(r) : r.whole)}</td>
@@ -588,7 +728,7 @@ function drawCompare() {
   document.getElementById("cmp-html").onclick = async () => {
     const devices = C.failRows.map(r => ({ name: r.name, error: t("{w} で失敗", { w: r.fail }) + ": " + r.msg })).concat(cmpSorted(C).map(({ r }) => ({ name: r.name, pathA: byName[r.name].a, pathB: byName[r.name].b, verdict: work ? cmpVerdictText(r, work) : "", check: cmpChecklist() ? cmpCheckText(r.check) : "", error: r.err || "" })));
     try {
-      const path = await App().ExportCompareReport({ title: t("比較レポート") + " " + (a.group || ""), runA: runTitle(a), runB: runTitle(b), work: work ? runTitle(work) : "", headline: C.headline || "", lang: LANG, devices });
+      const path = await App().ExportCompareReport({ title: t("比較レポート") + " " + (a.group || ""), runA: runTitle(a), runB: runTitle(b), work: work ? cmpWorkName(work, works) : "", headline: C.headline || "", lang: LANG, devices });
       await exportDoneDialog(path);
     } catch (e) { toast(t("書き出し失敗") + ": " + terr(e), "err"); }
   };
@@ -630,13 +770,13 @@ function exportDoneDialog(path) {
 // a work report.
 function cmpTable(withTitle) {
   const C = histState.cmp;
-  const { a, b, work } = C;
+  const { a, b, work, works } = C;
   const head = [t("機器名"), t("組にした名前"), t("差分"), t("追加（行）"), t("削除（行）"), t("設定 追加"), t("設定 削除"), t("設定 変更"), t("設定 順序"), t("その他 追加"), t("その他 削除"), t("影響")];
   if (cmpChecklist()) head.push(t("期待値"), t("期待値に合わない行"));
   if (work) head.push(t("結論"), t("未反映"), t("要確認"), t("作業外の変更"), t("未反映・要確認の行"), t("作業外の変更の行"));
   const out = [];
   if (withTitle) {
-    out.push([t("比較"), `A: ${runTitle(a)}`, `B: ${runTitle(b)}`].concat(work ? [t("作業中の実行: {t}", { t: runTitle(work) })] : []));
+    out.push([t("比較"), `A: ${runTitle(a)}`, `B: ${runTitle(b)}`].concat(work ? [t("作業中の実行: {t}", { t: cmpWorkName(work, works) })] : []));
     if (C.headline) out.push([C.headline]);
     out.push([]);
   }

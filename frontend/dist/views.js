@@ -709,6 +709,31 @@ function bulkEditDialog(ids) {
         <div class="field"><label><input type="checkbox" id="bk-bpass-on" style="width:auto"> ${esc(t("踏み台のパスワード"))}</label><input id="bk-bpass" type="password" autocomplete="new-password"></div>
       </div>
     </details>
+    <details style="margin-top:4px" id="bk-b1-details"><summary class="link" style="text-decoration:none;font-size:13px">${esc(t("踏み台を設定（1 段目をまとめて付ける）"))}</summary>
+      <div class="muted" style="font-size:12px;margin:6px 0 8px">${esc(t("お客様の共通踏み台など、選択した機器の 1 段目の踏み台をここで一度に設定します。2 段目以降がある機器はそのまま残ります。機器ごとの踏み台は機器の編集で、自分の踏み台は設定タブで変えます。"))}</div>
+      <div class="field" style="margin-bottom:8px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="bk-b1-on" style="width:auto"> ${esc(t("1 段目の踏み台を設定する"))}</label>
+        <div id="bk-b1-note" class="muted" style="font-size:12px;margin-top:4px"></div></div>
+      <div class="row-inline" style="gap:18px;margin-bottom:8px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="radio" name="bk-b1-mode" value="fill" checked style="width:auto"> ${esc(t("踏み台が無い機器にだけ入れる"))}</label>
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px"><input type="radio" name="bk-b1-mode" value="replace" style="width:auto"> ${esc(t("既存の 1 段目を置き換える"))}</label>
+      </div>
+      <div class="grid-3">
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("ホスト"))} <span class="req">${esc(t("必須"))}</span></label><input id="bk-b1-host" autocomplete="off" placeholder="jump1.example.net"></div>
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("接続方式"))}</label><select id="bk-b1-method"><option value="ssh">SSH</option><option value="telnet">Telnet</option></select></div>
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("ポート"))}</label><input id="bk-b1-port" type="number" value="22"></div>
+      </div>
+      <div class="grid-3">
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("ユーザー"))} <span class="req" id="bk-b1-user-req">${esc(t("必須"))}</span></label><input id="bk-b1-user" autocomplete="off"></div>
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("パスワード"))}</label><input id="bk-b1-pw" type="password" autocomplete="new-password"></div>
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("SSH認証"))}</label><select id="bk-b1-auth"><option value="password">${esc(t("パスワード"))}</option><option value="publickey">${esc(t("公開鍵"))}</option></select></div>
+      </div>
+      <div class="grid-2" id="bk-b1-keyrow" style="display:none">
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("秘密鍵ファイル（公開鍵認証時）"))}</label>
+          <div class="row-inline" style="gap:6px"><input id="bk-b1-key" style="flex:1"><button class="btn sm" id="bk-b1-key-pick" type="button">${esc(t("参照…"))}</button></div></div>
+        <div class="field" style="margin-bottom:8px"><label>${esc(t("鍵のパスフレーズ（任意）"))}</label><input id="bk-b1-keypass" type="password" autocomplete="new-password"></div>
+      </div>
+      <div class="field" style="margin-bottom:0"><label>${esc(t("踏み台の通り方"))}</label><select id="bk-b1-way">${keep}<option value="">${esc(t("踏み台上でコマンドを打つ（標準・ルーターの踏み台も可。表・CSV では「コマンド入力」）"))}</option><option value="tunnel">${esc(t("SSH トンネル（この PC から全段にログイン・鍵が使える）"))}</option></select></div>
+    </details>
     <div class="modal-actions">
       <button class="btn" id="bk-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="bk-ok" data-tip="Ctrl+Enter">${esc(t("変更する"))}</button>
@@ -717,6 +742,37 @@ function bulkEditDialog(ids) {
   openModal(node, "mid");
   wirePasswordToggles(node);
   const $n = id => node.querySelector(id);
+  // 踏み台を設定: how many of the selected devices already have a hop 1
+  // (the ones 「無い機器にだけ」 leaves alone, 「置き換える」 overwrites).
+  const b1Has = (INV.devices || []).filter(d => ids.includes(d.id) && (d.bastions || []).some(b => b && b.host)).length;
+  const b1Mode = () => (node.querySelector('input[name="bk-b1-mode"]:checked') || {}).value || "fill";
+  const b1Note = () => {
+    const on = $n("#bk-b1-on").checked, fill = b1Mode() === "fill";
+    $n("#bk-b1-note").textContent = !on ? ""
+      : !b1Has ? t("選択中の {n} 台には踏み台がありません: 全台に 1 段目として入ります", { n: ids.length })
+      : fill ? t("選択中 {m} / {n} 台には既に踏み台があります: その {m} 台は変えず、無い {k} 台にだけ入ります", { m: b1Has, n: ids.length, k: ids.length - b1Has })
+      : t("⚠ 選択中 {m} / {n} 台の既存の 1 段目を置き換えます（2 段目以降は残ります）", { m: b1Has, n: ids.length });
+    $n("#bk-b1-note").style.color = on && b1Has && !fill ? "var(--warn)" : "";
+  };
+  $n("#bk-b1-on").onchange = b1Note;
+  node.querySelectorAll('input[name="bk-b1-mode"]').forEach(r => r.onchange = () => { $n("#bk-b1-on").checked = true; b1Note(); });
+  ["#bk-b1-host", "#bk-b1-user", "#bk-b1-pw"].forEach(id => { $n(id).oninput = () => { if (!$n("#bk-b1-on").checked) { $n("#bk-b1-on").checked = true; b1Note(); } }; });
+  // The port follows the method while it is a standard one, and a Telnet
+  // hop may ask for no user name (as in the device editor).
+  $n("#bk-b1-method").onchange = () => {
+    const p = parseInt($n("#bk-b1-port").value, 10) || 0;
+    if (!p || p === 22 || p === 23) $n("#bk-b1-port").value = $n("#bk-b1-method").value === "ssh" ? 22 : 23;
+    $n("#bk-b1-user-req").style.display = $n("#bk-b1-method").value === "telnet" ? "none" : "";
+  };
+  $n("#bk-b1-auth").onchange = () => {
+    const key = $n("#bk-b1-auth").value === "publickey";
+    $n("#bk-b1-keyrow").style.display = key ? "" : "none";
+    if (key && !$n("#bk-b1-key").value && (INV.settings || {}).lastKeyFile) $n("#bk-b1-key").value = INV.settings.lastKeyFile;
+  };
+  $n("#bk-b1-key-pick").onclick = async () => {
+    try { const p = await App().PickKeyFile(); if (p) $n("#bk-b1-key").value = p; }
+    catch (e) { toast(t("選択失敗") + ": " + terr(e), "err"); }
+  };
   // How many of the selected devices have the chosen hop: a jump-host
   // password set on 12 of 50 is a rotation that missed 38, said here first.
   // The hop is a position, not a jump host: hop 1 may be one host on some
@@ -790,11 +846,36 @@ function bulkEditDialog(ids) {
       else if (hosts.size > 1 && !(await subConfirm(esc(t("{n}段目の踏み台は機器によって違います（{list}）。すべてに同じ値を設定しますか？", { n: patch.bastionHop, list: [...hosts.keys()].join(t("、")) })),
         t("すべてに設定する"), null, "primary"))) return;
     }
+    // 踏み台を設定: the whole first hop, checked as the device editor checks
+    // a hop (the backend checks every device again, all or none).
+    if ($n("#bk-b1-on").checked) {
+      const b1 = {
+        host: $n("#bk-b1-host").value.trim(),
+        method: $n("#bk-b1-method").value,
+        port: parseInt($n("#bk-b1-port").value, 10) || 0,
+        username: $n("#bk-b1-user").value.trim(),
+        password: $n("#bk-b1-pw").value,
+        authMethod: $n("#bk-b1-auth").value,
+        keyFile: $n("#bk-b1-auth").value === "publickey" ? $n("#bk-b1-key").value : "",
+        keyPassphrase: $n("#bk-b1-auth").value === "publickey" ? $n("#bk-b1-keypass").value : "",
+      };
+      $n("#bk-b1-details").open = true;
+      if (!b1.host) { fieldError($n("#bk-b1-host"), t("踏み台のホストは必須です")); return; }
+      if (b1.method === "ssh" && !b1.username) { fieldError($n("#bk-b1-user"), t("踏み台（SSH）のユーザー名は必須です")); return; }
+      patch.bastion1 = b1;
+      patch.bastion1Mode = b1Mode();
+      if (patch.bastion1Mode === "replace" && b1Has && !(await subConfirm(esc(t("{m} 台の既存の 1 段目の踏み台を「{h}」に置き換えます（2 段目以降は残ります）。よろしいですか？", { m: b1Has, h: b1.host })),
+        t("置き換える"), null, "primary"))) return;
+    }
+    if ($n("#bk-b1-way").value !== "__keep__") patch.bastionMode = $n("#bk-b1-way").value;
     if (!Object.keys(patch).length) { toast(t("変更する項目を選んでください"), "err"); return; }
     try {
       const rep = await App().UpdateDevices(ids, patch) || {};
       closeModal(); await refreshInventory();
-      if (patch.bastionHop && (rep.hopApplied || rep.hopMissing || rep.hopOther)) {
+      if (patch.bastion1) {
+        toast(t("{n} 台を変更しました。踏み台 1 段目は {m} 台に設定しました", { n: ids.length, m: rep.hop1Set || 0 })
+          + (rep.hop1Kept ? t("（{k} 台には既に踏み台があり、変えていません）", { k: rep.hop1Kept }) : ""), "ok");
+      } else if (patch.bastionHop && (rep.hopApplied || rep.hopMissing || rep.hopOther)) {
         const msg = t("{n} 台を変更しました。踏み台の認証情報は {m} 台に設定しました", { n: ids.length, m: rep.hopApplied || 0 })
           + (rep.hopMissing ? t("（{k} 台にはその段の踏み台がなく、変わっていません）", { k: rep.hopMissing }) : "")
           + (rep.hopOther ? t("（{k} 台はその段が別の踏み台のため、変わっていません）", { k: rep.hopOther }) : "");
@@ -1015,7 +1096,10 @@ function importSummaryLines(pv) {
 // editDevice opens the editor on dev; null adds a device (in preGroup), and
 // template, when given, is what a new device starts from (a copy of another
 // device: nothing is saved until 保存).
-function editDevice(dev, preGroup, template) {
+// nextOf: the name of the device just saved by 保存して次を追加 — template is
+// then that device's settings with the name and address cleared, and the
+// editor opens as 機器を追加 (not 複製).
+function editDevice(dev, preGroup, template, nextOf) {
   const preG = preGroup ? (INV.deviceGroups || []).find(g => g.name === preGroup) : null;
   const preHasCreds = !!(preG && (preG.username || preG.password || preG.enablePassword));
   // A device added inside a group that has default credentials starts on
@@ -1040,8 +1124,8 @@ function editDevice(dev, preGroup, template) {
   const groupListId = "grouplist-dev";
   const groupOpts = (INV.deviceGroups || []).map(g => `<option value="${esc(g.name)}">`).join("");
   const node = h(`<div>
-    <h3>${esc(dev ? t("機器を編集") : template ? t("機器を複製") : t("機器を追加"))}</h3>
-    <p class="muted" style="font-size:12px;margin:-10px 0 12px"><span class="req">${esc(t("必須"))}</span> ${esc(t("の付いた項目以外は任意です（空欄のままで保存できます）"))}${template ? " " + esc(t("複製元の内容が入っています。保存するまで機器は作られません。")) : ""}</p>
+    <h3>${esc(dev ? t("機器を編集") : template && !nextOf ? t("機器を複製") : t("機器を追加"))}</h3>
+    <p class="muted" style="font-size:12px;margin:-10px 0 12px"><span class="req">${esc(t("必須"))}</span> ${esc(t("の付いた項目以外は任意です（空欄のままで保存できます）"))}${nextOf ? " " + esc(t("「{n}」の設定（グループ・OS タイプ・コマンドセット・踏み台・認証情報）を引き継いでいます。機器名と IP アドレスを入れてください。", { n: nextOf })) : template ? " " + esc(t("複製元の内容が入っています。保存するまで機器は作られません。")) : ""}</p>
     <div class="grid-2">
       <div class="field"><label>${esc(t("機器名（ログファイル名に使用）"))} <span class="req">${esc(t("必須"))}</span></label><input id="f-name" value="${esc(d.name || "")}" autofocus></div>
       <div class="field"><label>${esc(t("グループ"))}</label>
@@ -1132,6 +1216,7 @@ function editDevice(dev, preGroup, template) {
 
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
+      ${dev ? "" : `<button class="btn" id="save-next" data-tip="${esc(t("保存してから、同じグループ・OS タイプ・コマンドセット・踏み台・認証情報の扱いで次の機器の追加を開きます（機器名と IP だけ空）。Ctrl+Shift+Enter"))}">${esc(t("保存して次を追加"))}</button>`}
       <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
     </div>
   </div>`);
@@ -1403,7 +1488,11 @@ function editDevice(dev, preGroup, template) {
   renderBastions();
 
   guardDiscard(node, "#cancel");
-  node.querySelector("#save").onclick = async () => {
+  // andNext (保存して次を追加, Ctrl+Shift+Enter): the saved device's settings
+  // come back as the template of the next one, name and address cleared,
+  // the cursor on the name — ten switches of one site typed in a row
+  // without 「＋ 機器を追加」 between them.
+  const saveDevice = async andNext => {
     const conn = node.querySelector("#f-conn").value;
     const out = {
       id: dev ? dev.id : "",
@@ -1465,7 +1554,27 @@ function editDevice(dev, preGroup, template) {
       const mk = await subConfirm(esc(t("グループ「{g}」はまだありません。新しいグループとして作成しますか？", { g: out.group })), t("作成して保存"), t("編集に戻る"), "primary");
       if (!mk) return;
     }
-    try { await App().SaveDevice(out); closeModal(); await refreshInventory(); toast(t("保存しました"), "ok"); }
-    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+    try { await App().SaveDevice(out); closeModal(); await refreshInventory(); toast(andNext ? t("「{n}」を保存しました。次の機器を入力してください", { n: out.name }) : t("保存しました"), "ok"); }
+    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); return; }
+    if (andNext) {
+      // Everything but the identity carries over (the serial port too: a
+      // console cable moves from device to device).
+      const tpl = JSON.parse(JSON.stringify(out));
+      tpl.id = ""; tpl.name = ""; tpl.host = "";
+      editDevice(null, out.group, tpl, out.name);
+      const inp = document.getElementById("f-name"); if (inp) inp.focus();
+    }
   };
+  node.querySelector("#save").onclick = () => saveDevice(false);
+  const saveNext = node.querySelector("#save-next");
+  if (saveNext) {
+    saveNext.onclick = () => saveDevice(true);
+    // Before the dialog's own Ctrl+Enter (app.js, on document): with Shift
+    // held it is 保存して次を追加.
+    node.addEventListener("keydown", e => {
+      if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || !e.shiftKey || e.isComposing) return;
+      e.preventDefault();
+      if (!e.repeat && !saveNext.disabled) saveNext.click();
+    });
+  }
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,9 +47,9 @@ type Term struct {
 	runner    *runpkg.Runner
 	pwCh      chan string
 
-	mu        sync.Mutex
-	send      func(string) error
-	resizeFn  func(cols, rows int) error
+	mu       sync.Mutex
+	send     func(string) error
+	resizeFn func(cols, rows int) error
 	// cols/rows is the screen size the page last reported (Resize), the
 	// size the pseudo-terminal is opened at; sizeKnown closes at the first
 	// report so a connect can wait for it. sentCols/sentRows is the size the
@@ -60,14 +61,14 @@ type Term struct {
 	sizeOnce           sync.Once
 	sentCols, sentRows int
 	pagerOff           bool
-	closeFn   func() error
-	logDir    string // Settings.LogDir once the vault is open ("" => logs/)
-	slog      *logstore.Stream
-	lastLog   string        // the last session's log file (its folder is what ログフォルダ opens)
-	pasteOpen bool          // a paste-confirmation window is showing
-	pw        string        // master password, kept for a reconnect
-	dev       *model.Device // the device once the vault is open
-	hostKeys  *memHostKeys  // this window's pins (seeded from the vault)
+	closeFn            func() error
+	logDir             string // Settings.LogDir once the vault is open ("" => logs/)
+	slog               *logstore.Stream
+	lastLog            string        // the last session's log file (its folder is what ログフォルダ opens)
+	pasteOpen          bool          // a paste-confirmation window is showing
+	pw                 string        // master password, kept for a reconnect
+	dev                *model.Device // the device once the vault is open
+	hostKeys           *memHostKeys  // this window's pins (seeded from the vault)
 	// pending is a session whose automatic login failed but whose line is
 	// still open, waiting for the user to take it over (Takeover) or drop it
 	// (Discard). The transcript shown with the error is what they decide on.
@@ -94,6 +95,11 @@ type Term struct {
 	lang        string
 	exp         *runpkg.Expecter // the live session's line (SendBreak)
 	pasteProc   *os.Process      // the open paste-confirmation window (ended on Lock)
+	pasteIn     io.WriteCloser   // its stdin (pasteLineDump before Lock ends it)
+	pasteInMu   sync.Mutex       // one writer on it at a time (the request, then Lock's line)
+	pasteGone   chan struct{}    // closed once it has ended (Lock waits on it)
+	pasteSent   pasteReq         // what it was handed (kept if it cannot say what it holds)
+	pasteDraft  *pasteDraft      // the paste a Lock closed, for after the unlock (memory only)
 	unlockFails int              // wrong passwords in a row at the lock screen
 	quitting    bool             // quitForParent: close without asking
 	bc          bcastState       // 同時入力 (term_bcast.go)
@@ -236,7 +242,7 @@ func (t *Term) Focus() { go focusOwnWindow() }
 func (t *Term) shutdown(ctx context.Context) {
 	t.mu.Lock()
 	c, p := t.closeFn, t.pending
-	t.pending = nil
+	t.pending, t.pasteDraft = nil, nil
 	t.mu.Unlock()
 	if c != nil {
 		_ = c()
@@ -601,14 +607,34 @@ func (t *Term) Discard() {
 func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Settings, shown bool) {
 	d := *dev
 	// The transcript goes to one file, named at connect time by the same
-	// template as a batch log with the stage "work", in its own run folder
-	// (log_<time>_work) so the session shows in 実行履歴 like a batch. It is
+	// template as a batch log with the stage "work", in the group's work
+	// folder — the one the group's other windows of this work cycle use
+	// (history.FindWorkDir), or a new one (<time>_<group>_work) — so the
+	// cycle shows in 実行履歴 as one run with a session per device. It is
 	// written as it arrives (Tera Term style) with the passwords masked —
 	// see logstore.Stream.
 	started := time.Now()
-	runDir := logstore.ClaimRunDir(settings.LogDir, settings.LogDirTemplate, d.Group, logstore.StageWork, settings.StageTokens(), started)
-	logPath := filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
-		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Role: d.Role, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started)))
+	runDir := workRunDir(settings, d.Group, started)
+	logPath := logstore.UniquePath(filepath.Join(runDir, filepath.Base(logstore.Path(settings.LogDir, settings.LogNameTemplate,
+		logstore.Fields{Host: d.Name, IP: d.Host, OS: d.OSType, Group: d.Group, Site: d.Site, Role: d.Role, Stage: logstore.StageWork, Tokens: settings.StageTokens()}, started))))
+	// The session is recorded in the folder's summary now, not only at the
+	// end: the group's next window (並べて接続 opens them all at once) finds
+	// the folder by its summary and joins it. The entry is completed at
+	// the close (EndedAt), or taken out again if nothing was logged.
+	entry := history.DeviceSummary{Name: d.Name, Host: d.Host, Site: d.Site, Success: true,
+		LogFile: filepath.Base(logPath), StartedAt: started.Format(time.RFC3339)}
+	session := func(e history.DeviceSummary) history.Summary {
+		return history.Summary{
+			App: "PalaTerm " + appVersion, StartedAt: started.Format(time.RFC3339), FinishedAt: time.Now().Format(time.RFC3339),
+			Group: d.Group, Stage: logstore.StageWork, Interactive: true, Devices: []history.DeviceSummary{e},
+		}
+	}
+	_ = history.Update(runDir, func(prev history.Summary, ok bool) (history.Summary, bool) {
+		if !ok {
+			return session(entry), true
+		}
+		return history.AddSession(prev, session(entry)), true
+	})
 	var secrets []string
 	if settings.MaskLogSecrets {
 		secrets = runpkg.SecretsOf(&d)
@@ -638,17 +664,33 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		t.bcastReport() // no longer takes keys from the other windows
 		p, _ := slog.Close()
 		if p == "" {
-			// Nothing was logged: drop the folder claimed at connect time, or
-			// it shows in 実行履歴 as a run with no devices. (Remove only
-			// succeeds on an empty folder.)
+			// Nothing was logged: the session recorded at connect time
+			// comes out of the summary again, and a folder left with no
+			// session at all is dropped, or it shows in 実行履歴 as a run
+			// with no devices. (Remove only succeeds on an empty folder.)
+			_ = history.Update(runDir, func(prev history.Summary, ok bool) (history.Summary, bool) {
+				if !ok {
+					return prev, false
+				}
+				out := history.DropSession(prev, entry)
+				if len(out.Devices) == 0 {
+					_ = os.Remove(filepath.Join(runDir, history.SummaryName))
+					return out, false
+				}
+				return out, true
+			})
 			_ = os.Remove(runDir)
 		}
 		if p != "" {
-			_ = history.Write(runDir, history.Summary{
-				App: "PalaTerm " + appVersion, StartedAt: started.Format(time.RFC3339), FinishedAt: time.Now().Format(time.RFC3339),
-				Group: d.Group, Stage: logstore.StageWork, Interactive: true,
-				Devices: []history.DeviceSummary{{Name: d.Name, Host: d.Host, Site: d.Site, Success: true,
-					LogFile: filepath.Base(p), ElapsedSec: time.Since(started).Seconds()}},
+			done := entry
+			done.LogFile = filepath.Base(p)
+			done.EndedAt = time.Now().Format(time.RFC3339)
+			done.ElapsedSec = time.Since(started).Seconds()
+			_ = history.Update(runDir, func(prev history.Summary, ok bool) (history.Summary, bool) {
+				if !ok {
+					return session(done), true
+				}
+				return history.AddSession(prev, session(done)), true
 			})
 		}
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, LogPath: p})
@@ -677,6 +719,22 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		host = tr
 	}
 	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Group: d.Group, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
+}
+
+// workRunDir is the folder a terminal session of group logs into: the
+// group's current work folder when there is one to join (Settings.WorkJoin,
+// history.FindWorkDir, the manual cut of CutWorkCycle), otherwise a new
+// folder claimed as every run's is. Decided here, in the terminal process,
+// from the disk alone — a reconnect in the same window lands in the same
+// folder as long as the cycle is open.
+func workRunDir(settings model.Settings, group string, now time.Time) string {
+	if join := settings.WorkJoin(); join > 0 {
+		root := logstore.ResolveRoot(settings.LogDir)
+		if dir, _, ok := history.FindWorkDir(root, settings.StageTokens(), group, now, join, workCutAt(group)); ok {
+			return dir
+		}
+	}
+	return logstore.ClaimRunDir(settings.LogDir, settings.LogDirTemplate, group, logstore.StageWork, settings.StageTokens(), now)
 }
 
 // seedHostKeys builds a window's host-key store from the vault's pins,
@@ -785,6 +843,27 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 	if err != nil {
 		return err
 	}
+	return t.openPaste(string(raw), withCR, single)
+}
+
+// pasteDraft is a paste confirmation that Lock closed: the text as the
+// window held it (edits included) and its 最後に Enter を送る, kept in memory
+// — never on disk — until 再表示 or 破棄 after the unlock, or the window
+// closes (M-13, 2026-11-01: a 20-line paste being read over was lost to
+// the main window's ロック).
+type pasteDraft struct {
+	text   string
+	cr     bool
+	single bool
+}
+
+// pasteDumpWait bounds how long Lock waits for the paste window to say what
+// it holds before ending it.
+const pasteDumpWait = 1500 * time.Millisecond
+
+// openPaste is OpenPasteWindow with the text decoded (also 再表示 of a
+// draft).
+func (t *Term) openPaste(raw string, withCR, single bool) error {
 	t.mu.Lock()
 	if t.locked {
 		t.mu.Unlock()
@@ -822,24 +901,40 @@ func (t *Term) OpenPasteWindow(textB64 string, withCR, single bool) error {
 		t.pasteDone()
 		return err
 	}
+	req := pasteReq{Device: t.label, Text: raw, CR: withCR, Bcast: peers, Single: single}
 	t.mu.Lock()
 	t.pasteProc = cmd.Process
+	// The pipe stays open for Lock's pasteLineDump; Wait closes it.
+	t.pasteIn, t.pasteGone, t.pasteSent = stdin, make(chan struct{}), req
 	t.mu.Unlock()
 	go func() {
 		defer recoverGo("paste window stdin")
-		_ = json.NewEncoder(stdin).Encode(pasteReq{Device: t.label, Text: string(raw), CR: withCR, Bcast: peers, Single: single})
-		_ = stdin.Close()
+		t.pasteInMu.Lock()
+		defer t.pasteInMu.Unlock()
+		_ = json.NewEncoder(stdin).Encode(req)
 	}()
 	go func() {
 		defer t.pasteDone()
 		defer recoverGo("paste window stdout")
 		var res pasteRes
+		answered := false // a line came back (Submit, Cancel or Draft); none: the X, or Lock's Kill
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
 		if sc.Scan() {
-			_ = json.Unmarshal(sc.Bytes(), &res)
+			answered = json.Unmarshal(sc.Bytes(), &res) == nil
 		}
 		_ = cmd.Wait()
+		t.mu.Lock()
+		locked := t.locked
+		t.mu.Unlock()
+		if locked {
+			// Ended by Lock (or confirmed in the same instant: nothing is
+			// sent to a locked window). Kept for after the unlock — what
+			// the window said it held, else what it was handed; a cancel
+			// answered before the lock is a cancel.
+			t.keepDraft(res, answered)
+			return
+		}
 		// Hand the keyboard back to this window: closing the paste window
 		// does not reliably re-activate the terminal underneath. The paste
 		// window hands the foreground over before it closes
@@ -877,7 +972,71 @@ func pasteText(res pasteRes) (string, bool) {
 func (t *Term) pasteDone() {
 	t.mu.Lock()
 	t.pasteOpen = false
-	t.pasteProc = nil
+	t.pasteProc, t.pasteIn = nil, nil
+	if t.pasteGone != nil {
+		close(t.pasteGone)
+		t.pasteGone = nil
+	}
+	t.mu.Unlock()
+}
+
+// keepDraft stores what a paste window ended by Lock held (see
+// pasteDraft): its Draft answer, a Submit that arrived in the same instant,
+// or — ended before it could answer — the text it was handed. An explicit
+// Cancel keeps nothing.
+func (t *Term) keepDraft(res pasteRes, answered bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	sent := t.pasteSent
+	t.pasteSent = pasteReq{}
+	switch {
+	case answered && (res.Draft || res.OK):
+		if res.Text != "" {
+			t.pasteDraft = &pasteDraft{text: res.Text, cr: res.CR, single: sent.Single}
+		}
+	case !answered && sent.Text != "":
+		t.pasteDraft = &pasteDraft{text: sent.Text, cr: sent.CR, single: sent.Single}
+	}
+}
+
+// PasteDraftLines is how many lines the paste a Lock closed has (0: none).
+// The page asks after each unlock and offers 再表示 / 破棄.
+func (t *Term) PasteDraftLines() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pasteDraft == nil {
+		return 0
+	}
+	return len(strings.Split(strings.ReplaceAll(t.pasteDraft.text, "\r\n", "\n"), "\n"))
+}
+
+// ReopenPasteDraft is 再表示: the paste a Lock closed, back in a
+// confirmation window — nothing is sent until it is confirmed there, as
+// always. The draft is dropped as it is shown (kept only if the window
+// could not open).
+func (t *Term) ReopenPasteDraft() error {
+	t.mu.Lock()
+	d := t.pasteDraft
+	t.pasteDraft = nil
+	t.mu.Unlock()
+	if d == nil {
+		return fmt.Errorf("ロック前の貼り付け内容はもうありません")
+	}
+	if err := t.openPaste(d.text, d.cr, d.single); err != nil {
+		t.mu.Lock()
+		if t.pasteDraft == nil {
+			t.pasteDraft = d
+		}
+		t.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// DropPasteDraft is 破棄 (also the window closing).
+func (t *Term) DropPasteDraft() {
+	t.mu.Lock()
+	t.pasteDraft = nil
 	t.mu.Unlock()
 }
 
@@ -1002,20 +1161,34 @@ func (t *Term) OpenLogDir() error {
 func (t *Term) Lock() {
 	t.mu.Lock()
 	t.locked = true
-	ctx, pp := t.ctx, t.pasteProc
+	ctx, pp, in, gone := t.ctx, t.pasteProc, t.pasteIn, t.pasteGone
 	t.mu.Unlock()
 	t.bcastReport()
+	// The lock screen first: what follows may take a moment.
+	if ctx != nil {
+		runtime.EventsEmit(ctx, "term:lock")
+	}
 	// A paste confirmation left open would otherwise still send to the device
-	// from its own window, lock or no lock.
+	// from its own window, lock or no lock. It is asked for what it holds
+	// (it answers with Draft and ends; keepDraft keeps it for after the
+	// unlock), then ended if it did not go by itself.
 	if pp != nil {
+		if in != nil {
+			t.pasteInMu.Lock()
+			_, _ = io.WriteString(in, pasteLineDump+"\n")
+			t.pasteInMu.Unlock()
+		}
+		if gone != nil {
+			select {
+			case <-gone:
+			case <-time.After(pasteDumpWait):
+			}
+		}
 		_ = pp.Kill()
 	}
 	// The log viewer opened from this window shows the session: it goes
 	// with the lock too.
 	closeViewerWindows()
-	if ctx != nil {
-		runtime.EventsEmit(ctx, "term:lock")
-	}
 }
 
 // IsLocked lets the page show the lock screen for a lock that arrived before
@@ -1036,8 +1209,18 @@ func (t *Term) Unlock(pw string) bool {
 	t.mu.Lock()
 	if t.pw != "" && subtle.ConstantTimeCompare([]byte(pw), []byte(t.pw)) == 1 {
 		t.locked, t.unlockFails = false, 0
+		gone := t.pasteGone
 		t.mu.Unlock()
 		t.bcastReport()
+		// A paste window the lock is still closing (Lock asked it for its
+		// text a moment ago): its draft is kept once it has ended, and the
+		// page asks for it right after this returns.
+		if gone != nil {
+			select {
+			case <-gone:
+			case <-time.After(pasteDumpWait):
+			}
+		}
 		return true
 	}
 	t.unlockFails++
@@ -1141,6 +1324,7 @@ const termCloseWait = 3 * time.Second
 func (t *Term) closeAndQuit() {
 	t.mu.Lock()
 	t.quitting = true
+	t.pasteDraft = nil
 	ctx := t.ctx
 	t.mu.Unlock()
 	t.closeSession(termCloseWait)

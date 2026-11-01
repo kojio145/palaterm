@@ -1444,6 +1444,18 @@ type DevicePatch struct {
 	// rest, and one password set on all of them is a mistake. nil or "" =
 	// every device with that hop.
 	BastionHost *string `json:"bastionHost,omitempty"`
+	// Bastion1 is a whole first hop for the selected devices (一括変更 →
+	// 踏み台を設定: a customer's shared jump host put on thirty devices at
+	// once). Bastion1Mode says where it goes: "replace" sets it on every
+	// selected device (a hop 1 already there is replaced, later hops
+	// stay), "fill" only on the devices that have no hop at all. BastionMode
+	// is the device's way through its chain ("" = typed on the hops,
+	// "tunnel"); nil keeps it. The hop goes through the same checks as a
+	// device saved from its editor (Device.Validate / Inventory.ValidateIn
+	// per device), all or none like the rest of the patch.
+	Bastion1     *model.Bastion `json:"bastion1,omitempty"`
+	Bastion1Mode string         `json:"bastion1Mode,omitempty"`
+	BastionMode  *string        `json:"bastionMode,omitempty"`
 }
 
 // UpdateReport says what a bulk edit touched: how many devices, and — for a
@@ -1457,6 +1469,36 @@ type UpdateReport struct {
 	// HopOther: devices with that hop on another host than BastionHost
 	// (left as they are).
 	HopOther int `json:"hopOther"`
+	// Hop1Set / Hop1Kept: devices that got Bastion1, and devices whose own
+	// hop 1 was kept (Bastion1Mode "fill").
+	Hop1Set  int `json:"hop1Set"`
+	Hop1Kept int `json:"hop1Kept"`
+}
+
+// bastion1Patch checks a DevicePatch's first-hop part before any device is
+// touched: the mode must be one of the two, the hop needs a host, and an
+// SSH hop a user name (the editor asks for the same; a hop without one
+// fails at the login of every device it was put on).
+func bastion1Patch(p DevicePatch) (model.Bastion, error) {
+	var b model.Bastion
+	if p.Bastion1 == nil {
+		return b, nil
+	}
+	if p.Bastion1Mode != "replace" && p.Bastion1Mode != "fill" {
+		return b, fmt.Errorf("踏み台の入れ方が不正です: %q（replace / fill）", p.Bastion1Mode)
+	}
+	b = *p.Bastion1
+	b.Host, b.Username = strings.TrimSpace(b.Host), strings.TrimSpace(b.Username)
+	if b.Method == "" {
+		b.Method = model.BastionSSH
+	}
+	if b.Host == "" {
+		return b, errors.New("踏み台のホストは必須です")
+	}
+	if b.Method == model.BastionSSH && b.Username == "" {
+		return b, errors.New("踏み台（SSH）のユーザー名は必須です")
+	}
+	return b, nil
 }
 
 // UpdateDevices applies p to the devices with the given IDs, all or none:
@@ -1474,11 +1516,36 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 		sel[id] = true
 	}
 	hopEdit := p.BastionHop != nil && (p.BastionUsername != nil || p.BastionPassword != nil)
+	hop1, err := bastion1Patch(p)
+	if err != nil {
+		a.mu.Unlock()
+		return rep, err
+	}
 	next := append([]model.Device(nil), a.inv.Devices...)
 	for i := range next {
 		d := &next[i]
 		if !sel[d.ID] {
 			continue
+		}
+		// The first hop goes in before the hop-credential edit below, so a
+		// patch carrying both sets the hop and then its credentials.
+		if p.Bastion1 != nil {
+			d.NormalizeBastions()
+			hops := append([]model.Bastion(nil), d.Bastions...)
+			if len(hops) > 0 && p.Bastion1Mode == "fill" {
+				rep.Hop1Kept++
+			} else {
+				if len(hops) > 0 {
+					hops[0] = hop1
+				} else {
+					hops = []model.Bastion{hop1}
+				}
+				d.Bastions = hops
+				rep.Hop1Set++
+			}
+		}
+		if p.BastionMode != nil {
+			d.BastionMode = model.BastionMode(*p.BastionMode) // checked by ValidateIn below
 		}
 		if p.Group != nil {
 			d.Group = strings.TrimSpace(*p.Group)
@@ -2179,6 +2246,10 @@ func (a *App) SaveSettings(s model.Settings) error {
 		a.mu.Unlock()
 		return err
 	}
+	if err := s.ValidateWorkJoinHours(); err != nil {
+		a.mu.Unlock()
+		return err
+	}
 	if s.StageTokenBefore == logstore.DefaultStageTokens.Before {
 		s.StageTokenBefore = ""
 	}
@@ -2219,6 +2290,13 @@ type RunRequest struct {
 	// Direct reaches every device without its jump hosts, for this run only
 	// (踏み台を使わずに接続: on site, on the devices' own network).
 	Direct bool `json:"direct,omitempty"`
+	// RetryDir is the folder of the batch a 失敗のみ再実行 retries: the
+	// retried devices' logs go into it and its summary takes their new
+	// results (history.AddRetry), so the cycle stays one run. It must be
+	// a PalaTerm run folder directly under the log root, with a summary
+	// of the same group and stage, not a 予約's and not an interactive
+	// folder; anything else falls back to a new folder (RunDone.RetryFallback).
+	RetryDir string `json:"retryDir,omitempty"`
 }
 
 // AdHocSetName names the commands typed in the run tab for one run (in the
@@ -2238,6 +2316,11 @@ type RunDone struct {
 	// Error: the batch stopped on an internal error (a panic, logged in
 	// data\error.log) instead of finishing.
 	Error string `json:"error,omitempty"`
+	// RetryFallback: the request named a RetryDir the batch could not use
+	// (RetryFallbackWhy says why, in Japanese), so the logs went to a new
+	// folder (RunDir) instead.
+	RetryFallback    bool   `json:"retryFallback,omitempty"`
+	RetryFallbackWhy string `json:"retryFallbackWhy,omitempty"`
 }
 
 // RunWith runs with the full set of per-run choices (stage, dry run, group,
@@ -2365,15 +2448,77 @@ func (a *App) run(req RunRequest) error {
 	}
 	ctx, cancel := a.beginRunLocked("")
 	a.mu.Unlock()
+	// A retry into the original folder, when that folder qualifies; the
+	// request keeps RetryDir either way (the page rebuilds from it).
+	retryDir, retryWhy := a.retryDir(req)
 
 	go func() {
 		emit := func(ev runpkg.Event) {
 			runtime.EventsEmit(a.ctx, "run:event", ev)
 		}
-		done := a.execBatch(ctx, cancel, snap, req, "", "", emit)
+		done := a.execBatch(ctx, cancel, snap, req, "", retryDir, emit)
+		if req.RetryDir != "" && retryDir == "" {
+			done.RetryFallback, done.RetryFallbackWhy = true, retryWhy
+		}
 		runtime.EventsEmit(a.ctx, "run:done", done)
 	}()
 	return nil
+}
+
+// retryDir is the folder a 失敗のみ再実行 (req.RetryDir) writes into — "" with
+// the reason when the folder does not qualify and the batch takes a new
+// one: it must lie directly under the log root, hold a summary PalaTerm
+// wrote for a batch (not a 予約's folder, not an interactive work folder,
+// not a dry run) of the request's group and stage. Nothing outside the log
+// root is ever written to.
+func (a *App) retryDir(req RunRequest) (string, string) {
+	if req.RetryDir == "" || req.DryRun {
+		return "", ""
+	}
+	root, err := filepath.Abs(a.logRoot())
+	if err != nil {
+		return "", err.Error()
+	}
+	dir, err := filepath.Abs(filepath.Clean(req.RetryDir))
+	if err != nil {
+		return "", err.Error()
+	}
+	if !strings.EqualFold(filepath.Dir(dir), root) || filepath.Base(dir) == "." || filepath.Base(dir) == ".." {
+		return "", "再実行先のフォルダがログフォルダの直下にないため、新しいフォルダに保存します"
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return "", "再実行先のフォルダが見つからないため、新しいフォルダに保存します"
+	}
+	sum, ok := history.Read(dir)
+	if !ok {
+		return "", "再実行先のフォルダに PalaTerm の実行記録がないため、新しいフォルダに保存します"
+	}
+	if sum.Schedule != "" || isSchedDir(dir) {
+		return "", "再実行先が予約のフォルダのため、新しいフォルダに保存します"
+	}
+	if sum.Interactive {
+		return "", "再実行先が対話接続の作業フォルダのため、新しいフォルダに保存します"
+	}
+	if sum.DryRun {
+		return "", "再実行先が接続確認（ドライラン）の記録のため、新しいフォルダに保存します"
+	}
+	if sum.Group != req.Group || sum.Stage != req.Stage {
+		return "", "再実行先のフォルダのグループまたは作業タイミングが今回の実行と違うため、新しいフォルダに保存します"
+	}
+	return dir, ""
+}
+
+// isSchedDir reports whether dir is one of the folders the 予約 keep
+// (data\schedule-dirs.json), whatever its summary says.
+func isSchedDir(dir string) bool {
+	recs := map[string]schedDirRec{}
+	readJSONFile(schedDirsPath(), &recs)
+	for _, r := range recs {
+		if strings.EqualFold(filepath.Clean(r.Dir), filepath.Clean(dir)) {
+			return true
+		}
+	}
+	return false
 }
 
 // busyErrLocked (caller holds a.mu) says why a second batch cannot start.
@@ -2399,7 +2544,10 @@ func (a *App) beginRunLocked(sched string) (context.Context, context.CancelFunc)
 // run started by hand and one started by a 予約 share.
 //
 // dir is a 予約's own folder ("" = a new run folder): its rounds all go
-// there, and the folder's summary counts them (history.AddRound).
+// there, and the folder's summary counts them (history.AddRound). With
+// sched empty, dir is the folder of the batch a 失敗のみ再実行 retries
+// (see retryDir): the retried devices' results replace theirs in its
+// summary (history.AddRetry).
 func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *model.Inventory, req RunRequest, sched, dir string, emit runpkg.EmitFunc) (done RunDone) {
 	defer cancel()
 	// A panic in the batch must not take the whole app (and with it every
@@ -2440,12 +2588,24 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 		a.noteRunEvent(ev)
 		emit(ev)
 	}
-	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: schedLogStage(dir, req.Stage)}, counted)
+	retry := sched == "" && dir != "" && req.RetryDir != ""
+	logStage := ""
+	if !retry {
+		logStage = schedLogStage(dir, req.Stage) // a retry's files are named as the original batch's were
+	}
+	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: logStage}, counted)
 	// Back to the vault before the next batch may start (runActive below):
 	// restored later, it could undo the next batch's own copy.
 	a.runner.HostKeys = a.hostKeys()
 	if runDir != "" {
-		writeRunSummary(runDir, snap, req, sched, dir != "", started, results)
+		mode := summaryNew
+		switch {
+		case retry:
+			mode = summaryRetry
+		case dir != "":
+			mode = summaryRound
+		}
+		writeRunSummary(runDir, snap, req, sched, mode, started, results)
 	}
 	done = RunDone{Results: results, RunDir: runDir, DryRun: req.DryRun}
 	a.mu.Lock()
@@ -2521,11 +2681,23 @@ func (a *App) GetRunCounts() runCounts {
 	return c
 }
 
+// summaryMode says how writeRunSummary treats a summary already in the
+// folder: replaced (a new run), added as a round (a 予約's folder), or
+// merged as a retry (the retried devices' rows replaced).
+type summaryMode int
+
+const (
+	summaryNew summaryMode = iota
+	summaryRound
+	summaryRetry
+)
+
 // writeRunSummary records the batch in its log folder for the 実行履歴 tab.
 // Best effort: a summary that cannot be written costs the history row, not
-// the logs. With addRound (a 予約's folder) the round is added to the
-// summary already there instead of replacing it.
-func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched string, addRound bool, started time.Time, results []runpkg.DeviceResult) {
+// the logs. With summaryRound (a 予約's folder) the round is added to the
+// summary already there instead of replacing it; with summaryRetry the
+// retried devices' rows are replaced in it.
+func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched string, mode summaryMode, started time.Time, results []runpkg.DeviceResult) {
 	byName := map[string]model.Device{}
 	for _, d := range inv.Devices {
 		byName[d.Name] = d
@@ -2552,9 +2724,14 @@ func writeRunSummary(runDir string, inv *model.Inventory, req RunRequest, sched 
 		}
 		s.Devices = append(s.Devices, ds)
 	}
-	if addRound {
+	switch mode {
+	case summaryRound:
 		if prev, ok := history.Read(runDir); ok {
 			s = history.AddRound(prev, s)
+		}
+	case summaryRetry:
+		if prev, ok := history.Read(runDir); ok {
+			s = history.AddRetry(prev, s)
 		}
 	}
 	_ = history.Write(runDir, s)
@@ -2616,6 +2793,63 @@ func dangerOf(snap *model.Inventory) []DangerWarning {
 		}
 	}
 	return out
+}
+
+// ---- 作業サイクル（対話接続の作業フォルダ） ----
+
+// workCyclePath is data\work-cycle.json: the time each group's work cycle
+// was last cut by hand (CutWorkCycle), group name → RFC3339. Beside the
+// 予約's files; no device names in it.
+func workCyclePath() string { return filepath.Join(exeDir(), "data", "work-cycle.json") }
+
+// workCutAt is when group's work cycle was last cut by hand (zero: never).
+// Read by the terminal processes too (see workRunDir).
+func workCutAt(group string) time.Time {
+	cuts := map[string]string{}
+	if !readJSONFile(workCyclePath(), &cuts) {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, cuts[group])
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// CutWorkCycle closes group's current work folder by hand: the next
+// terminal window of the group starts a new folder instead of joining
+// it (the 作業前 / 作業後 batches do the same on their own).
+func (a *App) CutWorkCycle(group string) error {
+	defer recoverBound(a.ctx, "CutWorkCycle")
+	if a.locked() {
+		return errVaultLocked
+	}
+	cuts := map[string]string{}
+	readJSONFile(workCyclePath(), &cuts)
+	cuts[group] = time.Now().Format(time.RFC3339)
+	return writeJSONAtomic(workCyclePath(), cuts)
+}
+
+// WorkCycleInfo is the work folder the next terminal window of group would
+// join (history.WorkCycle; empty fields when it would start a new one, or
+// while the vault is locked).
+func (a *App) WorkCycleInfo(group string) history.WorkCycle {
+	defer recoverBound(a.ctx, "WorkCycleInfo")
+	if a.locked() {
+		return history.WorkCycle{}
+	}
+	a.mu.Lock()
+	var s model.Settings
+	if a.inv != nil {
+		s = a.inv.Settings
+	}
+	a.mu.Unlock()
+	join := s.WorkJoin()
+	if join <= 0 {
+		return history.WorkCycle{}
+	}
+	_, wc, _ := history.FindWorkDir(a.logRoot(), s.StageTokens(), group, time.Now(), join, workCutAt(group))
+	return wc
 }
 
 // ---- 実行履歴 ----
@@ -2981,7 +3215,14 @@ func (a *App) DeviceVersions(name string) ([]DeviceVersion, error) {
 			if err != nil {
 				continue
 			}
-			out = append(out, DeviceVersion{Dir: r.Dir, RunName: r.Name, StartedAt: r.StartedAt, Stage: r.Stage, Group: r.Group, External: r.External, Status: d.Status, LogPath: d.LogPath, File: filepath.Base(d.LogPath), Size: st.Size()})
+			// A work folder holds a session per entry, each with its own
+			// start: that is the version's time, so two sessions of one
+			// device in one folder sort by when they were taken.
+			at := r.StartedAt
+			if d.StartedAt != "" {
+				at = d.StartedAt
+			}
+			out = append(out, DeviceVersion{Dir: r.Dir, RunName: r.Name, StartedAt: at, Stage: r.Stage, Group: r.Group, External: r.External, Status: d.Status, LogPath: d.LogPath, File: filepath.Base(d.LogPath), Size: st.Size()})
 			stats = append(stats, st)
 		}
 	}
@@ -3639,7 +3880,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.27"
+const appVersion = "1.9.28"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

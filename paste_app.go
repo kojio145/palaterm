@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -18,11 +19,28 @@ import (
 // window closes. Closing the window without answering (the X) ends the
 // process, and the terminal takes the EOF as a cancel. No vault, no
 // password: this process only edits text.
+//
+// The terminal keeps the stdin pipe open: a pasteLineDump line on it (its
+// Lock) asks for the text as it is now, answered with a Draft line and the
+// window closing — the terminal keeps it for after the unlock (M-13).
 type Paste struct {
 	ctx   context.Context
 	title string
 	reqCh chan pasteReq
+
+	mu       sync.Mutex
+	req      pasteReq // what arrived on stdin
+	loaded   bool     // the page has it (Load)
+	answered bool     // a line has gone back on stdout
 }
+
+// pasteLineDump is what the terminal writes to the paste window's stdin
+// to ask for the text it holds now.
+const pasteLineDump = "DUMP"
+
+// pasteDumpPageWait is how long the page gets to answer paste:dump before
+// the text as handed over is sent back instead.
+const pasteDumpPageWait = 700 * time.Millisecond
 
 // pasteReq is what the terminal sends: the clipboard text, whether Enter
 // should be sent at the end (Alt+V), and the device name for the title.
@@ -42,6 +60,9 @@ type pasteRes struct {
 	OK   bool   `json:"ok"`
 	Text string `json:"text,omitempty"`
 	CR   bool   `json:"cr,omitempty"`
+	// Draft: the text as held when the terminal's Lock asked for it
+	// (pasteLineDump); not a confirmation, nothing is sent.
+	Draft bool `json:"draft,omitempty"`
 }
 
 func NewPaste(title string) *Paste {
@@ -51,14 +72,66 @@ func NewPaste(title string) *Paste {
 		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024) // pasted configs can be big
 		var r pasteReq
 		if sc.Scan() && json.Unmarshal(sc.Bytes(), &r) == nil {
+			p.mu.Lock()
+			p.req = r
+			p.mu.Unlock()
 			p.reqCh <- r
+		}
+		for sc.Scan() {
+			if sc.Text() == pasteLineDump {
+				p.dump()
+			}
 		}
 	}()
 	return p
 }
 
+// dump answers pasteLineDump: the page is asked for the text as edited
+// (paste:dump → Draft), or, before it has the text, the text as handed over
+// goes back at once.
+func (p *Paste) dump() {
+	p.mu.Lock()
+	ctx, loaded, req := p.ctx, p.loaded, p.req
+	p.mu.Unlock()
+	if ctx == nil || !loaded {
+		p.Draft(req.Text, req.CR)
+		return
+	}
+	runtime.EventsEmit(ctx, "paste:dump")
+	time.AfterFunc(pasteDumpPageWait, func() { p.Draft(req.Text, req.CR) })
+}
+
+// answer writes one line back and closes; false when one already went
+// (a Draft after a Submit, or the other way round).
+func (p *Paste) answer(res pasteRes) bool {
+	p.mu.Lock()
+	if p.answered {
+		p.mu.Unlock()
+		return false
+	}
+	p.answered = true
+	ctx := p.ctx
+	p.mu.Unlock()
+	_ = json.NewEncoder(os.Stdout).Encode(res)
+	handForegroundToParent()
+	if ctx != nil {
+		runtime.Quit(ctx)
+	} else {
+		os.Exit(0)
+	}
+	return true
+}
+
+// Draft is the page's answer to paste:dump: the text as it is now, not
+// confirmed (the terminal keeps it for after its unlock).
+func (p *Paste) Draft(text string, cr bool) {
+	p.answer(pasteRes{Draft: true, Text: text, CR: cr})
+}
+
 func (p *Paste) startup(ctx context.Context) {
+	p.mu.Lock()
 	p.ctx = ctx
+	p.mu.Unlock()
 	pasteWin.fit(ctx)
 	placeNearParent(ctx, pasteWin)
 	go keepKeyboardOnWebview(ctx)
@@ -78,6 +151,9 @@ func (p *Paste) Focus() { go focusOwnWindow() }
 func (p *Paste) Load() pasteReq {
 	select {
 	case r := <-p.reqCh:
+		p.mu.Lock()
+		p.loaded = true
+		p.mu.Unlock()
 		return r
 	case <-time.After(2 * time.Second):
 		return pasteReq{}
@@ -88,16 +164,12 @@ func (p *Paste) Load() pasteReq {
 // The foreground goes back to the terminal first (handForegroundToParent),
 // while this window still holds it.
 func (p *Paste) Submit(text string, cr bool) {
-	_ = json.NewEncoder(os.Stdout).Encode(pasteRes{OK: true, Text: text, CR: cr})
-	handForegroundToParent()
-	runtime.Quit(p.ctx)
+	p.answer(pasteRes{OK: true, Text: text, CR: cr})
 }
 
 // Cancel closes without pasting.
 func (p *Paste) Cancel() {
-	_ = json.NewEncoder(os.Stdout).Encode(pasteRes{OK: false})
-	handForegroundToParent()
-	runtime.Quit(p.ctx)
+	p.answer(pasteRes{OK: false})
 }
 
 // beforeClose: the X (or Alt+F4) closes the window with no answer — the

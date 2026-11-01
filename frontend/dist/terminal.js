@@ -59,6 +59,10 @@ async function bootPasteWindow() {
   ta.addEventListener("input", info);
   const submit = () => P().Submit(ta.value, cr.checked);
   const cancel = () => P().Cancel();
+  // The terminal locked (paste_app.go dump): hand back the text as it is
+  // now, edits included; the terminal keeps it for after the unlock and
+  // this window closes. Nothing is sent to the device.
+  rt().EventsOn("paste:dump", () => P().Draft(ta.value, cr.checked).catch(() => {}));
   document.getElementById("pw-ok").onclick = submit;
   document.getElementById("pw-cancel").onclick = cancel;
   // Keys work wherever the focus happens to be: Enter pastes the moment the
@@ -126,6 +130,11 @@ async function bootTerminalWindow() {
       <span id="tw-takeover-msg" style="flex:1">${esc(t("自動ログインに失敗しましたが、回線はつながったままです。機器が出している画面に合わせて、ここから手で操作できます。"))}</span>
       <button class="btn sm warn-outline" id="tw-takeover-ok">${esc(t("手動で続ける"))}</button>
       <button class="btn sm" id="tw-takeover-close">${esc(t("切断する"))}</button>
+    </div>
+    <div id="tw-draft" class="hidden" style="display:flex;align-items:center;gap:10px;padding:6px 12px;background:#172033;border-bottom:1px solid #3b82f6;font-family:'Segoe UI',sans-serif;font-size:12px;color:#bfdbfe">
+      <span id="tw-draft-msg" style="flex:1">${esc(t("ロック前に準備していた貼り付け内容があります"))}</span>
+      <button class="btn sm primary" id="tw-draft-show" data-tip="${esc(t("貼り付けの確認ウィンドウにもう一度表示します（そこで「貼り付け」を押すまで機器へは送りません）"))}">${esc(t("再表示"))}</button>
+      <button class="btn sm" id="tw-draft-drop">${esc(t("破棄"))}</button>
     </div>
     <div id="tw-findbar" class="hidden" style="display:flex;align-items:center;gap:6px;padding:4px 12px;background:#161c25;border-bottom:1px solid var(--border);font-family:'Segoe UI',sans-serif;font-size:12px">
       <input id="tw-find-in" placeholder="${esc(t("検索（Enter=次 / Shift+Enter=前 / Esc=閉じる）"))}" style="flex:1;max-width:420px;background:#0b0e13;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:12px">
@@ -696,6 +705,27 @@ async function bootTerminalWindow() {
     takeoverBar.classList.add("hidden"); doFit();
     Term().Discard().catch(() => {});
   };
+  // A paste confirmation the lock closed (M-13): after the unlock the text
+  // it held is offered back. 再表示 opens the confirmation window again
+  // with it — nothing goes to the device until 貼り付け there, as always;
+  // 破棄 forgets it. The bar goes with the next lock, and comes back after
+  // the unlock while the backend still holds the text.
+  const draftBar = document.getElementById("tw-draft");
+  const hideDraftBar = () => { if (!draftBar.classList.contains("hidden")) { draftBar.classList.add("hidden"); doFit(); } };
+  function showDraftBar(n) {
+    document.getElementById("tw-draft-msg").textContent = t("ロック前に準備していた貼り付け内容があります（{n} 行）", { n });
+    draftBar.classList.remove("hidden"); doFit();
+    setTimeout(() => document.getElementById("tw-draft-show").focus(), 30);
+  }
+  document.getElementById("tw-draft-show").onclick = () => {
+    hideDraftBar();
+    Term().ReopenPasteDraft().catch(e => { flashNote(terr(e), 0, "err"); term.focus(); });
+  };
+  document.getElementById("tw-draft-drop").onclick = () => {
+    hideDraftBar();
+    Term().DropPasteDraft().catch(() => {});
+    term.focus();
+  };
   // The OS window title (the taskbar's label): eight windows side by side
   // tell a disconnected one from a live one by it. The group goes first
   // (names are unique within a group only). While locked the title says
@@ -799,6 +829,7 @@ async function bootTerminalWindow() {
   const setInert = on => [...wrap.children].forEach(el => { if (el !== lockEl) el.inert = on; });
   function showLock() {
     closeScreenColorPanel(); // nothing but the lock screen stays usable
+    hideDraftBar();
     locked = true;
     setInert(true);
     lockEl.classList.remove("hidden");
@@ -824,6 +855,8 @@ async function bootTerminalWindow() {
       locked = false; setInert(false); lockEl.classList.add("hidden"); lastInput = Date.now();
       setOSTitle("", "", osTitleState); // the title from before the lock
       if (hkOpen) showHk(); else term.focus();
+      // A paste the lock closed: offer it back (see showDraftBar).
+      Term().PasteDraftLines().then(n => { if (n > 0 && !locked) showDraftBar(n); }).catch(() => {});
     }
     else { document.getElementById("tw-lock-err").textContent = t("マスターパスワードが違います"); lockIn.focus(); }
   }

@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // 並べて接続 and 同時入力 (2026-10-21, field request after Tera Term's
@@ -17,7 +20,9 @@ import (
 //
 // 並べて接続 opens the selected devices' terminal windows at once, laid out
 // as a grid over the main window's monitor (with 同時入力 on if the 設定 tab
-// says so; off by default). 同時入力 sends what is typed in
+// says so; off by default) — or, with the 設定 tab's メイン窓の場所を空ける
+// (Settings.TileKeepMain), over another monitor or beside a strip kept for
+// the main window (tilePlan). 同時入力 sends what is typed in
 // one terminal window to every other window that has it on. Each terminal
 // window is its own process; the main window already holds a pipe to each
 // (stdin down, stdout up) and relays between them:
@@ -182,6 +187,92 @@ func mainWorkArea() (rect, bool) {
 	return mi.Work, ok
 }
 
+// tilePlan is where the grid goes with メイン窓の場所を空ける on (M-12,
+// 2026-11-01: on a laptop screen three tiled windows covered the main
+// window, and the run tab had to be found with Alt+Tab). work is the
+// monitor the grid was asked for, mainWin the main window's rectangle,
+// monitors the work areas of every monitor, minMain the least width to keep
+// for the main window (physical pixels: its minimum width at the screen's
+// scaling). The main window not on work (並べ直す pressed on another
+// screen): nothing to keep, the grid fills work. Another monitor: the
+// grid goes to the largest one, and the main window stays. One screen: a
+// strip on the right, the main window's width (at least minMain, at most
+// half the screen), is left and the main window is moved into it
+// (moveMain, mainTo). Pure, for the tests.
+func tilePlan(work, mainWin rect, monitors []rect, minMain int32) (tile rect, mainTo rect, moveMain bool) {
+	cx, cy := (mainWin.L+mainWin.R)/2, (mainWin.T+mainWin.B)/2
+	if mainWin.R <= mainWin.L || cx < work.L || cx >= work.R || cy < work.T || cy >= work.B {
+		return work, rect{}, false
+	}
+	var other rect
+	var best int64
+	for _, m := range monitors {
+		if m == work || m.R <= m.L || m.B <= m.T {
+			continue
+		}
+		if area := int64(m.R-m.L) * int64(m.B-m.T); area > best {
+			other, best = m, area
+		}
+	}
+	if best > 0 {
+		return other, rect{}, false
+	}
+	strip := mainWin.R - mainWin.L
+	if strip < minMain {
+		strip = minMain
+	}
+	if half := (work.R - work.L) / 2; strip > half {
+		strip = half
+	}
+	tile = rect{work.L, work.T, work.R - strip, work.B}
+	mainTo = rect{work.R - strip, work.T, work.R, work.B}
+	return tile, mainTo, true
+}
+
+// tileKeepMain is the 設定 tab's メイン窓の場所を空ける (false while locked).
+func (a *App) tileKeepMain() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.inv != nil && a.inv.Settings.TileKeepMain
+}
+
+// tileArea is the area 並べて接続 / 並べ直す lays the grid over: work as
+// asked, or with メイン窓の場所を空ける what tilePlan picks — moving the main
+// window into its strip (in the background: placing takes a moment) when
+// that is the plan.
+func (a *App) tileArea(work rect) rect {
+	if !a.tileKeepMain() {
+		return work
+	}
+	hwnd := ownTopLevelWindow()
+	if hwnd == 0 {
+		return work
+	}
+	var mw rect
+	if ok, _, _ := pGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&mw))); ok == 0 {
+		return work
+	}
+	tile, mainTo, move := tilePlan(work, mw, allMonitorsWork(), int32(mainWin.MinW)*windowDPI(hwnd)/96)
+	if move {
+		go a.placeMain(hwnd, mainTo)
+	}
+	return tile
+}
+
+// placeMain moves the main window onto cell (its strip beside the grid),
+// restored first if it was maximised: a maximised window ignores a move.
+func (a *App) placeMain(hwnd uintptr, cell rect) {
+	defer recoverGo("placeMain")
+	a.mu.Lock()
+	ctx := a.ctx
+	a.mu.Unlock()
+	if ctx != nil && (runtime.WindowIsMaximised(ctx) || runtime.WindowIsMinimised(ctx)) {
+		runtime.WindowUnmaximise(ctx)
+		runtime.WindowUnminimise(ctx)
+	}
+	placeWindow(hwnd, func(win, ext rect, _ int32) rect { return frameFit(cell, win, ext) })
+}
+
 // TiledReport says what 並べて接続 opened, and which devices it could not.
 type TiledReport struct {
 	Opened  int      `json:"opened"`
@@ -224,6 +315,7 @@ func (a *App) SpawnTiled(ids []string, direct bool) (TiledReport, error) {
 	work, have := mainWorkArea()
 	var cells []rect
 	if have {
+		work = a.tileArea(work)
 		cells = tileRects(work, len(ok))
 	}
 	var opened []*termChild
@@ -391,8 +483,9 @@ func (a *App) LeaveAllBroadcast() error {
 
 // retile is 並べ直す: the open terminal windows (up to maxTiled), in the
 // order they were opened, laid out over work (the monitor of the window
-// that asked).
+// that asked; see tileArea).
 func (a *App) retile(work rect) {
+	work = a.tileArea(work)
 	a.termsMu.Lock()
 	defer a.termsMu.Unlock()
 	list := make([]*termChild, 0, len(a.terms))

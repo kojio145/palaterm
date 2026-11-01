@@ -39,6 +39,12 @@ type DeviceSummary struct {
 	ElapsedSec float64 `json:"elapsedSec"`
 	// Warnings: commands the device refused (see runner.DeviceResult).
 	Warnings []string `json:"warnings,omitempty"`
+	// StartedAt / EndedAt (RFC3339) are set for an interactive session: a
+	// work folder holds one entry per session (the same device may appear
+	// several times, oldest first), and EndedAt stays empty while the
+	// window is open (or if it never closed cleanly).
+	StartedAt string `json:"startedAt,omitempty"`
+	EndedAt   string `json:"endedAt,omitempty"`
 }
 
 // Summary is palaterm-run.json: what one batch did.
@@ -59,9 +65,15 @@ type Summary struct {
 	// its logs to the same folder); 0 = a single run. Devices is then each
 	// device's latest round, and FailedRounds counts the rounds in which a
 	// device failed.
-	Rounds       int             `json:"rounds,omitempty"`
-	FailedRounds int             `json:"failedRounds,omitempty"`
-	Devices      []DeviceSummary `json:"devices"`
+	Rounds       int `json:"rounds,omitempty"`
+	FailedRounds int `json:"failedRounds,omitempty"`
+	// Sessions counts the interactive sessions a work folder holds (one
+	// device entry each, see AddSession); 0 for a batch.
+	Sessions int `json:"sessions,omitempty"`
+	// Retries counts the 失敗のみ再実行 batches merged into this folder
+	// (see AddRetry).
+	Retries int             `json:"retries,omitempty"`
+	Devices []DeviceSummary `json:"devices"`
 }
 
 // Read returns dir's summary (false when it has none, or an unreadable one).
@@ -134,9 +146,16 @@ type Run struct {
 	Interactive bool   `json:"interactive,omitempty"`
 	Schedule    string `json:"schedule,omitempty"`
 	// Rounds / FailedRounds: see Summary (a 予約's folder).
-	Rounds       int  `json:"rounds,omitempty"`
-	FailedRounds int  `json:"failedRounds,omitempty"`
-	HasSummary   bool `json:"hasSummary"`
+	Rounds       int `json:"rounds,omitempty"`
+	FailedRounds int `json:"failedRounds,omitempty"`
+	// Sessions: interactive sessions in a work folder (0 for a batch);
+	// Retries: 失敗のみ再実行 batches merged into the folder.
+	Sessions int `json:"sessions,omitempty"`
+	Retries  int `json:"retries,omitempty"`
+	// DeviceCount is the number of distinct device names in Devices (a work
+	// folder lists a device once per session).
+	DeviceCount int  `json:"deviceCount"`
+	HasSummary  bool `json:"hasSummary"`
 	// External: a folder under the log root that PalaTerm did not write
 	// (logs brought in from another job or another tool, dropped into
 	// logs\ by hand). Listed so it can be compared like a run: its devices
@@ -158,6 +177,10 @@ type Device struct {
 	LogPath string `json:"logPath,omitempty"` // absolute, "" when the file is gone
 	// Warnings: commands the device refused during that run.
 	Warnings []string `json:"warnings,omitempty"`
+	// StartedAt / EndedAt: an interactive session's times (see
+	// DeviceSummary); empty for a batch device.
+	StartedAt string `json:"startedAt,omitempty"`
+	EndedAt   string `json:"endedAt,omitempty"`
 }
 
 // Write stores s as dir/palaterm-run.json. The file is written beside its
@@ -176,11 +199,18 @@ func Write(dir string, s Summary) error {
 	if err := os.WriteFile(tmp, append(data, '\r', '\n'), 0o600); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, final); err != nil {
-		_ = os.Remove(tmp)
-		return err
+	// A reader (the history tab, another terminal process ending its
+	// session) holding the old file for a moment makes the rename fail on
+	// Windows with a sharing violation: a few short retries ride it out.
+	var err2 error
+	for i := 0; i < 8; i++ {
+		if err2 = os.Rename(tmp, final); err2 == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(10*(i+1)) * time.Millisecond)
 	}
-	return nil
+	_ = os.Remove(tmp)
+	return err2
 }
 
 // List returns the runs under root (an absolute log folder), newest first.
@@ -364,7 +394,17 @@ func readExternal(dir, label string, tok logstore.StageTokens) Run {
 	if !newest.IsZero() {
 		r.StartedAt = newest.Format(time.RFC3339)
 	}
+	r.DeviceCount = distinctNames(r.Devices)
 	return r
+}
+
+// distinctNames counts the device names in devs once each.
+func distinctNames(devs []Device) int {
+	seen := map[string]bool{}
+	for _, d := range devs {
+		seen[d.Name] = true
+	}
+	return len(seen)
 }
 
 // stageWords are the words a folder or file name carries for a stage, in
@@ -637,8 +677,9 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 			r.FinishedAt = s.FinishedAt
 			r.Group, r.Stage, r.DryRun, r.Interactive, r.Schedule = s.Group, s.Stage, s.DryRun, s.Interactive, s.Schedule
 			r.Rounds, r.FailedRounds = s.Rounds, s.FailedRounds
+			r.Sessions, r.Retries = s.Sessions, s.Retries
 			for _, d := range s.Devices {
-				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error, Warnings: d.Warnings}
+				dv := Device{Name: d.Name, Host: d.Host, Site: d.Site, Error: d.Error, Warnings: d.Warnings, StartedAt: d.StartedAt, EndedAt: d.EndedAt}
 				switch {
 				case d.Success:
 					dv.Status = "ok"
@@ -662,6 +703,7 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 				}
 				r.Devices = append(r.Devices, dv)
 			}
+			r.DeviceCount = distinctNames(r.Devices)
 			return r
 		}
 	}
@@ -682,6 +724,7 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 		}
 		r.Devices = append(r.Devices, Device{Name: name, Status: "unknown", LogPath: filepath.Join(dir, e.Name())})
 	}
+	r.DeviceCount = distinctNames(r.Devices)
 	return r
 }
 

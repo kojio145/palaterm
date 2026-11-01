@@ -517,6 +517,24 @@ func Path(dir, tmpl string, f Fields, now time.Time) string {
 	return filepath.Join(ResolveRoot(dir), expandName(tmpl, f, now))
 }
 
+// UniquePath returns path when no file is there yet, otherwise the first
+// of path_2, path_3, … (before the extension) that is free. For a log that
+// is opened on its first byte (Stream) in a folder shared by several
+// sessions: a second session of the same device must not append to the
+// first one's file when the name template has no {time}.
+func UniquePath(path string) string {
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	p := path
+	for i := 2; i < 10000; i++ {
+		if _, err := os.Stat(p); err != nil {
+			return p
+		}
+		p = fmt.Sprintf("%s_%d%s", base, i, ext)
+	}
+	return p
+}
+
 // RunDir builds the per-run output folder from tmpl (DefaultDirTemplate when
 // empty) and makes it unique: a template without {time} can name the same
 // folder twice in a day, and the second run then gets "_2", "_3", … rather

@@ -324,6 +324,14 @@ func (l *landing) check(exp *expecter) error {
 		return failedJump(l.target, line)
 	}
 	if l.prompt != "" && currentLine(exp.Transcript()) == l.prompt {
+		if !distinctPrompt(l.prompt) && l.keyed {
+			// The hop's ssh went straight in with a key and said nothing of
+			// a failure (jumpFailLine above): two shells on the same bare
+			// "$ " cannot be told apart, and the owner chose to let this
+			// one through (a chain of jump hosts with plain prompts and
+			// keys) rather than stop it.
+			return nil
+		}
 		if !distinctPrompt(l.prompt) {
 			return &jumpError{fmt.Sprintf("ログイン後のプロンプト（%q）が踏み台のプロンプトと同じため、中止しました。踏み台から %s への接続に失敗して、踏み台に戻っている可能性があります。踏み台のプロンプトにホスト名が無い（「$ 」「# 」だけ）場合は、踏み台のプロンプト（PS1 など）にホスト名を入れると区別できます", l.prompt, l.target)}
 		}

@@ -475,6 +475,7 @@ function renderRun() {
         ${running && ["queued", "connecting", "login", "running", "saving"].includes(st.phase) && !cancelling
           ? `<button class="btn sm err-outline" data-stop="${esc(d.name)}" ${st.stopping ? "disabled" : ""} data-tip="${esc(t("この機器だけ止めます（ほかの機器は続けます）"))}">${esc(st.stopping ? t("中止中…") : t("止める"))}</button> ` : ""}
         ${!running ? `<button class="btn sm act-edit" data-editdev="${esc(d.id)}" data-tip="${esc(t("この機器の設定（アドレス・認証情報・踏み台など）を開きます。失敗の原因をここで直して ↻ で再実行"))}">${esc(t("編集"))}</button> ` : ""}
+        ${!running && st.phase === "error" && expectTimeoutMsg(st.message) ? `<button class="btn sm" data-editprof="${esc(d.id)}" data-tip="${esc(t("応答待ちのタイムアウトは OS タイプ（プロンプト・ページャ解除・確認への自動応答）で直します。この機器の OS タイプ「{p}」を開きます", { p: profileNameOf(d.osType) }))}">${esc(t("OS タイプ…"))}</button> ` : ""}
         ${!running ? `<button class="btn sm" data-dry1="${esc(d.id)}" data-tip="${esc(t("この 1 台だけ接続とログインを確認します（コマンドは送らず、ログも残しません）。実行対象のチェックは変わりません"))}">⚡</button> ` : ""}
         <button class="btn sm act-conn" data-term="${esc(d.id)}" data-tip="${esc(CONNECT_TIP)}">${esc(t("接続"))}</button>
       </td>
@@ -519,6 +520,7 @@ function renderRun() {
           <div><span data-tip="${esc(t("完了済みコマンド数と経過時間から算出した全体の予想残り時間。実行が進むほど精度が上がります"))}">${esc(t("予想残り"))}</span> <b id="rc-eta">${running ? computeEta() : "—"}</b></div>
         </div>
         ${!running && lastRunDir ? `<button class="btn" id="btn-rundir" data-tip="${esc(t("直前の一括実行のログが入ったフォルダを開きます: {d}", { d: lastRunDir }))}">${esc(t("📂 この実行のフォルダ"))}</button>` : ""}
+        ${!running && lastRunAfter ? `<button class="btn" id="btn-cmp-before" data-tip="${esc(t("実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します"))}">${esc(t("⇄ 作業前と比較"))}</button>` : ""}
         <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
       </div>
     </div>
@@ -539,6 +541,7 @@ function renderRun() {
       <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
       </select>
+      ${runGroupSel && !running && typeof App().CutWorkCycle === "function" ? `<button class="btn" id="btn-cut-work" data-tip="${esc(t("次の対話接続から新しい作業中フォルダに記録します"))}">${esc(t("作業中を区切る"))}</button>` : ""}
       ${anyBastion ? `<select id="run-route" class="btn${runDirect ? " warn-outline" : ""}" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
         <option value="" ${runDirect ? "" : "selected"}>${esc(t("踏み台: 機器の設定どおり"))}</option>
         <option value="direct" ${runDirect ? "selected" : ""}>${esc(t("踏み台: 使わない（直接接続）"))}</option>
@@ -689,12 +692,37 @@ function renderRun() {
   if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
   // The 📂 button belongs to the results: it goes with them.
-  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; renderRun(); };
+  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; lastRunAfter = null; renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const btnRunDir = document.getElementById("btn-rundir");
   if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
+  // 作業中を区切る: the group's interactive sessions share one 作業中 folder
+  // (joined while the last session is within 作業中をまとめる時間); this
+  // closes it, so the next session starts a new folder. The tooltip says
+  // which folder the next session would otherwise join (WorkCycleInfo).
+  const btnCut = document.getElementById("btn-cut-work");
+  if (btnCut) {
+    wireCutWorkTip(btnCut);
+    btnCut.onclick = async () => {
+      try {
+        await App().CutWorkCycle(runGroupName());
+        toast(t("作業中を区切りました。次の対話接続から新しいフォルダに記録します"), "ok");
+        wireCutWorkTip(btnCut);
+      } catch (e) { toast(t("区切れません") + ": " + terr(e), "err"); }
+    };
+  }
   // 編集 on a row: a failed login is fixed where it failed, and ↻ re-runs it.
   root.querySelectorAll("[data-editdev]").forEach(b => b.onclick = () => { const d = devById(b.dataset.editdev); if (d) editDevice(d); });
+  // OS タイプ… on a row: a pager or prompt timeout is fixed in the OS type.
+  root.querySelectorAll("[data-editprof]").forEach(b => b.onclick = () => { const d = devById(b.dataset.editprof); if (d) editDeviceProfile(d); });
+  // ⇄ 作業前と比較: the history tab, A / B chosen and compared at once.
+  const btnCmp = document.getElementById("btn-cmp-before");
+  if (btnCmp) btnCmp.onclick = async () => {
+    const want = lastRunAfter;
+    if (!want) return;
+    await switchTab("history");
+    if (typeof compareAfterRun === "function") compareAfterRun(want.dir, want.group);
+  };
   wireGridBadges(root);
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
@@ -712,6 +740,7 @@ function renderRun() {
     }
     for (const k in runState) delete runState[k];
     lastRunDir = ""; // the 📂 folder was the previous group's run
+    lastRunAfter = null; // and so was the 作業後 run of ⇄ 作業前と比較
     runFilter.exact = ""; // the one-device view named a device of the previous group
     // Each device keeps its own チェック state — switching groups no longer
     // rewrites Enabled flags, so selections survive group changes.
@@ -753,6 +782,25 @@ function renderRun() {
 function runMsg(st) {
   if (st.warnings && st.warnings.length) return "⚠ " + st.warnings.map(terr).join(" ／ ");
   return fmtRunMsg(st.message);
+}
+// A timeout of the expect engine — a prompt, a pager's --More--, a login
+// step or a 待つ文字列 that never came: the raw message as the backend
+// composes it ("expect timeout", with 機器の最後の表示 when something was
+// shown, or a hop's プロンプトが出ませんでした). What fixes it is the OS
+// type, not the device, so the row and the message dialog offer its editor.
+function expectTimeoutMsg(msg) {
+  return /expect timeout|機器の最後の表示|プロンプトが出ませんでした|待つ文字列/.test(String(msg || ""));
+}
+// The display name of an OS type key (the key itself when unknown).
+function profileNameOf(key) {
+  const p = (PROFILES || []).find(x => x.key === key);
+  return p ? p.name : (key || "");
+}
+// Open the editor of the device's OS type (保存して接続確認へ is in there).
+function editDeviceProfile(dev) {
+  const prof = (INV.customProfiles || []).find(p => p.key === dev.osType);
+  if (!prof) { toast(t("OS タイプ「{k}」のプロファイルが見つかりません（OSタイプタブで確認してください）", { k: profileNameOf(dev.osType) }), "err"); return; }
+  editProfile(prof);
 }
 // A host-key mismatch of a jump host rather than of the device itself: the
 // hop's number (1-based) as the message names it, "mine" for 自分の踏み台,
@@ -816,6 +864,7 @@ function showRunMessage(name) {
     <div style="font-size:14px;line-height:1.8;white-space:pre-wrap;word-break:break-word;max-height:60vh;overflow:auto">${esc(runMsg(st))}</div>
     ${grp && st.phase === "error" ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("この機器はグループ「{g}」の既定の認証情報でログインします。", { g: grp }))} <span class="link" id="rm-gcreds">${esc(t("グループ既定を編集…"))}</span></div>` : ""}
     ${hop != null ? `<div style="margin-top:8px"><button class="btn sm warn-outline" id="rm-hopkey">${esc(t("踏み台のホストキーを忘れる…"))}</button> <span class="muted" style="font-size:12px">${esc(t("踏み台を交換したときだけ。設定タブ（自分の踏み台）と機器の編集（踏み台カード）にも同じボタンがあります"))}</span></div>` : ""}
+    ${!running && dev && st.phase === "error" && expectTimeoutMsg(st.message) ? `<div style="margin-top:8px"><button class="btn sm" id="rm-prof">${esc(t("この機器の OS タイプ「{p}」を編集…", { p: profileNameOf(dev.osType) }))}</button> <span class="muted" style="font-size:12px">${esc(t("ページャの解除・プロンプト・確認への自動応答は OS タイプで直します。保存後は「保存して接続確認へ」で試せます"))}</span></div>` : ""}
     <div class="modal-actions"><button class="btn" id="rm-close" autofocus>${esc(t("閉じる"))}</button><button class="btn primary" id="rm-copy">${esc(t("コピー"))}</button></div>
   </div>`);
   openModal(node, "mid");
@@ -823,6 +872,8 @@ function showRunMessage(name) {
   node.querySelector("#rm-copy").onclick = () => copyText(runMsg(st), t("コピーしました"));
   const gc = node.querySelector("#rm-gcreds");
   if (gc) gc.onclick = () => { closeModal(); groupCredsDialog(grp); };
+  const pf = node.querySelector("#rm-prof");
+  if (pf) pf.onclick = () => { closeModal(); editDeviceProfile(dev); };
   const hk = node.querySelector("#rm-hopkey");
   if (hk) hk.onclick = async () => {
     closeModal();
@@ -1024,6 +1075,10 @@ let lastRunDry = false;
 // 📂 button: handing over a run's logs used to mean opening the log root
 // and finding the right date folder.
 let lastRunDir = "";
+// The last finished 作業後 batch ({dir, group}), for ⇄ 作業前と比較 on the
+// heading: the comparison tab is opened with it as B and the group's
+// newest 作業前 before it as A. Cleared with the results, as lastRunDir.
+let lastRunAfter = null;
 // The request of the last full run. A re-run (失敗・中断のみ / 鍵を許可して
 // 再実行) repeats its choices — group, stage, command set, typed commands —
 // not whatever the toolbar shows by then: switching the set to a change set
@@ -1041,7 +1096,8 @@ function rerunDetail() {
   if (lastRunDry) return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じく接続確認のみです（コマンドは送りません）"))}</span>` + directNote(r.direct);
   const cmds = r.adHoc && r.adHoc.length ? t("今回だけ入力: {s}", { s: r.adHoc.map(c => c.text).join(" / ") })
     : r.commandSet ? t("{s}（今回のみ）", { s: r.commandSet }) : t("機器ごとの設定どおり");
-  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>` + directNote(r.direct);
+  const dirNote = lastRunDir ? `<br><span class="muted" style="font-size:12px">${esc(t("ログは前回と同じフォルダに保存します: {d}", { d: lastRunDir }))}</span>` : "";
+  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>` + dirNote + directNote(r.direct);
 }
 
 // A re-run passes the same change warning a first run does.
@@ -1064,6 +1120,13 @@ async function doRun(names, dryRun, partial, keepRows) {
   if (!partial && !keepRows) for (const k in runState) delete runState[k];
   const targets = names;
   const req = partial && lastRunReq ? { ...lastRunReq, names: targets, dryRun: !!dryRun } : runRequest(targets, dryRun);
+  // A re-run of the batch's unfinished devices (↻, a row's 再実行) writes
+  // its logs into the batch's own folder (RunRequest.retryDir), so one
+  // night's logs are not split over two folders. lastRunDir is that
+  // batch's folder: it is cleared with the results and on a group switch.
+  // The backend falls back to a new folder (run:done retryFallback) when
+  // it cannot append there.
+  if (partial && lastRunDir && !dryRun) req.retryDir = lastRunDir; else delete req.retryDir;
   if (!partial) lastRunReq = req;
   lastRunDry = !!dryRun;
   targets.forEach(n => runState[n] = { phase: "queued" });
@@ -1197,6 +1260,23 @@ function devEta(name, st) {
   if (st.phase !== "running" || !st.total || !st.startedAt) return "";
   const sec = devEtaSec(name, st);
   return t("残り {t}", { t: sec == null ? t("計測中…") : fmtDur(sec) });
+}
+
+// The tooltip of 作業中を区切る: the 作業中 folder the group's next
+// interactive session would join (WorkCycleInfo: {dir, sessions, devices,
+// since}; an empty dir = a new folder). Read after the render, so the
+// toolbar never waits for the folder scan; an older backend keeps the
+// generic tip.
+function wireCutWorkTip(btn) {
+  if (typeof App().WorkCycleInfo !== "function") return;
+  const group = runGroupName(), sel = runGroupSel;
+  App().WorkCycleInfo(group).then(info => {
+    if (!btn.isConnected || sel !== runGroupSel) return; // the group changed meanwhile
+    const head = t("次の対話接続から新しい作業中フォルダに記録します。");
+    btn.dataset.tip = info && info.dir
+      ? head + t("今は「{dir}」（{n} セッション・{d} 台）に続けて記録します", { dir: info.dir, n: info.sessions || 0, d: info.devices || 0 })
+      : head + t("今は新しいフォルダから始まります");
+  }).catch(() => { /* the generic tip stays */ });
 }
 
 // Re-run the devices the last batch left unfinished: failures, plus the
@@ -1350,6 +1430,9 @@ function applyRunDone(payload) {
   const results = Array.isArray(payload) ? payload : (payload && payload.results) || [];
   const runDir = (payload && payload.runDir) || "";
   if (runDir) lastRunDir = runDir; // 📂 この実行のフォルダ
+  // A re-run that could not append to the batch's folder (retryDir) went
+  // to a new one: said, since 📂 now opens that folder, not the batch's.
+  if (payload && payload.retryFallback && runDir) setTimeout(() => toast(t("前回のフォルダに追記できなかったため、再実行のログは新しいフォルダに保存しました: {d}", { d: runDir }), "warn", { ms: 8000 }), 800);
   const wasDry = !!(payload && payload.dryRun);
   (results || []).forEach(r => {
     const prev = runState[r.device] || {};
@@ -1407,7 +1490,11 @@ function applyRunDone(payload) {
     const v = Object.values(runState);
     toast(t("接続確認が完了しました（OK {a}・失敗 {b}）", { a: v.filter(s => s.phase === "done").length, b: v.filter(s => s.phase === "error").length }), "ok");
   } else if (ranStage === "after" && runDir) {
-    toast(t("実行が完了しました。実行履歴・比較タブで作業前のログと比較できます") + stageNote, "ok", { ms: 6000 });
+    // The heading's ⇄ 作業前と比較 goes with this batch (drawn by the
+    // renderRun below).
+    lastRunAfter = { dir: runDir, group: (lastRunReq && lastRunReq.group) || (runGroupSel === RUN_UNGROUPED ? "" : runGroupSel) || "" };
+    if (active && active.id === "tab-run") renderRun();
+    toast(t("実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます") + stageNote, "ok", { ms: 6000 });
   } else toast(t("実行が完了しました") + stageNote, "ok", stageNote ? { ms: 6000 } : undefined);
   // Refused commands are easy to miss in a long table: say so once more.
   const warned = Object.values(runState).filter(s => s.warnings && s.warnings.length).length;
@@ -1473,6 +1560,11 @@ function renderSettings() {
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("予約のログフォルダ名と、作業タイミングを指定していない予約のログファイル名に付きます"))}">${esc(t("予約（reserve）"))}</span><input id="set-st-sched" style="flex:1" placeholder="reserve" value="${esc(s.stageTokenSchedule || "reserve")}"></div>
           <div class="row-inline" style="gap:6px"><span class="muted" style="font-size:12px;white-space:nowrap" data-tip="${esc(t("作業タイミングを「指定なし」で実行したときのログファイル名に付きます（フォルダ名には付きません）"))}">${esc(t("指定なし（Current）"))}</span><input id="set-st-none" style="flex:1" placeholder="Current" value="${esc(s.stageTokenNone || "Current")}"></div>
         </div></div>
+      <div class="field"><label><span data-tip="${esc(t("同じグループの対話接続（端末窓）のログを、前のセッションからこの時間以内なら同じ「作業中」フォルダに続けて記録します（1〜168 時間。空欄なら 12 時間）。作業前の一括実行で新しいフォルダに切り替わり、作業後の一括実行で閉じます。実行タブの「作業中を区切る」でいつでも区切れます"))}">${esc(t("作業中をまとめる時間（時間） ⓘ"))}</span></label>
+        <div class="row-inline" style="gap:14px;flex-wrap:wrap;align-items:center">
+          <input id="set-join-h" type="number" min="1" max="168" placeholder="12" style="width:110px" value="${(s.workJoinHours || 0) > 0 ? s.workJoinHours : ""}" ${(s.workJoinHours || 0) < 0 ? "disabled" : ""}>
+          <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-join-off" type="checkbox" ${(s.workJoinHours || 0) < 0 ? "checked" : ""}> ${esc(t("まとめない（窓ごとに別フォルダ）"))}</label>
+        </div></div>
       <div class="grid-2">
         <div class="field"><label><span data-tip="${esc(t("マウス・キーボード操作がこの時間なければ自動でロックします（一括実行中も。実行は続き、解除すると表に戻ります）。0 で無効"))}">${esc(t("アイドル時の自動ロック（分・0=無効） ⓘ"))}</span></label>
           <input id="set-lock" type="number" min="0" value="${s.autoLockOff ? 0 : (s.autoLockMin > 0 ? s.autoLockMin : 30)}"></div>
@@ -1483,7 +1575,8 @@ function renderSettings() {
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-rc-off" type="checkbox" ${s.rightClickPasteOff ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを無効にする"))}</label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
       <div class="field"><label><span data-tip="${esc(t("機器一覧・実行タブの「並べて接続」で開いた窓を、最初から同時入力オンにするかどうかです。オフ（既定）なら、同時入力は各窓の「同時入力」ボタンで必要な窓だけオンにします。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続の同時入力 ⓘ"))}</span></label>
-        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-tile-bcast" type="checkbox" ${s.tiledBroadcast ? "checked" : ""}> ${esc(t("並べて接続した窓を同時入力オンで開く（既定: オフ）"))}</label></div>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-tile-bcast" type="checkbox" ${s.tiledBroadcast ? "checked" : ""}> ${esc(t("並べて接続した窓を同時入力オンで開く（既定: オフ）"))}</label>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px;align-items:flex-start"><input id="set-tile-keep" type="checkbox" ${s.tileKeepMain ? "checked" : ""} style="margin-top:3px"> <span data-tip="${esc(t("並べた端末窓がこの画面（実行タブ）を覆わないようにします。1 画面のときは右端にメイン窓の幅ぶんを空けて並べ、2 画面ならメイン窓と別の画面に並べます。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続でメイン窓の場所を空ける（1 画面のとき右端にメイン窓の幅ぶんを空け、2 画面ならメイン窓と別の画面に並べる） ⓘ"))}</span></label></div>
       <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
       <table class="ph-table"><tbody>
         <tr><td class="mono">{host}</td><td>${esc(t("機器名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
@@ -1529,10 +1622,13 @@ function renderSettings() {
 
   // Track unsaved edits so tab switches can warn (see canLeaveSettings).
   settingsDirty = myLoginsDirty = false;
-  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-tile-bcast", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none"].forEach(id => {
+  ["set-par", "set-ct", "set-cmt", "set-dir", "set-tmpl", "set-dtmpl", "set-lock", "set-mask", "set-rc-off", "set-rc-confirm", "set-tile-bcast", "set-tile-keep", "set-st-before", "set-st-work", "set-st-after", "set-st-sched", "set-st-none", "set-join-h", "set-join-off"].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener("input", () => { settingsDirty = true; });
   });
+  // まとめない greys the hours out (they are not used while it is on).
+  const joinOff = document.getElementById("set-join-off");
+  joinOff.onchange = () => { document.getElementById("set-join-h").disabled = joinOff.checked; };
   document.getElementById("set-dir-pick").onclick = async () => {
     try {
       const p = await App().PickLogDir();
@@ -1573,6 +1669,13 @@ function renderSettings() {
     out.rightClickPasteOff = !!document.getElementById("set-rc-off").checked;
     out.rightClickPasteConfirm = !!document.getElementById("set-rc-confirm").checked;
     out.tiledBroadcast = !!document.getElementById("set-tile-bcast").checked;
+    out.tileKeepMain = !!document.getElementById("set-tile-keep").checked; // model.Settings.TileKeepMain (broadcast.go reads it)
+    // model.Settings.WorkJoinHours: 0 = the default 12 hours, -1 = never
+    // join (a folder per window), 1..168 = hours (the backend validates too).
+    const joinRaw = document.getElementById("set-join-h").value.trim();
+    const joinH = joinRaw === "" ? 0 : parseInt(joinRaw, 10);
+    if (!document.getElementById("set-join-off").checked && (isNaN(joinH) || joinH < 0 || joinH > 168)) { toast(t("作業中をまとめる時間は 1〜168 の時間で入力してください（空欄なら 12 時間）"), "err"); return; }
+    out.workJoinHours = document.getElementById("set-join-off").checked ? -1 : joinH;
     document.getElementById("set-dir").value = out.logDir;
     try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }

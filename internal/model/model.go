@@ -11,6 +11,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kojio145/palaterm/internal/logstore"
 	"github.com/kojio145/palaterm/internal/profile"
@@ -1006,6 +1007,53 @@ type Settings struct {
 	// Off by default (user request 2026-10-21): each window is turned on by
 	// hand, so keys never reach several devices unasked.
 	TiledBroadcast bool `json:"tiledBroadcast,omitempty"`
+
+	// TileKeepMain keeps the main window in view when 並べて接続 / 並べ直す
+	// lays the terminal windows out: with a second monitor the grid goes
+	// there, on a single screen a strip on the right (the main window's
+	// width, at least 480 px) is left for the main window, which is moved
+	// into it (M-12, 2026-11-01). Off by default: the grid fills the main
+	// window's monitor as before.
+	TileKeepMain bool `json:"tileKeepMain,omitempty"`
+
+	// WorkJoinHours: how long an interactive work folder stays open to the
+	// next terminal window of the same group (see WorkJoin). 0 = the
+	// default (DefaultWorkJoinHours); WorkJoinNever (-1) = every window
+	// makes its own folder, as before v1.9.29; otherwise 1..MaxWorkJoinHours.
+	WorkJoinHours int `json:"workJoinHours,omitempty"`
+}
+
+// DefaultWorkJoinHours is the join window when WorkJoinHours is 0; a work
+// cycle (作業前 batch, hand-operated windows, 作業後 batch) rarely pauses
+// longer than that between two windows.
+const DefaultWorkJoinHours = 12
+
+// MaxWorkJoinHours is the longest join window (a week).
+const MaxWorkJoinHours = 168
+
+// WorkJoinNever is the WorkJoinHours value that turns joining off.
+const WorkJoinNever = -1
+
+// WorkJoin is the time an interactive work folder stays joinable after its
+// latest session started: 0 means never join (each window its own folder).
+func (s Settings) WorkJoin() time.Duration {
+	switch {
+	case s.WorkJoinHours < 0:
+		return 0
+	case s.WorkJoinHours == 0:
+		return DefaultWorkJoinHours * time.Hour
+	case s.WorkJoinHours > MaxWorkJoinHours:
+		return MaxWorkJoinHours * time.Hour
+	}
+	return time.Duration(s.WorkJoinHours) * time.Hour
+}
+
+// ValidateWorkJoinHours refuses a value outside -1..MaxWorkJoinHours.
+func (s Settings) ValidateWorkJoinHours() error {
+	if s.WorkJoinHours < WorkJoinNever || s.WorkJoinHours > MaxWorkJoinHours {
+		return fmt.Errorf("作業フォルダをまとめる時間は 1〜%d 時間（0 = 既定の %d 時間、-1 = まとめない）で指定してください: %d", MaxWorkJoinHours, DefaultWorkJoinHours, s.WorkJoinHours)
+	}
+	return nil
 }
 
 // RightClickPaste returns what a right-click does in the interactive
