@@ -80,6 +80,9 @@ var configStamps = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\s*## last (commit|changed):.*$`),
 	regexp.MustCompile(`(?i)^\s*#\s*last modified by\b.*$`),
 	regexp.MustCompile(`(?i)^\s*#\s*reporting date:.*$`),
+	// NEC IX ("! Current time Nov 01-Sun-2026 14:40:28 JST") and the
+	// "generated at …" headers some listings carry.
+	regexp.MustCompile(`(?i)^\s*[!#;]\s*(current time|generated (at|on))(\s|$).*$`),
 }
 
 // stripStamps blanks a line that is one of the configStamps.

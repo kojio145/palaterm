@@ -16,10 +16,10 @@ The full text of each license is reproduced below.
 | github.com/pkg/errors | v0.9.1 | BSD-2-Clause |
 | github.com/rivo/uniseg | v0.4.4 | MIT |
 | go.bug.st/serial | v1.6.2 | BSD-3-Clause |
-| golang.org/x/crypto | v0.56.0 | BSD-3-Clause |
-| golang.org/x/net | v0.58.0 | BSD-3-Clause |
-| golang.org/x/sys | v0.47.0 | BSD-3-Clause |
-| golang.org/x/text | v0.41.0 | BSD-3-Clause |
+| golang.org/x/crypto | v0.58.0 | BSD-3-Clause |
+| golang.org/x/net | v0.62.0 | BSD-3-Clause |
+| golang.org/x/sys | v0.49.0 | BSD-3-Clause |
+| golang.org/x/text | v0.43.0 | BSD-3-Clause |
 | xterm.js (xterm) | 5.3.0 | MIT |
 | xterm-addon-fit | 0.8.0 | MIT |
 

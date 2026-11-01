@@ -196,6 +196,11 @@ func cmdTree(lines []DiffLine) []*cnode {
 			continue
 		}
 		key := strings.TrimSpace(rowText(l))
+		// A comment with text ("! Current time …", "# saved by ops") is
+		// never a command: "no ! …" would be typed into the device.
+		if isCommentText(key) {
+			continue
+		}
 		if isCloser(key) {
 			closed := false
 			for k := len(stack) - 1; k >= 0; k-- {
@@ -352,6 +357,20 @@ const (
 	phOther  = 6
 	phFinal  = 8
 )
+
+// isCommentText reports a listing comment with text after the marker
+// ("! …", "# …", "; …"); a bare marker is a section break, not a comment,
+// and a banner's text lines are handled by their banner node before this.
+func isCommentText(key string) bool {
+	if len(key) < 2 {
+		return false
+	}
+	switch key[0] {
+	case '!', '#', ';':
+		return strings.TrimSpace(key[1:]) != ""
+	}
+	return false
+}
 
 // noToggle puts "no " in front of a command or takes it off.
 func noToggle(cmd string) string {

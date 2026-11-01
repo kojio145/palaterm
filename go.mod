@@ -2,16 +2,16 @@ module github.com/kojio145/palaterm
 
 go 1.26.0
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/wailsapp/go-webview2 v1.0.16
 	github.com/wailsapp/wails/v2 v2.9.2
 	go.bug.st/serial v1.6.2
-	golang.org/x/crypto v0.56.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
-	golang.org/x/text v0.41.0
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
+	golang.org/x/text v0.43.0
 )
 
 require (

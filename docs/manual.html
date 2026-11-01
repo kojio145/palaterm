@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.26</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.27</div>
   </header>
 
   <nav class="toc">
@@ -931,6 +931,14 @@
     </ul>
   </section>
 
+  <section id="changes-1927">
+    <h2 class="step"><span class="num">9+</span>v1.9.27 での挙動の変更</h2>
+    <ul>
+      <li><strong>比較の「戻す」「揃える」</strong>: 設定表示の先頭にある時刻のコメント行（NEC IX の <code>! Current time …</code> など）を時刻スタンプとして無視します。v1.9.26 ではこの行が「変更」と数えられ、生成コマンドに <code>no ! Current time …</code> が出ることがありました。本文付きのコメント行（<code>!</code> <code>#</code> <code>;</code> で始まる行）は、どの機種でもコマンドにしません。</li>
+      <li><strong>依存ライブラリ</strong>: ビルドのたびに行う既知脆弱性の検査が初回に 2 件を検出したため更新しました（HTML 形式の機器一覧を読む部品 <code>x/net</code> v0.62.0、Go 1.26.10）。動作は変わりません。</li>
+    </ul>
+  </section>
+
   <section id="changes-1926">
     <h2 class="step"><span class="num">9+</span>v1.9.26 での挙動の変更</h2>
     <p>v2.0 で (beta) を外す前に、全体を 10 の観点（攻撃者の立場での見直し・過去の指摘の横展開を含む）で読み直し、約 150 件を直しました。使い方が変わる点を領域ごとに挙げます。</p>
@@ -1115,7 +1123,7 @@
   </section>
 
   <footer>
-    PalaTerm v1.9.26 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
+    PalaTerm v1.9.27 使い方マニュアル ／ 作者: KJO ／ MIT License<br>
     実行ファイル: <code>build\bin\PalaTerm.exe</code>
   </footer>
 </div>
