@@ -336,16 +336,32 @@ const (
 // read different listings.
 func configSection(log string) ([]string, int) {
 	lines := splitLines(log)
+	idx, kind := configSectionIdx(lines)
+	out := make([]string, len(idx))
+	for i, k := range idx {
+		if k < 0 {
+			out[i] = partBreak
+		} else {
+			out[i] = lines[k]
+		}
+	}
+	return out, kind
+}
+
+// configSectionIdx is configSection on split lines, giving the indices of
+// the chosen lines (-1 for a break between parts) so a caller can keep the
+// original line numbers.
+func configSectionIdx(lines []string) ([]int, int) {
 	type listing struct {
 		cmd   string
 		ctx   bool // typed inside a context (FortiGate "FG (interface) # show"): a section only
-		lines []string
+		lines []int
 	}
 	var ls []*listing
 	var cur *listing
 	sawPrompt := false
 	junosCtx := false // inside "[edit interfaces …]": a bare show lists that subtree
-	for _, l := range lines {
+	for li, l := range lines {
 		if m := promptLine.FindStringSubmatch(strings.TrimRight(l, " \t")); m != nil {
 			sawPrompt = true
 			cur = nil
@@ -365,14 +381,14 @@ func configSection(log string) ([]string, int) {
 			junosCtx = m[1] != ""
 		}
 		if cur != nil {
-			cur.lines = append(cur.lines, l)
+			cur.lines = append(cur.lines, li)
 		}
 	}
 	switch {
 	case !sawPrompt:
-		return lines, wholeFile
+		return allIdx(len(lines)), wholeFile
 	case len(ls) == 0:
-		return lines, noListing
+		return allIdx(len(lines)), noListing
 	default:
 		pick := func(ok func(*listing) bool) *listing {
 			for i := len(ls) - 1; i >= 0; i-- {
@@ -405,12 +421,12 @@ func configSection(log string) ([]string, int) {
 		for i, x := range ls {
 			last[strings.ToLower(ws.ReplaceAllString(x.cmd, " "))] = i
 		}
-		var all []string
+		var all []int
 		for i, x := range ls {
 			if last[strings.ToLower(ws.ReplaceAllString(x.cmd, " "))] != i || (running && savedConfig.MatchString(x.cmd)) {
 				continue
 			}
-			all = append(append(all, partBreak), x.lines...)
+			all = append(append(all, -1), x.lines...)
 		}
 		return all, oneListing
 	}

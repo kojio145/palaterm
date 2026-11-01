@@ -2314,10 +2314,10 @@ func (a *App) ListRunHistory() ([]history.Run, error) {
 	return runs, err
 }
 
-// DiffLogFiles compares two saved logs line by line (A = before, B = after).
-// Both must sit under the log folder. With ignoreNoise, lines that differ
-// only in clock readings, uptimes and traffic counters count as unchanged.
-func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.DiffResult, error) {
+// DiffLogFiles compares two saved logs (A = before, B = after) and returns
+// the counts for the whole logs and for their configuration listings (see
+// history.Summarize). Both must sit under the log folder.
+func (a *App) DiffLogFiles(pathA, pathB string, opts history.DiffOpts) (*history.DiffSummary, error) {
 	defer recoverBound(a.ctx, "DiffLogFiles")
 	if a.locked() {
 		return nil, errVaultLocked
@@ -2335,10 +2335,7 @@ func (a *App) DiffLogFiles(pathA, pathB string, ignoreNoise bool) (*history.Diff
 	if err != nil {
 		return nil, err
 	}
-	r := history.Diff(string(ba), string(bb), ignoreNoise)
-	if r.Lines == nil {
-		r.Lines = []history.DiffLine{}
-	}
+	r := history.Summarize(string(ba), string(bb), opts)
 	return &r, nil
 }
 
@@ -2883,7 +2880,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.23"
+const appVersion = "1.9.24"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

@@ -7,11 +7,18 @@ import (
 
 // DiffLine is one row of a side-by-side comparison.
 type DiffLine struct {
-	Kind  string `json:"kind"` // "=" same, "-" only in A, "+" only in B
+	Kind  string `json:"kind"` // "=" same, "-" only in A, "+" only in B, "~" changed (DiffWith)
 	A     string `json:"a,omitempty"`
 	B     string `json:"b,omitempty"`
 	LineA int    `json:"lineA,omitempty"` // 1-based line number in A (0 when absent)
 	LineB int    `json:"lineB,omitempty"`
+	// The rest is set by DiffWith (difftree.go) only.
+	SegA  []Seg `json:"segA,omitempty"` // a changed line's stretches (inlineDiff)
+	SegB  []Seg `json:"segB,omitempty"`
+	Depth int   `json:"depth,omitempty"` // indentation level of the block
+	Head  bool  `json:"head,omitempty"`  // the heading line of a block
+	Moved bool  `json:"moved,omitempty"` // on both sides, at another place
+	Noise bool  `json:"noise,omitempty"` // left out of the comparison (a secret), shown dimmed
 }
 
 // DiffResult is what the UI renders: the aligned lines plus counts.
@@ -26,6 +33,16 @@ type DiffResult struct {
 	// line for line, so the counts are an upper bound and a moved block
 	// shows as changed lines.
 	Approx bool `json:"approx,omitempty"`
+	// Set by DiffWith only.
+	Changed     int    `json:"changed,omitempty"`
+	Moved       int    `json:"moved,omitempty"`
+	NoiseLines  int    `json:"noiseLines,omitempty"`  // blank, prompt and pager lines left out (A + B)
+	SecretLines int    `json:"secretLines,omitempty"` // certificate / encrypted / UUID lines left out (A + B)
+	Mode        string `json:"mode,omitempty"`        // "whole" / "config"
+	ConfigA     bool   `json:"configA,omitempty"`     // A holds a configuration listing
+	ConfigB     bool   `json:"configB,omitempty"`
+	Sections    []Jump `json:"sections,omitempty"`
+	Commands    []Jump `json:"commands,omitempty"`
 }
 
 // noise matches the parts of a line that differ between any two captures of

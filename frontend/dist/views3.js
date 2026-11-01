@@ -322,8 +322,15 @@ async function compareRuns() {
   await inPool(rows, 4, async r => {
     const e = byName[r.name];
     try {
-      const d = await App().DiffLogFiles(e.a, e.b, true);
-      r.added = d.added; r.removed = d.removed;
+      // Whole logs and, when both hold a configuration listing, the
+      // listings alone: a device whose counters moved is not one whose
+      // configuration changed.
+      const d = await App().DiffLogFiles(e.a, e.b, { ignoreNoise: true, ignoreSecrets: true });
+      const n = c => c.added + c.removed + (c.changed || 0) + (c.moved || 0);
+      r.whole = d.whole; r.hasConfig = !!(d.configA && d.configB); r.config = r.hasConfig ? d.config : null;
+      r.added = d.whole.added; r.removed = d.whole.removed; r.changed = d.whole.changed || 0; r.moved = d.whole.moved || 0;
+      r.cfgDiff = r.hasConfig ? n(d.config) : 0;
+      r.anyDiff = n(d.whole);
     } catch (err) { r.err = terr(err); }
     if (work && !r.err) {
       const paths = works.map(w => devFor(w, r.name, e.pairedWith)).filter(d => d && d.logPath).map(d => d.logPath);
@@ -361,10 +368,29 @@ function cmpKey() { return [histState.a, histState.b, histState.c].join("|"); }
 function cmpRank(r) {
   const s = r.strict;
   if (r.err || (s && s.err)) return 0;
+  if (r.hasConfig && r.cfgDiff) return 1;
   if (s && s.missing) return 1;
   if (s && s.unexpectedCount) return 2;
   if (s && s.unverified) return 3;
-  return 4;
+  if (r.anyDiff) return 4;
+  return 5;
+}
+
+// The 差分 cell: whether the configuration changed, only the state, nothing,
+// or (no listing on one side) the whole logs.
+function cmpDiffText(r) {
+  if (r.err) return t("判定不能");
+  if (r.hasConfig) {
+    if (r.cfgDiff) return t("設定の差分あり");
+    return r.anyDiff ? t("状態のみ変化") : t("差分なし");
+  }
+  return r.anyDiff ? t("差分あり（設定が見当たらない）") : t("差分なし（設定が見当たらない）");
+}
+function cmpDiffColor(r) { return r.err ? "err" : r.hasConfig ? (r.cfgDiff ? "warn" : r.anyDiff ? "muted" : "ok") : (r.anyDiff ? "warn" : "ok"); }
+// "+a / -b / ~c / ↕d" for one count set.
+function cmpCountsHTML(c) {
+  if (!c) return "";
+  return `<span style="color:var(--ok)">+${c.added}</span> / <span style="color:var(--err)">-${c.removed}</span>` + (c.changed ? ` / <span style="color:#fcd34d">~${c.changed}</span>` : "") + (c.moved ? ` / <span style="color:#c4b5fd">${esc(t("順序"))} ${c.moved}</span>` : "");
 }
 
 // The verdict of one device as plain text (the table cell's headline, the
@@ -472,24 +498,25 @@ function drawCompare() {
     ? `<div class="warn-box" style="margin-top:10px">${esc(t("⚠ 別のグループの実行同士を比べています（A: {a} ／ B: {b}）。機器名が同じでも別の機器の可能性があります", { a: ga || t("（グループ未設定）"), b: gb || t("（グループ未設定）") }))}</div>`
     : "";
   const tools = `<div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:12px;font-size:13px">
-      ${needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(work ? t("未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }) : t("判定不能の機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}
+      ${needs && all.length > 1 ? `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal"><input type="checkbox" id="cmp-only-ng" style="width:auto" ${onlyNg ? "checked" : ""}> ${esc(work ? t("設定の差分・未反映・作業外の変更・要確認のある機器だけ表示（{n} 台）", { n: needs }) : t("設定の差分・判定不能の機器だけ表示（{n} 台）", { n: needs }))}</label>` : ""}
       <span style="flex:1"></span>
       <button class="btn sm" id="cmp-copy" data-tip="${esc(t("結論と機器ごとの結果を、Excel や作業報告に貼れる形（タブ区切り）でコピーします"))}">${esc(t("結果をコピー"))}</button>
       <button class="btn sm" id="cmp-csv" data-tip="${esc(t("機器ごとの結果を export\\compare に CSV で書き出します"))}">${esc(t("CSV に書き出す"))}</button>
     </div>`;
   out.innerHTML = groupWarn + banner + tools + `
     ${failRows.length ? `<div style="margin-top:10px;font-size:13px;color:var(--err)">${esc(t("⚠ {n} 台は A または B で失敗しているため比較していません（下の表の先頭に赤で示します）", { n: failRows.length }))}</div>` : ""}
-    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:120px">${esc(t("差分"))}</th><th style="width:150px">${esc(t("追加 / 削除（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
+    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:150px">${esc(t("差分"))}</th><th style="width:150px" data-tip="${esc(t("show running-config 等の出力だけを比べた行数（追加 / 削除 / 変更 / 順序）"))}">${esc(t("設定（行）"))}</th><th style="width:150px" data-tip="${esc(t("設定以外（show の出力など）の行数。設定が見当たらないときはログ全体"))}">${esc(t("その他（行）"))}</th>${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
       ${failRows.map(r => `<tr style="background:rgba(239,68,68,.08)">
         <td><b>${esc(r.name)}</b></td>
         <td><span style="color:var(--err)">${esc(t("{w} で失敗", { w: r.fail }))}</span></td>
-        <td colspan="${work ? 2 : 1}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
+        <td colspan="${work ? 3 : 2}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
         <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
       ${rows.map(r => `<tr>
         <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}</td>
-        <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : (r.added + r.removed === 0 ? `<span style="color:var(--ok)">${esc(t("差分なし"))}</span>` : `<span style="color:var(--warn)">${esc(t("差分あり"))}</span>`)}</td>
-        <td class="mono">${r.err ? "" : `<span style="color:var(--ok)">+${r.added}</span> / <span style="color:var(--err)">-${r.removed}</span>`}</td>
+        <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
+        <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
+        <td class="mono">${r.err ? "" : cmpCountsHTML(r.hasConfig ? cmpRest(r) : r.whole)}</td>
         ${work ? `<td>${verdict(r)}</td>` : ""}
         <td style="text-align:right">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}</td>
       </tr>`).join("")}
@@ -520,7 +547,7 @@ function drawCompare() {
 function cmpTable(withTitle) {
   const C = histState.cmp;
   const { a, b, work } = C;
-  const head = [t("機器名"), t("組にした名前"), t("差分"), t("追加（行）"), t("削除（行）")];
+  const head = [t("機器名"), t("組にした名前"), t("差分"), t("追加（行）"), t("削除（行）"), t("設定 追加"), t("設定 削除"), t("設定 変更"), t("設定 順序"), t("その他 追加"), t("その他 削除")];
   if (work) head.push(t("結論"), t("未反映"), t("要確認"), t("作業外の変更"), t("未反映・要確認の行"), t("作業外の変更の行"));
   const out = [];
   if (withTitle) {
@@ -530,9 +557,11 @@ function cmpTable(withTitle) {
   }
   out.push(head);
   // A failed device: why, in the 差分 column (there with or without a work).
-  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", ""]));
+  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", "", "", "", "", "", "", ""]));
   for (const { r } of cmpSorted(C)) {
-    const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : (r.added + r.removed ? t("差分あり") : t("差分なし")), r.err ? "" : r.added, r.err ? "" : r.removed];
+    const cfg = r.hasConfig ? r.config : null, rest = r.err ? null : (r.hasConfig ? cmpRest(r) : r.whole);
+    const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : cmpDiffText(r), r.err ? "" : r.added, r.err ? "" : r.removed,
+      cfg ? cfg.added : "", cfg ? cfg.removed : "", cfg ? (cfg.changed || 0) : "", cfg ? (cfg.moved || 0) : "", rest ? rest.added : "", rest ? rest.removed : ""];
     if (work) {
       const s = r.strict || {};
       const lines = (s.commands || []).filter(c => c.status === "missing" || c.status === "unverified")
@@ -542,6 +571,14 @@ function cmpTable(withTitle) {
     out.push(row);
   }
   return out;
+}
+
+// The lines outside the configuration listing: the whole logs' counts less
+// the listings' (never below zero: the two are computed apart).
+function cmpRest(r) {
+  const w = r.whole, c = r.config;
+  const z = n => Math.max(0, n);
+  return { added: z(w.added - c.added), removed: z(w.removed - c.removed), changed: z((w.changed || 0) - (c.changed || 0)), moved: z((w.moved || 0) - (c.moved || 0)) };
 }
 
 // The diff opens in its own WinMerge-style window (PalaTerm.exe --diff).

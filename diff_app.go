@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -30,6 +31,9 @@ type diffDoc struct {
 	Label  string             `json:"label"`
 	Result history.DiffResult `json:"result"`
 	Err    string             `json:"err,omitempty"`
+	// Writing: a log still being written (a device still running): what
+	// is compared is what was there when the window read it.
+	Writing bool `json:"writing,omitempty"`
 }
 
 func NewDiffWin(a, b, label, title string) *DiffWin {
@@ -44,24 +48,42 @@ func (d *DiffWin) startup(ctx context.Context) {
 
 func (d *DiffWin) domReady(ctx context.Context) { go focusOwnWindow() }
 
-// Load compares the two files (re-run when the noise option changes).
-func (d *DiffWin) Load(ignoreNoise bool) diffDoc {
+// Load compares the two files (re-run when an option changes).
+func (d *DiffWin) Load(opts history.DiffOpts) diffDoc {
 	doc := diffDoc{PathA: d.a, PathB: d.b, NameA: filepath.Base(d.a), NameB: filepath.Base(d.b), Label: d.label}
-	ba, err := os.ReadFile(d.a)
+	ba, wa, err := readWatching(d.a)
 	if err != nil {
 		doc.Err = err.Error()
 		return doc
 	}
-	bb, err := os.ReadFile(d.b)
+	bb, wb, err := readWatching(d.b)
 	if err != nil {
 		doc.Err = err.Error()
 		return doc
 	}
-	doc.Result = history.Diff(string(ba), string(bb), ignoreNoise)
-	if doc.Result.Lines == nil {
-		doc.Result.Lines = []history.DiffLine{}
-	}
+	doc.Writing = wa || wb
+	doc.Result = history.DiffWith(string(ba), string(bb), opts)
 	return doc
+}
+
+// readWatching reads a file and says whether it is still being written:
+// its size changed while it was read, or it was last written within the
+// second.
+func readWatching(path string) ([]byte, bool, error) {
+	before, err := os.Stat(path)
+	if err != nil {
+		return nil, false, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		return data, false, nil
+	}
+	writing := after.Size() != before.Size() || time.Since(after.ModTime()) < time.Second
+	return data, writing, nil
 }
 
 // OpenLog opens side "a" or "b" in a viewer window.

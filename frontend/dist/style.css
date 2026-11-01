@@ -450,6 +450,23 @@ th.sortable:hover { color: var(--text); }
 .dw-light .dw-table tr.dw-added td:nth-child(4) { background: rgba(34,197,94,.24); color: #14532d; }
 .dw-light .dw-table tr.dw-skip td { color: #64748b; background: rgba(0,0,0,.05); }
 .dw-light .dw-table tr:hover td { filter: brightness(.96); }
+/* Structured diff (diff.js): the changed part of a line, moved blocks, lines left out, folds, jumps, one-side selection. */
+.dw-table tr.dw-changed td.dw-txt .dw-seg-del { background: rgba(239,68,68,.45); color: #fecaca; border-radius: 2px; }
+.dw-table tr.dw-changed td.dw-txt .dw-seg-add { background: rgba(34,197,94,.45); color: #bbf7d0; font-weight: 600; border-radius: 2px; }
+.dw-table tr.dw-moved td.dw-txt { background: rgba(167,139,250,.22); color: #ddd6fe; }
+.dw-moved-badge { display: inline-block; margin-left: 4px; padding: 0 4px; border-radius: 3px; background: #7c3aed; color: #fff; font-size: 9px; line-height: 14px; vertical-align: middle; }
+.dw-table tr.dw-noise td.dw-txt { color: #4b5563; font-style: italic; }
+.dw-table tr.dw-head td.dw-txt { font-weight: 600; }
+.dw-table tr.dw-skip td { cursor: pointer; }
+.dw-table tr.dw-skip:hover td { color: #94a3b8; }
+.dw-table tr.dw-banner td { color: #fbbf24; background: rgba(251,191,36,.08); padding: 4px 8px; font-size: 12px; white-space: normal; }
+.dw-table tr.dw-jump td { outline: 2px solid #f59e0b; outline-offset: -2px; transition: outline-color 2.5s; }
+.dw-body[data-side="a"] td.dw-b, .dw-body[data-side="b"] td.dw-a { user-select: none; }
+.dw-light .dw-table tr.dw-changed td.dw-txt .dw-seg-del { background: rgba(239,68,68,.3); color: #7f1d1d; }
+.dw-light .dw-table tr.dw-changed td.dw-txt .dw-seg-add { background: rgba(34,197,94,.35); color: #14532d; }
+.dw-light .dw-table tr.dw-moved td.dw-txt { background: rgba(139,92,246,.18); color: #4c1d95; }
+.dw-light .dw-table tr.dw-noise td.dw-txt { color: #9ca3af; }
+.dw-light .dw-table tr.dw-banner td { color: #92400e; background: rgba(251,191,36,.15); }
 .dw-mark { position: absolute; left: 3px; right: 3px; min-height: 2px; border-radius: 1px; opacity: .85; }
 .dw-mark.cur { outline: 1px solid #fff; }
 .dw-sw { display: inline-block; width: 14px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
