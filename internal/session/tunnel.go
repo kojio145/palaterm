@@ -46,12 +46,12 @@ func DialTunnel(hops []model.Bastion, dev *model.Device, timeout time.Duration, 
 	if dev.Conn == model.ConnTelnet {
 		return &telnetSession{conn: conn, hops: clients}, nil
 	}
-	cfg, err := sshConfig(dev.Username, dev.Password, dev.AuthMethod, dev.KeyFile, dev.KeyPassphrase, timeout, opts)
+	name := model.TunnelName(via, addr)
+	cfg, err := sshConfig(dev.Username, dev.Password, dev.AuthMethod, dev.KeyFile, dev.KeyPassphrase, timeout, opts, name)
 	if err != nil {
 		conn.Close()
 		return fail(err)
 	}
-	name := model.TunnelName(via, addr)
 	var s *sshSession
 	err = withTimeout(conn, name, timeout, func() error {
 		c, err := sshHandshakeNoTimer(conn, name, cfg)
@@ -96,7 +96,8 @@ func dialChain(hops []model.Bastion, timeout time.Duration, opts DialOpts) ([]*s
 		addr := model.HopAddr(b.Host, b.EffectivePort())
 		hopOpts := opts
 		hopOpts.Legacy = effectiveBastionLegacy(b, opts)
-		cfg, err := sshConfig(b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, timeout, hopOpts)
+		name := model.TunnelName(via, addr)
+		cfg, err := sshConfig(b.Username, b.Password, b.AuthMethod, b.KeyFile, b.KeyPassphrase, timeout, hopOpts, name)
 		if err != nil {
 			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
 		}
@@ -104,7 +105,6 @@ func dialChain(hops []model.Bastion, timeout time.Duration, opts DialOpts) ([]*s
 		if err != nil {
 			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, err))
 		}
-		name := model.TunnelName(via, addr)
 		c, err := sshHandshake(conn, name, cfg, timeout)
 		if err != nil {
 			return fail(fmt.Errorf("踏み台%d段目（%s）: %w", i+1, b.Host, sshDialError(name, err, b.Username, b.AuthMethod, hopOpts)))

@@ -183,10 +183,11 @@ func New(profiles *profile.Registry) *Runner {
 // dialOpts builds the per-device security options for a dial.
 func (r *Runner) dialOpts(dev *model.Device) session.DialOpts {
 	return session.DialOpts{
-		HostKey: session.VerifyHostKey(r.HostKeys),
-		Legacy:  dev.LegacyAlgos,
-		Cols:    r.TermCols,
-		Rows:    r.TermRows,
+		HostKey:  session.VerifyHostKey(r.HostKeys),
+		HostKeys: r.HostKeys,
+		Legacy:   dev.LegacyAlgos,
+		Cols:     r.TermCols,
+		Rows:     r.TermRows,
 	}
 }
 
@@ -795,9 +796,22 @@ func (r *Runner) dialTransport(ctx context.Context, dev *model.Device, bastions 
 		if hint := dialHint(err, dev, bastions); hint != "" {
 			return nil, fmt.Errorf("%s（%w）", hint, err)
 		}
-		return nil, err
+		return nil, headHopError(err, dev, bastions)
 	}
 	return sess, nil
+}
+
+// headHopError names the first jump host in a host-key refusal of it. The
+// hop is dialed by this PC when commands are typed on it, and its refusal
+// read like the device's own: the run tab offered 「鍵を許可して再実行」,
+// which drops the device's pin and leaves the hop's — the same refusal
+// again, as often as the button was pressed. Named like a tunnel's hop
+// (「踏み台1段目（…）: ホストキーが…」), it gets the jump-host button instead.
+func headHopError(err error, dev *model.Device, bastions []model.Bastion) error {
+	if len(bastions) == 0 || dev.Tunneled() || session.MismatchedHostKey(err) == "" {
+		return err
+	}
+	return fmt.Errorf("踏み台1段目（%s）: %w", bastions[0].Host, err)
 }
 
 // dialHint says in plain words why a network connection could not be

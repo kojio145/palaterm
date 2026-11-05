@@ -1019,7 +1019,7 @@ type Settings struct {
 	// WorkJoinHours: how long an interactive work folder stays open to the
 	// next terminal window of the same group (see WorkJoin). 0 = the
 	// default (DefaultWorkJoinHours); WorkJoinNever (-1) = every window
-	// makes its own folder, as before v1.9.29; otherwise 1..MaxWorkJoinHours.
+	// makes its own folder, as before v1.9.28; otherwise 1..MaxWorkJoinHours.
 	WorkJoinHours int `json:"workJoinHours,omitempty"`
 }
 

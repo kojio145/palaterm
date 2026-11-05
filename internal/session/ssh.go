@@ -141,6 +141,10 @@ func MismatchedHostKeyIn(msg string) string {
 type DialOpts struct {
 	// HostKey verifies the server host key; nil accepts any key (tests only).
 	HostKey ssh.HostKeyCallback
+	// HostKeys is the store HostKey checks against, when there is one: the
+	// endpoint is offered the pinned key's type first (see pinnedFirst), so
+	// a server with several host keys presents the one on record.
+	HostKeys HostKeyStore
 	// Legacy additionally offers old KEX/cipher algorithms (SHA-1 DH groups,
 	// CBC, 3DES) for network gear that supports nothing newer. Off by
 	// default, mirroring modern clients that disabled SHA-1 by default.
@@ -255,11 +259,11 @@ func startKeepalive(c *ssh.Client) <-chan struct{} {
 }
 
 func dialSSH(host string, port int, user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (Session, error) {
-	cfg, err := sshConfig(user, password, auth, keyFile, keyPassphrase, timeout, opts)
+	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
+	cfg, err := sshConfig(user, password, auth, keyFile, keyPassphrase, timeout, opts, addr)
 	if err != nil {
 		return nil, err
 	}
-	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 	client, conn, err := dialSSHClient(addr, cfg, timeout)
 	if err != nil {
 		return nil, sshDialError(addr, err, user, auth, opts)
@@ -278,8 +282,9 @@ func dialSSH(host string, port int, user, password string, auth model.AuthMethod
 }
 
 // sshConfig builds the client config for one SSH endpoint: its credentials,
-// the algorithms it is offered and the host-key check.
-func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts) (*ssh.ClientConfig, error) {
+// the algorithms it is offered and the host-key check. pin is the name the
+// endpoint's host key is pinned under (see model.HostKeyNames).
+func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphrase string, timeout time.Duration, opts DialOpts, pin string) (*ssh.ClientConfig, error) {
 	var authMethods []ssh.AuthMethod
 
 	if auth == model.AuthPublicKey {
@@ -327,6 +332,16 @@ func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphr
 		hostKeyAlgos = append(hostKeyAlgos, ssh.KeyAlgoRSA, ssh.InsecureKeyAlgoDSA, ssh.CertAlgoRSAv01, ssh.InsecureCertAlgoDSAv01)
 		macs = append(macs, "hmac-sha1", "hmac-sha1-96")
 	}
+	// A server with several host keys (OpenSSH: RSA, ECDSA and ED25519 at
+	// once) presents the first type the client lists that it has. v1.9.26
+	// put ED25519 ahead of the ECDSA the library had preferred, and every
+	// endpoint pinned by an earlier version then presented a key of another
+	// type: 「ホストキーが前回接続時と異なります」 for a server that had not
+	// changed at all. Like OpenSSH with known_hosts, the type on record goes
+	// first, so the server keeps presenting the key that was pinned.
+	if opts.HostKeys != nil && pin != "" {
+		hostKeyAlgos = pinnedFirst(hostKeyAlgos, opts.HostKeys.GetHostKey(pin))
+	}
 	hostKey := opts.HostKey
 	if hostKey == nil {
 		hostKey = ssh.InsecureIgnoreHostKey() // tests / fakes only
@@ -343,6 +358,42 @@ func sshConfig(user, password string, auth model.AuthMethod, keyFile, keyPassphr
 			MACs:         macs,
 		},
 	}, nil
+}
+
+// pinnedFirst reorders the host-key algorithms so those of the pinned key's
+// type come first, their order among themselves kept. pinned is the stored
+// fingerprint ("key type SHA256:…", see VerifyHostKey); "" or an unknown
+// type leaves the list as it is.
+func pinnedFirst(algos []string, pinned string) []string {
+	typ, _, _ := strings.Cut(pinned, " ")
+	if typ == "" {
+		return algos
+	}
+	var first, rest []string
+	for _, a := range algos {
+		if keyTypeOf(a) == typ {
+			first = append(first, a)
+		} else {
+			rest = append(rest, a)
+		}
+	}
+	if len(first) == 0 {
+		return algos
+	}
+	return append(first, rest...)
+}
+
+// keyTypeOf is the key type (ssh.PublicKey.Type) a host-key algorithm
+// presents: the RSA signature algorithms all carry an ssh-rsa key, the
+// others are named after their key.
+func keyTypeOf(algo string) string {
+	switch algo {
+	case ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA:
+		return ssh.KeyAlgoRSA
+	case ssh.CertAlgoRSASHA512v01, ssh.CertAlgoRSASHA256v01, ssh.CertAlgoRSAv01:
+		return ssh.CertAlgoRSAv01
+	}
+	return algo
 }
 
 // rePasswordQuestion is a keyboard-interactive question that asks for the

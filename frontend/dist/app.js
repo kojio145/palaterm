@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.25";
+const APP_VERSION = "1.9.29";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -1143,6 +1143,11 @@ async function boot() {
   // Log-viewer window (binds Viewer).
   if (window.go && window.go.main && window.go.main.Viewer) {
     bootViewerWindow();
+    return;
+  }
+  // Grep window (binds GrepWin).
+  if (window.go && window.go.main && window.go.main.GrepWin) {
+    bootGrepWindow();
     return;
   }
   // Paste-confirmation window (child of a terminal window; binds Paste).

@@ -14,7 +14,7 @@ import (
 // pinned to the modern set; ssh-rsa (SHA-1), ssh-dss and the SHA-1 MACs
 // come only with レガシー暗号を許可, like the old KEX and ciphers.
 func TestReview1101AlgorithmLists(t *testing.T) {
-	cfg, err := sshConfig("ops", "pw", model.AuthPassword, "", "", time.Second, DialOpts{})
+	cfg, err := sshConfig("ops", "pw", model.AuthPassword, "", "", time.Second, DialOpts{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestReview1101AlgorithmLists(t *testing.T) {
 	// silently, and the list would be shorter than it reads.
 	sup := ssh.SupportedAlgorithms()
 	ins := ssh.InsecureAlgorithms()
-	legacy, _ := sshConfig("ops", "pw", model.AuthPassword, "", "", time.Second, DialOpts{Legacy: true})
+	legacy, _ := sshConfig("ops", "pw", model.AuthPassword, "", "", time.Second, DialOpts{Legacy: true}, "")
 	for _, a := range legacy.HostKeyAlgorithms {
 		if !slices.Contains(sup.HostKeys, a) && !slices.Contains(ins.HostKeys, a) {
 			t.Errorf("host key algorithm %s is not one the library has", a)

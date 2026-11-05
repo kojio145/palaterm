@@ -3489,6 +3489,27 @@ func (a *App) OpenLogDir() error {
 	return startExplorer(abs)
 }
 
+// OpenGrepWindow opens the grep window over the log folder, or over the one
+// run folder dir of it ("" = the whole folder): every log file searched for
+// a text at once, the hits listed by file (PalaTerm.exe --grep).
+func (a *App) OpenGrepWindow(dir string) error {
+	if a.locked() {
+		return errVaultLocked
+	}
+	root := a.logRoot()
+	_ = os.MkdirAll(root, 0o755)
+	if dir == "" {
+		return spawnWindow(nil, "--grep", root)
+	}
+	if err := a.underLogRoot(dir); err != nil {
+		return err
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return fmt.Errorf("フォルダがありません: %s", dir)
+	}
+	return spawnWindow(nil, "--grep", root, dir)
+}
+
 // StrictVerify picks the setting lines typed in the work logs and reports
 // whether each is present in the after log (see history.StrictVerify). A
 // work done over several sessions (a reconnect) has one log per session:
@@ -3880,7 +3901,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.28"
+const appVersion = "1.9.29"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

@@ -201,7 +201,7 @@
   <header class="hero">
     <div class="logo"><span class="ex">Pala</span>Term</div>
     <div class="hero-sub">Parallel SSH / Telnet / Serial Access ─ 複数のネットワーク機器へ並列ログインし、ログ取得・コマンド一括実行を行うツール</div>
-    <div class="hero-tag">使い方マニュアル / v1.9.28</div>
+    <div class="hero-tag">使い方マニュアル / v1.9.29</div>
   </header>
 
   <nav class="toc">
@@ -789,6 +789,14 @@
     実際のファイルは、<strong>「ログフォルダを開く」</strong>ボタンでエクスプローラーから確認できます。</p>
 
     <figure class="shot" data-shot="25_log_window"><img src="img/manual/25_log_window.png" alt="ログ表示ウィンドウ。検索・文字サイズ・全文コピー" loading="lazy"><figcaption>ログ表示ウィンドウ。検索・文字サイズ・全文コピー</figcaption></figure>
+    <h3>ログの grep（複数ファイルをまとめて検索）</h3>
+    <p>一括実行が終わると実行タブに<strong>「🔍 ログを grep」</strong>が出ます（実行履歴・比較タブの上部と、各実行の行の 🔍 も同じです）。サクラエディタの grep のように、<strong>その実行のログファイルすべて</strong>（範囲を切り替えればログフォルダ全体や他の実行も）を指定した文字でまとめて検索し、<code>フォルダ\ファイル(行): 内容</code> の形で機器ごとに一覧します。別窓なので、実行タブや端末窓を使いながら見られます（v1.9.29）。</p>
+    <ul>
+      <li>検索する文字を入れて Enter。既定は大文字小文字を区別しない文字そのままの検索、「正規表現」にチェックすると正規表現（例: <code>Gi1/0/[1-4]|down</code>）。</li>
+      <li>一致した行をクリックすると、その機器のログ表示窓が<strong>その行を選択した状態</strong>で開きます。</li>
+      <li><strong>「一致しなかったファイルも表示」</strong>で、その内容が出ていない機器（ファイル）も一覧の下に並びます。「この設定が入っていない機器はどれか」を探すときに。</li>
+      <li>「結果をコピー」「結果を保存」（<code>export\grep\</code>）は <code>ファイル(行): 内容</code> の形です。期間（ファイルの更新日時）でも絞れます。</li>
+    </ul>
     <h3>保存先とファイル名</h3>
     <p>実行するたびに、ログフォルダの中に実行ごとのフォルダ（既定 <code>日付_時刻[_グループ][_作業タイミング]/</code>。例: <code>20261011_211445_A社_before</code>）が作られ、その中に機器ごとのログが入ります。フォルダ名も「設定」の<strong>ログフォルダ名テンプレート</strong>で変えられます（使える変数: <code>{date} {time} {hhmm} {group} {stage}</code>。例: <code>{date}_{group}_{stage}</code> → <code>20261009_A社_before</code>。同名のフォルダが既にあれば <code>_2</code>, <code>_3</code> … が付きます）。ファイル名の既定は次の形式です。</p>
     <div class="term">{host}_{site}_{role}_{stage}_{date}_{time}.txt<br>

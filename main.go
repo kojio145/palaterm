@@ -64,6 +64,16 @@ func main() {
 		runWatchWindow(os.Args[2])
 		return
 	}
+	// Grep window: "--grep <log root> [run folder]" (the run tab's and the
+	// history tab's ログを grep).
+	if len(os.Args) >= 3 && os.Args[1] == "--grep" {
+		dir := ""
+		if len(os.Args) >= 4 {
+			dir = os.Args[3]
+		}
+		runGrepWindow(os.Args[2], dir)
+		return
+	}
 	// Diff window: "--diff <A> <B> [label]".
 	if len(os.Args) >= 4 && os.Args[1] == "--diff" {
 		label := ""

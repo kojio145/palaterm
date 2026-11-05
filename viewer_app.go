@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,8 @@ type Viewer struct {
 	path  string
 	title string
 	live  bool
+	// line is the line the window opens at (a grep hit), 0 = the end.
+	line int
 
 	// What Load read so far (see read): the file's bytes, their cleaned
 	// text, and the size and time the file had, so the follow timer reads
@@ -46,10 +49,13 @@ type viewerDoc struct {
 	// Live says the file is still being written (opened from a running
 	// interactive session), so the page starts in follow mode.
 	Live bool `json:"live,omitempty"`
+	// Line: the line to show and select first (a grep hit), 0 = the end.
+	Line int `json:"line,omitempty"`
 }
 
 func NewViewer(path, title string) *Viewer {
-	return &Viewer{path: path, title: title, live: os.Getenv("PALATERM_VIEW_LIVE") == "1"}
+	line, _ := strconv.Atoi(os.Getenv(viewLineEnv))
+	return &Viewer{path: path, title: title, live: os.Getenv("PALATERM_VIEW_LIVE") == "1", line: line}
 }
 
 // openInExplorer shows a file selected in Explorer (or opens a folder).
@@ -148,6 +154,7 @@ func (v *Viewer) Load() viewerDoc {
 	}
 	d.Text = text
 	d.Live = v.live
+	d.Line = v.line
 	return d
 }
 

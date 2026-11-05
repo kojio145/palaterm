@@ -250,6 +250,7 @@ function renderHistoryView() {
         <button class="btn sm" data-cmp-a="${esc(r.dir)}" ${histState.a === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較元(A)"))}</button>
         <button class="btn sm" data-cmp-b="${esc(r.dir)}" ${histState.b === r.dir ? 'style="border-color:var(--accent)"' : ""}>${esc(t("比較先(B)"))}</button>
         <button class="btn sm" data-folder="${esc(r.dir)}">${esc(t("フォルダを開く"))}</button>
+        <button class="btn sm" data-grep="${esc(r.dir)}" data-tip="${esc(t("この実行のログファイルすべてを、指定した文字でまとめて検索します（別窓）"))}">🔍</button>
       </td>
     </tr>${devRows}`;
   }).join("");
@@ -261,6 +262,7 @@ function renderHistoryView() {
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読み込み"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
+        <button class="btn" id="hist-grep" data-tip="${esc(t("ログフォルダ内のすべての実行のログファイルを、指定した文字でまとめて検索します（別窓）"))}">${esc(t("🔍 ログを grep"))}</button>
         <button class="btn" id="hist-versions" ${runs.length ? "" : "disabled"} data-tip="${esc(t("機器を 1 台選ぶと、すべての実行のログがその機器の「版」として新しい順に並びます。設定が前の版から変わったかの印つき。任意の 2 版を差分窓で比べられます"))}">${esc(t("機器ごとの版"))}</button>
       </div>
     </div>
@@ -306,6 +308,8 @@ function renderHistoryView() {
   const more = document.getElementById("hist-more");
   if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
   document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
+  document.getElementById("hist-grep").onclick = () => App().OpenGrepWindow("").catch(e => toast(terr(e), "err"));
+  root.querySelectorAll("[data-grep]").forEach(b => b.onclick = () => App().OpenGrepWindow(b.dataset.grep).catch(e => toast(terr(e), "err")));
   document.getElementById("hist-versions").onclick = deviceVersionsDialog;
   root.querySelectorAll("[data-toggle]").forEach(el => el.onclick = () => { histState.open[el.dataset.toggle] = !histState.open[el.dataset.toggle]; renderHistoryView(); });
   root.querySelectorAll(".hist-failed-only").forEach(el => el.onchange = () => { histState.failedOnly[el.dataset.dir] = el.checked; renderHistoryView(); });

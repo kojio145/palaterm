@@ -101,6 +101,17 @@ async function bootViewerWindow() {
   zoom.set(zoom.size);
   zoom.buttons(document.getElementById("lv-font-inc"), document.getElementById("lv-font-dec"));
   zoom.wheel(ta);
+  // Opened at a line (a grep hit): that line selected and in the middle of
+  // the view, its number shown for a moment.
+  if (doc.line > 0 && !doc.err) {
+    const ls = ta.value.split("\n"), n = Math.min(doc.line, ls.length);
+    let off = 0;
+    for (let i = 0; i < n - 1; i++) off += ls[i].length + 1;
+    ta.setSelectionRange(off, off + ls[n - 1].length);
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || zoom.size * 1.25;
+    ta.scrollTop = Math.max(0, (n - 1) * lh - ta.clientHeight / 2);
+    flash(t("{n} 行目", { n }));
+  }
 
   // Find: case-insensitive. Every match is marked in the backdrop (lv-hl) as
   // the query is typed, the current one in a stronger colour, and Enter

@@ -184,6 +184,7 @@ tr:hover td { background: var(--bg-2); }
 /* ログ表示の検索: 本文の後ろに重ねた写し（#lv-hl）の中の一致。写しの文字は透明で、印だけが透けて見える（viewer.js） */
 #lv-hl mark.lv-m { background: rgba(255, 214, 0, .45); color: transparent; border-radius: 2px; }
 #lv-hl mark.lv-cur { background: rgba(255, 128, 0, .9); outline: 1px solid rgba(255, 255, 255, .7); }
+#gw-body mark.gw-m { background: rgba(255, 214, 0, .5); color: #111; border-radius: 2px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 16px; }
 .row-inline { display: flex; gap: 10px; align-items: center; }

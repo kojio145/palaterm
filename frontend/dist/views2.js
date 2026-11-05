@@ -520,6 +520,7 @@ function renderRun() {
           <div><span data-tip="${esc(t("完了済みコマンド数と経過時間から算出した全体の予想残り時間。実行が進むほど精度が上がります"))}">${esc(t("予想残り"))}</span> <b id="rc-eta">${running ? computeEta() : "—"}</b></div>
         </div>
         ${!running && lastRunDir ? `<button class="btn" id="btn-rundir" data-tip="${esc(t("直前の一括実行のログが入ったフォルダを開きます: {d}", { d: lastRunDir }))}">${esc(t("📂 この実行のフォルダ"))}</button>` : ""}
+        ${!running && lastRunDir ? `<button class="btn" id="btn-grep" data-tip="${esc(t("この実行のログファイルすべてを、指定した文字でまとめて検索します（別窓。範囲をログフォルダ全体にもできます）"))}">${esc(t("🔍 ログを grep"))}</button>` : ""}
         ${!running && lastRunAfter ? `<button class="btn" id="btn-cmp-before" data-tip="${esc(t("実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します"))}">${esc(t("⇄ 作業前と比較"))}</button>` : ""}
         <button class="btn" id="btn-logdir">${esc(t("ログフォルダを開く"))}</button>
       </div>
@@ -696,6 +697,11 @@ function renderRun() {
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const btnRunDir = document.getElementById("btn-rundir");
   if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
+  // 🔍 ログを grep: every log of this run searched for a text at once, in
+  // the grep window (a status taken from many devices, then "which of
+  // them show X" — and which do not).
+  const btnGrep = document.getElementById("btn-grep");
+  if (btnGrep) btnGrep.onclick = () => App().OpenGrepWindow(lastRunDir).catch(e => toast(terr(e), "err"));
   // 作業中を区切る: the group's interactive sessions share one 作業中 folder
   // (joined while the last session is within 作業中をまとめる時間); this
   // closes it, so the next session starts a new folder. The tooltip says

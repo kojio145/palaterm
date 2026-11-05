@@ -28,6 +28,8 @@ var (
 	pasteWin  = winSize{W: 980, H: 640, MinW: 480, MinH: 320}
 	viewerWin = winSize{W: 1080, H: 700, MinW: 480, MinH: 320}
 	diffWin   = winSize{W: 1320, H: 760, MinW: 720, MinH: 400}
+	// ログの grep: a query line and a list of hits.
+	grepWin = winSize{W: 1100, H: 720, MinW: 600, MinH: 360}
 	// コマンドセットの表示: narrow enough to sit beside a terminal window.
 	cmdsetWinSize = winSize{W: 760, H: 680, MinW: 420, MinH: 300}
 	// The GUI window (a device's web GUI, gui_window_windows.go): not a Wails
