@@ -2,6 +2,7 @@ package listimport
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -517,6 +518,15 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 				pr.Errors = append(pr.Errors, FieldLabel(k)+": "+msg)
 			}
 		}
+		// An error on a field the rule does not map (a jump host whose
+		// user name and password are mapped but not its host): until
+		// v1.9.31 it was dropped with the hop, the row read as a plain
+		// 追加 and the device came without the hop — nothing said why.
+		for _, k := range sortedKeys(fr.errs) {
+			if !mapped(keys, k) {
+				pr.Errors = append(pr.Errors, FieldLabel(k)+": "+fr.errs[k]+"（この項目はルールで紐付けていません）")
+			}
+		}
 		d := fr.dev
 		d.ID = ""
 		stamp(pr, fr, nil, nil)
@@ -639,6 +649,59 @@ func stamp(pr *PlanRow, fr *fileRow, prev map[string]string, lost map[string]boo
 		rec.Base[k] = v
 	}
 	pr.rec = rec
+}
+
+func mapped(keys []string, k string) bool {
+	for _, x := range keys {
+		if x == k {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// UnmappedErrors runs the rule's converted rows through the device
+// check and counts, per field the rule does not map, the rows whose
+// values fail on it (a jump host with user name and password mapped but
+// no host): the rule editor warns about it before any import.
+func UnmappedErrors(conv *Converted) []string {
+	type ek struct{ key, msg string }
+	counts := map[ek]int{}
+	var order []ek
+	for _, row := range conv.Rows {
+		if row.Excluded != "" {
+			continue
+		}
+		fc := map[string]string{}
+		for _, k := range row.Keys {
+			fc[k] = row.Values[k]
+		}
+		_, errs := csvio.CellsDevice(fc)
+		for _, e := range errs {
+			if mapped(row.Keys, e.Col) {
+				continue
+			}
+			k := ek{e.Col, e.Msg}
+			if counts[k] == 0 {
+				order = append(order, k)
+			}
+			counts[k]++
+		}
+	}
+	var out []string
+	for _, k := range order {
+		out = append(out, fmt.Sprintf("%s: %s — この項目はルールで紐付けていません（%d 行）。このままでは取り込めません", FieldLabel(k.key), k.msg, counts[k]))
+	}
+	return out
 }
 
 // hopGapMsg: hop n is empty while a later hop has a host. A new device

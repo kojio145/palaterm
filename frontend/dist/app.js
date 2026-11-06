@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.31";
+const APP_VERSION = "1.9.32";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----

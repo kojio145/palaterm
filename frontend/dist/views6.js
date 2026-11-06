@@ -5,7 +5,11 @@
 // itself runs in Go (internal/listimport); this page only edits the rule
 // and shows what Go worked out.
 
-let LI = { view: "list", rule: null, sample: null, test: null, more: false, imp: null };
+// sample: the sample file's path while the backend still holds it as the
+// file picked; sampleLast: its name once the backend forgot it (the import
+// screen left, the vault locked, another file picked for an import), shown
+// as 前回の見本 to find it again — not as if it were chosen.
+let LI = { view: "list", rule: null, sample: null, sampleLast: "", test: null, more: false, imp: null };
 let LI_FIELDS = null; // [{key, ja, kind, hop}]
 
 // The fields shown before 「ほかの項目を表示」.
@@ -265,7 +269,14 @@ function liRenderEdit(root) {
   const headers = (test && test.headers) || [];
   const hdrNames = headers.map(h => h.name).filter(n => n);
   const sample = liSampleRow();
-  const fields = LI_FIELDS.filter(f => LI.more || LI_MAIN.includes(f.key) || (liFieldRule(f.key) && (liFieldRule(f.key).source || liFieldRule(f.key).default)));
+  const inUse = key => { const x = liFieldRule(key); return !!(x && (x.source || x.default)); };
+  // A jump host with any field mapped shows every field of that hop: with
+  // only the mapped ones in sight, a hop whose host was never mapped (its
+  // IP column tied to 接続方式 by mistake) had no host row to fix — the
+  // import then dropped the hop.
+  const hopInUse = n => LI_FIELDS.some(x => x.hop === n && inUse(x.key));
+  const hostNeeded = f => !!(f.hop && /Host$/.test(f.key) && hopInUse(f.hop) && !inUse(f.key));
+  const fields = LI_FIELDS.filter(f => LI.more || LI_MAIN.includes(f.key) || inUse(f.key) || (f.hop && hopInUse(f.hop)));
   const colOpts = (cur) => {
     const list = hdrNames.slice();
     if (cur && !list.includes(cur)) list.push(cur);
@@ -341,6 +352,7 @@ function liRenderEdit(root) {
       <div class="field"><label>${esc(t("見本ファイル（ルールには保存しません）"))}</label>
         <div class="row-inline" style="gap:6px"><input type="text" readonly value="${esc(LI.sample ? LI.sample.split(/[\\/]/).pop() : "")}" placeholder="${esc(t("未選択"))}" style="flex:1" data-guard-skip>
         <button class="btn sm" id="li-sample">${esc(t("選ぶ…"))}</button></div>
+        ${!LI.sample && (LI.sampleLast || r.sampleName) ? `<div class="muted" style="font-size:11px;margin-top:4px">${esc(t("前回の見本: {f}（見本は画面を離れると閉じます。確かめるには選び直してください）", { f: LI.sampleLast || r.sampleName }))}</div>` : ""}
         ${test ? `<div class="muted" style="font-size:11px;margin-top:4px">${esc(t("形式: {f}", { f: test.format }))}${test.total ? " · " + esc(t("値の行 {n}（除外 {x}）", { n: test.total, x: test.excluded })) : ""}</div>` : ""}
       </div>
     </div></div>
@@ -389,8 +401,9 @@ function liRenderEdit(root) {
         ${fields.map(f => {
           const fr = liFieldRule(f.key) || { steps: [] };
           const used = fr.source || fr.default;
-          return `<tr class="${used ? "" : "li-unused"}">
-            <td><b>${esc(liFieldLabel(f.key))}</b>${f.key === "name" ? ` <span class="req">${esc(t("必須"))}</span>` : ""}</td>
+          const needHost = hostNeeded(f);
+          return `<tr class="${used ? "" : "li-unused"}${needHost ? " li-needrow" : ""}">
+            <td><b>${esc(liFieldLabel(f.key))}</b>${f.key === "name" || needHost ? ` <span class="req">${esc(t("必須"))}</span>` : ""}${needHost ? `<div class="muted" style="font-size:11px">${esc(t("この段のほかの項目を使うにはホストの紐付けが必要です（無いと取り込めません）"))}</div>` : ""}</td>
             <td>${srcSelect(f)}${LI.tent.has(f.key) ? `<span class="li-tentb" data-tip="${esc(t("見出しの名前から仮に選びました"))}">${esc(t("仮"))}</span>` : ""}</td>
             <td><div class="li-steps">${(fr.steps || []).map((s, i) => `<button class="li-step" data-step="${esc(f.key)}">${esc(liStepLabel(s))}</button>`).join("")}
               ${fr.source ? `<button class="li-step add" data-step="${esc(f.key)}" data-tip="${esc(t("加工手順を編集"))}">${(fr.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button>` : ""}</div></td>
@@ -520,7 +533,19 @@ async function liRunTest(rerender = true) {
     LI.test = res;
     if (rerender || before !== JSON.stringify(res.headers)) renderListImport();
     else liRefreshResults();
-  } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
+  } catch (e) {
+    // The backend no longer holds the sample as the file picked (the
+    // import screen was left, the vault locked, another file picked for
+    // an import): not a failure to report — the editor opens with no
+    // sample and names the last one.
+    if (/ファイルが選ばれていません/.test(String(e))) {
+      // Two tries may fail together (the editor opening runs it twice):
+      // the second finds the sample already dropped.
+      if (LI.sample) { LI.sampleLast = LI.sample.split(/[\\/]/).pop(); LI.sample = null; LI.test = null; if (LI.view === "edit") renderListImport(); }
+      return;
+    }
+    toast(t("見本ファイルの読み込み失敗") + ": " + terr(e), "err");
+  }
 }
 function liRefreshResults() {
   const root = document.getElementById("tab-import");
@@ -589,10 +614,10 @@ function liWireEdit(root) {
     try {
       const p = await App().PickListFile();
       if (!p) return;
-      LI.sample = p;
+      LI.sample = p; LI.sampleLast = "";
       if (liCanSuggest()) await liSuggest();
       await liRunTest(true);
-    } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
+    } catch (e) { toast(t("見本ファイルの読み込み失敗") + ": " + terr(e), "err"); }
   };
   q("#li-sheet").onchange = e => {
     const v = e.target.value;

@@ -78,6 +78,12 @@ const I18N_EN_PATTERNS = [
   [/^認証方式は パスワード \/ 公開鍵 のどちらかです$/, "Auth method must be password or public key"],
   [/^踏み台の通り方は コマンド入力 \/ SSHトンネル のどちらかです$/, "Jump host mode must be typed commands or SSH tunnel"],
   [/^踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください）$/, "Jump host #$1 has no host (to skip this hop, leave all of its cells empty)"],
+  // The list conversion's check of a field the rule does not map (the
+  // preview's row error, and the rule editor's warning with a row count).
+  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください）（この項目はルールで紐付けていません）$/, "$1: jump host #$2 has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule"],
+  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください） — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, "$1: jump host #$2 has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule ($3 rows). The rows cannot be imported as they are"],
+  [/^(.+?): (.+?)（この項目はルールで紐付けていません）$/, "$1: $2 (this field is not mapped in the rule)"],
+  [/^(.+?): (.+?) — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, "$1: $2 — this field is not mapped in the rule ($3 rows). The rows cannot be imported as they are"],
   [/^OSタイプ「(.+)」は登録されていません$/, "OS type \"$1\" does not exist"],
   [/^コマンドセット「(.+)」は登録されていません$/, "Command set \"$1\" does not exist"],
   [/^グループ「(.+)」に「(.+)」が重複しています$/, "\"$2\" appears more than once in group \"$1\""],
@@ -2093,6 +2099,9 @@ Object.assign(I18N_EN, {
   "例: 資産管理（月次出力）": "e.g. Asset system (monthly export)",
   "見本ファイル（ルールには保存しません）": "Sample file (not saved in the rule)",
   "未選択": "None",
+  "前回の見本: {f}（見本は画面を離れると閉じます。確かめるには選び直してください）": "Last sample: {f} (a sample is closed when you leave the screen; choose it again to try the rule)",
+  "見本ファイルの読み込み失敗": "Could not read the sample file",
+  "この段のほかの項目を使うにはホストの紐付けが必要です（無いと取り込めません）": "The hop's other fields need its host mapped (the rows cannot be imported without it)",
   "選ぶ…": "Choose…",
   "形式: {f}": "Format: {f}",
   "値の行 {n}（除外 {x}）": "{n} value rows ({x} excluded)",

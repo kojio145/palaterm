@@ -208,3 +208,53 @@ func TestHopNumbersKept(t *testing.T) {
 		t.Errorf("written despite the gap: %+v", d.Bastions)
 	}
 }
+
+// A jump host whose user name and password are mapped but not its host
+// (2026-11-06 user: the second hop's IP column was tied to 接続方式, so
+// no bastion2Host field existed): the device check's error on the
+// unmapped host is shown and the row is refused, instead of the device
+// coming without the hop as a plain 追加.
+func TestUnmappedHostErrorShown(t *testing.T) {
+	s := &sheet.Sheet{Name: "s", Rows: [][]string{
+		{"name", "ip", "j2ip", "j2user"},
+		{"lab-sw1", "192.0.2.11", "192.0.2.2", "ops"},
+	}}
+	r := &model.ImportRule{Name: "t", HeaderRow: 1, Fields: []model.ImportField{
+		{Key: "name", Source: "column", Column: "name"},
+		{Key: "host", Source: "column", Column: "ip"},
+		{Key: "bastion2Method", Source: "column", Column: "j2ip", Default: "telnet"},
+		{Key: "bastion2Username", Source: "column", Column: "j2user"},
+	}}
+	inv := lab()
+	c := convert(t, s, r)
+	w := UnmappedErrors(c)
+	if len(w) != 1 || !strings.Contains(w[0], "踏み台2_ホスト") || !strings.Contains(w[0], "紐付けていません") {
+		t.Errorf("editor warnings = %v", w)
+	}
+	p := BuildPlan(inv, c, r, Options{Group: "拠点A"})
+	row := rowOf(p, 2)
+	if row.Status != "err" || len(row.Errors) == 0 || !strings.Contains(row.Errors[0], "踏み台2_ホスト") {
+		t.Errorf("row = %s %v", row.Status, row.Errors)
+	}
+	Apply(inv, p, "拠点A", nil)
+	if dev(inv, "lab-sw1") != nil {
+		t.Errorf("the device was written without its hop")
+	}
+	// The rule corrected (the IP column tied to the host, the method a
+	// default): no warning, the device has the hop.
+	r.Fields[2] = model.ImportField{Key: "bastion2Method", Default: "telnet"}
+	r.Fields = append(r.Fields, model.ImportField{Key: "bastion2Host", Source: "column", Column: "j2ip"})
+	r.Fields = append(r.Fields, model.ImportField{Key: "bastion1Host", Default: "192.0.2.1"})
+	c = convert(t, s, r)
+	if w := UnmappedErrors(c); len(w) != 0 {
+		t.Errorf("warnings with the host mapped: %v", w)
+	}
+	p = BuildPlan(inv, c, r, Options{Group: "拠点A"})
+	if row := rowOf(p, 2); row.Status != "add" || len(row.Errors) != 0 {
+		t.Fatalf("corrected rule: %s %v", row.Status, row.Errors)
+	}
+	Apply(inv, p, "拠点A", nil)
+	if d := dev(inv, "lab-sw1"); d == nil || len(d.Bastions) != 2 || d.Bastions[1].Host != "192.0.2.2" || d.Bastions[1].Method != "telnet" {
+		t.Errorf("after: %+v", d)
+	}
+}

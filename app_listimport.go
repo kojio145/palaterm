@@ -466,6 +466,7 @@ func (a *App) TestImportRule(path string, r model.ImportRule) (*RuleTest, error)
 	conv := listimport.Convert(t, &r, env)
 	out.Missing = conv.Missing
 	out.Total = len(conv.Rows)
+	out.Warnings = append(out.Warnings, listimport.UnmappedErrors(conv)...)
 	lines := map[int]bool{}
 	for _, row := range conv.Rows {
 		if row.Excluded != "" {
