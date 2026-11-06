@@ -58,6 +58,11 @@ func isSecret(key string) bool { return gridByKey[key].Kind == "secret" }
 //	take  the source changed it, PalaTerm did not: the file's value
 //	keep  PalaTerm changed it, the source did not: kept
 //	ask   both changed, or no record of the last import: Choice decides
+//	fill  no record of the last import, PalaTerm's is empty and the file
+//	      has a value (a column added to the rule after the last import, a
+//	      device made by hand): the file's value — the column was mapped
+//	      for that, and nothing of PalaTerm's is lost. A yes/no is never
+//	      "empty" (an empty cell is its "no"), so it is asked as before.
 //	guess the value is a guess from this PalaTerm's OS types or command
 //	      sets: an existing device keeps its own unless chosen otherwise
 //	lost  the file has no column for it (renamed or gone at the source):
@@ -545,6 +550,8 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 			// a command set — or none found), not by the source: it changes
 			// with this PalaTerm's sets, so an existing device keeps its own.
 			cell.State, cell.Choice = "guess", "keep"
+		case !has && c == "" && f != "" && gridByKey[k].Kind != "bool":
+			cell.State, cell.Choice = "fill", "file"
 		case !has:
 			cell.State, cell.Choice = "ask", "keep"
 		case b == c:

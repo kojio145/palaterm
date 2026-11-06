@@ -2215,6 +2215,7 @@ Object.assign(I18N_EN, {
   "元のシステムで変更": "changed at the source",
   "PalaTerm で変更済み": "edited in PalaTerm",
   "両方で変更": "changed on both sides",
+  "PalaTerm では空": "empty in PalaTerm",
   // backend messages
   "ルール名を入力してください": "Enter a rule name",
   "ルール名は 80 文字までです": "The rule name is 80 characters at most",

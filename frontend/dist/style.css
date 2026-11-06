@@ -701,6 +701,7 @@ table.li-prev { table-layout: fixed; min-width: 1000px; }
 .li-cs { font-size: 10px; border-radius: 4px; padding: 0 5px; border: 1px solid var(--border); color: var(--text-dim); }
 .li-cs-ask { color: var(--warn); border-color: rgba(245,158,11,.5); }
 .li-cs-take { color: #a78bfa; border-color: rgba(167,139,250,.5); }
+.li-cs-fill { color: #4ade80; border-color: rgba(74,222,128,.5); }
 .li-note { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .li-hostnote { font-size: 12px; color: var(--warn); margin: 0 0 4px; }
 .li-rerr { font-size: 12px; color: #f87171; margin-top: 2px; }

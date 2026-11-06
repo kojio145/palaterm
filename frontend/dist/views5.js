@@ -209,12 +209,23 @@ async function openGrid(scope) {
 function gridLoadVis() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(GRID_VIS_KEY) || "null"); } catch (e) { }
-  if (Array.isArray(saved) && saved.length) return new Set(["name", ...saved]);
-  // First time: the device's own columns, plus the first jump host's when
-  // any device here has one.
-  const vis = new Set(G.cols.filter(c => !c.hop).map(c => c.key));
-  if (G.rows.some(r => r.cells.bastion1Host)) G.cols.filter(c => c.hop === 1).forEach(c => vis.add(c.key));
+  const vis = Array.isArray(saved) && saved.length ? new Set(["name", ...saved]) : new Set(G.cols.filter(c => !c.hop).map(c => c.key));
+  // A jump host's columns come out while any device here has that hop
+  // (a second hop read in by 外部一覧の変換 sat hidden with nothing to say
+  // so), unless all of them were hidden by hand: "-hop2" in the saved list
+  // (列の表示… and the header menu put it there). Some of them hidden by
+  // hand is left as it is.
+  for (const n of gridHopsUsed()) {
+    if (vis.has("-hop" + n) || G.cols.some(c => c.hop === n && vis.has(c.key))) continue;
+    G.cols.filter(c => c.hop === n).forEach(c => vis.add(c.key));
+  }
   return vis;
+}
+// gridHopsUsed: the jump host numbers any device of the table has.
+function gridHopsUsed() {
+  const out = [];
+  for (let n = 1; G.cols.some(c => c.hop === n); n++) if (G.rows.some(r => r.cells["bastion" + n + "Host"])) out.push(n);
+  return out;
 }
 // gridOnScreen: the table is open and its tab showing. Keys and focus go to
 // it only then (a hidden table took typing after a dialog closed elsewhere).
@@ -545,6 +556,17 @@ function gridClampSel() {
   s.ar = Math.min(Math.max(0, s.ar), R); s.fr = Math.min(Math.max(0, s.fr), R);
   s.ac = Math.min(Math.max(0, s.ac), C); s.fc = Math.min(Math.max(0, s.fc), C);
 }
+// A cell's box in the table's own pixels (what left / top / width of a
+// thing laid over the table take): getBoundingClientRect is in window
+// pixels, which differ by the page zoom (app.js uiZoom), and is measured
+// from the table's outer edge, outside its 1px border. Over a zoomed page
+// the copy frame, the fill handle and the ▼ drifted off their cells.
+function gridBox(el) {
+  const w = G.wrap, z = uiZoom(), wr = w.getBoundingClientRect(), r = el.getBoundingClientRect();
+  const x = (r.left - wr.left) / z - w.clientLeft + w.scrollLeft;
+  const y = (r.top - wr.top) / z - w.clientTop + w.scrollTop;
+  return { left: x, top: y, right: x + r.width / z, bottom: y + r.height / z, width: r.width / z, height: r.height / z };
+}
 function gridPaintSel(fillTo) {
   (G.painted || []).forEach(td => td.classList.remove("in", "cur", "fillp"));
   document.querySelectorAll("#g-table th.hl").forEach(th => th.classList.remove("hl"));
@@ -578,22 +600,22 @@ function gridPaintSel(fillTo) {
   // The fill handle sits on the bottom-right corner of the selection.
   const corner = G.tds[g.r1] && G.tds[g.r1][g.c1];
   if (fill && corner && !G.edit) {
-    const wr = G.wrap.getBoundingClientRect(), cr = corner.getBoundingClientRect();
+    const cb = gridBox(corner);
     // Inside the cell's corner: hanging over its edge, the handle of the
     // last row sat under the table's horizontal scrollbar and could not be
     // grabbed.
-    fill.style.left = (cr.right - wr.left + G.wrap.scrollLeft - 10) + "px";
-    fill.style.top = (cr.bottom - wr.top + G.wrap.scrollTop - 10) + "px";
+    fill.style.left = (cb.right - 10) + "px";
+    fill.style.top = (cb.bottom - 10) + "px";
     fill.classList.remove("hidden");
   } else if (fill) fill.classList.add("hidden");
   // The ▼ of a column with choices sits at the right end of the current cell.
   const dd = document.getElementById("g-dd");
   const ccol = G.vc[G.sel.fc];
   if (dd && cur && !G.edit && gridChoices(ccol)) {
-    const wr = G.wrap.getBoundingClientRect(), cr = cur.getBoundingClientRect();
-    dd.style.left = (cr.right - wr.left + G.wrap.scrollLeft - 20) + "px";
-    dd.style.top = (cr.top - wr.top + G.wrap.scrollTop + 1) + "px";
-    dd.style.height = Math.max(cr.height - 2, 16) + "px";
+    const cb = gridBox(cur);
+    dd.style.left = (cb.right - 20) + "px";
+    dd.style.top = (cb.top + 1) + "px";
+    dd.style.height = Math.max(cb.height - 2, 16) + "px";
     dd.classList.remove("hidden");
   } else if (dd) dd.classList.add("hidden");
 }
@@ -617,13 +639,13 @@ function gridOpenList() {
   gridEnsureVisible(G.sel.fr, G.sel.fc);
   const cur = row.cells[col.key] || "";
   list.innerHTML = opts.map((o, i) => `<div class="g-opt${o.v === cur ? " on" : ""}" data-i="${i}">${esc(o.label)}</div>`).join("");
-  const wr = G.wrap.getBoundingClientRect(), cr = td.getBoundingClientRect();
-  list.style.left = (cr.left - wr.left + G.wrap.scrollLeft) + "px";
-  list.style.minWidth = Math.max(cr.width, 160) + "px";
+  const cb = gridBox(td), w = G.wrap;
+  list.style.left = cb.left + "px";
+  list.style.minWidth = Math.max(cb.width, 160) + "px";
   list.classList.remove("hidden");
   // Below the cell, or above it when the table has no room left below.
-  const below = wr.bottom - cr.bottom, h = Math.min(list.scrollHeight, 280);
-  list.style.top = (below < h + 8 && cr.top - wr.top > below ? cr.top - wr.top + G.wrap.scrollTop - h - 2 : cr.bottom - wr.top + G.wrap.scrollTop + 1) + "px";
+  const above = cb.top - w.scrollTop, below = w.clientHeight - (cb.bottom - w.scrollTop), h = Math.min(list.scrollHeight, 280);
+  list.style.top = (below < h + 8 && above > below ? cb.top - h - 2 : cb.bottom + 1) + "px";
   G.list = { opts, i: Math.max(0, opts.findIndex(o => o.v === cur)), kind: col.kind };
   gridListHL();
   list.focus({ preventScroll: true });
@@ -690,17 +712,19 @@ function gridShowSel() {
 function gridEnsureVisible(r, c, keepX, keepY) {
   const td = G.tds[r] && G.tds[r][c];
   if (!td) return;
-  const w = G.wrap, wr = w.getBoundingClientRect(), tr = td.getBoundingClientRect();
-  const head = document.querySelector("#g-table thead").getBoundingClientRect().height;
+  // In the table's own pixels (gridBox): the scroll offsets are in them.
+  const w = G.wrap, tb = gridBox(td), z = uiZoom();
+  const top = tb.top - w.scrollTop, bottom = tb.bottom - w.scrollTop, x0 = tb.left - w.scrollLeft, x1 = tb.right - w.scrollLeft;
+  const head = document.querySelector("#g-table thead").getBoundingClientRect().height / z;
   let left = 46;
   const stick = document.querySelector("#g-table thead th.g-stick");
-  if (stick && c > 0) left += stick.getBoundingClientRect().width;
+  if (stick && c > 0) left += stick.getBoundingClientRect().width / z;
   if (keepY) { /* whole column: stay */ }
-  else if (tr.top < wr.top + head) w.scrollTop -= wr.top + head - tr.top;
-  else if (tr.bottom > wr.bottom - 14) w.scrollTop += tr.bottom - wr.bottom + 14;
+  else if (top < head) w.scrollTop -= head - top;
+  else if (bottom > w.clientHeight - 14) w.scrollTop += bottom - w.clientHeight + 14;
   if (keepX) { /* whole row: stay */ }
-  else if (tr.left < wr.left + left) w.scrollLeft -= wr.left + left - tr.left;
-  else if (tr.right > wr.right - 14) w.scrollLeft += tr.right - wr.right + 14;
+  else if (x0 < left) w.scrollLeft -= left - x0;
+  else if (x1 > w.clientWidth - 14) w.scrollLeft += x1 - w.clientWidth + 14;
 }
 function gridSelect(ar, ac, fr, fc) {
   G.sel = { ar, ac, fr: fr ?? ar, fc: fc ?? ac };
@@ -801,11 +825,11 @@ function gridBeginEdit(initial) {
     dl.innerHTML = labels.map(l => `<option value="${esc(l)}"></option>`).join("");
     inp.setAttribute("list", "g-dl");
   }
-  const wr = G.wrap.getBoundingClientRect(), cr = td.getBoundingClientRect();
-  inp.style.left = (cr.left - wr.left + G.wrap.scrollLeft) + "px";
-  inp.style.top = (cr.top - wr.top + G.wrap.scrollTop) + "px";
-  inp.style.minWidth = Math.max(cr.width, 140) + "px";
-  inp.style.height = cr.height + "px";
+  const cb = gridBox(td);
+  inp.style.left = cb.left + "px";
+  inp.style.top = cb.top + "px";
+  inp.style.minWidth = Math.max(cb.width, 140) + "px";
+  inp.style.height = cb.height + "px";
   G.wrap.appendChild(inp);
   G.edit = { r, c, inp, uid: row.uid, key: col.key, mode: initial != null ? "enter" : "edit" };
   document.getElementById("g-fill").classList.add("hidden");
@@ -971,11 +995,11 @@ function gridPaintClip() {
   const c1 = c ? G.vc.findIndex(x => x.key === c.keys[c.keys.length - 1]) : -1;
   const a = r0 >= 0 && c0 >= 0 && G.tds[r0] && G.tds[r0][c0], b = r1 >= 0 && c1 >= 0 && G.tds[r1] && G.tds[r1][c1];
   if (!a || !b) { el.classList.add("hidden"); return; }
-  const wr = G.wrap.getBoundingClientRect(), ar = a.getBoundingClientRect(), br = b.getBoundingClientRect();
-  el.style.left = (ar.left - wr.left + G.wrap.scrollLeft) + "px";
-  el.style.top = (ar.top - wr.top + G.wrap.scrollTop) + "px";
-  el.style.width = (br.right - ar.left) + "px";
-  el.style.height = (br.bottom - ar.top) + "px";
+  const ab = gridBox(a), bb = gridBox(b);
+  el.style.left = ab.left + "px";
+  el.style.top = ab.top + "px";
+  el.style.width = (bb.right - ab.left) + "px";
+  el.style.height = (bb.bottom - ab.top) + "px";
   el.classList.toggle("cut", !!c.cut);
   el.classList.remove("hidden");
 }
@@ -1634,7 +1658,7 @@ function gridColsDialog() {
   const apply = () => {
     const vis = new Set(["name"]);
     node.querySelectorAll("[data-col]").forEach(b => { if (b.checked) vis.add(b.dataset.col); });
-    node.querySelectorAll("[data-hop]").forEach(b => { if (b.checked) G.cols.filter(c => c.hop === +b.dataset.hop).forEach(c => vis.add(c.key)); });
+    node.querySelectorAll("[data-hop]").forEach(b => { if (b.checked) G.cols.filter(c => c.hop === +b.dataset.hop).forEach(c => vis.add(c.key)); else vis.add("-hop" + b.dataset.hop); });
     G.vis = vis;
     // Hiding the sort column would leave the sort on with no ▲▼ in sight.
     if (G.sort.key && !vis.has(G.sort.key)) gridClearSort();
@@ -1678,9 +1702,11 @@ function gridHeaderMenu(key, anchor) {
     ${key !== "name" ? `<button class="g-hi" data-a="hide">${esc(t("この列を隠す"))}</button>` : ""}
   </div>`);
   document.body.appendChild(pop);
-  const r = anchor.getBoundingClientRect();
-  pop.style.left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 8) + "px";
-  pop.style.top = Math.min(r.bottom + 2, window.innerHeight - pop.offsetHeight - 8) + "px";
+  // Fixed to the window, in page pixels: the rect and the window size are
+  // in window pixels (app.js uiZoom).
+  const r = anchor.getBoundingClientRect(), z = uiZoom();
+  pop.style.left = Math.min(r.left / z, window.innerWidth / z - pop.offsetWidth - 8) + "px";
+  pop.style.top = Math.min(r.bottom / z + 2, window.innerHeight / z - pop.offsetHeight - 8) + "px";
   const boxes = () => [...pop.querySelectorAll("[data-v]")];
   const all = pop.querySelector("[data-all]");
   all.checked = boxes().every(b => b.checked);
@@ -1704,7 +1730,10 @@ function gridHeaderMenu(key, anchor) {
     else if (a === "hide") {
       // Hiding the sort column would leave the sort on with no ▲▼ in sight.
       if (G.sort.key === key) gridClearSort();
-      G.vis.delete(key); gridSaveVis();
+      G.vis.delete(key);
+      // The hop's last column hidden: the hop stays hidden (gridLoadVis).
+      if (col.hop && !G.cols.some(c => c.hop === col.hop && G.vis.has(c.key))) G.vis.add("-hop" + col.hop);
+      gridSaveVis();
     }
     close(); // puts the focus back on the table
     gridRedrawTable(false);
@@ -1826,7 +1855,7 @@ function gridWire(root) {
     const rz = e.target.closest(".g-rz");
     if (rz) {
       const c = +rz.dataset.rz;
-      gridDrag = { mode: "rz", c, x: e.clientX, w: document.querySelectorAll("#g-table col")[c + 1].getBoundingClientRect().width || gridColW(G.vc[c]) };
+      gridDrag = { mode: "rz", c, x: e.clientX, w: document.querySelectorAll("#g-table col")[c + 1].getBoundingClientRect().width / uiZoom() || gridColW(G.vc[c]) };
       e.preventDefault(); e.stopPropagation();
       return;
     }
@@ -1904,7 +1933,7 @@ document.addEventListener("modal-closed", () => {
 document.addEventListener("mousemove", e => {
   if (!gridDrag || !G) return;
   if (gridDrag.mode === "rz") {
-    const w = Math.max(40, Math.min(600, gridDrag.w + e.clientX - gridDrag.x));
+    const w = Math.max(40, Math.min(600, gridDrag.w + (e.clientX - gridDrag.x) / uiZoom()));
     const col = document.querySelectorAll("#g-table col")[gridDrag.c + 1];
     if (col) col.style.width = w + "px";
     gridDrag.nw = w;

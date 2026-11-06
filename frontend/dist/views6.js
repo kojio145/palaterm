@@ -944,7 +944,7 @@ const LI_STATUS = {
   err: ["li-p-err", "取り込めない"], same: ["li-p-same", "変更なし"], skip: ["li-p-skip", "取り込まない"],
   excl: ["li-p-skip", "除外"],
 };
-const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", guess: "推測（既存の機器は変えません）", new: "" };
+const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", fill: "PalaTerm では空", guess: "推測（既存の機器は変えません）", new: "" };
 
 // liRowStatus is the status a preview row is shown and filtered under: a
 // row the rule leaves out (an exclusion, no name) is 除外, apart from one
