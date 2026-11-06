@@ -385,6 +385,12 @@ type ImportRecord struct {
 	// wrote them, so the next one tells a value changed in the source from
 	// one edited here: only the source's changes are taken.
 	Base map[string]string `json:"base"`
+	// V is the record's version: 0 (v1.9.30 and before) recorded a cell
+	// that was asked and left on its default 残す too, so a value the device
+	// never had read as PalaTerm's change for ever; 1 (v1.9.31) fills such a
+	// cell by default, so a record of this version saying the source had
+	// the value while the device is empty is a deletion made here.
+	V int `json:"v,omitempty"`
 }
 
 // PruneImportRecords drops the records of devices no longer there.

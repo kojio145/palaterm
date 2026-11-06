@@ -223,6 +223,13 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		dev, errs := csvio.CellsDevice(fc)
 		dev.Group = opt.Group
 		canon := csvio.DeviceCells(dev)
+		// The file's hops under their own numbers (CellsDevice closed a
+		// gap: a list with the second hop only wrote it as the first, and
+		// an existing device's own first hop read as changed while the
+		// second was never written).
+		for k, v := range csvio.HopCells(fc) {
+			canon[k] = v
+		}
 		fr := &fileRow{row: row, cells: map[string]string{}, errs: map[string]string{}, dev: dev, linked: -1}
 		for _, k := range row.Keys {
 			fr.cells[k] = canon[k]
@@ -513,6 +520,9 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		d := fr.dev
 		d.ID = ""
 		stamp(pr, fr, nil, nil)
+		if n := csvio.HopGap(fr.cells); n > 0 {
+			pr.Errors = append(pr.Errors, hopGapMsg(n))
+		}
 		if err := inv.ValidateIn(&d); err != nil {
 			pr.Errors = append(pr.Errors, err.Error())
 		}
@@ -521,6 +531,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	}
 	cur := inv.Devices[fr.linked]
 	cc := csvio.DeviceCells(cur)
+	rec := inv.ImportRecords[cur.ID]
 	lost := map[string]bool{}
 	for _, k := range fr.row.Lost {
 		lost[k] = true
@@ -533,7 +544,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	for _, k := range keys {
 		f, c := fr.cells[k], cc[k]
 		cell := Cell{Key: k, File: f, Cur: c, Secret: isSecret(k), Filled: filled[k], Guessed: guessed[k]}
-		b, has := inv.ImportRecords[cur.ID].Base[k]
+		b, has := rec.Base[k]
 		switch {
 		case f == c:
 			cell.State, cell.Choice = "same", "keep"
@@ -554,6 +565,13 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 			cell.State, cell.Choice = "fill", "file"
 		case !has:
 			cell.State, cell.Choice = "ask", "keep"
+		case rec.V == 0 && c == "" && f != "" && b == f && gridByKey[k].Kind != "bool":
+			// A record of v1.9.30 or before: the cell was asked and left
+			// on its default 残す, yet recorded as if written, so the
+			// value the device never had read as PalaTerm's change at
+			// every import since. Filled like a cell with no record; a
+			// record written now (V 1) tells a deletion made here apart.
+			cell.State, cell.Choice = "fill", "file"
 		case b == c:
 			cell.State, cell.Choice = "take", "file"
 		case b == f:
@@ -582,6 +600,11 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 			pr.Errors = append(pr.Errors, FieldLabel(e.Col)+": "+e.Msg)
 		}
 	}
+	// A hop the file adds with the one before it empty on both sides:
+	// CellsDevice would close the gap and write it one hop up.
+	if n := csvio.HopGap(out); n > 0 {
+		pr.Errors = append(pr.Errors, hopGapMsg(n))
+	}
 	d.ID, d.Group = cur.ID, cur.Group
 	stamp(pr, fr, inv.ImportRecords[cur.ID].Base, lost)
 	if err := inv.ValidateIn(&d); err != nil {
@@ -605,7 +628,7 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 // column is back, the comparison is with what the source last said, not with
 // an empty value it never said.
 func stamp(pr *PlanRow, fr *fileRow, prev map[string]string, lost map[string]bool) {
-	rec := &model.ImportRecord{Key: fr.row.Key, KeyBy: fr.row.KeyBy, Base: map[string]string{}}
+	rec := &model.ImportRecord{Key: fr.row.Key, KeyBy: fr.row.KeyBy, Base: map[string]string{}, V: 1}
 	for k, v := range fr.cells {
 		if lost[k] {
 			if b, ok := prev[k]; ok {
@@ -616,6 +639,16 @@ func stamp(pr *PlanRow, fr *fileRow, prev map[string]string, lost map[string]boo
 		rec.Base[k] = v
 	}
 	pr.rec = rec
+}
+
+// hopGapMsg: hop n is empty while a later hop has a host. A new device
+// cannot hold the gap (its hops are a list), and closing it quietly wrote
+// the later hop one up — the device's own first hop, set by hand or by
+// 一括変更, then read as changed. The list without that hop is imported
+// first, the hop added, and the list imported again with the hop's columns
+// (an existing device keeps its hops and takes the file's by number).
+func hopGapMsg(n int) string {
+	return fmt.Sprintf("踏み台%dが空のまま踏み台%dがあります。先に踏み台%dを付けた機器なら、取り込み直すと踏み台%dが足されます（新しい機器は、踏み台%d以降の列を外して取り込み → 踏み台%dを付ける → 列を戻して取り込み直し）", n, n+1, n, n+1, n+1, n)
 }
 
 // Result says what Apply did.

@@ -248,6 +248,46 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 	return d, errs
 }
 
+// HopCells canonicalises the jump-host cells of c hop by hop, each under
+// its own number. CellsDevice closes a gap (a second hop with the first
+// empty becomes the first), which is what the table editor and a CSV mean;
+// a list conversion comparing the file's cells with a device's must keep
+// the file's numbering — the first hop may be the device's own (set by hand
+// or by 一括変更) and the file give only the second. A hop with no host
+// reads empty in every field.
+func HopCells(c map[string]string) map[string]string {
+	out := map[string]string{}
+	for n := 1; n <= model.MaxBastions; n++ {
+		p := "bastion" + strconv.Itoa(n)
+		one := map[string]string{"name": "x", "host": "192.0.2.1"}
+		for _, f := range hopFields {
+			one["bastion1"+f.key] = c[p+f.key]
+		}
+		d, _ := CellsDevice(one)
+		cells := DeviceCells(d)
+		for _, f := range hopFields {
+			out[p+f.key] = cells["bastion1"+f.key]
+		}
+	}
+	return out
+}
+
+// HopGap is the number of the first empty hop that a later hop follows in
+// c (0 when the hops are in order): CellsDevice would close the gap.
+func HopGap(c map[string]string) int {
+	gap := 0
+	for n := 1; n <= model.MaxBastions; n++ {
+		if strings.TrimSpace(c["bastion"+strconv.Itoa(n)+"Host"]) == "" {
+			if gap == 0 {
+				gap = n
+			}
+		} else if gap > 0 {
+			return gap
+		}
+	}
+	return 0
+}
+
 func boolWord(v string) bool {
 	return parseBool(v, true) == parseBool(v, false)
 }
