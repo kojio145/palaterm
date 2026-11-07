@@ -17,6 +17,7 @@ import (
 // parent checks both lie under the log folder) and needs no vault.
 type DiffWin struct {
 	ctx   context.Context
+	cc    childCtx // for the parent's CLOSE (watchParent)
 	a, b  string
 	label string
 	title string
@@ -42,6 +43,7 @@ func NewDiffWin(a, b, label, title string) *DiffWin {
 
 func (d *DiffWin) startup(ctx context.Context) {
 	d.ctx = ctx
+	d.cc.set(ctx)
 	diffWin.fit(ctx)
 	placeNearParent(ctx, diffWin)
 }

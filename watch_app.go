@@ -21,6 +21,7 @@ type Watcher struct {
 	ctx   context.Context
 	path  string
 	title string
+	cc    childCtx // for the parent's CLOSE (watchParent)
 }
 
 // watchChunk is the next part of the file from the offset asked for.
@@ -43,6 +44,7 @@ func NewWatcher(path, title string) *Watcher { return &Watcher{path: path, title
 
 func (w *Watcher) startup(ctx context.Context) {
 	w.ctx = ctx
+	w.cc.set(ctx)
 	termWin.fit(ctx)
 	placeNearParent(ctx, termWin)
 }

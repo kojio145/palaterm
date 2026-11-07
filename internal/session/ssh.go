@@ -424,16 +424,63 @@ func keyboardInteractive(password string) ssh.KeyboardInteractiveChallenge {
 	}
 }
 
-// sshDialError adds what the user can do about a failed handshake: allow
-// the old algorithms, or fix the credentials.
+// sshDialError puts in front of a failed dial what it means and what the
+// user can do about it — allow the old algorithms, fix the credentials, look
+// at the device that hung up or at the slow authentication — in the form
+// "理由（ssh dial addr: raw）", the raw error kept (and wrapped, for
+// errors.As). A failure with no explanation stays "ssh dial addr: raw",
+// which the runner's dialHint reads (review 2026-11-07 F-A-4).
 func sshDialError(addr string, err error, user string, auth model.AuthMethod, opts DialOpts) error {
-	if hint := algorithmHint(err, opts); hint != "" {
-		return fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
+	raw := fmt.Errorf("ssh dial %s: %w", addr, err)
+	for _, hint := range []string{algorithmHint(err, opts), authFailureHint(err, user, auth), handshakeHint(err)} {
+		if hint != "" {
+			return fmt.Errorf("%s（%w）", hint, raw)
+		}
 	}
-	if hint := authFailureHint(err, user, auth); hint != "" {
-		return fmt.Errorf("ssh dial %s: %w — %s", addr, err, hint)
+	return raw
+}
+
+// Hints for a handshake that ended without a reason of its own.
+const (
+	// HintHandshakeDropped: the TCP connection was made and the far end
+	// closed it at once — an SSH server that refuses this client before
+	// saying why.
+	HintHandshakeDropped = "機器側が接続直後に切断しました（VTY の ACL・同時接続数の上限・SSH 鍵未生成のいずれか）"
+	// HintHandshakeTimedOut: the connection was made and the handshake or
+	// the authentication did not finish in the connect timeout.
+	HintHandshakeTimedOut = "接続はできましたが応答・認証が時間内に終わりません（認証サーバーの遅延など）"
+)
+
+// HandshakeDropped reports an error text of a connection the far end
+// closed during the SSH handshake (EOF, reset, "forcibly closed").
+func HandshakeDropped(msg string) bool {
+	low := strings.ToLower(msg)
+	return strings.HasSuffix(strings.TrimSpace(low), "eof") || strings.Contains(low, ": eof") ||
+		strings.Contains(low, "connection reset") || strings.Contains(low, "forcibly closed") ||
+		strings.Contains(low, "broken pipe")
+}
+
+// HandshakeTimedOut reports an error text of an SSH handshake that ran out
+// of time (the connect deadline hit while the far end was still talking).
+func HandshakeTimedOut(msg string) bool {
+	low := strings.ToLower(msg)
+	return strings.Contains(low, "i/o timeout") || strings.Contains(low, "timed out") || strings.Contains(low, "deadline exceeded")
+}
+
+// handshakeHint explains "ssh: handshake failed: …" when the library's
+// words say only how the connection ended.
+func handshakeHint(err error) string {
+	msg := err.Error()
+	if !strings.Contains(msg, "handshake failed") {
+		return ""
 	}
-	return fmt.Errorf("ssh dial %s: %w", addr, err)
+	switch {
+	case HandshakeDropped(msg):
+		return HintHandshakeDropped
+	case HandshakeTimedOut(msg):
+		return HintHandshakeTimedOut
+	}
+	return ""
 }
 
 // algorithmHint says what to do about x/crypto's "no common algorithm for

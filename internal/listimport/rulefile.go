@@ -53,7 +53,7 @@ func ValidateRule(r *model.ImportRule) error {
 // date last used and the sample file's name (a local file) stay home.
 func ExportRule(r model.ImportRule, app string) ([]byte, error) {
 	out := r
-	out.ID, out.LastUsed, out.SampleName = "", "", ""
+	out.ID, out.LastUsed, out.SampleName, out.LastGroup = "", "", "", ""
 	out.Fields = stripSecrets(r.Fields)
 	out.Units = nil
 	for _, u := range r.Units {
@@ -124,7 +124,7 @@ func ParseRule(data []byte) (model.ImportRule, error) {
 	r := f.Rule
 	// The sample's file name is this PC's business: a rule handed over must
 	// not be picked by itself for a file of that name.
-	r.ID, r.LastUsed, r.SampleName = "", "", ""
+	r.ID, r.LastUsed, r.SampleName, r.LastGroup = "", "", "", ""
 	if err := ValidateRule(&r); err != nil {
 		return model.ImportRule{}, err
 	}

@@ -161,7 +161,7 @@ async function bootTerminalWindow() {
       <div class="sub-modal" style="width:min(620px,92vw);border-color:var(--warn)">
         <h3 style="color:var(--warn)">${esc(t("ホストキーが前回と異なります"))}</h3>
         <div id="tw-hk-msg" style="font-size:13px;line-height:1.8;margin-bottom:6px"></div>
-        <div class="muted" style="font-size:12px;line-height:1.7">${esc(t("機器を交換した／OSを再インストールした場合だけ許可してください。心当たりがなければ、なりすましの可能性があるため許可せずネットワーク管理者に確認してください。"))}</div>
+        <div id="tw-hk-note" class="muted" style="font-size:12px;line-height:1.7">${esc(t("機器を交換した／OSを再インストールした場合だけ許可してください。心当たりがなければ、なりすましの可能性があるため許可せずネットワーク管理者に確認してください。"))}</div>
         <div class="modal-actions">
           <button class="btn" id="tw-hk-cancel">${esc(t("キャンセル"))}</button>
           <button class="btn danger" id="tw-hk-ok">${esc(t("機器を交換したので許可して再接続"))}</button>
@@ -282,6 +282,11 @@ async function bootTerminalWindow() {
     // Ctrl+Shift+F finds in the scrollback; plain Ctrl+F reaches the device
     // (^F: page down in less / vi, cursor right on IOS) as in Tera Term.
     if (e.ctrlKey && e.shiftKey && (e.code === "KeyF" || e.key === "f" || e.key === "F")) { openFind(); return false; }
+    // Ctrl+Shift+6 (US: ^ over the 6) and Ctrl+^ (JIS: its own key) send
+    // RS (0x1e), the telnet escape on IOS / Junos ("Ctrl+Shift+6, x"
+    // suspends a session). xterm.js sends it for Ctrl+6 alone, and the JIS
+    // ^ key sits where Equal is, which read as 文字を大きく — before zoom.key.
+    if (e.ctrlKey && !e.altKey && (e.key === "^" || (e.shiftKey && e.code === "Digit6"))) { typed("\x1e"); return false; }
     if (zoom.key(e)) return false;
     if (e.ctrlKey && !e.shiftKey && isV) return false;
     if (e.shiftKey && !e.ctrlKey && isIns) return false;
@@ -484,9 +489,36 @@ async function bootTerminalWindow() {
     setTimeout(() => { suppressCopy = false; }, 50);
     findN.textContent = `${matchIdx + 1} / ${matches.length}`;
   }
+  // The buffer as it was when the matches were collected: its length, its
+  // base row and its first line. Output that arrived since moves the
+  // matches (the buffer grows; once the scrollback is full, lines scroll
+  // off the top) and 次へ landed on the wrong text: the matches are
+  // collected again and the walk goes on from the match shown.
+  let matchStamp = null;
+  function bufStamp() {
+    const b = term.buffer.active, l = b.getLine(0);
+    return { len: b.length, base: b.baseY, first: l ? l.translateToString(true) : "" };
+  }
+  const sameStamp = (a, b) => !!a && !!b && a.len === b.len && a.base === b.base && a.first === b.first;
   function findNext(dir) {
     const q = findIn.value;
-    if (q !== lastQuery) { lastQuery = q; matches = collectMatches(q); matchIdx = dir >= 0 ? -1 : 0; }
+    const st = bufStamp();
+    if (q !== lastQuery) { lastQuery = q; matches = collectMatches(q); matchStamp = st; matchIdx = dir >= 0 ? -1 : 0; }
+    else if (!sameStamp(st, matchStamp)) {
+      const prev = matches[matchIdx];
+      matches = collectMatches(q); matchStamp = st;
+      // From the match shown: the same place if it is still a match, else
+      // the one before the first past it (so that 次へ lands on that).
+      let at = -1;
+      if (prev) {
+        at = matches.findIndex(m => m.y === prev.y && m.x === prev.x);
+        if (at < 0) {
+          const past = matches.findIndex(m => m.y > prev.y || (m.y === prev.y && m.x > prev.x));
+          at = (past < 0 ? matches.length : past) - 1;
+        }
+      }
+      matchIdx = at < 0 ? (dir >= 0 ? -1 : 0) : at;
+    }
     if (!matches.length) { showMatch(); return; }
     matchIdx = (matchIdx + dir + matches.length) % matches.length;
     showMatch();
@@ -520,9 +552,18 @@ async function bootTerminalWindow() {
   // being recorded.
   let logging = true;
   const logBtn = document.getElementById("tw-log");
+  // The state pill while connected: 接続済み / 接続済み（手動）, with
+  // 記録停止中 while the log is stopped ("" while not connected: the pill
+  // then says what the connection is doing).
+  let stateBase = "";
+  function renderState() {
+    if (!stateBase) return;
+    stateEl.textContent = stateBase + (logging ? "" : t("（記録停止中）"));
+  }
   function renderLogBtn() {
     logBtn.textContent = logging ? t("ログ停止") : t("ログ開始");
     logBtn.classList.toggle("danger", !logging);
+    renderState();
   }
   logBtn.onclick = () => {
     if (closed) return;
@@ -622,7 +663,12 @@ async function bootTerminalWindow() {
     closed = false;
     showSwitch(false);
     takeoverBar.classList.add("hidden"); doFit();
-    stateEl.textContent = ev.manual ? t("接続済み（手動）") : t("接続済み"); stateEl.className = "pill ok";
+    // A new session records from its start (a new log stream): the button
+    // follows, or it read ログ開始 after a reconnect while the log was on.
+    // A login continued by hand (ev.takeover) reads 手動 like a manual one.
+    stateBase = (ev.manual || ev.takeover) ? t("接続済み（手動）") : t("接続済み");
+    logging = true; renderLogBtn();
+    stateEl.className = "pill ok";
     reconnectBtn.classList.add("hidden");
     breakBtn.classList.toggle("hidden", ev.conn !== "serial");
     titleEl.textContent = `${ev.group ? ev.group + " / " : ""}${ev.device}  ${ev.host} / ${ev.conn}` + (ev.hops ? `  ${t("踏み台 {n} 段経由", { n: ev.hops })}` : "") + (ev.manual ? `  ${t("（自動ログインなし）")}` : "");
@@ -645,8 +691,20 @@ async function bootTerminalWindow() {
   // everything behind is inert so keys never reach the terminal meanwhile.
   const hkDlg = document.getElementById("tw-hk");
   let hkOpen = false;
-  function showHk(msg) {
+  // blocked: why the key cannot be allowed from here (a jump host's key,
+  // Term.HostKeyChangeBlocked): the 許可して再接続 button is hidden — it led
+  // round in a circle — and the note says where to go instead.
+  let hkBlocked = "";
+  const hkNote = document.getElementById("tw-hk-note"), hkNoteText = hkNote.textContent;
+  function showHk(msg, blocked) {
     if (msg !== undefined) document.getElementById("tw-hk-msg").textContent = msg;
+    if (blocked !== undefined) {
+      hkBlocked = blocked || "";
+      document.getElementById("tw-hk-ok").classList.toggle("hidden", !!hkBlocked);
+      hkNote.textContent = hkBlocked
+        ? t("踏み台のホストキーはこの窓では許可できません。本体で消してから再接続してください（実行タブの結果の「踏み台のホストキーを忘れる…」、または機器編集の踏み台欄）")
+        : hkNoteText;
+    }
     hkOpen = true;
     hkDlg.classList.remove("hidden");
     if (locked) return; // the lock screen decides what is inert; shown again on unlock
@@ -673,6 +731,13 @@ async function bootTerminalWindow() {
   }
   function dismissHk() {
     hideHk();
+    if (hkBlocked) {
+      // Nothing to allow here: 再接続 tries again (the main window may have
+      // forgotten the jump host's key by then).
+      reconnectBtn.classList.remove("hidden");
+      term.write("\x1b[90m" + t("[Enter または「再接続」でもう一度接続します]") + "\x1b[0m\r\n");
+      return;
+    }
     setHkAsk(true);
     reconnectBtn.classList.remove("hidden");
     term.write("\x1b[90m" + t("[Enter または「再接続（ホストキーを確認）」でホストキーの確認をもう一度表示します]") + "\x1b[0m\r\n");
@@ -684,7 +749,7 @@ async function bootTerminalWindow() {
     setHkAsk(false);
     reconnectBtn.classList.add("hidden");
     closed = false; connecting = true; typedHint = false; switchHint = false;
-    stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
+    stateBase = ""; stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[ホストキーを更新して再接続します]") + "\x1b[0m\r\n");
     Term().AllowHostKeyChange().catch(connectFailed);
@@ -740,6 +805,7 @@ async function bootTerminalWindow() {
   }
   rt().EventsOn("term:closed", ev => {
     closed = true;
+    stateBase = "";
     setHkAsk(false);
     connecting = false;
     showSwitch(false);
@@ -756,7 +822,12 @@ async function bootTerminalWindow() {
     // fallback for a backend without it.
     const isHostKey = ev.kind === "hostkey" || (!ev.kind && !!ev.error && /ホストキーが前回接続時と異なります/.test(ev.error));
     const isMasterPw = ev.kind === "masterpw" || (!ev.kind && /マスターパスワード/.test(ev.error || ""));
-    if (isHostKey) showHk(terr(ev.error || ""));
+    if (isHostKey) {
+      // Whose key: the device's own may be allowed here, a jump host's not
+      // (see showHk). Asked first, so the button never shows for a moment.
+      const msg = terr(ev.error || "");
+      Term().HostKeyChangeBlocked().then(why => showHk(msg, why || "")).catch(() => showHk(msg, ""));
+    }
     if (ev.error) term.write("\r\n\x1b[31m" + t("[接続エラー] ") + terr(ev.error) + "\x1b[0m\r\n");
     else term.write("\r\n\x1b[33m" + t("[切断されました]") + "\x1b[0m\r\n");
     if (ev.logPath) term.write("\x1b[36m" + t("[ログ保存] ") + ev.logPath + "\x1b[0m\r\n");
@@ -793,7 +864,7 @@ async function bootTerminalWindow() {
     reconnecting = true;
     reconnectBtn.classList.add("hidden");
     closed = false; connecting = true; typedHint = false; switchHint = false;
-    stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
+    stateBase = ""; stateEl.textContent = t("接続中…"); stateEl.className = "pill run";
     showSwitch(!res.manual);
     term.write("\r\n\x1b[33m" + t("[再接続します]") + "\x1b[0m\r\n");
     Term().Reconnect().catch(connectFailed)
@@ -805,7 +876,7 @@ async function bootTerminalWindow() {
   // at 接続中… with the 再接続 button hidden, and nothing could be done
   // with it.
   function connectFailed(e) {
-    closed = true; connecting = false;
+    closed = true; connecting = false; stateBase = "";
     showSwitch(false);
     stateEl.textContent = t("接続失敗"); stateEl.className = "pill err";
     setOSTitle("", "", t("接続失敗"));
@@ -946,7 +1017,10 @@ async function bootTerminalWindow() {
   const isMouseReport = d => /^(\x1b\[M[\s\S]{3}|\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[\d+;\d+;\d+M)+$/.test(d);
   const isTermReply = d => /^\x1b(\[(\?[\d;]*c|>[\d;]*c|\??\d+;\d+R|0n|\??[\d;]*\$y|[IO]|[\d;]*t)|\][^\x07]*(\x07|\x1b\\)|P[^\x1b]*\x1b\\)$/.test(d)
     && !/^\x1b\[1;[2-8]R$/.test(d);
-  term.onData(d => {
+  // typed is what the keyboard produced (xterm's onData, and the keys the
+  // custom handler sends itself, Ctrl+Shift+6): to the device, unless the
+  // window is in no state to take it.
+  function typed(d) {
     if (locked || hkOpen) return;
     // After a disconnect, Enter opens the session again (the 再接続 button).
     if (closed) { if (d === "\r" && canReconnect()) reconnect(); return; }
@@ -955,13 +1029,12 @@ async function bootTerminalWindow() {
       if (switchBtn.disabled) switchingHint(); else loginHint();
       return;
     }
-    // A reply to the device's own query is this device's alone: never
-    // relayed to the other windows by 同時入力.
     // A reply to the device's own query, or a mouse report (vim / htop with
     // mouse on), is this device's alone: never relayed by 同時入力.
     if (isTermReply(d) || isMouseReport(d)) { sendKeys(d, true); return; }
     sendKeys(d, false);
-  });
+  }
+  term.onData(typed);
   // Close drops the live session; Discard drops a line held for takeover.
   window.addEventListener("beforeunload", () => { if (!closed) Term().Close(); else Term().Discard().catch(() => {}); });
 

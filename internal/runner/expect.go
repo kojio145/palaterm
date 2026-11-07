@@ -321,6 +321,14 @@ func (e *expecter) Mark() int {
 	return e.headMark
 }
 
+// pos is how much output has arrived so far (an absolute offset, as
+// Mark's), without Mark's side effect on head: a wait polling for new data.
+func (e *expecter) pos() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.dropped + e.transcript.Len()
+}
+
 // Since returns the output that arrived after mark. When the transcript's
 // front has been cut since (KeepTail), it is the start of that output (its
 // first headKeep bytes) and the kept tail, joined by a line holding "…".

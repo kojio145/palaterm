@@ -1567,7 +1567,7 @@ func (a *App) SaveSchedule(sc schedule.Schedule) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	req := schedRequest(sc)
 	if !model.Stage(req.Stage).Valid() {
@@ -1624,7 +1624,7 @@ func (a *App) SetScheduleEnabled(id string, on bool) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	var sc *schedule.Schedule
 	for i := range a.inv.Schedules {
@@ -1646,7 +1646,7 @@ func (a *App) SetScheduleEnabled(id string, on bool) error {
 	a.mu.Lock()
 	if a.inv == nil { // locked in between
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	before := slices.Clone(a.inv.Schedules)
 	for i := range a.inv.Schedules {
@@ -1706,7 +1706,7 @@ func (a *App) DeleteFinishedSchedules() (int, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return 0, fmt.Errorf("vault is locked")
+		return 0, errVaultLocked
 	}
 	before := slices.Clone(a.inv.Schedules)
 	keep := a.inv.Schedules[:0]
@@ -1755,7 +1755,7 @@ func (a *App) DeleteSchedule(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	before := slices.Clone(a.inv.Schedules)
 	out := a.inv.Schedules[:0]
@@ -1784,7 +1784,7 @@ func (a *App) RunScheduleNow(id string) error {
 	locked := a.inv == nil
 	a.mu.Unlock()
 	if locked {
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	var job *schedJob
 	for _, sc := range a.schedules() {

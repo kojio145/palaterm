@@ -28,7 +28,6 @@ import (
 	"github.com/kojio145/palaterm/internal/model"
 	"github.com/kojio145/palaterm/internal/profile"
 	runpkg "github.com/kojio145/palaterm/internal/runner"
-	"github.com/kojio145/palaterm/internal/schedule"
 	"github.com/kojio145/palaterm/internal/session"
 	"github.com/kojio145/palaterm/internal/vault"
 )
@@ -101,6 +100,10 @@ type App struct {
 	// counted so far (by name, in memory only).
 	runProg runCounts
 	runSeen map[string]bool
+	// runLast is each device's last event of the batch started by hand,
+	// by name: a page reloaded mid-run (ロック → 解錠) rebuilds its rows
+	// from it instead of showing every device as 順番待ち (GetRunStatus).
+	runLast map[string]runpkg.Event
 }
 
 // vaultHostKeys is the batch runner's session.HostKeyStore backed by the
@@ -196,6 +199,9 @@ func NewApp() *App {
 	}
 	a.sched.kick = make(chan struct{}, 1)
 	a.runner.HostKeys = a.hostKeys() // TOFU host key pinning backed by the vault
+	// A panic inside one device's run fails that device; it is written to
+	// data\error.log like one that ends a batch (review 2026-11-07 F-C-3).
+	a.runner.OnPanic = func(where string, p any) { logPanic("runner "+where, p) }
 	vault.Writer = appVersion
 	return a
 }
@@ -378,7 +384,7 @@ func (a *App) ClearHostKeys(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	idx := a.inv.DeviceIndex(id)
 	if idx < 0 {
@@ -1012,7 +1018,7 @@ func (a *App) locked() bool {
 	return a.inv == nil
 }
 
-var errVaultLocked = fmt.Errorf("vault is locked")
+var errVaultLocked = errors.New("ロック中です。解錠してから操作してください")
 
 // Unlocked tells a page that reloaded itself (the language switch) whether
 // the vault is still open, so it can go straight back in instead of asking
@@ -1028,7 +1034,7 @@ func (a *App) ChangeMasterPassword(current, next string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if current != a.password {
 		return fmt.Errorf("現在のマスターパスワードが違います")
@@ -1061,7 +1067,7 @@ func (a *App) ResetVault(current string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if current != a.password {
 		a.mu.Unlock()
@@ -1099,7 +1105,7 @@ func (a *App) persist() error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	// Safety net: whatever path added a device, it is saved with an ID.
 	a.inv.EnsureDeviceIDs()
@@ -1163,7 +1169,7 @@ func (a *App) SaveProfile(p profile.Profile) error {
 		return fmt.Errorf("プロファイル名は必須です")
 	}
 	if strings.TrimSpace(p.Prompt) == "" {
-		return fmt.Errorf("「showコマンド完了の目印」は必須です")
+		return fmt.Errorf("プロンプト（コマンド完了の目印）は必須です")
 	}
 	// Control characters and credential variables in the answers are refused
 	// there, for every path a profile comes in by (file imports too).
@@ -1174,7 +1180,7 @@ func (a *App) SaveProfile(p profile.Profile) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	// A new profile (追加, 複製) gets a key no profile has: a profile renamed
 	// since keeps its old key ("custom:X_copy" for one now called "Y"), and
@@ -1183,6 +1189,7 @@ func (a *App) SaveProfile(p profile.Profile) error {
 		p.Key = a.freeProfileKeyLocked(p.Name)
 	}
 	found := false
+	var old profile.Profile // the version replaced (the registry gets it back on a failed save)
 	for i := range a.inv.CustomProfiles {
 		q := &a.inv.CustomProfiles[i]
 		if q.Key != p.Key && strings.EqualFold(q.Name, p.Name) {
@@ -1190,16 +1197,26 @@ func (a *App) SaveProfile(p profile.Profile) error {
 			return fmt.Errorf("同名のプロファイル「%s」が既にあります", q.Name)
 		}
 		if q.Key == p.Key {
+			old = *q
 			*q = p
 			found = true
 		}
 	}
+	snap := a.snapshotLocked()
 	if !found {
 		a.inv.CustomProfiles = append(a.inv.CustomProfiles, p)
 	}
 	a.mu.Unlock()
 	a.profiles.Add(profile.Quote(p))
-	return a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		if found {
+			a.profiles.Add(profile.Quote(old))
+		} else {
+			a.profiles.Remove(p.Key)
+		}
+		return err
+	}
+	return nil
 }
 
 // freeProfileKeyLocked (caller holds a.mu) is the key a new profile called
@@ -1222,24 +1239,44 @@ func (a *App) DeleteProfile(key string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
+	// Every device on it, not the first: the operator sees how much there
+	// is to change, and what to do (review 2026-11-07 B-C4).
+	var using []string
 	for _, d := range a.inv.Devices {
 		if d.OSType == key {
-			a.mu.Unlock()
-			return fmt.Errorf("機器「%s」がこのプロファイルを使用中のため削除できません", d.Name)
+			using = append(using, d.Name)
 		}
 	}
-	out := a.inv.CustomProfiles[:0]
+	if n := len(using); n > 0 {
+		a.mu.Unlock()
+		if n > 5 {
+			using = append(using[:5], "…")
+		}
+		return fmt.Errorf("機器 %d 台がこの OS タイプを使用中のため削除できません（%s）。機器の OS タイプを変えてから削除してください", n, strings.Join(using, ", "))
+	}
+	snap := a.snapshotLocked()
+	var gone *profile.Profile
+	out := a.inv.CustomProfiles[:0:0]
 	for _, p := range a.inv.CustomProfiles {
 		if p.Key != key {
 			out = append(out, p)
+		} else {
+			q := p
+			gone = &q
 		}
 	}
 	a.inv.CustomProfiles = out
 	a.mu.Unlock()
 	a.profiles.Remove(key)
-	return a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		if gone != nil {
+			a.profiles.Add(profile.Quote(*gone))
+		}
+		return err
+	}
+	return nil
 }
 
 // CopyProfile duplicates a profile under "<名前>_copy" (then _copy2, …) and
@@ -1248,7 +1285,7 @@ func (a *App) CopyProfile(key string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	var src *profile.Profile
 	existing := map[string]bool{}
@@ -1275,10 +1312,15 @@ func (a *App) CopyProfile(key string) (string, error) {
 	dup.Pager = append([]profile.Step(nil), src.Pager...)
 	dup.Disconnect = append([]profile.Step(nil), src.Disconnect...)
 	dup.Answers = append([]profile.Step(nil), src.Answers...)
+	snap := a.snapshotLocked()
 	a.inv.CustomProfiles = append(a.inv.CustomProfiles, dup)
 	a.mu.Unlock()
 	a.profiles.Add(profile.Quote(dup))
-	return newName, a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		a.profiles.Remove(dup.Key)
+		return "", err
+	}
+	return newName, nil
 }
 
 // ListSerialPorts returns COM ports currently present.
@@ -1315,13 +1357,13 @@ func (a *App) SaveDevice(d model.Device) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if err := a.inv.ValidateIn(&d); err != nil {
 		a.mu.Unlock()
 		return err
 	}
-	before, beforeSched := slices.Clone(a.inv.Devices), slices.Clone(a.inv.Schedules)
+	snap := a.snapshotLocked()
 	idx := -1
 	if d.ID != "" {
 		for i := range a.inv.Devices {
@@ -1363,18 +1405,37 @@ func (a *App) SaveDevice(d model.Device) error {
 		a.inv.Settings.LastKeyFile = d.KeyFile
 	}
 	a.mu.Unlock()
-	return a.persistThenLog(before, beforeSched, stopped)
+	return a.persistOr(snap, stopped)
 }
 
-// persistThenLog saves the vault and only then writes the 実行記録 lines
-// of the schedules the change stopped; a failed save puts the devices and
-// schedules back as they were (ApplyGrid's rule), so no line says a
-// schedule stopped for a change that was never kept.
-func (a *App) persistThenLog(before []model.Device, beforeSched []schedule.Schedule, stopped []SchedLogEntry) error {
+// invSnapshot is the inventory as a binding found it, to put back when the
+// save fails: memory and the vault must agree, or the page shows a change
+// that is gone at the next unlock, and a 実行記録 line would say a schedule
+// stopped for a change never kept. The host keys are not part of it: a
+// batch may pin one meanwhile (saved by persistSoon on its own).
+type invSnapshot struct {
+	of   *model.Inventory // the inventory the copy was taken of
+	copy *model.Inventory
+}
+
+// snapshotLocked (caller holds a.mu, a.inv != nil) copies the inventory
+// before the binding changes it.
+func (a *App) snapshotLocked() invSnapshot {
+	return invSnapshot{of: a.inv, copy: a.inv.Clone()}
+}
+
+// persistOr saves the vault; a failed save puts the inventory back as snap
+// had it (the same inventory still open: a lock and unlock in between
+// loaded a fresh one, left alone) and returns the error. The 実行記録 lines
+// of the schedules the change stopped are written only after a successful
+// save (review 2026-11-07 A-4 / F-A-5 / F-B-6).
+func (a *App) persistOr(snap invSnapshot, stopped []SchedLogEntry) error {
 	if err := a.persist(); err != nil {
 		a.mu.Lock()
-		if a.inv != nil {
-			a.inv.Devices, a.inv.Schedules = before, beforeSched
+		if a.inv != nil && a.inv == snap.of {
+			keys := a.inv.KnownHostKeys
+			*a.inv = *snap.copy
+			a.inv.KnownHostKeys = keys
 		}
 		a.mu.Unlock()
 		return err
@@ -1401,20 +1462,20 @@ func (a *App) DeleteDevice(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	idx := a.inv.DeviceIndex(id)
 	if idx < 0 {
 		a.mu.Unlock()
 		return fmt.Errorf("機器が見つかりません")
 	}
-	before, beforeSched := slices.Clone(a.inv.Devices), slices.Clone(a.inv.Schedules)
+	snap := a.snapshotLocked()
 	delete(a.inv.KnownGUICerts, a.inv.Devices[idx].GUICertKey())
 	// A schedule naming it would run on the next device given its name.
 	stopped := stopLeaving(a.inv, a.inv.Devices[idx:idx+1], nil)
 	a.inv.Devices = append(a.inv.Devices[:idx], a.inv.Devices[idx+1:]...)
 	a.mu.Unlock()
-	return a.persistThenLog(before, beforeSched, stopped)
+	return a.persistOr(snap, stopped)
 }
 
 // DevicePatch is a bulk edit from the device list: each non-nil field is set
@@ -1509,7 +1570,7 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return rep, fmt.Errorf("vault is locked")
+		return rep, errVaultLocked
 	}
 	sel := map[string]bool{}
 	for _, id := range ids {
@@ -1633,15 +1694,16 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 		}
 	}
 	// A schedule naming a device that leaves its group would keep the name
-	// and run on whatever gets it next: stop it, and say so in the record.
+	// and run on whatever gets it next: stop it, and say so in the record
+	// (once the save went through).
+	snap := a.snapshotLocked()
 	stopped := stopLeaving(a.inv, a.inv.Devices, next)
 	a.inv.Devices = next
 	if p.Group != nil {
 		a.ensureGroupExists(strings.TrimSpace(*p.Group))
 	}
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	if err := a.persist(); err != nil {
+	if err := a.persistOr(snap, stopped); err != nil {
 		return UpdateReport{}, err
 	}
 	return rep, nil
@@ -1652,12 +1714,13 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return 0, fmt.Errorf("vault is locked")
+		return 0, errVaultLocked
 	}
 	sel := map[string]bool{}
 	for _, id := range ids {
 		sel[id] = true
 	}
+	snap := a.snapshotLocked()
 	out := make([]model.Device, 0, len(a.inv.Devices)) // a.inv.Devices is read below
 	n := 0
 	for _, d := range a.inv.Devices {
@@ -1672,8 +1735,10 @@ func (a *App) DeleteDevices(ids []string) (int, error) {
 	stopped := stopLeaving(a.inv, a.inv.Devices, out)
 	a.inv.Devices = out
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	return n, a.persist()
+	if err := a.persistOr(snap, stopped); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // SetAllDevicesEnabled checks or unchecks the devices with the given IDs in
@@ -1685,7 +1750,7 @@ func (a *App) SetAllDevicesEnabled(enabled bool, ids []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if len(ids) == 0 {
 		a.mu.Unlock()
@@ -1695,13 +1760,14 @@ func (a *App) SetAllDevicesEnabled(enabled bool, ids []string) error {
 	for _, id := range ids {
 		only[id] = true
 	}
+	snap := a.snapshotLocked()
 	for i := range a.inv.Devices {
 		if only[a.inv.Devices[i].ID] {
 			a.inv.Devices[i].Enabled = enabled
 		}
 	}
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // CopyDevice duplicates a device (by ID) in its own group under a name free
@@ -1710,7 +1776,7 @@ func (a *App) CopyDevice(id string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	idx := a.inv.DeviceIndex(id)
 	if idx < 0 {
@@ -1725,9 +1791,13 @@ func (a *App) CopyDevice(id string) (string, error) {
 	dup.ID = model.NewDeviceID()
 	dup.Name = newName
 	dup.Bastions = append([]model.Bastion(nil), dup.Bastions...)
+	snap := a.snapshotLocked()
 	a.inv.Devices = append(a.inv.Devices, dup)
 	a.mu.Unlock()
-	return newName, a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		return "", err
+	}
+	return newName, nil
 }
 
 // RenameDevice changes a device's name in place, e.g. from the inline name
@@ -1740,7 +1810,7 @@ func (a *App) RenameDevice(id, newName string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	idx := a.inv.DeviceIndex(id)
 	if idx < 0 {
@@ -1756,10 +1826,11 @@ func (a *App) RenameDevice(id, newName string) error {
 		a.mu.Unlock()
 		return errDeviceNameTaken(d.Group, newName)
 	}
+	snap := a.snapshotLocked()
 	renameSchedDevice(a.inv, d.Group, d.Name, newName)
 	d.Name = newName
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // DeviceNameExists reports whether name is already taken in group by a
@@ -1799,12 +1870,13 @@ func (a *App) saveDeviceGroup(g model.DeviceGroup, create bool) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if create && a.inv.Group(g.Name) != nil {
 		a.mu.Unlock()
 		return fmt.Errorf("同名のグループ「%s」が既にあります", g.Name)
 	}
+	snap := a.snapshotLocked()
 	found := false
 	for i := range a.inv.DeviceGroups {
 		if a.inv.DeviceGroups[i].Name == g.Name {
@@ -1817,7 +1889,7 @@ func (a *App) saveDeviceGroup(g model.DeviceGroup, create bool) error {
 		a.inv.DeviceGroups = append(a.inv.DeviceGroups, g)
 	}
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // CopyDeviceGroup duplicates a group — its default credentials and every
@@ -1835,7 +1907,7 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return 0, fmt.Errorf("vault is locked")
+		return 0, errVaultLocked
 	}
 	src := a.inv.Group(name)
 	if src == nil {
@@ -1861,10 +1933,14 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	g := *src
 	g.Name = newName
 	g.Members = nil
+	snap := a.snapshotLocked()
 	a.inv.DeviceGroups = append(a.inv.DeviceGroups, g)
 	a.inv.Devices = append(a.inv.Devices, copies...)
 	a.mu.Unlock()
-	return len(copies), a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		return 0, err
+	}
+	return len(copies), nil
 }
 
 // DeleteDeviceGroup removes a device group. Its devices are kept but
@@ -1880,9 +1956,10 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
-	out := a.inv.DeviceGroups[:0]
+	snap := a.snapshotLocked()
+	out := a.inv.DeviceGroups[:0:0]
 	for _, g := range a.inv.DeviceGroups {
 		if g.Name != name {
 			out = append(out, g)
@@ -1935,8 +2012,10 @@ func (a *App) DeleteDeviceGroup(name string) ([]string, error) {
 		}
 	}
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	return renamed, a.persist()
+	if err := a.persistOr(snap, stopped); err != nil {
+		return nil, err
+	}
+	return renamed, nil
 }
 
 // RenameDeviceGroup renames a group and updates its devices' Group field.
@@ -1955,7 +2034,7 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	// Renaming onto another group would merge the two, and with it any
 	// device names they share.
@@ -1963,6 +2042,7 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 		a.mu.Unlock()
 		return fmt.Errorf("同名のグループ「%s」が既にあります", newName)
 	}
+	snap := a.snapshotLocked()
 	for i := range a.inv.DeviceGroups {
 		if a.inv.DeviceGroups[i].Name == oldName {
 			a.inv.DeviceGroups[i].Name = newName
@@ -1976,7 +2056,7 @@ func (a *App) RenameDeviceGroup(oldName, newName string) error {
 	renameSchedGroup(a.inv, oldName, newName)
 	renameGridDrafts(a.inv, oldName, newName)
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // ---- Command sets ----
@@ -2008,8 +2088,9 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
+	snap := a.snapshotLocked()
 	found := false
 	for i := range a.inv.CommandSets {
 		if a.inv.CommandSets[i].Name == cs.Name {
@@ -2022,7 +2103,7 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 		a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	}
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // CreateCommandSet adds a new set and refuses a name already in use: the
@@ -2036,7 +2117,7 @@ func (a *App) CreateCommandSet(cs model.CommandSet) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	for i := range a.inv.CommandSets {
 		if a.inv.CommandSets[i].Name == cs.Name {
@@ -2044,9 +2125,10 @@ func (a *App) CreateCommandSet(cs model.CommandSet) error {
 			return fmt.Errorf("「%s」は既にあります", cs.Name)
 		}
 	}
+	snap := a.snapshotLocked()
 	a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // RenameCommandSet gives a command set a new name and points every device
@@ -2065,7 +2147,7 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if oldName == newName {
 		a.mu.Unlock()
@@ -2083,8 +2165,9 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 	}
 	if idx < 0 {
 		a.mu.Unlock()
-		return fmt.Errorf("command set %q not found", oldName)
+		return fmt.Errorf("コマンドセット「%s」が見つかりません", oldName)
 	}
+	snap := a.snapshotLocked()
 	a.inv.CommandSets[idx].Name = newName
 	renameSchedSet(a.inv, oldName, newName)
 	renameCmdsetWindow(oldName, newName)
@@ -2094,7 +2177,11 @@ func (a *App) RenameCommandSet(oldName, newName string) error {
 		}
 	}
 	a.mu.Unlock()
-	return a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		renameCmdsetWindow(newName, oldName)
+		return err
+	}
+	return nil
 }
 
 // CopyCommandSet duplicates a command set under a new unique name and returns
@@ -2103,7 +2190,7 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	var src *model.CommandSet
 	existing := map[string]bool{}
@@ -2116,7 +2203,7 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	}
 	if src == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("command set %q not found", name)
+		return "", fmt.Errorf("コマンドセット「%s」が見つかりません", name)
 	}
 	newName := name + "_copy"
 	for i := 2; existing[newName]; i++ {
@@ -2125,9 +2212,13 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	dup := *src
 	dup.Name = newName
 	dup.Commands = append([]model.Command(nil), src.Commands...)
+	snap := a.snapshotLocked()
 	a.inv.CommandSets = append(a.inv.CommandSets, dup)
 	a.mu.Unlock()
-	return newName, a.persist()
+	if err := a.persistOr(snap, nil); err != nil {
+		return "", err
+	}
+	return newName, nil
 }
 
 // DeleteCommandSet removes a command set by name. A schedule set to run it
@@ -2142,9 +2233,10 @@ func (a *App) DeleteCommandSet(name string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
-	out := a.inv.CommandSets[:0]
+	snap := a.snapshotLocked()
+	out := a.inv.CommandSets[:0:0]
 	for _, cs := range a.inv.CommandSets {
 		if cs.Name != name {
 			out = append(out, cs)
@@ -2153,8 +2245,7 @@ func (a *App) DeleteCommandSet(name string) error {
 	a.inv.CommandSets = out
 	stopped := stopSchedSet(a.inv, name)
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	return a.persist()
+	return a.persistOr(snap, stopped)
 }
 
 // SaveSettings replaces the run-wide settings.
@@ -2185,7 +2276,7 @@ func (a *App) SaveMyBastions(chain []model.Bastion) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	// A device reaching its jump hosts by SSH tunnel needs every hop SSH,
 	// the own ones included: refused here, not on every connection later.
@@ -2208,9 +2299,10 @@ func (a *App) SaveMyBastions(chain []model.Bastion) error {
 		}
 		break
 	}
+	snap := a.snapshotLocked()
 	a.inv.MyBastions = out
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 func (a *App) SaveSettings(s model.Settings) error {
@@ -2228,10 +2320,20 @@ func (a *App) SaveSettings(s model.Settings) error {
 	if err := logstore.CheckRoot(s.LogDir); err != nil {
 		return err
 	}
+	// The numbers, within the bounds the form states — here too, so no
+	// blank or mistyped field saves a value that runs every device at once
+	// or never locks (review 2026-11-07 B-A9) — and the name templates, as
+	// a sample name (B-B6).
+	if err := checkSettingsRanges(s); err != nil {
+		return err
+	}
+	if err := logstore.CheckTemplates(s.LogNameTemplate, s.LogDirTemplate); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	// The form never shows LastKeyFile or the 予約 tab's keep-awake; keep
 	// them instead of blanking them.
@@ -2265,9 +2367,36 @@ func (a *App) SaveSettings(s model.Settings) error {
 	if s.StageTokenNone == logstore.DefaultStageTokens.None {
 		s.StageTokenNone = ""
 	}
+	snap := a.snapshotLocked()
 	a.inv.Settings = s
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
+}
+
+// The bounds of the settings form's numbers (the page refuses the same).
+const (
+	maxParallelLimit = 200
+	maxAutoLockMin   = 1440
+	maxTimeoutSec    = 3600
+)
+
+// checkSettingsRanges refuses a number outside its bounds: the parallel
+// count (0 = no limit), the auto-lock minutes (0 = the default), and the
+// timeouts (at least a second — a zero connect timeout is no timeout).
+func checkSettingsRanges(s model.Settings) error {
+	if s.MaxParallel < 0 || s.MaxParallel > maxParallelLimit {
+		return fmt.Errorf("並列実行数は 0〜%d で入力してください（0 = 制限なし）", maxParallelLimit)
+	}
+	if s.AutoLockMin < 0 || s.AutoLockMin > maxAutoLockMin {
+		return fmt.Errorf("自動ロックまでの分数は 0〜%d で入力してください", maxAutoLockMin)
+	}
+	if s.ConnectTimeout < 1 || s.ConnectTimeout > maxTimeoutSec {
+		return fmt.Errorf("接続タイムアウトは 1〜%d 秒で入力してください", maxTimeoutSec)
+	}
+	if s.CommandTimeout < 1 || s.CommandTimeout > maxTimeoutSec {
+		return fmt.Errorf("コマンドタイムアウトは 1〜%d 秒で入力してください", maxTimeoutSec)
+	}
+	return nil
 }
 
 // ---- Execution ----
@@ -2434,7 +2563,7 @@ func (a *App) run(req RunRequest) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	snap, err := a.runSnapshot(req)
 	if err != nil {
@@ -2562,6 +2691,7 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 			a.runSched = ""
 			a.runReq = nil
 			a.runProg = runCounts{}
+			a.runLast = nil
 			done = RunDone{DryRun: req.DryRun, Error: msg}
 			if sched == "" {
 				a.lastDone = &done
@@ -2578,7 +2708,7 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	a.runner.HostKeys = &runHostKeys{mem: newMemHostKeys(snap.KnownHostKeys), app: a}
 	// The lock screen's counts (GetRunCounts) follow the batch's events.
 	a.mu.Lock()
-	a.runProg, a.runSeen = runCounts{Running: true, Total: len(snap.Devices)}, nil
+	a.runProg, a.runSeen, a.runLast = runCounts{Running: true, Total: len(snap.Devices)}, nil, nil
 	if sched == "" {
 		r := req
 		a.runReq = &r
@@ -2613,6 +2743,7 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	a.runSched = ""
 	a.runReq = nil
 	a.runProg = countsOf(results)
+	a.runLast = nil // the results say it all now (RunDone)
 	if sched == "" {
 		r := req
 		done.Request = &r
@@ -2648,6 +2779,15 @@ func countsOf(results []runpkg.DeviceResult) runCounts {
 // device's final event (done / error / canceled) counts it once, however
 // many final events it sends (a device stopped alone reports twice).
 func (a *App) noteRunEvent(ev runpkg.Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Every event: the last one per device is what a reloaded page gets
+	// (GetRunStatus.Events). A device's final event stays its last (a
+	// device stopped alone reports twice, both final).
+	if a.runLast == nil {
+		a.runLast = map[string]runpkg.Event{}
+	}
+	a.runLast[ev.Device] = ev
 	failed := false
 	switch ev.Phase {
 	case runpkg.PhaseDone:
@@ -2656,8 +2796,6 @@ func (a *App) noteRunEvent(ev runpkg.Event) {
 	default:
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.runSeen[ev.Device] {
 		return
 	}
@@ -2910,7 +3048,7 @@ func (a *App) SaveChecklist(cl model.Checklist) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	found := false
 	for i := range a.inv.Checklists {
@@ -2957,7 +3095,7 @@ func (a *App) RenameChecklist(oldName, newName string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if oldName == newName {
 		a.mu.Unlock()
@@ -2990,7 +3128,7 @@ func (a *App) DeleteChecklist(name string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	kept := a.inv.Checklists[:0]
 	for _, c := range a.inv.Checklists {
@@ -3186,6 +3324,18 @@ func configFingerprintOf(path string, st os.FileInfo) string {
 // and whether it differs from the next older version that has one.
 func (a *App) DeviceVersions(name string) ([]DeviceVersion, error) {
 	defer recoverBound(a.ctx, "DeviceVersions")
+	return a.deviceVersions(name, "", false)
+}
+
+// DeviceVersionsIn is DeviceVersions for the device of one group: the logs
+// of a device of the same name in another group are not its versions
+// (review 2026-11-07 C-A6). group "" is the ungrouped devices.
+func (a *App) DeviceVersionsIn(group, name string) ([]DeviceVersion, error) {
+	defer recoverBound(a.ctx, "DeviceVersionsIn")
+	return a.deviceVersions(name, group, true)
+}
+
+func (a *App) deviceVersions(name, group string, byGroup bool) ([]DeviceVersion, error) {
 	if a.locked() {
 		return nil, errVaultLocked
 	}
@@ -3202,6 +3352,13 @@ func (a *App) DeviceVersions(name string) ([]DeviceVersion, error) {
 	var out []DeviceVersion
 	var stats []os.FileInfo
 	for _, r := range runs {
+		// A run with no group (a folder dropped into the log folder, a
+		// run of ungrouped devices) belongs to no group: it stays in
+		// every group's list of the name, as it did when versions were
+		// listed by name alone.
+		if byGroup && r.Group != group && r.Group != "" {
+			continue
+		}
 		for _, d := range r.Devices {
 			if d.Name != name || d.LogPath == "" {
 				continue
@@ -3349,6 +3506,11 @@ type RunStatus struct {
 	Active  bool        `json:"active"`
 	Request *RunRequest `json:"request,omitempty"` // the active batch's request (started by hand)
 	Last    *RunDone    `json:"last,omitempty"`
+	// Events is each device's last event of the active batch (the same
+	// shape as run:event), by device name: a page reloaded mid-run draws
+	// the rows where they are instead of all 順番待ち (review 2026-11-07
+	// B-A10).
+	Events map[string]runpkg.Event `json:"events,omitempty"`
 }
 
 // GetRunStatus returns the RunStatus (it needs no unlocked vault).
@@ -3364,7 +3526,22 @@ func (a *App) GetRunStatus() RunStatus {
 		r := *a.runReq
 		st.Request = &r
 	}
+	if st.Active && len(a.runLast) > 0 {
+		st.Events = make(map[string]runpkg.Event, len(a.runLast))
+		for k, v := range a.runLast {
+			st.Events[k] = v
+		}
+	}
 	return st
+}
+
+// DiscardLastRun forgets the last batch's results: the run tab's 結果を
+// クリア, so a lock and unlock after it does not bring the rows back
+// (review 2026-11-07 B-B1). A batch still running is not touched.
+func (a *App) DiscardLastRun() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.lastDone = nil
 }
 
 func (a *App) CancelRun() {
@@ -3730,7 +3907,7 @@ func (a *App) spawnTerminal(id string, manual, direct bool, extra []string) (*te
 	}
 	a.mu.Unlock()
 	if locked {
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	if label == "" {
 		return nil, fmt.Errorf("機器が見つかりません")
@@ -3901,7 +4078,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.32"
+const appVersion = "1.9.33"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
@@ -4185,6 +4362,12 @@ type BundleExportInfo struct {
 	Dir        string `json:"dir"`
 	Exists     bool   `json:"exists"`
 	ExportedAt string `json:"exportedAt"`
+	// Other: the export already there is another group's (two group names
+	// that make the same folder name, "lab/A" and "lab_A"; or the whole
+	// inventory's, OtherGroup ""), which the export would overwrite
+	// (review 2026-11-07 B-6).
+	Other      bool   `json:"other,omitempty"`
+	OtherGroup string `json:"otherGroup,omitempty"`
 }
 
 // BundleExportTarget tells the page whether export\bundles\<group>\ holds an
@@ -4203,6 +4386,9 @@ func (a *App) BundleExportTarget(group string) BundleExportInfo {
 	var m bundle.Manifest
 	if json.Unmarshal(b, &m) == nil {
 		info.ExportedAt = m.ExportedAt
+		if m.Group != group {
+			info.Other, info.OtherGroup = true, m.Group
+		}
 	}
 	return info
 }
@@ -4226,7 +4412,7 @@ func (a *App) ExportBundle(group string, noBastionCreds, noDeviceCreds bool) (st
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	c := bundle.SelectWith(a.inv, group, noBastionCreds, noDeviceCreds)
 	c.Lang = a.lang
@@ -4317,7 +4503,7 @@ func (a *App) previewImport(path, targetGroup string, overwriteShared bool) (*Im
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	pv.Summary = bundle.Preview(a.inv, c, bundle.Options{TargetGroup: targetGroup, OverwriteShared: overwriteShared})
 	a.mu.Unlock()
@@ -4349,8 +4535,9 @@ func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bund
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
+	snap := a.snapshotLocked()
 	before := slices.Clone(a.inv.Devices)
 	s, changed := bundle.Apply(a.inv, c, bundle.Options{TargetGroup: targetGroup, OverwriteShared: overwriteShared})
 	// A 予約 on a group the bundle added devices to (or changed addresses
@@ -4361,10 +4548,22 @@ func (a *App) ApplyImport(path, targetGroup string, overwriteShared bool) (*bund
 	for _, p := range changed {
 		a.profiles.Add(profile.Quote(p))
 	}
-	if err := a.persist(); err != nil {
+	if err := a.persistOr(snap, stopped); err != nil {
+		// The registry follows the inventory back: a profile the bundle
+		// brought in goes, one it replaced comes back.
+		had := map[string]profile.Profile{}
+		for _, p := range snap.copy.CustomProfiles {
+			had[p.Key] = p
+		}
+		for _, p := range changed {
+			if old, ok := had[p.Key]; ok {
+				a.profiles.Add(profile.Quote(old))
+			} else {
+				a.profiles.Remove(p.Key)
+			}
+		}
 		return nil, err
 	}
-	a.logStopped(stopped)
 	return &s, nil
 }
 
@@ -4385,7 +4584,7 @@ func (a *App) ExportRunFailures(group string, dryRun bool, rows []RunFailure) (s
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	byName := map[string]model.Device{}
 	for _, d := range a.inv.Devices {
@@ -4501,12 +4700,13 @@ func (a *App) ReorderDeviceGroups(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	pos := map[string]int{}
 	for i, n := range order {
 		pos[n] = i
 	}
+	snap := a.snapshotLocked()
 	sort.SliceStable(a.inv.DeviceGroups, func(i, j int) bool {
 		pi, oki := pos[a.inv.DeviceGroups[i].Name]
 		pj, okj := pos[a.inv.DeviceGroups[j].Name]
@@ -4519,7 +4719,7 @@ func (a *App) ReorderDeviceGroups(order []string) error {
 		return false
 	})
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // reorderSlots rewrites the relative order of the items whose key is listed
@@ -4554,11 +4754,12 @@ func (a *App) ReorderDevices(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
+	snap := a.snapshotLocked()
 	reorderSlots(a.inv.Devices, func(d model.Device) string { return d.ID }, order)
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // ReorderCommandSets rewrites the command-set list order.
@@ -4566,11 +4767,12 @@ func (a *App) ReorderCommandSets(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
+	snap := a.snapshotLocked()
 	reorderSlots(a.inv.CommandSets, func(s model.CommandSet) string { return s.Name }, order)
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }
 
 // ReorderProfiles rewrites the OS profile list order (by key). Dropdowns
@@ -4579,9 +4781,10 @@ func (a *App) ReorderProfiles(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
+	snap := a.snapshotLocked()
 	reorderSlots(a.inv.CustomProfiles, func(p profile.Profile) string { return p.Key }, order)
 	a.mu.Unlock()
-	return a.persist()
+	return a.persistOr(snap, nil)
 }

@@ -57,9 +57,9 @@ func normalizeChoice(key, v string) string {
 		}
 	case "bool":
 		switch w {
-		case "true", "1", "yes", "y", "on", "はい", "○", "◯", "有効", "有", "あり", "する", "使う", "enable", "enabled", "〇":
+		case "true", "1", "yes", "y", "on", "はい", "○", "◯", "有効", "有", "あり", "する", "使う", "enable", "enabled", "〇", "✓", "✔", "レ", "済":
 			return "true"
-		case "false", "0", "no", "n", "off", "いいえ", "×", "無効", "無", "なし", "しない", "使わない", "disable", "disabled", "-", "ー":
+		case "false", "0", "no", "n", "off", "いいえ", "×", "無効", "無", "なし", "しない", "使わない", "disable", "disabled", "-", "ー", "x", "✗", "✘":
 			return "false"
 		}
 	case "scheme":

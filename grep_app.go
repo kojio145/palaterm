@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -26,6 +27,12 @@ type GrepWin struct {
 	root  string
 	dir   string
 	title string
+	cc    childCtx // for the parent's CLOSE (watchParent)
+	// kids are the log windows opened from here, by file (kidKey): a hit in
+	// a file whose window is still open goes to that window (LINE) instead
+	// of opening another.
+	kidsMu sync.Mutex
+	kids   map[string]*viewerKid
 }
 
 // grepInit is what the page starts from.
@@ -50,6 +57,7 @@ func NewGrepWin(root, dir, title string) *GrepWin {
 
 func (g *GrepWin) startup(ctx context.Context) {
 	g.ctx = ctx
+	g.cc.set(ctx)
 	grepWin.fit(ctx)
 	placeNearParent(ctx, grepWin)
 }
@@ -94,7 +102,9 @@ func (g *GrepWin) Search(req history.GrepRequest) (*history.GrepResult, error) {
 	return history.Grep(ctx, req)
 }
 
-// OpenLog opens a hit's file in a log viewer window, at that line.
+// OpenLog opens a hit's file in a log viewer window, at that line. A window
+// of the same file still open shows the line instead (and comes to the
+// front): every click used to open one more window.
 func (g *GrepWin) OpenLog(path string, line int) error {
 	if err := underRoot(g.root, path, "ログフォルダの外は開けません"); err != nil {
 		return err
@@ -102,11 +112,47 @@ func (g *GrepWin) OpenLog(path string, line int) error {
 	if _, err := os.Stat(path); err != nil {
 		return err
 	}
+	key := kidKey(path)
+	if k := g.kidFor(key); k != nil && k.send(kidLineGoto+" "+strconv.Itoa(line)) == nil {
+		return nil
+	}
 	var env []string
 	if line > 0 {
 		env = []string{viewLineEnv + "=" + strconv.Itoa(line)}
 	}
-	return spawnWindow(env, "--view", path)
+	k, err := spawnKid(env, "--view", path)
+	if err != nil {
+		return err
+	}
+	g.kidsMu.Lock()
+	if g.kids == nil {
+		g.kids = map[string]*viewerKid{}
+	}
+	g.kids[key] = k
+	g.kidsMu.Unlock()
+	return nil
+}
+
+// kidFor is the log window open for key, nil when there is none (or it has
+// ended, which forgets it).
+func (g *GrepWin) kidFor(key string) *viewerKid {
+	g.kidsMu.Lock()
+	defer g.kidsMu.Unlock()
+	k := g.kids[key]
+	if k == nil {
+		return nil
+	}
+	if !k.alive() {
+		delete(g.kids, key)
+		return nil
+	}
+	return k
+}
+
+// kidKey is a file's key among the open log windows: the path as Windows
+// compares it (case does not matter).
+func kidKey(path string) string {
+	return strings.ToLower(filepath.Clean(path))
 }
 
 // OpenFolder shows a file in Explorer (or the folder searched).
@@ -128,13 +174,20 @@ func (g *GrepWin) OpenFolder(path string) error {
 func (g *GrepWin) SaveText(text string) (string, error) {
 	dir := filepath.Join(exeDir(), "export", "grep")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return "", saveTextErr(dir, err)
 	}
 	p := filepath.Join(dir, "grep_"+time.Now().Format("20060102_150405")+".txt")
 	if err := os.WriteFile(p, []byte(strings.ReplaceAll(text, "\n", "\r\n")), 0o644); err != nil {
-		return "", err
+		return "", saveTextErr(dir, err)
 	}
 	return p, nil
+}
+
+// saveTextErr says the folder the result could not be written to and what
+// to do (the folder beside the exe may be read-only: Program Files, a
+// share): the bare OS error gave no way on.
+func saveTextErr(dir string, err error) error {
+	return fmt.Errorf("%s に書けません（%v）。書き込める場所に PalaTerm を置くか、「結果をコピー」で貼り付けてください", dir, err)
 }
 
 // Close ends the window (Esc).
@@ -151,5 +204,6 @@ func runGrepWindow(root, dir string) {
 	}
 	title := fmt.Sprintf("PalaTerm - %s - %s", winWord("ログの grep", "Grep logs"), where)
 	g := NewGrepWin(root, dir, title)
+	watchParent(g.cc.quit, nil)
 	runChildWindow(childWindow{title: title, size: grepWin, bg: panelBG, bind: g, startup: g.startup, domReady: g.domReady})
 }

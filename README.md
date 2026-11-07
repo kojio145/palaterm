@@ -8,7 +8,7 @@ PalaTerm logs in to many network devices at once to collect logs, run command se
 and apply configuration changes in parallel. It ships as a single portable
 Windows exe — no installation required.
 
-> **Status: v1.9.29 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
+> **Status: v1.9.33 (beta).** It works, but expect rough edges. Feedback via Issues is welcome.
 
 > 日本語の概要: 複数のネットワーク機器（Cisco IOS/ASA・JUNOS・FortiGate・HPE・NEC IX・Yamaha RTX など）に SSH / Telnet / シリアルで一括ログインし、
 > コマンドセットを並列実行してログを自動保存する Windows 用ツールです。Tera Term マクロや手作業のログ取得の置き換えを想定しています。
@@ -37,8 +37,13 @@ Windows exe — no installation required.
   profiles are editable and you can add your own
 - 📋 **Batch command execution** — assign named command sets per device and run them in one go (View opens a set read-only in its own window, to keep beside a terminal)
 - 📁 **Automatic log saving** — `{host}_{site}_{role}_{stage}_{date}_{time}.txt` style, customizable with placeholders
+- 🔍 **Grep logs** — search every log file of a run (or the whole log folder) at once, and open a log at the matching line
 - 🕘 **Run history & before/after diff** — tag a run as before / during / after the work, then compare
   the before and after logs per device (clock and counter noise ignored)
+- 🔁 **Revert / align commands** — from a config diff, generate the commands that put a device back to its before state or bring another device in line (Cisco IOS, FortiGate, Junos, Yamaha RTX, Comware/VRP; lines that need a human are marked)
+- ✅ **Checklists** — a list of expected configuration lines, checked against every after log (PASS / FAIL / MISSING)
+- 🧭 **Impact** — changed lines ranked by what they touch (addresses, routes, ACLs, policies first), with what refers to them
+- 📄 **HTML report** — per-device results and side-by-side config diffs in one self-contained HTML file (no scripts, no external requests)
 - ⏰ **Schedules** — run a batch at set times (once / daily / weekly / every n seconds–hours, optionally n times) for collecting show output;
   keeps running from the tray and while locked, wakes the PC from sleep where Windows allows it
 - ⚠️ **Warning before configuration changes** — a command set that contains `conf t` / `write` / `reload` … is called out
@@ -50,6 +55,7 @@ Windows exe — no installation required.
 - 💻 **Interactive terminal** — automate the login to a single device, then take over
   manually in a built-in terminal (xterm.js); or skip the automatic login (Shift+click, or
   "Switch to manual" while connecting) for initial setup over a serial console
+- 🪟 **Tile & broadcast** — open up to 16 terminals side by side in one click, and type into all of them at once
 - 🌐 **English / Japanese UI**
 - 🚫 **Zero external communication** — no telemetry, no auto-update; designed for use inside closed networks
 

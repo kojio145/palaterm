@@ -1,6 +1,7 @@
 package history
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -8,13 +9,25 @@ import (
 // Commands from a comparison (cmdgen.go). All device data is made up for
 // the lab (192.0.2.x, sw-lab-01, ops).
 
+// cmdTexts is the generated lines as commands: a line to check by hand is
+// written as a comment ("! 手で確認（why）: line", see cmdWriter.note) and
+// is read back here as the bare line, so the tests below say what is
+// generated and TestNoteLinesAreComments says how it is written.
 func cmdTexts(g CmdGen) []string {
 	var out []string
 	for _, l := range g.Lines {
-		out = append(out, strings.TrimSpace(l.Text))
+		text := strings.TrimSpace(l.Text)
+		if l.Note != "" {
+			if m := manualLineRe.FindStringSubmatch(text); m != nil {
+				text = m[1]
+			}
+		}
+		out = append(out, text)
 	}
 	return out
 }
+
+var manualLineRe = regexp.MustCompile(`^[!#] 手で確認（.+?）: (.*)$`)
 
 func joinCmds(g CmdGen) string { return strings.Join(cmdTexts(g), "\n") }
 

@@ -210,11 +210,11 @@ func (t *Term) bcastCounts(arg string) {
 func (t *Term) Tile() error {
 	hwnd := ownTopLevelWindow()
 	if hwnd == 0 {
-		return fmt.Errorf("ウィンドウが見つかりません")
+		return fmt.Errorf("この窓の位置を読めないため並べられません。窓を開き直してからもう一度お試しください")
 	}
 	mi, ok := windowMonitor(hwnd)
 	if !ok {
-		return fmt.Errorf("画面の大きさを読めません")
+		return fmt.Errorf("画面の大きさを読めないため並べられません。窓を別の画面へ動かすか、開き直してからもう一度お試しください")
 	}
 	childLine(termEventTile + " " + rectArg(mi.Work))
 	return nil

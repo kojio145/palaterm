@@ -123,6 +123,22 @@ type Runner struct {
 	devMu     sync.Mutex
 	devCancel map[string]context.CancelFunc
 	devStop   map[string]bool
+
+	// OnPanic, when set, is told of a panic recovered inside one device's
+	// run (the device fails, the batch goes on): the app writes it to
+	// data\error.log, where a panic that ended the batch already went
+	// (review 2026-11-07 F-C-3). where names the place, p is the panic.
+	OnPanic func(where string, p any)
+}
+
+// notePanic hands a recovered panic to OnPanic (nil-safe, and a panic in
+// the hook itself is swallowed: the device's own recovery must finish).
+func (r *Runner) notePanic(where string, p any) {
+	if r == nil || r.OnPanic == nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	r.OnPanic(where, p)
 }
 
 // CancelDevice stops one device of the running batch and lets the others go
@@ -248,6 +264,7 @@ func (r *Runner) runDevice(ctx context.Context, dev *model.Device, set *model.Co
 		if p == nil {
 			return
 		}
+		r.notePanic("runDevice "+dev.Name, p)
 		res.Success = false
 		res.Error = fmt.Sprintf("%s: %v", internalErrMsg, p)
 		if live != nil && !logDone {
@@ -693,7 +710,7 @@ func (r *Runner) disablePager(ctx context.Context, exp *expecter, prof profile.P
 			if errors.Is(err, ErrClosed) || ctx.Err() != nil {
 				return "", err
 			}
-			r.emit(emit, dev.Name, PhaseLogin, "pager disable skipped: "+err.Error())
+			r.emit(emit, dev.Name, PhaseLogin, "ページャ解除を飛ばしました: "+err.Error())
 			return fmt.Sprintf("ページャ解除コマンド「%s」が通りませんでした（%v）。出力の途中停止は --More-- への応答で続けます", st.Send, err), nil
 		}
 		if line := rejectedLine(exp.Since(before)); line != "" {
@@ -828,7 +845,18 @@ func dialHint(err error, dev *model.Device, bastions []model.Bastion) string {
 		target = fmt.Sprintf("踏み台経由の %s", dev.Host)
 	}
 	s := err.Error()
+	// session.sshDialError already put the reason in front of the raw
+	// error ("理由（ssh dial …）"): nothing to add.
+	if strings.Contains(s, "（ssh dial ") {
+		return ""
+	}
 	switch {
+	// The TCP connection was made and the SSH handshake then failed: not
+	// an unreachable device (review 2026-11-07 F-A-4).
+	case strings.Contains(s, "handshake failed") && session.HandshakeDropped(s):
+		return fmt.Sprintf("%s: %s", target, session.HintHandshakeDropped)
+	case strings.Contains(s, "handshake failed") && session.HandshakeTimedOut(s):
+		return fmt.Sprintf("%s: %s", target, session.HintHandshakeTimedOut)
 	case strings.Contains(s, "i/o timeout") || strings.Contains(s, "timed out") || errors.Is(err, context.DeadlineExceeded):
 		return fmt.Sprintf("%s に接続できません（応答がありません）。アドレスとポート、この PC からその機器へ通信できるか（VPN・踏み台の要否）を確認してください", target)
 	case strings.Contains(s, "connection refused") || strings.Contains(s, "actively refused"):
@@ -1046,8 +1074,14 @@ func sendKeys(exp *expecter, text string) error {
 // was too loose: "#" matched NEC IX's "PDEV#" column header while
 // "show processes" was still printing, and the next command went too soon.
 func waitTail(wait string) string {
-	return regexp.QuoteMeta(wait) + `[ \t]*\z`
+	return regexp.QuoteMeta(wait) + tailPad
 }
+
+// tailPad closes a pattern matched as the tail of the output: trailing
+// blanks, and the escape sequences a device may print after its prompt
+// (ArubaOS-Switch ends the prompt line with cursor and attribute codes;
+// the prompt is there all the same — review 2026-11-07 F-A-2).
+const tailPad = `(?:[ \t]|\x1b\[[0-9;?]*[A-Za-z])*\z`
 
 // maxAnswers bounds the questions answered for one command: a device that
 // keeps asking (or an Expect that matches its own echo) must not loop.
@@ -1100,7 +1134,12 @@ func rejectedLine(out string) string {
 // "% terminal -- Invalid command." elsewhere). Without this net, one wrong
 // command means every long output hangs until the command timeout and the
 // whole device fails — a profile mistake should cost tidiness, not the run.
-const genericMore = `(?i)-{2,}\s*\(?\s*more`
+//
+// Matched as the tail of the output only: a marker the device printed
+// earlier and scrolled past (quoted in a log line, or already answered)
+// is not one waiting now (review 2026-11-07 F-C-5). What follows on the
+// marker's line (blanks, escape codes) is allowed.
+const genericMore = `(?i)-{2,}\s*\(?\s*more[^\n]*\s*\z`
 
 // promptMismatchHint names the case where the login worked and the device is
 // waiting at a prompt — just not the one this OS type expects.
@@ -1224,19 +1263,31 @@ func (r *Runner) waitPromptAnswering(ctx context.Context, exp *expecter, prof pr
 	// the run moved on mid-output and typed the next command into a device that
 	// was still paging — which ate its first character, turning "show logging"
 	// into "how logging".
-	return r.waitTailAnswering(ctx, exp, prof, "(?:"+prof.Prompt+`)[ \t]*\z`, timeout, answers)
+	return r.waitTailAnswering(ctx, exp, prof, "(?:"+prof.Prompt+")"+tailPad, timeout, answers)
 }
 
 // waitTailAnswering waits until tail (a pattern anchored at the end of the
 // output) matches, paging and answering the way waitPromptAnswering
 // describes.
+//
+// timeout is how long the device may stay silent: a "show tech" that keeps
+// printing for five minutes, or a console at 9600 bps, is not a device
+// that stopped answering, and the wait used to run out while the output
+// was still arriving (review 2026-11-07 F-A-1). An output that never ends
+// is cut at cmdHardLimit (or timeout, when that is longer).
 func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof profile.Profile, tail string, timeout time.Duration, answers []profile.Step) error {
 	answered := 0
 	more := prof.MorePrompt
 	if more == "" {
 		more = genericMore
 	}
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	hard := start.Add(max(timeout, cmdHardLimit))
+	// quietSince: when the device last printed — the reply to a nudge
+	// (its prompt again, moments after the Enter) aside, or every nudge
+	// would stretch the wait by another timeout. pos is how much of the
+	// transcript was there at the last look.
+	quietSince, pos := start, exp.pos()
 	// A device that prints something on its own after the prompt leaves the
 	// tail on that line instead: ALAXALA AX logs "… Local authentication
 	// succeeded." right after the first "#", and syslog-to-terminal does the
@@ -1250,7 +1301,16 @@ func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof prof
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if time.Now().After(deadline) {
+		// Silent for timeout (since the command went out, or since the
+		// device last printed), or past the hard limit.
+		now := time.Now()
+		if cur := exp.pos(); cur != pos {
+			pos = cur
+			if now.Sub(nudgedAt) > nudgeEcho {
+				quietSince = now
+			}
+		}
+		if now.After(hard) || now.Sub(quietSince) >= timeout {
 			return ErrExpectTimeout
 		}
 		if exp.Seen(tail) {
@@ -1302,6 +1362,16 @@ func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof prof
 	}
 }
 
+// cmdHardLimit is the longest one command may run however steadily it
+// prints: the ceiling of waitTailAnswering's silence timeout (a var for
+// the tests).
+var cmdHardLimit = 30 * time.Minute
+
+// nudgeEcho is how long after a nudge Enter the device's reply to it (the
+// echoed line break, its prompt again) is not taken for output of the
+// command: it says nothing about the command still running.
+const nudgeEcho = 500 * time.Millisecond
+
 // pendingAnswer returns the answer whose (quoted) Expect is the tail of
 // what has arrived.
 //
@@ -1311,10 +1381,10 @@ func (r *Runner) waitTailAnswering(ctx context.Context, exp *expecter, prof prof
 // command timeout like any question without an answer.
 func pendingAnswer(exp *expecter, answers []profile.Step) (profile.Step, bool) {
 	for _, a := range answers {
-		if a.Expect == "" || !exp.Seen("(?:"+a.Expect+`)[ \t]*\z`) {
+		if a.Expect == "" || !exp.Seen("(?:"+a.Expect+")"+tailPad) {
 			continue
 		}
-		if a.Send == "" && a.SendRaw == "" && exp.Seen(`\[\]\?[ \t]*\z`) {
+		if a.Send == "" && a.SendRaw == "" && exp.Seen(`\[\]\?`+tailPad) {
 			continue
 		}
 		return a, true
@@ -1488,7 +1558,7 @@ const reIdleLine = `\S[ \t]*\z`
 // tailOf is pattern p as the tail of the output: the line the device is on
 // now, trailing blanks allowed (the rule every prompt is matched by).
 func tailOf(p string) string {
-	return "(?:" + p + `)[ \t]*\z`
+	return "(?:" + p + ")" + tailPad
 }
 
 // expectOrReady waits for pattern, reporting ready=true instead if the device
@@ -1570,7 +1640,7 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 				if st.Auth() {
 					continue // prompt absent: device skips this question
 				}
-				return fmt.Errorf("waiting for %q: %w", st.Expect, err)
+				return fmt.Errorf("waiting for %q: %w", unquoteMeta(st.Expect), err)
 			}
 			if ready {
 				continue // already operational: this step has nothing to do
@@ -1593,6 +1663,22 @@ func (r *Runner) runSteps(ctx context.Context, exp *expecter, steps []profile.St
 		}
 	}
 	return nil
+}
+
+// unquoteMeta is the text a profile's wait string was before Quote
+// (regexp.QuoteMeta): the error names what the user typed, not "\\[y/n\\]".
+func unquoteMeta(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && strings.IndexByte(`\.+*?()|[]{}^$`, s[i+1]) >= 0 {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 // SecretsOf lists the passwords a transcript of dev must never show: its own,
@@ -1826,6 +1912,7 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 	}
 	sem := make(chan struct{}, limit)
 	var wg sync.WaitGroup
+	ports := serialLocks(targets)
 	r.devMu.Lock()
 	r.devStop = map[string]bool{}
 	r.devMu.Unlock()
@@ -1845,11 +1932,23 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 			// device's turn, so no bug here ends the program.
 			defer func() {
 				if p := recover(); p != nil {
+					r.notePanic("RunBatch "+d.Name, p)
 					msg := fmt.Sprintf("%s: %v", internalErrMsg, p)
 					results[idx] = DeviceResult{Device: d.Name, Error: msg}
 					safeEmit(emit, Event{Device: d.Name, Phase: PhaseError, Message: msg})
 				}
 			}()
+			// Two devices on one COM port (a console server's ports typed
+			// alike, a cable moved between devices) go one after the other:
+			// opened together, the second read as "in use by another
+			// program" (review 2026-11-07 F-A-6).
+			if m := ports[serialPortKey(d)]; m != nil {
+				if !m.TryLock() {
+					r.emit(emit, d.Name, PhaseQueued, fmt.Sprintf("同じ COM ポート（%s）の機器が終わるのを待っています", d.SerialPort))
+					m.Lock()
+				}
+				defer m.Unlock()
+			}
 			// A device whose turn comes after 中止 is reported as never run,
 			// not as an error: nothing was attempted against it.
 			if ctx.Err() != nil {
@@ -1869,6 +1968,12 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 				set = cs
 			}
 			res := r.runDevice(dctx, d, set, inv.Settings, runDir, now, emit, opts)
+			// A set the device names that no longer exists (renamed or
+			// deleted elsewhere): the login went through and nothing was
+			// sent — said, not passed as a run (review 2026-11-07 F-B-3).
+			if set == nil && d.CommandSet != "" && !opts.DryRun && res.Success {
+				res.Warnings = append(res.Warnings, fmt.Sprintf("コマンドセット「%s」が見つからないためログインのみ", d.CommandSet))
+			}
 			if res.Canceled && ctx.Err() == nil {
 				// Stopped alone: say so, the batch's 中止 was not pressed.
 				res.Error = CanceledDeviceMsg
@@ -1896,9 +2001,37 @@ func indexSets(sets []model.CommandSet) map[string]*model.CommandSet {
 
 func setName(s *model.CommandSet) string {
 	if s == nil {
-		return "(no commands)"
+		return "（コマンドなし）"
 	}
 	return s.Name
+}
+
+// serialPortKey is the COM port a serial device opens ("" for the rest),
+// case folded: "com3" and "COM3" are one port.
+func serialPortKey(d *model.Device) string {
+	if d.Conn != model.ConnSerial {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(d.SerialPort))
+}
+
+// serialLocks is one lock per COM port that two or more of the targets
+// open: those devices run one after the other (see RunBatchOpts). A port
+// one device opens, or an auto-detected one (""), needs none.
+func serialLocks(targets []*model.Device) map[string]*sync.Mutex {
+	n := map[string]int{}
+	for _, d := range targets {
+		if k := serialPortKey(d); k != "" {
+			n[k]++
+		}
+	}
+	out := map[string]*sync.Mutex{}
+	for k, c := range n {
+		if c > 1 {
+			out[k] = &sync.Mutex{}
+		}
+	}
+	return out
 }
 
 func pauseFor(cmd model.Command, conn model.ConnMethod) int {

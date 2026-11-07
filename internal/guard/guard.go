@@ -15,6 +15,8 @@ package guard
 import (
 	"regexp"
 	"strings"
+
+	"github.com/kojio145/palaterm/internal/model"
 )
 
 // Hit is one flagged command.
@@ -163,7 +165,7 @@ var reDevNull = regexp.MustCompile(`\s[12]?>{1,2}\s*/dev/null`)
 // disable", Aruba "no page"), Linux "ip route show" and its kin, "reload
 // cancel", "shutdown -c" (the cancel). A pager-off line must never warn:
 // it is the line every set is told to start with.
-var reads = regexp.MustCompile(`(?i)^(?:reset\s+(counters|arp|logbuffer|session|ip\s+bgp)(\s|$)|set\s+(cli|terminal)\s|set\s+console\s+page(\s|$)|no\s+page$|ip\s+route\s+(show|list|get)(\s|$)|reload\s+cancel$|shutdown\s+-c(\s|$))`)
+var reads = regexp.MustCompile(`(?i)^(?:reset\s+(counters|arp|logbuffer|ip\s+bgp)(\s|$)|set\s+(cli|terminal)\s|set\s+console\s+page(\s|$)|no\s+page$|ip\s+route\s+(show|list|get)(\s|$)|reload\s+cancel$|shutdown\s+-c(\s|$))`)
 
 // rePrefix is what only changes who runs the command, not what it does:
 // "do " (IOS: an exec command from config mode), Junos / VyOS "run ",
@@ -175,6 +177,12 @@ var rePrefix = regexp.MustCompile(`(?i)^(?:do|run|(?:sudo|doas)(?:\s+-\S+(?:\s+[
 // command-set order. Commands are matched on their trimmed text; a leading
 // "do " / "sudo " / "run " (see rePrefix) is stripped first so "do show
 // run" stays harmless and "do reload" does not.
+//
+// A line with key tokens ("show clock{enter}reload{enter}") is as many
+// commands as it has {enter}s: each piece is checked on its own, so a
+// change hidden after the first Enter is flagged like a line of its own
+// (review 2026-11-07 B-A1). The pieces are the text between the tokens
+// (model.KeySegments), control keys left out.
 func Check(cmds []string) []Hit {
 	var hits []Hit
 	for i, raw := range cmds {
@@ -182,23 +190,64 @@ func Check(cmds []string) []Hit {
 		if text == "" {
 			continue
 		}
-		probe := strip(text)
-		if reads.MatchString(probe) {
-			continue
-		}
-		hit := false
-		for _, r := range rules {
-			if r.re.MatchString(probe) {
-				hits = append(hits, Hit{Index: i, Text: text, Reason: r.reason})
-				hit = true
+		for _, piece := range pieces(text) {
+			if reason := checkOne(piece); reason != "" {
+				hits = append(hits, Hit{Index: i, Text: text, Reason: reason})
 				break
 			}
 		}
-		if !hit && reRedirect.MatchString(reDevNull.ReplaceAllString(probe, "")) {
-			hits = append(hits, Hit{Index: i, Text: text, Reason: ReasonWrite})
-		}
 	}
 	return hits
+}
+
+// pieces is what a command line types as separate commands: the line
+// itself, or — with key tokens — the text before each {enter} (and after
+// the last), control characters removed.
+func pieces(text string) []string {
+	segs, ok := model.KeySegments(text)
+	if !ok {
+		return []string{text}
+	}
+	var out []string
+	var cur strings.Builder
+	flush := func() {
+		if p := strings.TrimSpace(cur.String()); p != "" {
+			out = append(out, p)
+		}
+		cur.Reset()
+	}
+	for _, sg := range segs {
+		switch sg.Kind {
+		case model.KeySegText:
+			for _, r := range sg.Text {
+				if r >= 0x20 && r != 0x7f {
+					cur.WriteRune(r)
+				}
+			}
+		default: // Enter or a break: the line typed so far is a command
+			flush()
+		}
+	}
+	flush()
+	return out
+}
+
+// checkOne is the reason one command (no key tokens) changes the device,
+// or "".
+func checkOne(text string) string {
+	probe := strip(text)
+	if reads.MatchString(probe) {
+		return ""
+	}
+	for _, r := range rules {
+		if r.re.MatchString(probe) {
+			return r.reason
+		}
+	}
+	if reRedirect.MatchString(reDevNull.ReplaceAllString(probe, "")) {
+		return ReasonWrite
+	}
+	return ""
 }
 
 // strip removes the run-as prefixes (rePrefix) and the quotes "su -c"

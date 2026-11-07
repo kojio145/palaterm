@@ -624,6 +624,10 @@ func reservedName(w string) bool {
 	return false
 }
 
+// sanitize makes a device's value usable in a file or folder name: the
+// characters Windows refuses become "_", and a name Windows reserves (a
+// device called "CON" or "COM1") gets one appended — "CON_" is a file,
+// "CON" is the console (review 2026-11-07 F-C-7).
 func sanitize(s string) string {
 	repl := func(r rune) rune {
 		switch r {
@@ -632,5 +636,67 @@ func sanitize(s string) string {
 		}
 		return r
 	}
-	return strings.Map(repl, s)
+	out := strings.Map(repl, s)
+	if reservedName(out) {
+		out += "_"
+	}
+	return out
+}
+
+// CheckTemplates refuses a log file name template or a run folder template
+// that cannot make a usable name: expanded with sample values, each part
+// of the path must be a name Windows accepts (no control characters or
+// the characters it refuses, no reserved name, no "." / ".."). Checked when
+// the settings are saved, not found out by every run (review 2026-11-07
+// B-B6). An empty template is the default and passes.
+func CheckTemplates(fileTmpl, dirTmpl string) error {
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.Local)
+	if t := strings.TrimSpace(fileTmpl); t != "" {
+		// With a stage and without: a template with no {stage} gets
+		// "_<stage>" appended for a staged run, and a run with none keeps
+		// the name as it is.
+		for _, stage := range []string{"before", ""} {
+			f := Fields{Host: "lab-sw1", IP: "192.0.2.1", OS: "generic", Group: "lab", Site: "site", Role: "role", Stage: stage, Tokens: DefaultStageTokens}
+			if err := checkNameParts(expandName(t, f, now)); err != nil {
+				return fmt.Errorf("ログファイル名の書式%w", err)
+			}
+		}
+	}
+	if t := strings.TrimSpace(dirTmpl); t != "" {
+		vals := map[string]string{
+			"{group}": "lab", "{stage}": "before",
+			"{date}": now.Format("20060102"), "{time}": now.Format("150405"), "{hhmm}": now.Format("1504"),
+		}
+		if err := checkNameParts(strings.Trim(expand(dropEmpty(t, vals), vals), "_. ")); err != nil {
+			return fmt.Errorf("ログフォルダ名の書式%w", err)
+		}
+	}
+	return nil
+}
+
+// checkNameParts checks every path part of an expanded template name.
+func checkNameParts(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("が空の名前になります（{host} や {date} などを入れてください）")
+	}
+	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == "." || part == ".." {
+			return fmt.Errorf("に「%s」は使えません", part)
+		}
+		for _, r := range part {
+			if r < 0x20 || r == 0x7f {
+				return fmt.Errorf("に制御文字（改行・タブなど）が含まれています")
+			}
+			if strings.ContainsRune(`:*?"<>|`, r) {
+				return fmt.Errorf("に Windows のファイル名に使えない文字（%c）が含まれています", r)
+			}
+		}
+		if reservedName(part) {
+			return fmt.Errorf("の「%s」は Windows の予約名のため使えません", part)
+		}
+		if strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") {
+			return fmt.Errorf("の「%s」は末尾のドットや空白のため使えません", part)
+		}
+	}
+	return nil
 }

@@ -275,17 +275,55 @@ func HopCells(c map[string]string) map[string]string {
 // HopGap is the number of the first empty hop that a later hop follows in
 // c (0 when the hops are in order): CellsDevice would close the gap.
 func HopGap(c map[string]string) int {
-	gap := 0
+	gap, _ := HopGapNext(c)
+	return gap
+}
+
+// HopGapNext is HopGap with the number of the hop that follows the gap:
+// the first one with a host after it ((1, 3) for a row whose only hop is
+// the third — the message names that hop, not "踏み台2", review 2026-11-07
+// D-B1). (0, 0) when the hops are in order.
+func HopGapNext(c map[string]string) (gap, next int) {
 	for n := 1; n <= model.MaxBastions; n++ {
 		if strings.TrimSpace(c["bastion"+strconv.Itoa(n)+"Host"]) == "" {
 			if gap == 0 {
 				gap = n
 			}
 		} else if gap > 0 {
-			return gap
+			return gap, n
 		}
 	}
-	return 0
+	return 0, 0
+}
+
+// HopNumbers lists the hops of c that have a host, in order: what
+// CellsDevice keeps, renumbered from 1. A Validate message about the
+// device's hop N is about the row's HopNumbers[N-1] (a row with the first
+// hop empty and the second filled: the device's hop 1 is the row's hop 2).
+func HopNumbers(c map[string]string) []int {
+	var out []int
+	for n := 1; n <= model.MaxBastions; n++ {
+		if strings.TrimSpace(c["bastion"+strconv.Itoa(n)+"Host"]) != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// HopErrorColumn is ErrorColumn for a row whose hops have a gap: a column
+// of the device's hop N is moved to the row's hop HopNumbers[N-1], so the
+// mark lands on the column the value was typed in.
+func HopErrorColumn(msg string, c map[string]string) string {
+	col := ErrorColumn(msg)
+	if !strings.HasPrefix(col, "bastion") || len(col) < 8 {
+		return col
+	}
+	n := int(col[7] - '0')
+	nums := HopNumbers(c)
+	if n < 1 || n > len(nums) || nums[n-1] == n {
+		return col
+	}
+	return "bastion" + strconv.Itoa(nums[n-1]) + col[8:]
 }
 
 func boolWord(v string) bool {
@@ -313,8 +351,22 @@ func ErrorColumn(msg string) string {
 			return p + "Username"
 		case strings.Contains(msg, "秘密鍵"):
 			return p + "KeyFile"
+		case strings.Contains(msg, "ジャンプコマンド"):
+			return p + "JumpCommand"
+		case strings.Contains(msg, "認証方式"):
+			return p + "AuthMethod"
 		}
 		return p + "Host"
+	}
+	// "グループに制御文字…" (Device.Validate's label + CheckCommandText):
+	// the column the text was typed in, not the name.
+	switch {
+	case strings.HasPrefix(msg, "グループに"):
+		return "group"
+	case strings.HasPrefix(msg, "拠点に"):
+		return "site"
+	case strings.HasPrefix(msg, "役割に"):
+		return "role"
 	}
 	switch {
 	case strings.Contains(msg, "すべて SSH"):

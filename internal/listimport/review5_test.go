@@ -99,7 +99,7 @@ func TestInvalidValueIsNotSame(t *testing.T) {
 	// No record: asked, kept by default — the file's text in the cell.
 	p := plan(t, inv, fixture(), r, nil)
 	row := rowOf(p, 5)
-	if c := cell(row, "conn"); c.State != "ask" || c.File != "稼働" || c.Cur != "ssh" {
+	if c := cell(row, "conn"); c.State != "nobase" || c.File != "稼働" || c.Cur != "ssh" {
 		t.Fatalf("conn cell = %+v", c)
 	}
 	if row.Status != "ask" || len(row.Errors) != 0 {

@@ -113,7 +113,7 @@ function screenColorEditor(kind, apply) {
     </div>
     <div class="sc-sample"></div>
     <div class="sc-warn hidden">${esc(t("文字と背景の色が近く、読みにくい組み合わせです"))}</div>
-    ${kind === "term" || kind === "watch" ? `<div class="sc-note">${esc(t("機器が色を付けて出す文字（Linux の ls など）は機器側の色のままです。明るい背景では白と黄色だけ濃くして表示します"))}</div>` : ""}
+    ${kind === "term" || kind === "watch" ? `<div class="sc-note">${esc(t("機器が色を付けて出す文字は機器側の色のまま"))}${hintI(t("機器が色を付けて出す文字（Linux の ls など）は機器側の色のままです。明るい背景では白と黄色だけ濃くして表示します"))}</div>` : ""}
   </div>`);
   const fg = box.querySelector(".sc-fg"), bg = box.querySelector(".sc-bg"), cu = box.querySelector(".sc-cur");
   const sample = box.querySelector(".sc-sample"), warn = box.querySelector(".sc-warn");
@@ -188,7 +188,7 @@ function closeScreenColorPanel() {
 function screenColorsPanelHTML() {
   return `<div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="screen-colors">
     <div style="font-weight:600;margin-bottom:4px">${esc(t("表示の色"))}</div>
-    <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("別ウィンドウで開く画面の文字色・背景色です（Tera Term の［ウィンドウの設定］と同じ）。変更はすぐ保存され、開いている窓にも反映されます。各窓の「色」ボタンからも変えられます。保存先はこの PC です（vault・一式書き出しには入りません）。機器ごとの「端末の色」（機器の編集）は端末窓の背景にさらに重ねて使われます"))}</div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("別窓の文字色・背景色（変更はすぐ保存され、開いている窓にも反映）"))}${hintI(t("別ウィンドウで開く画面の文字色・背景色です（Tera Term の［ウィンドウの設定］と同じ）。変更はすぐ保存され、開いている窓にも反映されます。各窓の「色」ボタンからも変えられます。保存先はこの PC です（vault・一式書き出しには入りません）。機器ごとの「端末の色」（機器の編集）は端末窓の背景にさらに重ねて使われます"))}</div>
     <div id="sc-kinds"></div>
   </div>`;
 }

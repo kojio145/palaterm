@@ -258,7 +258,7 @@ function renderHistoryView() {
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行履歴・比較"))}</div>
-        <div class="page-sub">${esc(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます"))}<br>${esc(t("他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）"))}</div></div>
+        <div class="page-sub">${esc(t("実行ごとのログの一覧。▸ で機器ごとの結果、A と B を選んで「比較する」で作業前後の差分"))}${hintI(t("ログフォルダ内の実行ごとのフォルダ（既定: 日時[_グループ][_作業タイミング]）の一覧。▸ で機器ごとの結果、A/B で 2 回の実行を選んで「比較」すると、同じ機器の作業前・作業後のログの差分が見られます") + "\n\n" + t("他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="hist-refresh">${esc(t("再読み込み"))}</button>
         <button class="btn" id="hist-logdir">${esc(t("ログフォルダを開く"))}</button>
@@ -271,7 +271,7 @@ function renderHistoryView() {
         <b style="white-space:nowrap">${esc(t("比較"))}</b>
         <span class="muted" style="font-size:12px">A</span><select id="cmp-a" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.a))}">${runOpt(histState.a)}</select>
         <span class="muted" style="font-size:12px">B</span><select id="cmp-b" class="btn" style="max-width:360px" data-tip="${esc(runTipOf(histState.b))}">${runOpt(histState.b)}</select>
-        <button class="btn primary" id="cmp-go" ${aRun && bRun && histState.a !== histState.b ? "" : "disabled"}>${esc(t("比較する"))}</button>
+        <button class="btn primary" id="cmp-go" ${cmpGoOff(aRun, bRun) ? "disabled" : ""} data-tip="${esc(cmpGoTip(aRun, bRun))}">${esc(t("比較する"))}</button>
         ${bOlder ? `<span style="font-size:12px;color:var(--warn)">${esc(t("⚠ B は A より前の実行です（A=作業前・B=作業後 の順になっていません）"))}</span>` : ""}
       </div>
       <div class="row-inline" style="gap:10px;flex-wrap:wrap;margin-top:8px">
@@ -304,10 +304,10 @@ function renderHistoryView() {
   // 再読み込み drops the comparison shown: the folders may have changed
   // under the same names (a schedule's next round, an external folder
   // replaced), and the old verdict would be drawn again as if current.
-  document.getElementById("hist-refresh").onclick = () => { histState.cmp = null; renderHistory(); };
+  document.getElementById("hist-refresh").onclick = () => { histState.cmp = null; histState.cmpNote = null; histState.cmpStale = false; renderHistory(); };
   const more = document.getElementById("hist-more");
   if (more) more.onclick = () => { histState.limit += HIST_PAGE; renderHistoryView(); };
-  document.getElementById("hist-logdir").onclick = () => App().OpenLogDir();
+  document.getElementById("hist-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   document.getElementById("hist-grep").onclick = () => App().OpenGrepWindow("").catch(e => toast(terr(e), "err"));
   root.querySelectorAll("[data-grep]").forEach(b => b.onclick = () => App().OpenGrepWindow(b.dataset.grep).catch(e => toast(terr(e), "err")));
   document.getElementById("hist-versions").onclick = deviceVersionsDialog;
@@ -327,8 +327,35 @@ function renderHistoryView() {
   document.getElementById("cmp-k-edit").onclick = () => checklistEditor();
   document.getElementById("cmp-go").onclick = compareRuns;
   // The tab was redrawn (a sort, a filter, a row opened): the comparison of
-  // the same A / B / 作業中 is still valid, so it is drawn again as it was.
-  if (histState.cmp && histState.cmp.key === cmpKey()) drawCompare();
+  // the same A / B / 作業中 is still valid, so it is drawn again as it was
+  // — as is its progress while it runs, and the "no log on both sides"
+  // note (they used to vanish on a redraw). Another A / B / 作業中 /
+  // checklist: one line says the result shown no longer fits (it used to
+  // vanish without a word).
+  const out = document.getElementById("cmp-result"), key = cmpKey();
+  if (histState.cmpBusy && histState.cmpBusy.key === key) out.innerHTML = histState.cmpBusy.html;
+  else if (histState.cmp && histState.cmp.key === key) drawCompare();
+  else if (histState.cmpNote && histState.cmpNote.key === key) out.innerHTML = histState.cmpNote.html;
+  else if (histState.cmp || histState.cmpNote || histState.cmpBusy || histState.cmpStale) out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("条件が変わりました。「比較する」を押し直してください"))}</div>`;
+}
+
+// 比較する: off without A and B, with A = B, and while the comparison of
+// this A / B / 作業中 / checklist runs; the tip says which.
+function cmpGoBusy() { return !!(histState.cmpBusy && histState.cmpBusy.key === cmpKey()); }
+function cmpGoOff(aRun, bRun) { return !(aRun && bRun) || histState.a === histState.b || cmpGoBusy(); }
+function cmpGoTip(aRun, bRun) {
+  if (cmpGoBusy()) return t("比較中です");
+  if (!(aRun && bRun)) return t("A と B を選んでください");
+  if (histState.a === histState.b) return t("A と B が同じ実行です。別の実行を選んでください");
+  return "";
+}
+// The button as the comparison starts and ends (no redraw of the tab).
+function cmpGoRefresh() {
+  const go = document.getElementById("cmp-go");
+  if (!go) return;
+  const aRun = histState.runs.find(r => r.dir === histState.a), bRun = histState.runs.find(r => r.dir === histState.b);
+  go.disabled = cmpGoOff(aRun, bRun);
+  go.dataset.tip = cmpGoTip(aRun, bRun);
 }
 
 // Two names stand for the same device: equal, or one is the other followed
@@ -375,7 +402,7 @@ function cmpWorkName(work, works) {
   if (runSessions(work) > 1) parts.push(t("{s} セッション", { s: runSessions(work) }));
   const more = (works || []).filter(w => w !== work).length;
   if (more) parts.push(t("ほか {m} フォルダを含む", { m: more }));
-  return runTitle(work) + (work.interactive ? "（" + t("対話接続") + "）" : "") + (parts.length ? "（" + parts.join("・") + "）" : "");
+  return runTitle(work) + (work.interactive ? t("（{s}）", { s: t("対話接続") }) : "") + (parts.length ? t("（{s}）", { s: parts.join(t("・")) }) : "");
 }
 
 // The work runs read for the verdict: the one picked and, when it lies
@@ -409,13 +436,20 @@ let cmpSeq = 0;
 async function compareRuns() {
   const a = histState.runs.find(r => r.dir === histState.a);
   const b = histState.runs.find(r => r.dir === histState.b);
-  const out = document.getElementById("cmp-result");
-  if (!a || !b) return;
+  if (!a || !b || a === b) return;
   const seq = ++cmpSeq;
   // The selection this comparison is for: picking another A / B / 作業中
-  // while it runs must not put this result under the new selection.
-  const key = cmpKey();
-  histState.cmp = null;
+  // while it runs must not put this result under the new selection. The
+  // checklist is fixed here too: one picked while the rows were being
+  // judged used to judge the rest against the new one.
+  const key = cmpKey(), checklist = cmpChecklist();
+  histState.cmp = null; histState.cmpNote = null; histState.cmpStale = false;
+  // What #cmp-result shows for this selection (a redraw of the tab draws
+  // it again: renderHistoryView). The element is looked up each time: a
+  // redraw replaces it.
+  const show = html => { if (seq === cmpSeq && cmpKey() === key) { const out = document.getElementById("cmp-result"); if (out) out.innerHTML = html; } };
+  const busy = html => { if (seq !== cmpSeq) return; histState.cmpBusy = { key, html }; show(html); };
+  const finish = () => { if (seq === cmpSeq) { histState.cmpBusy = null; cmpGoRefresh(); } };
   // Every device of either run is listed. A device that failed in A or B
   // (no log, or a log cut short by an error) is a row of its own, in red,
   // first: three login failures used to hide inside "A のみ: sw3, sw7, sw9".
@@ -445,13 +479,19 @@ async function compareRuns() {
   const failedIn = n => { const e = byName[n]; const f = []; if (bad(e.sa)) f.push("A"); if (bad(e.sb)) f.push("B"); return f; };
   const failed = names.filter(n => failedIn(n).length);
   const pairs = names.filter(n => byName[n].a && byName[n].b && !failedIn(n).length);
-  if (!pairs.length && !failed.length) {
+  // With a checklist, a device that only B holds (added since A, or A's
+  // log missing) is judged against it too: a row of its own, 差分 "B の
+  // み" (the checklist reads B alone; the comparison needs both).
+  const checkOnly = checklist ? names.filter(n => !byName[n].sa && byName[n].sb && byName[n].b && !failedIn(n).length) : [];
+  if (!pairs.length && !failed.length && !checkOnly.length) {
     // Say which names each side was read as: a file naming habit that keeps
     // the names apart (a stage word or a date left in) shows at once.
     const sample = run => { const ns = [...new Set(run.devices.map(d => d.name))]; return ns.slice(0, 3).join(", ") + (ns.length > 3 ? t(" ほか {n} 台", { n: ns.length - 3 }) : ""); };
-    out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）"))}
+    const html = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）"))}
       <div class="mono" style="font-size:12px;margin-top:6px">A: ${esc(sample(a) || t("（ログなし）"))}<br>B: ${esc(sample(b) || t("（ログなし）"))}</div>
       <div style="font-size:12px;margin-top:4px">${esc(t("外部フォルダの機器名はファイル名から日付・時刻と作業の語（前／後・作業前ログ など）を除いて読み取っています。A と B で名前が違うときは、ファイル名をそろえてください"))}</div></div>`;
+    histState.cmpNote = { key, html };
+    show(html);
     return;
   }
   // Strict verdict: the setting lines typed during the work (its logs) are
@@ -459,12 +499,19 @@ async function compareRuns() {
   // work added from one that was already there.
   const work = histState.c && histState.c !== "-" ? histState.runs.find(r => r.dir === histState.c) : null;
   const works = work ? workRunsFor(a, b, work) : [];
-  const rows = pairs.map(n => ({ name: n }));
+  const rows = pairs.map(n => ({ name: n })).concat(checkOnly.map(n => ({ name: n, bOnly: true })));
   let done = 0;
-  const progress = () => { if (seq === cmpSeq) out.innerHTML = `<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("比較中… {i} / {n} 台", { i: done, n: pairs.length }))}</div>`; };
+  const progress = () => busy(`<div class="muted" style="font-size:13px;margin-top:10px">${esc(t("比較中… {i} / {n} 台", { i: done, n: rows.length }))}</div>`);
   progress();
+  cmpGoRefresh();
   await inPool(rows, 4, async r => {
     const e = byName[r.name];
+    if (r.bOnly) {
+      try { r.check = await App().VerifyChecklist(checklist, e.b); }
+      catch (err) { r.check = { err: terr(err) }; }
+      done++; progress();
+      return;
+    }
     try {
       // Whole logs and, when both hold a configuration listing, the
       // listings alone: a device whose counters moved is not one whose
@@ -477,8 +524,8 @@ async function compareRuns() {
       r.anyDiff = n(d.whole);
       r.impact = d.impact || ""; r.high = d.high || 0; r.mid = d.mid || 0;
     } catch (err) { r.err = terr(err); }
-    if (cmpChecklist() && !r.err) {
-      try { r.check = await App().VerifyChecklist(cmpChecklist(), e.b); }
+    if (checklist && !r.err) {
+      try { r.check = await App().VerifyChecklist(checklist, e.b); }
       catch (err) { r.check = { err: terr(err) }; }
     }
     if (work && !r.err) {
@@ -498,16 +545,17 @@ async function compareRuns() {
   });
   if (seq !== cmpSeq) return; // a newer comparison was started
   // Devices that one run did not include at all (a failure is listed above,
-  // not here).
+  // not here; a B-only device judged by the checklist is a row).
   const onlyA = names.filter(n => byName[n].sa && !byName[n].sb && !failedIn(n).length);
-  const onlyB = names.filter(n => !byName[n].sa && byName[n].sb && !failedIn(n).length);
+  const onlyB = names.filter(n => !byName[n].sa && byName[n].sb && !failedIn(n).length && !checkOnly.includes(n));
   const failRows = failed.map(n => {
     const e = byName[n]; const where = failedIn(n);
     const msg = where.map(w => `${w}: ${fmtRunMsg((w === "A" ? e.ea : e.eb) || t("ログなし"))}`).join(" ／ ");
     return { name: n, fail: where.join("/"), msg, a: e.a, b: e.b };
   });
   histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB, at: new Date().toISOString() };
-  drawCompare();
+  finish();
+  if (cmpKey() === key) drawCompare();
 }
 
 // The compared devices, the ones that need attention first.
@@ -582,9 +630,20 @@ function cmpVerdictText(r, work) {
   if (!s.commands.length) return t("設定コマンドなし（参照のみ {n} 件）", { n: s.typed });
   const unv = s.unverified || 0;
   if (s.missing) return t("⚠ {m} / {c} 件が未反映", { m: s.missing, c: s.commands.length }) + (unv ? t("（要確認 {u} 件）", { u: unv }) : "");
-  if (!unv) return t("✅ {c} 件すべて反映", { c: s.commands.length });
-  if (s.reflected) return t("✅ 未反映なし（反映 {r} 件・要確認 {u} 件）", { r: s.reflected, u: unv });
+  if (!unv) return t("✅ {c} 件すべて反映", { c: s.commands.length }) + cmpReflectedNote(s);
+  if (s.reflected) return t("✅ 未反映なし（反映 {r} 件・要確認 {u} 件）", { r: s.reflected, u: unv }) + cmpReflectedNote(s);
   return t("？ 照合できません（{u} 件）", { u: unv });
+}
+// "Reflected" counts the lines that were there before the work and the
+// lines a later line undid or overwrote: said next to the count, so "all
+// 12 reflected" is not read as "12 lines put in".
+function cmpReflectedNote(s) {
+  const already = (s.commands || []).filter(c => c.status === "already").length;
+  const sup = (s.commands || []).filter(c => c.status === "superseded").length;
+  const parts = [];
+  if (already) parts.push(t("作業前からあり {n} 件", { n: already }));
+  if (sup) parts.push(t("取り消し・上書き {n} 件", { n: sup }));
+  return parts.length ? t("（うち {s}）", { s: parts.join(t("・")) }) : "";
 }
 
 // Why a line was matched the way it was, or why it could not be.
@@ -640,14 +699,26 @@ function drawCompare() {
     const unexDev = all.filter(r => r.strict && r.strict.unexpectedCount).length;
     const unexLines = all.reduce((s, r) => s + ((r.strict && r.strict.unexpectedCount) || 0), 0);
     const noWork = all.filter(r => r.strict && (r.strict.noLog || (r.strict.commands && !r.strict.commands.length))).length;
+    // Devices the verdict could not cover: failed in A or B, in one run
+    // only, or not readable. A verdict of "every device" used to leave
+    // them out without a word.
+    const unjudged = failRows.length + onlyA.length + onlyB.length + all.filter(r => r.bOnly || r.err || (r.strict && r.strict.err)).length;
+    // The count is of lines (the sum over the devices): "合計", since
+    // "{c} 件 … 全 {n} 台" was read as c lines per device.
     let cls, headline;
     if (!judged.length) { cls = "warn"; headline = t("結論を出せません: 作業中のログに設定コマンドが見つかりません（show などの参照コマンドだけ、または作業ログの無い機器）"); }
     else if (!missCmd && !refCmd) { cls = "warn"; headline = t("結論を出せません: 作業後のログで照合できる設定がありません（作業後に show running-config 等を取得してください）"); }
-    else if (ngDev === 0 && !unvCmd) { cls = "ok"; headline = t("✅ 結論: 作業中に設定した内容（{c} 件）が、作業後に全 {n} 台で反映されています", { c: totalCmd, n: okDev }); }
-    else if (ngDev === 0) { cls = "ok"; headline = t("✅ 結論: 作業中に設定した内容（{c} 件）のうち、作業後に反映されていないものはありません（全 {n} 台・要確認 {u} 件）", { c: totalCmd, n: okDev, u: unvCmd }); }
+    else if (ngDev === 0 && !unvCmd) {
+      if (unjudged) { cls = "warn"; headline = t("⚠ 結論: 作業中に設定した内容（合計 {c} 件）は、判定できた {n} 台で反映されています（{k} 台は判定できません）", { c: totalCmd, n: okDev, k: unjudged }); }
+      else { cls = "ok"; headline = t("✅ 結論: 作業中に設定した内容（合計 {c} 件）が、作業後に {n} 台すべてで反映されています", { c: totalCmd, n: okDev }); }
+    } else if (ngDev === 0) {
+      if (unjudged) { cls = "warn"; headline = t("⚠ 結論: 作業中に設定した内容（合計 {c} 件）のうち、判定できた {n} 台で反映されていないものはありません（要確認 {u} 件・{k} 台は判定できません）", { c: totalCmd, n: okDev, u: unvCmd, k: unjudged }); }
+      else { cls = "ok"; headline = t("✅ 結論: 作業中に設定した内容（合計 {c} 件）のうち、作業後に反映されていないものはありません（{n} 台すべて・要確認 {u} 件）", { c: totalCmd, n: okDev, u: unvCmd }); }
+    }
     else if (okDev === 0) { cls = "err"; headline = t("⚠ 結論: 作業中に設定した内容のうち {m} / {c} 件が、作業後に反映されていません（{n} 台）", { m: missCmd, c: totalCmd, n: ngDev }); }
     else { cls = "warn"; headline = t("⚠ 結論: 作業中に設定した内容のうち {m} / {c} 件が、{b} 台で作業後に反映されていません（{a} 台はすべて反映）", { m: missCmd, c: totalCmd, a: okDev, b: ngDev }); }
     const notes = [];
+    if (unjudged && judged.length) notes.push(t("⚠ {n} 台は判定できません（A か B で失敗、片方の実行にしか無い、またはログを読めない機器。下の表と注記で確認してください）", { n: unjudged }));
     if (unexDev) notes.push(t("⚠ 作業中に打っていない設定の変化が {d} 台・{n} 行あります（各機器の「作業外の変更」で確認してください）", { d: unexDev, n: unexLines }));
     if (unvCmd && (ngDev || noCfg)) notes.push(t("？ 要確認 {u} 件（ログからは判定できない行。未反映には数えていません）", { u: unvCmd }));
     if (noCfg) notes.push(t("{n} 台は作業後のログに設定の表示（show running-config 等）が見当たらないため照合できません", { n: noCfg }));
@@ -707,7 +778,14 @@ function drawCompare() {
         <td colspan="${3 + (work ? 1 : 0) + (cmpChecklist() ? 1 : 0)}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
         <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
-      ${rows.map(r => `<tr>
+      ${rows.map(r => r.bOnly ? `<tr>
+        <td><b>${esc(r.name)}</b></td>
+        <td><span class="muted" data-tip="${esc(t("A にこの機器のログが無いため差分は出せません。チェックリストは B のログだけで判定しています"))}">${esc(t("B のみ（比較なし）"))}</span></td>
+        <td class="mono"><span class="muted">${esc(t("—"))}</span></td><td class="mono"><span class="muted">${esc(t("—"))}</span></td><td><span class="muted">—</span></td>
+        ${cmpChecklist() ? `<td>${cmpCheckHTML(r.check)}</td>` : ""}
+        ${work ? `<td></td>` : ""}
+        <td style="text-align:right;white-space:nowrap">${byName[r.name] && byName[r.name].b ? `<span class="link" data-log="${esc(byName[r.name].b)}">${esc(t("ログ表示"))}</span>` : ""}</td>
+      </tr>` : `<tr>
         <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
         <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
@@ -730,7 +808,11 @@ function drawCompare() {
     await copyText(tsv, t("比較結果をコピーしました"));
   };
   document.getElementById("cmp-html").onclick = async () => {
-    const devices = C.failRows.map(r => ({ name: r.name, error: t("{w} で失敗", { w: r.fail }) + ": " + r.msg })).concat(cmpSorted(C).map(({ r }) => ({ name: r.name, pathA: byName[r.name].a, pathB: byName[r.name].b, verdict: work ? cmpVerdictText(r, work) : "", check: cmpChecklist() ? cmpCheckText(r.check) : "", error: r.err || "" })));
+    // A B-only row has no A to diff: listed like a failed one, with its
+    // checklist result in the text.
+    const devices = C.failRows.map(r => ({ name: r.name, error: t("{w} で失敗", { w: r.fail }) + ": " + r.msg })).concat(cmpSorted(C).map(({ r }) => r.bOnly
+      ? { name: r.name, error: t("B のみ（比較なし）") + (r.check ? "　" + t("期待値（チェックリスト）") + ": " + cmpCheckText(r.check) : "") }
+      : { name: r.name, pathA: byName[r.name].a, pathB: byName[r.name].b, verdict: work ? cmpVerdictText(r, work) : "", check: cmpChecklist() ? cmpCheckText(r.check) : "", error: r.err || "" }));
     try {
       const path = await App().ExportCompareReport({ title: t("比較レポート") + " " + (a.group || ""), runA: runTitle(a), runB: runTitle(b), work: work ? cmpWorkName(work, works) : "", headline: C.headline || "", lang: LANG, devices });
       await exportDoneDialog(path);
@@ -786,10 +868,12 @@ function cmpTable(withTitle) {
   }
   out.push(head);
   // A failed device: why, in the 差分 column (there with or without a work).
-  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg, "", "", "", "", "", "", "", "", ""]));
+  // As many columns as the header (the checklist's and the work's too).
+  C.failRows.forEach(r => out.push([r.name, "", t("{w} で失敗", { w: r.fail }) + ": " + r.msg].concat(Array(head.length - 3).fill(""))));
   for (const { r } of cmpSorted(C)) {
-    const cfg = r.hasConfig ? r.config : null, rest = r.err ? null : (r.hasConfig ? cmpRest(r) : r.whole);
-    const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : cmpDiffText(r), r.err ? "" : r.added, r.err ? "" : r.removed,
+    const cfg = r.hasConfig ? r.config : null, rest = r.err || r.bOnly ? null : (r.hasConfig ? cmpRest(r) : r.whole);
+    const blank = !!(r.err || r.bOnly);
+    const row = [r.name, (C.byName[r.name] && C.byName[r.name].pairedWith) || "", r.err ? r.err : r.bOnly ? t("B のみ（比較なし）") : cmpDiffText(r), blank ? "" : r.added, blank ? "" : r.removed,
       cfg ? cfg.added : "", cfg ? cfg.removed : "", cfg ? (cfg.changed || 0) : "", cfg ? (cfg.moved || 0) : "", rest ? rest.added : "", rest ? rest.removed : "",
       r.err || !r.cfgDiff ? "" : ({ high: t("高"), mid: t("中"), low: t("低") }[r.impact] || "")];
     if (cmpChecklist()) row.push(cmpCheckText(r.check), ((r.check && r.check.results) || []).filter(x => x.status !== "pass").map(x => `${x.status === "fail" ? "✗" : x.status === "missing" ? "－" : "？"} ${x.text}${x.found ? " → " + x.found : ""}`).join("\n"));
@@ -855,7 +939,8 @@ async function checklistEditor() {
   async function show() {
     sel.innerHTML = lists.map(c => `<option value="${esc(c.name)}" ${cur && c.name === cur.name ? "selected" : ""}>${esc(c.name)}（${c.lines.length}）</option>`).join("") || `<option value="">${esc(t("（まだありません）"))}</option>`;
     nameIn.value = cur ? cur.name : "";
-    ta.value = cur ? await App().FormatChecklistLines(cur.lines) : "";
+    ta.value = "";
+    if (cur) { try { ta.value = await App().FormatChecklistLines(cur.lines); } catch (e) { toast(t("チェックリストを読めません") + ": " + terr(e), "err"); } }
     node.querySelector("#ck-del").disabled = !cur;
     snap = snapNow();
   }
@@ -867,16 +952,20 @@ async function checklistEditor() {
   node.querySelector("#ck-add").onclick = async () => {
     const vals = node.querySelector("#ck-vals").value.split(/[,、]/).map(s => s.trim()).filter(Boolean);
     if (!vals.length) { toast(t("値を入力してください"), "err"); return; }
-    const lines = await App().ChecklistTemplate(node.querySelector("#ck-fam").value, node.querySelector("#ck-kind").value, vals);
-    if (!lines.length) { toast(t("この組み合わせの雛形はありません"), "warn"); return; }
-    const add = await App().FormatChecklistLines(lines);
+    let add;
+    try {
+      const lines = await App().ChecklistTemplate(node.querySelector("#ck-fam").value, node.querySelector("#ck-kind").value, vals);
+      if (!lines || !lines.length) { toast(t("この組み合わせの雛形はありません"), "warn"); return; }
+      add = await App().FormatChecklistLines(lines);
+    } catch (e) { toast(t("雛形を作れません") + ": " + terr(e), "err"); return; }
     ta.value = (ta.value.replace(/\s+$/, "") + "\n" + add).replace(/^\n/, "");
   };
   node.querySelector("#ck-save").onclick = async () => {
     const name = nameIn.value.trim();
     if (!name) { toast(t("名前を入力してください"), "err"); return; }
-    const lines = await App().ParseChecklistText(ta.value);
-    if (!lines.length) { toast(t("あるべき設定行を 1 行以上書いてください"), "err"); return; }
+    let lines;
+    try { lines = await App().ParseChecklistText(ta.value); } catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); return; }
+    if (!lines || !lines.length) { toast(t("あるべき設定行を 1 行以上書いてください"), "err"); return; }
     // A new list, or a rename, under a name another list has: refused (it
     // used to replace that list without a word). The backend refuses it
     // too (ChecklistExists / RenameChecklist).
@@ -895,8 +984,9 @@ async function checklistEditor() {
     lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
     cur = lists.find(c => c.name === name) || null;
     histState.k = name;
-    // The comparison drawn was judged against the lines before this save.
-    histState.cmp = null;
+    // The comparison drawn was judged against the lines before this save:
+    // dropped, and the tab says to compare again (cmpStale).
+    histState.cmp = null; histState.cmpStale = true;
     toast(t("チェックリスト「{n}」を保存しました（{c} 行）", { n: name, c: lines.length }), "ok");
     await show();
   };
@@ -908,7 +998,7 @@ async function checklistEditor() {
     await refreshInventory();
     lists = (INV.checklists || []).map(c => ({ name: c.name, lines: c.lines }));
     if (histState.k === cur.name) histState.k = "";
-    histState.cmp = null;
+    histState.cmp = null; histState.cmpStale = true;
     cur = lists[0] || null;
     await show();
   };
@@ -920,16 +1010,28 @@ async function checklistEditor() {
 // 機器ごとの版: every log of one device across the runs, newest first, with
 // whether its configuration differs from the version before; any two open
 // in the diff window (the older as A).
-const dvState = { name: "", a: null, b: null };
+// A device is its group and its name: names are unique within a group
+// only, so the same name in two groups is two devices (their versions
+// used to be mixed into one list). The backend's DeviceVersionsIn reads
+// the runs of one group; an older one (DeviceVersions) reads by name.
+const dvState = { name: "", group: "", a: null, b: null };
+function dvKey(group, name) { return `${group || ""}\u0000${name}`; }
 async function deviceVersionsDialog() {
-  const names = [...new Set((histState.runs || []).flatMap(r => (r.devices || []).filter(d => d.logPath).map(d => d.name)))].sort((x, y) => x.localeCompare(y, undefined, { numeric: true }));
-  if (!names.length) { toast(t("ログのある機器がありません"), "warn"); return; }
-  if (!names.includes(dvState.name)) { dvState.name = names[0]; dvState.a = dvState.b = null; }
+  const seen = new Map();
+  (histState.runs || []).forEach(r => (r.devices || []).forEach(d => { if (d.logPath) seen.set(dvKey(r.group, d.name), { group: r.group || "", name: d.name }); }));
+  // A name seen with no group (an external folder) and in a group is one
+  // device: its ungrouped logs are listed with the group's (the backend
+  // includes them), so the ungrouped entry is dropped.
+  for (const d of [...seen.values()]) if (!d.group && [...seen.values()].some(x => x.group && x.name === d.name)) seen.delete(dvKey("", d.name));
+  const devs = [...seen.values()].sort((x, y) => x.group.localeCompare(y.group, undefined, { numeric: true }) || x.name.localeCompare(y.name, undefined, { numeric: true }));
+  if (!devs.length) { toast(t("ログのある機器がありません"), "warn"); return; }
+  if (!seen.has(dvKey(dvState.group, dvState.name))) { dvState.group = devs[0].group; dvState.name = devs[0].name; dvState.a = dvState.b = null; }
+  const dvLabel = d => d.group ? `${d.group} / ${d.name}` : d.name;
   const node = h(`<div>
     <h3>${esc(t("機器ごとの版"))}</h3>
     <div class="row-inline" style="gap:10px;flex-wrap:wrap">
-      <span class="muted" style="font-size:12px">${esc(t("機器"))}</span>
-      <select id="dv-name" class="btn" style="max-width:320px">${names.map(n => `<option value="${esc(n)}" ${n === dvState.name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+      <span class="muted" style="font-size:12px" data-tip="${esc(t("グループ / 機器名。同じ名前でもグループが違えば別の機器です"))}">${esc(t("機器"))}</span>
+      <select id="dv-name" class="btn" style="max-width:360px">${devs.map(d => `<option value="${esc(dvKey(d.group, d.name))}" ${d.group === dvState.group && d.name === dvState.name ? "selected" : ""}>${esc(dvLabel(d))}</option>`).join("")}</select>
       <span id="dv-summary" class="muted" style="font-size:12px"></span>
       <span style="flex:1"></span>
       <button class="btn primary" id="dv-diff" disabled>${esc(t("A と B の差分を開く"))}</button>
@@ -962,7 +1064,8 @@ async function deviceVersionsDialog() {
   }
   async function load() {
     body.innerHTML = `<div class="muted" style="font-size:13px">${esc(t("読み込み中…"))}</div>`;
-    try { vers = await App().DeviceVersions(dvState.name); } catch (e) { vers = []; toast(terr(e), "err"); }
+    try { vers = typeof App().DeviceVersionsIn === "function" ? await App().DeviceVersionsIn(dvState.group, dvState.name) : await App().DeviceVersions(dvState.name); }
+    catch (e) { vers = []; toast(terr(e), "err"); }
     vers = vers || [];
     // The oldest version with a configuration has nothing to be compared with.
     for (let i = vers.length - 1; i >= 0; i--) if (vers[i].hasConfig) { vers[i].first = true; break; }
@@ -970,7 +1073,7 @@ async function deviceVersionsDialog() {
     if (!vers.some(v => v.logPath === dvState.b)) dvState.b = null;
     draw();
   }
-  node.querySelector("#dv-name").onchange = e => { dvState.name = e.target.value; dvState.a = dvState.b = null; load(); };
+  node.querySelector("#dv-name").onchange = e => { const d = seen.get(e.target.value); if (!d) return; dvState.group = d.group; dvState.name = d.name; dvState.a = dvState.b = null; load(); };
   go.onclick = () => {
     let va = vers.find(x => x.logPath === dvState.a), vb = vers.find(x => x.logPath === dvState.b);
     if (!va || !vb) return;
@@ -987,6 +1090,24 @@ async function deviceVersionsDialog() {
 // lines dropped, indentation dropped (a device ignores it; a leading blank
 // would be typed to one that does not).
 function cmdLinesOf(text) { return text.split(/\r?\n/).map(s => s.trim()).filter(s => s && !s.startsWith("!") && !s.startsWith("#")); }
+// A generated line that needs a look by hand is a comment — "! 手で確認
+// （why）: line" — made by the backend (cmdgen.go note()), so cmdLinesOf
+// drops it and it never reaches a device as a command (it used to go out
+// as a bare line from the copy, the command set and the run tab). The
+// line of an older backend, which carries only the note, gets the same
+// comment here; one already a comment is never doubled. The marker and
+// the reason are shown in the UI's language.
+const MANUAL_LINE_RE = /^(\s*)([!#]) 手で確認（(.+?)）: (.*)$/;
+function cmdLineText(l) {
+  const text = l.text || "";
+  const m = MANUAL_LINE_RE.exec(text);
+  if (m) return `${m[1]}${m[2]} ${t("手で確認")}（${terr(m[3])}）: ${m[4]}`;
+  if (l.note && !/^\s*[!#]/.test(text)) return `! ${t("手で確認")}（${terr(l.note)}）: ${text}`;
+  // The headings of the generic listing ("# [B で増えた行…]") are backend text.
+  if (l.context && /^\s*# \[/.test(text)) return terr(text);
+  return text;
+}
+function cmdLineManual(l) { return !!l.note || MANUAL_LINE_RE.test(l.text || ""); }
 function cmdDirLabel(dir) { return dir === "forward" ? t("揃える（A → B）") : t("戻す（B → A）"); }
 function cmdFamilyLabel(f) { return { cisco: t("Cisco IOS 系"), fortigate: "FortiGate", junos: "Junos", yamaha: "Yamaha RTX", comware: t("Comware/VRP 系"), generic: t("不明（一覧のみ）") }[f] || f; }
 // The comment line put above the generated commands (the copy, the dialog's
@@ -1004,7 +1125,7 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
   let g;
   try { g = await App().GenerateCommands(pathA, pathB, dir, dev ? dev.osType || "" : ""); }
   catch (e) { toast(t("コマンドを作れません") + ": " + terr(e), "err"); return; }
-  const text = (g.lines || []).map(l => l.text).join("\n");
+  const text = (g.lines || []).map(cmdLineText).join("\n");
   const shown = text ? cmdHeaderLine(g.family, dir, name) + "\n" + text : "";
   const now = new Date(), p2 = n => String(n).padStart(2, "0");
   // Local time (toISOString gave UTC: nine hours off in Japan).
@@ -1017,7 +1138,7 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
   if (g.manual) notes.push(t("「! 手で確認」の行が {n} 行あります（機械的に逆にできない行）", { n: g.manual }));
   if (g.skipped) notes.push(t("証明書・暗号化値・UUID の差分 {n} 行は対象外です", { n: g.skipped }));
   if (g.reordered) notes.push(t("依存関係（参照 → 定義）の順に並べ替えています"));
-  (g.warnings || []).forEach(w => notes.push(w));
+  (g.warnings || []).forEach(w => notes.push(terr(w)));
   const node = h(`<div>
     <h3>${esc(t("{d}: {n}", { d: cmdDirLabel(dir), n: name }))}</h3>
     <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("差分から機械的に作ったコマンドです。投入前に必ず目で確認してください。機器の種類は「{f}」と判断しました（{by}）。", { f: cmdFamilyLabel(g.family), by: g.familyBy === "osType" ? t("OS タイプから") : t("設定の内容から") }))}</p>
@@ -1035,7 +1156,9 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
   </div>`);
   openModal(node, "wide");
   const ta = node.querySelector("#cg-text");
-  node.querySelector("#cg-close").onclick = closeModal;
+  // 閉じる (and Esc) ask before throwing away an edited text; armed again
+  // after a save as a command set (what was saved is not an edit lost).
+  guardDiscard(node, "#cg-close");
   node.querySelector("#cg-copy").onclick = () => copyText(ta.value, t("コマンドをコピーしました"));
   node.querySelector("#cg-save").onclick = async () => {
     const nm = node.querySelector("#cg-name").value.trim();
@@ -1045,14 +1168,23 @@ async function cmdDialog(name, pathA, pathB, dir, group) {
     if (!cmds.length) { toast(t("コマンドがありません"), "err"); return; }
     // Over the dialog (uiConfirm would replace it, and the commands with it).
     if ((INV.commandSets || []).some(s => s.name === nm) && !(await subConfirm(`<b>${esc(t("上書きしますか？"))}</b><br>${esc(t("同じ名前のコマンドセット「{n}」があります。上書きします", { n: nm }))}`, t("上書き"), t("キャンセル")))) return;
-    try { await App().SaveCommandSet({ name: nm, commands: cmds, pauseOff: false }); await refreshInventory(); toast(t("コマンドセット「{n}」を保存しました", { n: nm }), "ok"); }
+    try { await App().SaveCommandSet({ name: nm, commands: cmds, pauseOff: false }); await refreshInventory(); toast(t("コマンドセット「{n}」を保存しました", { n: nm }), "ok"); guardDiscard(node, "#cg-close"); }
     catch (e) { toast(t("保存に失敗") + ": " + terr(e), "err"); }
   };
   node.querySelector("#cg-run").onclick = async () => {
     if (!dev) return;
     const lines = cmdLinesOf(ta.value);
     if (!lines.length) { toast(t("コマンドがありません"), "err"); return; }
+    // The run tab's state is replaced below: not while a batch runs, and
+    // not over failed / canceled results without asking (as the run tab's
+    // group switch asks). The 📂 folder and ⇄ 作業前と比較 of the previous
+    // run go with the results.
+    if (typeof running !== "undefined" && running) { toast(t("一括実行中です。完了または中止を待ってください"), "err"); return; }
+    const left = typeof unfinishedNames === "function" ? unfinishedNames().length : 0;
+    if (left && !(await subConfirm(`<b>${esc(t("実行結果のクリア"))}</b><br>${esc(t("実行タブの前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。続けますか？", { n: left }))}`, t("続ける"), t("キャンセル")))) return;
     for (const k in runState) delete runState[k];
+    if (typeof lastRunDir !== "undefined") lastRunDir = "";
+    if (typeof lastRunAfter !== "undefined") lastRunAfter = null;
     runGroupSel = dev.group || RUN_UNGROUPED;
     // This device by its exact name (runFilter.exact, views2.js), not the
     // substring filter: "lab-sw1" also showed lab-sw10… as targets.

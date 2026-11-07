@@ -540,11 +540,15 @@ func atoi(s string) int {
 	}
 	return n
 }
+
+// parseBool reads a yes/no cell. The check marks a list kept by hand uses
+// (✓ ✔ レ 済 〇) count as yes, a lone x (or ✗) as no (review 2026-11-07
+// D-C7); anything else is def.
 func parseBool(s string, def bool) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "1", "yes", "y", "on", "はい", "○", "◯", "有効":
+	case "true", "1", "yes", "y", "on", "はい", "○", "◯", "〇", "有効", "✓", "✔", "レ", "済":
 		return true
-	case "false", "0", "no", "n", "off", "いいえ", "×", "無効":
+	case "false", "0", "no", "n", "off", "いいえ", "×", "無効", "x", "✗", "✘":
 		return false
 	}
 	return def

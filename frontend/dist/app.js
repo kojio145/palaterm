@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.32";
+const APP_VERSION = "1.9.33";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -87,6 +87,21 @@ function uiConfirm({ title = t("確認"), message = "", okLabel = "OK", cancelLa
   });
 }
 
+// NFKC: full-width letters, digits and dots typed into an address or a
+// port (an IME left on) become their half-width forms before the value is
+// checked or compared. Spaces of either width are left for trim().
+function nfkc(s) {
+  s = String(s ?? "");
+  try { return s.normalize("NFKC"); } catch (e) { return s; }
+}
+
+// The redraw after a successful save: a failure here is not a failed save,
+// so it is said as what it is and the caller goes on to its success toast.
+async function refreshAfterSave() {
+  try { await refreshInventory(); return true; }
+  catch (e) { toast(t("保存はできましたが、一覧を更新できませんでした（ロックし直すと最新になります）") + ": " + terr(e), "warn"); return false; }
+}
+
 // A dialog is open (an editor, a confirmation) — its contents are not saved.
 function modalOpen() { return !$("#modal-overlay").classList.contains("hidden"); }
 
@@ -95,6 +110,10 @@ function openModal(node, sizeClass) {
   m.className = "modal" + (sizeClass ? " " + sizeClass : "");
   m.innerHTML = ""; m.appendChild(node);
   $("#modal-overlay").classList.remove("hidden");
+  // The dialog box is reused: a previous dialog left scrolled (a long
+  // editor, a details opened near its end) would open the next one
+  // part-way down. Reset once it is displayed (a hidden box ignores it).
+  m.scrollTop = 0;
   // The autofocus attribute only works once per document in Chromium; the
   // dialogs come and go, so the focus is placed by hand — unless the
   // caller already put it somewhere inside.
@@ -254,9 +273,11 @@ function listViewActive(key) {
 // by; selOf maps each select's id to item → value for exact matching.
 function listViewApply(key, items, searchOf, sortVal, selOf) {
   const v = listView(key);
-  const q = v.text.trim().toLowerCase();
+  // Width-blind: "ｓｗ０１" (an IME left on) finds sw01, and the other way.
+  const fold = s => nfkc(s).toLowerCase();
+  const q = fold(v.text.trim());
   let out = items.filter(it => {
-    if (q && !searchOf(it).some(s => String(s ?? "").toLowerCase().includes(q))) return false;
+    if (q && !searchOf(it).some(s => fold(s).includes(q))) return false;
     for (const id of Object.keys(v.sel)) {
       if (v.sel[id] && selOf && selOf[id] && String(selOf[id](it) ?? "") !== v.sel[id]) return false;
     }
@@ -1050,6 +1071,13 @@ document.addEventListener("keydown", e => {
 window.addEventListener("blur", closeCtxMenu);
 document.addEventListener("scroll", closeCtxMenu, true);
 
+// An ⓘ mark whose explanation shows on hover (data-tip): the screens keep
+// one short line and put the rest here (2026-11-07 ユーザー「補足が多すぎて
+// 読む気にならない。長文はカーソルを合わせると出るように」).
+function hintI(text) {
+  return `<span class="hint-i" data-tip="${esc(text)}" tabindex="0">ⓘ</span>`;
+}
+
 // ---- instant styled tooltip (data-tip) ----
 const tipEl = document.createElement("div");
 tipEl.className = "tip hidden";
@@ -1066,6 +1094,9 @@ document.addEventListener("mouseover", e => {
   const text = el && el.dataset.tip;
   if (!text) { tipEl.classList.add("hidden"); return; }
   tipEl.textContent = text;
+  // A short tip is a bold label; an explanation (a sentence or more)
+  // reads as text.
+  tipEl.classList.toggle("long", text.length > 40 || text.includes("\n"));
   tipEl.style.left = "0px"; tipEl.style.top = "0px";
   tipEl.classList.remove("hidden");
   const z = uiZoom();
@@ -1210,7 +1241,9 @@ function renderLock(exists) {
       <button class="btn primary" id="unlock" style="width:100%">${esc(t("ロック解除"))}</button>
       <div class="muted" style="margin-top:12px;font-size:12px">${esc(t("暗号化された機器情報を復号します"))}</div>`;
     $("#unlock").onclick = doUnlock;
-    $("#pw").addEventListener("keydown", e => { if (e.key === "Enter") doUnlock(); });
+    // One unlock at a time: Enter held down (or pressed again while the
+    // key is derived) used to start a second one on the same password.
+    $("#pw").addEventListener("keydown", e => { if (e.key === "Enter" && !e.repeat && !e.isComposing) doUnlock(); });
     wirePasswordToggles(body);
     // Started again with schedules on: they wait for this unlock.
     App().SchedulesWaitUnlock().then(w => {
@@ -1226,7 +1259,10 @@ function renderLock(exists) {
       <div class="field"><label>${esc(t("確認のため再入力"))}</label><div><input id="pw2" type="password" /></div></div>
       <button class="btn primary" id="create" style="width:100%">${esc(t("作成して開始"))}</button>
       <div class="muted" style="margin-top:12px;font-size:12px;line-height:1.7">${esc(t("機器情報は PalaTerm.exe の隣の data\\palaterm_vault.enc に暗号化して保存されます。マスターパスワードを忘れると復元できません。"))}</div>`;
-    $("#pw2").addEventListener("keydown", e => { if (e.key === "Enter") doCreate(); });
+    // Enter in the first field moves on to the confirmation (it used to do
+    // nothing there); Enter in the second creates the vault.
+    $("#pw").addEventListener("keydown", e => { if (e.key === "Enter" && !e.repeat && !e.isComposing) { e.preventDefault(); $("#pw2").focus(); } });
+    $("#pw2").addEventListener("keydown", e => { if (e.key === "Enter" && !e.repeat && !e.isComposing) doCreate(); });
     $("#create").onclick = doCreate;
     wirePasswordToggles(body);
   }
@@ -1255,38 +1291,56 @@ function lockRunCounts() {
   lockRunTimer = setInterval(ask, 5000);
 }
 
+// The unlock (or the first creation) in progress: a second Enter or click
+// while the key is derived used to start it again (two unlocks of the same
+// vault, two creations). The button is disabled for the wait, and the flag
+// covers a click that lands between a redraw of the lock screen
+// (renderLock on a failure) and the next one.
+let lockBusy = false;
+function lockButtons(disabled) {
+  const b = $("#unlock") || $("#create");
+  if (b) b.disabled = disabled;
+}
+
 async function doUnlock() {
+  if (lockBusy) return;
   const pw = $("#pw").value;
-  if (!pw) return;
+  if (!pw) { fieldError($("#pw"), t("パスワードを入力してください")); return; }
+  lockBusy = true; lockButtons(true);
   try {
-    await App().Unlock(pw);
-  } catch (e) {
-    // A damaged vault whose backup opens: offer to restore it (views2.js).
-    if (!(await unlockRecover(pw))) {
-      // The backend tells a wrong password from a file it could not read (a
-      // sync client holding it, a permission): say which, so the password is
-      // not retyped at a file problem.
-      toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
-      return;
+    try {
+      await App().Unlock(pw);
+    } catch (e) {
+      // A damaged vault whose backup opens: offer to restore it (views2.js).
+      if (!(await unlockRecover(pw))) {
+        // The backend tells a wrong password from a file it could not read (a
+        // sync client holding it, a permission): say which, so the password is
+        // not retyped at a file problem.
+        toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
+        return;
+      }
     }
-  }
-  try {
-    await enterApp();
-    unlockNotices();
-  } catch (e) {
-    // The inventory could not be read: back on the lock screen with the
-    // reason (the vault is open in the backend; another try may do).
-    renderLock(true);
-    toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
-  }
+    try {
+      await enterApp();
+      unlockNotices();
+    } catch (e) {
+      // The inventory could not be read: back on the lock screen with the
+      // reason (the vault is open in the backend; another try may do).
+      renderLock(true);
+      toast(t("ロックを解除できません") + ": " + terr(e), "err", { lock: true });
+    }
+  } finally { lockBusy = false; lockButtons(false); }
 }
 
 async function doCreate() {
+  if (lockBusy) return;
   const pw = $("#pw").value, pw2 = $("#pw2").value;
   if (!pw) { fieldError($("#pw"), t("パスワードを入力してください")); return; }
   if (pw !== pw2) { fieldError($("#pw2"), t("確認用パスワードが一致しません")); return; }
+  lockBusy = true; lockButtons(true);
   try { await App().CreateVault(pw); await enterApp(); }
   catch (e) { renderLock(true); toast(t("作成に失敗しました") + ": " + terr(e), "err", { lock: true }); }
+  finally { lockBusy = false; lockButtons(false); }
 }
 
 async function enterApp() {
@@ -1331,12 +1385,23 @@ async function restoreRunFromBackend() {
   const names = req && req.names ? req.names : st.active ? Object.keys(runState) : (st.last && st.last.results || []).map(r => r.device);
   if (req) {
     runGroupSel = req.ungrouped ? RUN_UNGROUPED : (req.group || runGroupSel);
-    runStage = req.stage || "";
-    runDirect = !!req.direct;
     lastRunDry = !!req.dryRun;
-    if (req.adHoc && req.adHoc.length) { runSetSel = RUN_ADHOC; runAdHoc = req.adHoc.map(c => c.text).join("\n"); }
-    else runSetSel = req.commandSet || "";
     lastRunReq = { ...req };
+    if (st.active) {
+      // A batch still going: the toolbar shows what it runs with.
+      runStage = req.stage || "";
+      runDirect = !!req.direct;
+      if (req.adHoc && req.adHoc.length) { runSetSel = RUN_ADHOC; runAdHoc = req.adHoc.map(c => c.text).join("\n"); }
+      else runSetSel = req.commandSet || "";
+    } else if (req.adHoc && req.adHoc.length) {
+      // A finished batch: the toolbar keeps the choices the page's storage
+      // brought back (restoreUIState) — a finished 作業前 batch had moved
+      // the stage on to 作業後, and the batch's own request would undo
+      // that. The typed commands are not in that storage: they come back
+      // from the request (for ↻, and for 今回だけ入力… to reopen with).
+      runAdHoc = req.adHoc.map(c => c.text).join("\n");
+      if (!runSetSel) runSetSel = RUN_ADHOC;
+    }
   } else if (names.length && !runGroupSel) {
     // The group whose devices the names fit best (a name is unique only
     // within its group).
@@ -1350,9 +1415,27 @@ async function restoreRunFromBackend() {
   }
   if (st.active) {
     running = true;
-    // Rows the events since the reload have not touched yet start as queued.
-    names.forEach(n => { if (!runState[n]) runState[n] = { phase: "queued" }; });
+    // Where each device is: the backend's last event per device
+    // (RunStatus.events, on a build that keeps them) fills the rows the
+    // events since the reload have not touched (or left queued); a row
+    // that finished by the snapshot takes it. Without them, rows start as
+    // queued and catch up from the events that follow.
+    const evs = st.events || {};
+    const ended = p => ["done", "error", "canceled"].includes(p);
+    names.forEach(n => {
+      const ev = evs[n], cur = runState[n];
+      if (ev && ev.phase && (!cur || cur.phase === "queued" || (ended(ev.phase) && !ended(cur.phase)))) {
+        runState[n] = { phase: ev.phase, message: ev.message || "", done: ev.done || 0, total: ev.total || 0, waitSec: ev.waitSec || 0, logPath: ev.logPath || "", dry: lastRunDry };
+      } else if (!cur) runState[n] = { phase: "queued", dry: lastRunDry };
+      else if (cur.dry == null) cur.dry = lastRunDry;
+    });
     if (!runTargets.length) runTargets = names.slice();
+    // The overall ETA's command counts, from the request (a page reload
+    // had left them empty: 計測中… for the rest of the batch).
+    if (req && typeof reqCommandCount === "function") {
+      runTotals = {};
+      names.forEach(n => { runTotals[n] = req.dryRun ? 0 : reqCommandCount(req, runDev(n)); });
+    }
     if (!runStartMs) runStartMs = Date.now();
     clearInterval(etaTimer); etaTimer = setInterval(updateEta, 1000);
   } else if (st.last) {
@@ -1731,7 +1814,9 @@ function wireMainZoom() {
   if (dec) dec.onclick = () => set(pct - step);
   document.addEventListener("keydown", e => {
     if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.isComposing) return;
-    if (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd") { e.preventDefault(); set(pct + step); }
+    // On a JIS keyboard the ^ key reports code "Equal": Ctrl+^ is a
+    // terminal key (0x1E), not zoom.
+    if (e.key === "+" || e.key === "=" || (e.code === "Equal" && e.key !== "^") || e.code === "NumpadAdd") { e.preventDefault(); set(pct + step); }
     else if (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract") { e.preventDefault(); set(pct - step); }
     else if (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0") { e.preventDefault(); set(100); }
   });
@@ -1780,7 +1865,7 @@ function wireFontZoom(storageKey, apply, opts) {
     reload: () => set(stored()),
     key(e) {
       if (!e.ctrlKey) return false;
-      if (e.key === "+" || e.key === "=" || e.code === "Equal" || e.code === "NumpadAdd") { set(size + 1); return true; }
+      if (e.key === "+" || e.key === "=" || (e.code === "Equal" && e.key !== "^") || e.code === "NumpadAdd") { set(size + 1); return true; }
       if (e.key === "-" || e.code === "Minus" || e.code === "NumpadSubtract") { set(size - 1); return true; }
       if (e.key === "0" || e.code === "Digit0" || e.code === "Numpad0") { set(def); return true; }
       return false;

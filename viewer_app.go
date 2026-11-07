@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -29,6 +31,7 @@ type Viewer struct {
 	live  bool
 	// line is the line the window opens at (a grep hit), 0 = the end.
 	line int
+	cc   childCtx // for the parent's CLOSE / LINE (watchParent)
 
 	// What Load read so far (see read): the file's bytes, their cleaned
 	// text, and the size and time the file had, so the follow timer reads
@@ -83,48 +86,130 @@ func windowEnv(extra ...string) []string {
 	return env
 }
 
-// viewerKids are the log, diff and screen windows this process opened and
-// still running (spawnWindow): closed with the vault (Lock, ResetVault),
+// viewerKids are the log, diff, grep and screen windows this process opened
+// and still running (spawnWindow): closed with the vault (Lock, ResetVault),
 // as the GUI and set windows are — they show device configurations.
 var (
 	viewerKidsMu sync.Mutex
-	viewerKids   = map[*os.Process]struct{}{}
+	viewerKids   = map[*viewerKid]struct{}{}
 )
+
+// A window started by spawnWindow has its stdin as a pipe its parent holds
+// (kidPipeEnv says so; without it a window never reads stdin — a console's,
+// or none). The parent writes CLOSE when it closes its windows (the vault
+// locked): the window closes the windows it opened itself first, then ends
+// — a kill left those behind (a log opened from the grep window stayed
+// after the lock). A log viewer also takes LINE <n>: show line n (0: just
+// come to the front), which is how the grep window reuses an open viewer
+// for the same file. EOF alone changes nothing: a parent that ended the
+// ordinary way (the grep window closed by hand) leaves its windows as
+// before.
+const (
+	kidPipeEnv   = "PALATERM_PARENT_PIPE"
+	kidLineClose = "CLOSE"
+	kidLineGoto  = "LINE"
+	// kidCloseWait is how long a window asked to close has before it is
+	// ended anyway.
+	kidCloseWait = 700 * time.Millisecond
+)
+
+// viewerKid is one window this process opened (spawnKid).
+type viewerKid struct {
+	proc *os.Process
+	in   io.WriteCloser
+	inMu sync.Mutex
+	done chan struct{} // closed once the process has ended
+}
+
+// alive reports the window still running.
+func (k *viewerKid) alive() bool {
+	select {
+	case <-k.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// send writes one line of the protocol above to the window.
+func (k *viewerKid) send(line string) error {
+	k.inMu.Lock()
+	defer k.inMu.Unlock()
+	if !k.alive() {
+		return errors.New("window closed")
+	}
+	_, err := io.WriteString(k.in, line+"\n")
+	return err
+}
 
 // spawnWindow starts another PalaTerm window process detached from this one.
 func spawnWindow(env []string, args ...string) error {
+	_, err := spawnKid(env, args...)
+	return err
+}
+
+// spawnKid is spawnWindow with the window handed back, for a parent that
+// talks to it (the grep window's LINE).
+func spawnKid(env []string, args ...string) (*viewerKid, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cmd := exec.Command(exe, args...)
-	cmd.Env = windowEnv(env...)
+	cmd.Env = windowEnv(append(append([]string(nil), env...), kidPipeEnv+"=1")...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return nil, err
 	}
 	tieToMainWindow(cmd.Process.Pid)
 	trackChild(cmd.Process)
+	k := &viewerKid{proc: cmd.Process, in: stdin, done: make(chan struct{})}
 	viewerKidsMu.Lock()
-	viewerKids[cmd.Process] = struct{}{}
+	viewerKids[k] = struct{}{}
 	viewerKidsMu.Unlock()
 	go func() {
 		_ = cmd.Wait()
+		close(k.done)
 		viewerKidsMu.Lock()
-		delete(viewerKids, cmd.Process)
+		delete(viewerKids, k)
 		viewerKidsMu.Unlock()
 	}()
-	return nil
+	return k, nil
 }
 
-// closeViewerWindows ends the log, diff and screen windows still open (the
-// vault locked or deleted). They hold no state worth a graceful close:
-// each only shows files.
+// closeViewerWindows ends the log, diff, grep and screen windows still open
+// (the vault locked or deleted): each is asked to close (CLOSE, so it closes
+// the windows it opened itself), and one still running after kidCloseWait
+// is ended anyway. Returns at once.
 func closeViewerWindows() {
 	viewerKidsMu.Lock()
-	defer viewerKidsMu.Unlock()
-	for p := range viewerKids {
-		_ = p.Kill()
-		delete(viewerKids, p)
+	kids := make([]*viewerKid, 0, len(viewerKids))
+	for k := range viewerKids {
+		kids = append(kids, k)
+		delete(viewerKids, k)
+	}
+	viewerKidsMu.Unlock()
+	askKidsClose(kids)
+	go killKidsAfter(kids, kidCloseWait)
+}
+
+// askKidsClose writes CLOSE to each window.
+func askKidsClose(kids []*viewerKid) {
+	for _, k := range kids {
+		_ = k.send(kidLineClose)
+	}
+}
+
+// killKidsAfter ends the windows of kids still running after wait.
+func killKidsAfter(kids []*viewerKid, wait time.Duration) {
+	time.Sleep(wait)
+	for _, k := range kids {
+		if k.alive() && k.proc != nil {
+			_ = k.proc.Kill()
+		}
 	}
 }
 
@@ -135,10 +220,110 @@ func openViewerWindows() int {
 	return len(viewerKids)
 }
 
+// parseKidLine reads one line of the parent's protocol: the command and
+// its number (LINE 12 → "LINE", 12; CLOSE → "CLOSE", 0). Anything else is
+// "" — ignored.
+func parseKidLine(s string) (string, int) {
+	cmd, arg, _ := strings.Cut(strings.TrimSpace(s), " ")
+	switch cmd {
+	case kidLineClose:
+		return cmd, 0
+	case kidLineGoto:
+		n, err := strconv.Atoi(strings.TrimSpace(arg))
+		if err != nil || n < 0 {
+			return "", 0
+		}
+		return cmd, n
+	}
+	return "", 0
+}
+
+// childCtx is a child window's context once startup has it, read from the
+// parent-pipe goroutine (watchParent), which may need it before or after.
+type childCtx struct {
+	mu  sync.Mutex
+	ctx context.Context
+}
+
+func (c *childCtx) set(ctx context.Context) {
+	c.mu.Lock()
+	c.ctx = ctx
+	c.mu.Unlock()
+}
+
+func (c *childCtx) get() context.Context {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ctx
+}
+
+// quit ends the window: through Wails once it is up, else the process.
+func (c *childCtx) quit() {
+	if ctx := c.get(); ctx != nil {
+		runtime.Quit(ctx)
+		return
+	}
+	os.Exit(0)
+}
+
+// watchParent reads the parent's lines from stdin when kidPipeEnv says the
+// parent holds the pipe: CLOSE closes this window's own windows and ends it
+// (quit); LINE n goes to onLine (nil: ignored). Returns at EOF, leaving the
+// window as it is.
+func watchParent(quit func(), onLine func(n int)) {
+	if os.Getenv(kidPipeEnv) != "1" {
+		return
+	}
+	go func() {
+		defer recoverGo("parent pipe")
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			switch cmd, n := parseKidLine(sc.Text()); cmd {
+			case kidLineClose:
+				closeViewerWindows()
+				quit()
+				return
+			case kidLineGoto:
+				if onLine != nil {
+					onLine(n)
+				}
+			}
+		}
+	}()
+}
+
 func (v *Viewer) startup(ctx context.Context) {
 	v.ctx = ctx
+	v.cc.set(ctx)
 	viewerWin.fit(ctx)
 	placeNearParent(ctx, viewerWin)
+}
+
+// showLine is LINE n from the parent (the grep window, a hit in a file this
+// window already shows): the page selects and scrolls to line n (0: nothing
+// to show), and the window comes to the front.
+func (v *Viewer) showLine(n int) {
+	if ctx := v.cc.get(); ctx != nil && n > 0 {
+		runtime.EventsEmit(ctx, "viewer:line", n)
+	}
+	go focusOwnWindow()
+}
+
+// Changed says whether the file differs from what Load last read (its size
+// or time). The page's follow timer asks this every two seconds and loads
+// the text only then: the whole text used to cross to the page each time,
+// to be compared there.
+func (v *Viewer) Changed() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if !v.loaded {
+		return true
+	}
+	st, err := os.Stat(v.path)
+	if err != nil {
+		return true
+	}
+	return st.Size() != int64(len(v.raw)) || !st.ModTime().Equal(v.mod)
 }
 
 func (v *Viewer) domReady(ctx context.Context) { go focusOwnWindow() }

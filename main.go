@@ -115,7 +115,7 @@ type childWindow struct {
 	// close); true keeps it open.
 	beforeClose func(context.Context) bool
 	hidden      bool // StartHidden: the spare command-set window
-	onTop    bool // AlwaysOnTop: the paste window
+	onTop       bool // AlwaysOnTop: the paste window
 }
 
 // Background colours: the panel windows (viewer, diff, command set), the
@@ -157,12 +157,16 @@ func runChildWindow(w childWindow) {
 func runViewerWindow(path string) {
 	title := "PalaTerm - " + winWord("ログ", "Log") + " - " + filepath.Base(path)
 	v := NewViewer(path, title)
+	// The parent's CLOSE (the vault locked) and LINE (a grep hit in this
+	// file): see watchParent.
+	watchParent(v.cc.quit, v.showLine)
 	runChildWindow(childWindow{title: title, size: viewerWin, bg: panelBG, bind: v, startup: v.startup, domReady: v.domReady})
 }
 
 func runWatchWindow(path string) {
 	title := "PalaTerm - " + winWord("画面", "Screen") + " - " + filepath.Base(path)
 	w := NewWatcher(path, title)
+	watchParent(w.cc.quit, nil)
 	runChildWindow(childWindow{title: title, size: termWin, bg: screenBG, bind: w, startup: w.startup, domReady: w.domReady})
 }
 
@@ -172,6 +176,9 @@ func runDiffWindow(a, b, label string) {
 		title += " - " + label
 	}
 	d := NewDiffWin(a, b, label, title)
+	// The log windows this window opens (A / B) go with it when the main
+	// window locks: see watchParent.
+	watchParent(d.cc.quit, nil)
 	runChildWindow(childWindow{title: title, size: diffWin, bg: panelBG, bind: d, startup: d.startup, domReady: d.domReady})
 }
 
@@ -273,6 +280,9 @@ func runTerminalWindow(device, label string, manual, direct bool) {
 	if sw, sh, ok := loadTermWinSize(); ok {
 		w, h = sw, sh
 	}
+	// startup's fit compares this size, not the default, with the screen:
+	// a remembered size from a larger screen is shrunk to this one.
+	t.win = openSize(termWin, w, h)
 	err := wails.Run(&options.App{
 		Title:     title,
 		Width:     w,

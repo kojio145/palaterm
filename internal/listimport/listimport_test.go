@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kojio145/palaterm/internal/model"
+	"github.com/kojio145/palaterm/internal/profile"
 	"github.com/kojio145/palaterm/internal/sheet"
 )
 
@@ -185,8 +186,18 @@ func TestStartColumnAndMissing(t *testing.T) {
 	}
 }
 
+// lab is a test vault: one group, and the OS types and command sets of
+// stdEnv (a plan refuses an OS type or set the vault does not have, as the
+// table editor does; review 2026-11-07 D-A2).
 func lab() *model.Inventory {
-	return &model.Inventory{DeviceGroups: []model.DeviceGroup{{Name: "拠点A"}}}
+	inv := &model.Inventory{DeviceGroups: []model.DeviceGroup{{Name: "拠点A"}}}
+	for _, p := range stdEnv().Profiles {
+		inv.CustomProfiles = append(inv.CustomProfiles, profile.Profile{Key: p.Key, Name: p.Name})
+	}
+	for _, cs := range stdEnv().Sets {
+		inv.CommandSets = append(inv.CommandSets, model.CommandSet{Name: cs.Name})
+	}
+	return inv
 }
 
 func plan(t *testing.T, inv *model.Inventory, s *sheet.Sheet, r *model.ImportRule, dec map[int]Decision) *Plan {
@@ -319,8 +330,8 @@ func TestMatching(t *testing.T) {
 	if row.MatchBy != "norm" || row.Link != "a1" || row.Status != "ask" {
 		t.Errorf("norm match: %+v", row)
 	}
-	// No record: differing cells are asked, PalaTerm's kept by default.
-	if c := cell(row, "name"); c.State != "ask" || c.Choice != "keep" {
+	// No record: differing cells are asked ("nobase"), PalaTerm's kept by default.
+	if c := cell(row, "name"); c.State != "nobase" || c.Choice != "keep" {
 		t.Errorf("name cell = %+v", c)
 	}
 

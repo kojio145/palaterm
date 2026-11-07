@@ -49,10 +49,10 @@ func CheckCommands(cmds []Command) error {
 // import (a profile JSON, a bundle) refuse the same thing.
 func CheckProfileSends(p profile.Profile) error {
 	if err := checkProfilePattern(p.Prompt); err != nil {
-		return fmt.Errorf("プロファイル「%s」のプロンプトの%w", p.Name, err)
+		return fmt.Errorf("プロファイル「%s」のプロンプト%w", p.Name, err)
 	}
 	if err := checkProfilePattern(p.MorePrompt); err != nil {
-		return fmt.Errorf("プロファイル「%s」のページ送りプロンプトの%w", p.Name, err)
+		return fmt.Errorf("プロファイル「%s」のページ送りプロンプト%w", p.Name, err)
 	}
 	for _, steps := range [][]profile.Step{p.Login, p.Pager, p.Disconnect, p.Answers} {
 		for _, st := range steps {
@@ -60,7 +60,7 @@ func CheckProfileSends(p profile.Profile) error {
 				return fmt.Errorf("プロファイル「%s」の送信文字に%w", p.Name, err)
 			}
 			if err := checkProfilePattern(st.Expect); err != nil {
-				return fmt.Errorf("プロファイル「%s」の待つ文字列の%w", p.Name, err)
+				return fmt.Errorf("プロファイル「%s」の待つ文字列%w", p.Name, err)
 			}
 		}
 	}
@@ -97,11 +97,11 @@ const (
 // runner, which names it when the device is connected.
 func checkProfilePattern(pat string) error {
 	if len(pat) > maxProfilePattern {
-		return fmt.Errorf("正規表現が長すぎます（%d 文字まで）", maxProfilePattern)
+		return fmt.Errorf("が長すぎます（%d 文字まで）", maxProfilePattern)
 	}
 	if re, err := syntax.Parse(pat, syntax.Perl); err == nil {
 		if prog, err := syntax.Compile(re.Simplify()); err != nil || len(prog.Inst) > maxProfilePatternInsts {
-			return fmt.Errorf("正規表現が複雑すぎます")
+			return fmt.Errorf("が複雑すぎます（短くしてください）")
 		}
 	}
 	return nil

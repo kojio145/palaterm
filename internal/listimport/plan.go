@@ -58,7 +58,11 @@ func isSecret(key string) bool { return gridByKey[key].Kind == "secret" }
 //	same  equal (nothing to do)
 //	take  the source changed it, PalaTerm did not: the file's value
 //	keep  PalaTerm changed it, the source did not: kept
-//	ask   both changed, or no record of the last import: Choice decides
+//	ask   both changed: Choice decides
+//	nobase no record of the last import (a device made by hand, or a
+//	      column added to the rule) and the two differ: Choice decides,
+//	      kept unless chosen (it is not "both changed": nothing says who
+//	      changed it)
 //	fill  no record of the last import, PalaTerm's is empty and the file
 //	      has a value (a column added to the rule after the last import, a
 //	      device made by hand): the file's value — the column was mapped
@@ -207,6 +211,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		}
 	}
 	claimed := map[int]bool{}
+	known := knownChoices(inv)
 	var rows []*fileRow
 	for i := range conv.Rows {
 		row := &conv.Rows[i]
@@ -220,6 +225,12 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 		fc := map[string]string{"group": opt.Group}
 		for _, k := range row.Keys {
 			fc[k] = row.Values[k]
+		}
+		// An OS type written as its display name ("Cisco IOS") is the key
+		// ("cisco-ios"): the device holds keys, and a name would have gone
+		// in as an OS type nobody has (review 2026-11-07 D-A2).
+		if v, ok := fc["osType"]; ok {
+			fc["osType"] = known.osKey(v)
 		}
 		dev, errs := csvio.CellsDevice(fc)
 		dev.Group = opt.Group
@@ -380,7 +391,7 @@ func BuildPlan(inv *model.Inventory, conv *Converted, r *model.ImportRule, opt O
 
 	// The cells, the device written and the row's status.
 	for _, fr := range rows {
-		planCells(inv, fr, fr.row.Keys, opt.Decisions[fr.row.ID])
+		planCells(inv, known, fr, fr.row.Keys, opt.Decisions[fr.row.ID])
 	}
 	// Names stay unique in the group: a row may not write a name that a
 	// device keeps — one no row writes to, or one whose row fails — or that
@@ -485,8 +496,47 @@ func normKey(s, by string, m model.ImportMatch) string {
 	return normName(s, model.ImportMatch{IgnoreCase: m.IgnoreCase, Width: m.Width, Space: m.Space})
 }
 
+// choices is what this PalaTerm has for the fields with a fixed list: the
+// OS types (by key, and by display name folded). A value from the file
+// that is neither is written as it is (the lists are PalaTerm's own: the
+// operator fills them in after the import — user decision 2026-11-07,
+// the review's D-A2 refusal withdrawn).
+type choices struct {
+	profiles map[string]bool
+	osByName map[string]string
+}
+
+func knownChoices(inv *model.Inventory) choices {
+	c := choices{profiles: map[string]bool{}, osByName: map[string]string{}}
+	for _, p := range inv.CustomProfiles {
+		c.profiles[p.Key] = true
+		c.osByName[foldChoice(p.Name)] = p.Key
+	}
+	return c
+}
+
+// foldChoice is a name as names are compared: width, case and spaces
+// ignored (the rule normalizeChoice applies to the other fixed lists).
+func foldChoice(v string) string {
+	return strings.ToLower(strings.Join(strings.Fields(norm.NFKC.String(v)), ""))
+}
+
+// osKey is the profile key for v: v itself when it is a key, the key of
+// the profile whose display name it is, else v as written (shown as
+// "⚠ not found" in the device list until the operator sets it).
+func (c choices) osKey(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || c.profiles[v] {
+		return v
+	}
+	if k, ok := c.osByName[foldChoice(v)]; ok {
+		return k
+	}
+	return v
+}
+
 // planCells fills a row's cells, status and the device it writes.
-func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
+func planCells(inv *model.Inventory, known choices, fr *fileRow, keys []string, dec Decision) {
 	pr := fr.pr
 	filled := map[string]bool{}
 	for _, k := range fr.row.Filled {
@@ -530,8 +580,8 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		d := fr.dev
 		d.ID = ""
 		stamp(pr, fr, nil, nil)
-		if n := csvio.HopGap(fr.cells); n > 0 {
-			pr.Errors = append(pr.Errors, hopGapMsg(n))
+		if gap, next := csvio.HopGapNext(fr.cells); gap > 0 {
+			pr.Errors = append(pr.Errors, hopGapMsg(gap, next))
 		}
 		if err := inv.ValidateIn(&d); err != nil {
 			pr.Errors = append(pr.Errors, err.Error())
@@ -551,6 +601,8 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 	for k, v := range cc {
 		out[k] = v
 	}
+	listed := map[string]bool{}   // fields whose file error is on the row already
+	fromFile := map[string]bool{} // fields the file's value is written to
 	for _, k := range keys {
 		f, c := fr.cells[k], cc[k]
 		cell := Cell{Key: k, File: f, Cur: c, Secret: isSecret(k), Filled: filled[k], Guessed: guessed[k]}
@@ -574,7 +626,9 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		case !has && c == "" && f != "" && gridByKey[k].Kind != "bool":
 			cell.State, cell.Choice = "fill", "file"
 		case !has:
-			cell.State, cell.Choice = "ask", "keep"
+			// No record says who changed it: not "both changed" (review
+			// 2026-11-07 D-B12), but a choice all the same, kept by default.
+			cell.State, cell.Choice = "nobase", "keep"
 		case rec.V == 0 && c == "" && f != "" && b == f && gridByKey[k].Kind != "bool":
 			// A record of v1.9.30 or before: the cell was asked and left
 			// on its default 残す, yet recorded as if written, so the
@@ -592,28 +646,45 @@ func planCells(inv *model.Inventory, fr *fileRow, keys []string, dec Decision) {
 		if ch := dec.Choices[k]; cell.State != "same" && (ch == "file" || ch == "keep") {
 			cell.Choice = ch
 		}
-		if cell.State == "ask" {
+		if cell.State == "ask" || cell.State == "nobase" {
 			asked = true
 		}
 		if cell.Choice == "file" && f != c {
 			out[k] = f
 			took = true
+			fromFile[k] = true
 			if msg, ok := fr.errs[k]; ok {
 				pr.Errors = append(pr.Errors, FieldLabel(k)+": "+msg)
+				listed[k] = true
 			}
 		}
 		pr.Cells = append(pr.Cells, cell)
 	}
+	// The file's values failing on a field the rule does not map (a jump
+	// host's user name mapped, its host not): the hop read empty and the
+	// row passed as 変更なし, the value dropped in silence — said here as a
+	// new device's row says it (review 2026-11-07 D-A8).
+	for _, k := range sortedKeys(fr.errs) {
+		if !mapped(keys, k) {
+			pr.Errors = append(pr.Errors, FieldLabel(k)+": "+fr.errs[k]+"（この項目はルールで紐付けていません）")
+			listed[k] = true
+		}
+	}
 	d, errs := csvio.CellsDevice(out)
 	for _, e := range errs {
-		if fr.errs[e.Col] == "" { // the file's own errors are listed above
-			pr.Errors = append(pr.Errors, FieldLabel(e.Col)+": "+e.Msg)
+		if listed[e.Col] {
+			continue // the file's own error is on the row already
 		}
+		msg := FieldLabel(e.Col) + ": " + e.Msg
+		if !mapped(keys, e.Col) {
+			msg += "（この項目はルールで紐付けていません）"
+		}
+		pr.Errors = append(pr.Errors, msg)
 	}
 	// A hop the file adds with the one before it empty on both sides:
 	// CellsDevice would close the gap and write it one hop up.
-	if n := csvio.HopGap(out); n > 0 {
-		pr.Errors = append(pr.Errors, hopGapMsg(n))
+	if gap, next := csvio.HopGapNext(out); gap > 0 {
+		pr.Errors = append(pr.Errors, hopGapMsg(gap, next))
 	}
 	d.ID, d.Group = cur.ID, cur.Group
 	stamp(pr, fr, inv.ImportRecords[cur.ID].Base, lost)
@@ -704,14 +775,15 @@ func UnmappedErrors(conv *Converted) []string {
 	return out
 }
 
-// hopGapMsg: hop n is empty while a later hop has a host. A new device
-// cannot hold the gap (its hops are a list), and closing it quietly wrote
-// the later hop one up — the device's own first hop, set by hand or by
-// 一括変更, then read as changed. The list without that hop is imported
-// first, the hop added, and the list imported again with the hop's columns
-// (an existing device keeps its hops and takes the file's by number).
-func hopGapMsg(n int) string {
-	return fmt.Sprintf("踏み台%dが空のまま踏み台%dがあります。先に踏み台%dを付けた機器なら、取り込み直すと踏み台%dが足されます（新しい機器は、踏み台%d以降の列を外して取り込み → 踏み台%dを付ける → 列を戻して取り込み直し）", n, n+1, n, n+1, n+1, n)
+// hopGapMsg: hop gap is empty while hop next (the first with a host after
+// it) has one. A new device cannot hold the gap (its hops are a list), and
+// closing it quietly wrote the later hop one up — the device's own first
+// hop, set by hand or by 一括変更, then read as changed. The list without
+// that hop is imported first, the hop added, and the list imported again
+// with the hop's columns (an existing device keeps its hops and takes the
+// file's by number).
+func hopGapMsg(gap, next int) string {
+	return fmt.Sprintf("踏み台%dが空のまま踏み台%dがあります。先に踏み台%dを付けた機器なら、取り込み直すと踏み台%dが足されます（新しい機器は、踏み台%d以降の列を外して取り込み → 踏み台%dを付ける → 列を戻して取り込み直し）", gap, next, gap, next, next, gap)
 }
 
 // Result says what Apply did.

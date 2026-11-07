@@ -240,12 +240,26 @@ async function bootDiffWindow() {
     $("dw-pos").textContent = nav.length ? `${nav.indexOf(cur) + 1} / ${nav.length}` : t("差分なし");
     map.querySelectorAll(".dw-mark").forEach(m => m.classList.toggle("cur", parseInt(m.dataset.k, 10) === cur));
   }
-  // Scroll a row into the middle, opening the fold it sits in.
-  function reveal(i) {
-    const f = folds.find(f => i >= f.start && i <= f.end);
-    if (f && !expanded.has(foldKey(f.start))) { expanded.add(foldKey(f.start)); render(); }
+  // Scroll a row into the middle (the jump mark added when it is the row
+  // jumped to). Null when the row is not in the page yet.
+  function scrollToRow(i) {
     const tr = body.querySelector(`tr[data-i="${i}"]`);
-    if (tr) body.scrollTop = Math.max(0, tr.offsetTop - body.clientHeight / 3);
+    if (tr) { body.scrollTop = Math.max(0, tr.offsetTop - body.clientHeight / 3); if (jumpRow === i) tr.classList.add("dw-jump"); }
+    return tr;
+  }
+  // Scroll a row into the middle, opening the fold it sits in. A fold to
+  // open means a draw, and a draw of over CHUNK rows adds them a frame at
+  // a time: then the scroll waits for the last chunk (done(tr) runs either
+  // way, with the row or null), and the return value is null.
+  function reveal(i, then) {
+    const f = folds.find(f => i >= f.start && i <= f.end);
+    if (f && !expanded.has(foldKey(f.start))) {
+      expanded.add(foldKey(f.start));
+      render(() => { const tr = scrollToRow(i); if (then) then(tr); });
+      return null;
+    }
+    const tr = scrollToRow(i);
+    if (then) then(tr);
     return tr;
   }
   function goTo(k) {
@@ -307,7 +321,9 @@ async function bootDiffWindow() {
     picked = { row, name, isCmd };
     jumpRow = row;
     if ($("dw-filter").checked) applyFilter();
-    else { filter = null; render(); reveal(row); }
+    // The scroll once every row is in: a draw of over CHUNK rows has only
+    // its first rows when render returns, and the row was not found.
+    else { filter = null; render(() => reveal(row)); }
     setTimeout(() => { if (jumpRow === row) { jumpRow = -1; body.querySelectorAll("tr.dw-jump").forEach(tr => tr.classList.remove("dw-jump")); } }, 2500);
   }
   for (const [id, isCmd] of [["dw-sec", false], ["dw-cmd", true]]) {
@@ -323,10 +339,10 @@ async function bootDiffWindow() {
   }
   $("dw-filter").onchange = () => {
     if ($("dw-filter").checked && picked) applyFilter();
-    else if (!$("dw-filter").checked && filter) { const row = filter.from; filter = null; render(); reveal(row); markCurrent(); }
+    else if (!$("dw-filter").checked && filter) { const row = filter.from; filter = null; render(() => { reveal(row); markCurrent(); }); }
     else if (!picked) { toast(t("先にセクションかコマンドを選んでください"), "warn"); $("dw-filter").checked = false; }
   };
-  $("dw-fold").onchange = () => { opts.fold = $("dw-fold").checked; saveOpts(); render(); if (cur >= 0) reveal(blocks[cur].start); };
+  $("dw-fold").onchange = () => { opts.fold = $("dw-fold").checked; saveOpts(); render(() => { if (cur >= 0) reveal(blocks[cur].start); }); };
   $("dw-expand").onclick = () => {
     if (folds.every(f => expanded.has(foldKey(f.start)))) expanded.clear(); else folds.forEach(f => expanded.add(foldKey(f.start)));
     render();
@@ -369,9 +385,11 @@ async function bootDiffWindow() {
     body.querySelectorAll("tr.dw-found").forEach(tr => tr.classList.remove("dw-found"));
     if (!fMatches.length) { fn.textContent = fLast ? t("該当なし") : ""; return; }
     const i = fMatches[fIdx];
-    if (filter && (i < filter.from || i >= filter.to)) { filter = null; $("dw-filter").checked = false; render(); }
-    const tr = reveal(i);
-    if (tr) tr.classList.add("dw-found");
+    const found = tr => { if (tr) tr.classList.add("dw-found"); };
+    // Outside the 絞込 range: the whole document again, and the row once
+    // every row of it is in.
+    if (filter && (i < filter.from || i >= filter.to)) { filter = null; $("dw-filter").checked = false; render(() => reveal(i, found)); }
+    else reveal(i, found);
     fn.textContent = `${fIdx + 1} / ${fMatches.length}`;
   }
   function fNext(dir) { const q = fin.value; if (q !== fLast) { fLast = q; fMatches = fCollect(q); fIdx = dir >= 0 ? -1 : 0; } if (!fMatches.length) { fShow(); return; } fIdx = (fIdx + dir + fMatches.length) % fMatches.length; fShow(); fin.focus(); }
@@ -385,16 +403,24 @@ async function bootDiffWindow() {
   fin.addEventListener("input", () => { fLast = ""; fn.textContent = ""; });
 
   // Load (and reload when an option changes). The current block, the
-  // scroll position and the opened folds are kept across a reload.
-  let loading = false;
+  // scroll position and the opened folds are kept across a reload. An
+  // option changed while a load runs is not lost: the load runs once more
+  // when this one ends (the change used to be ignored, and the check box
+  // and the result disagreed). A load that fails says so in the body.
+  let loading = false, pending = false;
   async function load() {
-    if (loading) return;
+    if (loading) { pending = true; return; }
     loading = true;
+    try { await loadOnce(); }
+    catch (e) { body.innerHTML = `<div style="padding:14px;color:var(--err)">${esc(t("読み込めません") + ": " + terr(e))}</div>`; }
+    finally { loading = false; if (pending) { pending = false; load(); } }
+  }
+  async function loadOnce() {
     const keep = doc ? { la: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].la : 0, lb: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].lb : 0, scroll: body.scrollTop, expanded: new Set(expanded) } : null;
     opts.noise = $("dw-noise").checked; opts.secrets = $("dw-secrets").checked; opts.configOnly = $("dw-range").value === "config";
     saveOpts();
-    try { doc = await D().Load({ ignoreNoise: opts.noise, ignoreSecrets: opts.secrets, configOnly: opts.configOnly }); }
-    finally { loading = false; }
+    body.innerHTML = `<div class="muted" style="padding:14px">${esc(t("読み込み中…"))}</div>`;
+    doc = await D().Load({ ignoreNoise: opts.noise, ignoreSecrets: opts.secrets, configOnly: opts.configOnly });
     $("dw-title").textContent = (doc.label ? doc.label + "　" : "") + t("差分");
     $("dw-name-a").textContent = doc.nameA; $("dw-name-a").dataset.tip = doc.pathA;
     $("dw-name-b").textContent = doc.nameB; $("dw-name-b").dataset.tip = doc.pathB;
@@ -474,15 +500,18 @@ async function bootDiffWindow() {
     if (g.manual) notes.push(t("「! 手で確認」の行が {n} 行あります（機械的に逆にできない行）", { n: g.manual }));
     if (g.skipped) notes.push(t("証明書・暗号化値・UUID の差分 {n} 行は対象外です", { n: g.skipped }));
     if (g.reordered) notes.push(t("依存関係（参照 → 定義）の順に並べ替えています"));
-    (g.warnings || []).forEach(w => notes.push(w));
+    (g.warnings || []).forEach(w => notes.push(terr(w)));
     $("dw-cmd-note").textContent = notes.join("　");
     // A comment line first — which device, which way, when — so a paste
     // into the wrong window shows itself ("!" is Cisco's comment, "#" the
-    // others'; a command set made from the copy drops it).
+    // others'; a command set made from the copy drops it). A line that
+    // needs a look by hand is a comment too (cmdLineText, views3.js): the
+    // copy carries the same text as the pane, so it never reaches a
+    // device as a command.
     const lines = g.lines || [];
     const header = lines.length ? `${g.family === "cisco" ? "!" : "#"} PalaTerm ${$("dw-cmd-title").textContent} ${doc && doc.label ? doc.label : ""} ${fmtRunTime(new Date().toISOString())}` : "";
-    cmdText = (header ? [header] : []).concat(lines.map(l => l.text)).join("\n");
-    $("dw-cmd-text").innerHTML = (header ? [`<span class="dw-cmd-ctx">${esc(header)}</span>`] : []).concat(lines.map(l => `<span class="${l.context ? "dw-cmd-ctx" : ""}${l.note ? " dw-cmd-manual" : ""}"${l.note ? ` data-tip="${esc(l.note)}"` : ""}>${esc(l.note ? "! " + t("手で確認") + ": " + l.text : l.text)}</span>`)).join("\n");
+    cmdText = (header ? [header] : []).concat(lines.map(cmdLineText)).join("\n");
+    $("dw-cmd-text").innerHTML = (header ? [`<span class="dw-cmd-ctx">${esc(header)}</span>`] : []).concat(lines.map(l => `<span class="${l.context ? "dw-cmd-ctx" : ""}${cmdLineManual(l) ? " dw-cmd-manual" : ""}"${l.note ? ` data-tip="${esc(terr(l.note))}"` : ""}>${esc(cmdLineText(l))}</span>`)).join("\n");
     updateView();
   }
   // 影響: the impact items and the references of changed objects, in the
@@ -496,13 +525,22 @@ async function bootDiffWindow() {
     $("dw-cmd-note").textContent = t("高 {h}・中 {m}・低 {l}。アドレス・経路・ACL・ポリシー・ポートの up/down は「高」、VLAN・管理系は「中」、説明文は「低」。行をクリックするとその場所へ", { h: imp.high, m: imp.mid, l: imp.low });
     const lv = { high: ["高", "#f87171"], mid: ["中", "#fbbf24"], low: ["低", "#9ca3af"] };
     const items = (imp.items || []).slice().sort((x, y) => (["high", "mid", "low"].indexOf(x.level)) - (["high", "mid", "low"].indexOf(y.level)));
-    let html = items.map(it => `<span class="dw-imp" data-row="${it.row}" style="cursor:pointer"><b style="color:${lv[it.level][1]}">${esc(t(lv[it.level][0]))}</b> ${esc(it.text)}${it.section ? ` <span class="muted">［${esc(it.section)}］</span>` : ""} <span class="muted">— ${esc(it.reason)}</span></span>`).join("\n");
+    // The reason is backend text (impact.go); "<reason>（<section> の中）"
+    // carries a section name, translated around it.
+    const why = s => { const m = /^(.+?)（(.+?) の中）$/.exec(s || ""); return m ? terr(m[1]) + t("（{s} の中）", { s: m[2] }) : terr(s || ""); };
+    let html = items.map(it => `<span class="dw-imp" data-row="${it.row}" style="cursor:pointer"><b style="color:${lv[it.level][1]}">${esc(t(lv[it.level][0]))}</b> ${esc(it.text)}${it.section ? ` <span class="muted">［${esc(it.section)}］</span>` : ""} <span class="muted">— ${esc(why(it.reason))}</span></span>`).join("\n");
     if (imp.refs && imp.refs.length) {
       html += "\n\n" + esc(t("変わったオブジェクトの参照先:")) + "\n" + imp.refs.map(r => `<b>${esc(r.name)}</b> ← ` + r.rows.map(row => `<span class="dw-imp" data-row="${row}" style="cursor:pointer;text-decoration:underline">${esc(rowText(rows[row] || { a: "", b: "" }).trim())}</span>`).join("　")).join("\n");
     }
-    cmdText = items.map(it => `${t(lv[it.level][0])} ${it.text}${it.section ? " [" + it.section + "]" : ""} - ${it.reason}`).join("\n");
+    cmdText = items.map(it => `${t(lv[it.level][0])} ${it.text}${it.section ? " [" + it.section + "]" : ""} - ${why(it.reason)}`).join("\n");
     $("dw-cmd-text").innerHTML = html || esc(t("変更はありません"));
-    $("dw-cmd-text").querySelectorAll(".dw-imp").forEach(el => el.onclick = () => { const i = parseInt(el.dataset.row, 10); jumpRow = i; reveal(i); render(); setTimeout(() => { jumpRow = -1; render(); }, 2500); });
+    // The row scrolled into view and marked (scrollToRow), the mark taken
+    // off after a moment: no draw of the whole table for a click (two
+    // draws of 100,000 rows put the view back near the top).
+    $("dw-cmd-text").querySelectorAll(".dw-imp").forEach(el => el.onclick = () => {
+      const i = parseInt(el.dataset.row, 10); jumpRow = i; reveal(i);
+      setTimeout(() => { if (jumpRow === i) { jumpRow = -1; body.querySelectorAll("tr.dw-jump").forEach(tr => tr.classList.remove("dw-jump")); } }, 2500);
+    });
     updateView();
   }
   $("dw-impact").onclick = showImpact;

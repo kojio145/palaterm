@@ -118,6 +118,11 @@ type Term struct {
 	// attempt refused ("" when it failed for another reason): what
 	// AllowHostKeyChange is allowed to drop depends on it.
 	hkMismatch string
+	// win is the size this window opened at (the remembered one, else the
+	// default) with the terminal window's floor: what fit shrinks to the
+	// screen. The default alone let a remembered size larger than the
+	// screen stand, as the default fitted.
+	win winSize
 }
 
 // noteMismatch records which host key, if any, err refused (see hkMismatch).
@@ -154,6 +159,7 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 		runner:    runpkg.New(reg),
 		pwCh:      make(chan string, 1),
 		sizeKnown: make(chan struct{}),
+		win:       termWin,
 	}
 	// 並べて接続 may open the window with 同時入力 on (設定 tab).
 	t.bc.join = os.Getenv(bcastEnv) == "1"
@@ -220,12 +226,26 @@ func (t *Term) startup(ctx context.Context) {
 		t.placeAt(cell) // 並べて接続: its grid cell
 		placed = true
 	}
+	win := t.win
 	t.mu.Unlock()
 	if !placed {
-		termWin.fit(ctx)
-		placeNearParent(ctx, termWin)
+		win.fit(ctx)
+		placeNearParent(ctx, win)
 	}
 	t.bcastReport()
+}
+
+// openSize is want opened at w×h (the remembered size, see loadWinSize):
+// the size fit compares with the screen, with want's floor kept. A zero
+// side keeps the default.
+func openSize(want winSize, w, h int) winSize {
+	if w > 0 {
+		want.W = w
+	}
+	if h > 0 {
+		want.H = h
+	}
+	return want
 }
 
 // domReady brings this window to the front and gives the WebView2 the
@@ -298,6 +318,10 @@ type termReady struct {
 	Conn   string `json:"conn"`
 	Manual bool   `json:"manual"` // opened without automatic login
 	Hops   int    `json:"hops"`   // jump hosts on the way (0 = direct)
+	// Takeover: a failed automatic login continued by hand (手動で続ける):
+	// the state reads 手動 as a manual window's, while the next Reconnect
+	// still logs in automatically.
+	Takeover bool `json:"takeover,omitempty"`
 }
 
 // closedKind is termClosed.Kind for err (see termClosed).
@@ -324,11 +348,87 @@ func (t *Term) rememberSize() {
 	t.mu.Lock()
 	tiled := t.tiled
 	t.mu.Unlock()
-	if tiled {
-		return // a grid cell's size is no size for the next window
+	if !sizeWorthKeeping(tiled, runtime.WindowIsMaximised(t.ctx), runtime.WindowIsMinimised(t.ctx)) {
+		return
 	}
 	w, h := runtime.WindowGetSize(t.ctx)
 	saveWinSize(termWinState, termWin, w, h)
+}
+
+// sizeWorthKeeping says whether the window's size now is one to open the
+// next window at: not a grid cell's (tiled), not the whole screen of a
+// maximised window (the next window opened that big, as a plain window,
+// and ran off a smaller screen), not a minimised one's.
+func sizeWorthKeeping(tiled, maximised, minimised bool) bool {
+	return !tiled && !maximised && !minimised
+}
+
+// pagerFreezesWindow says whether, once the profile's pager-off steps have
+// gone, window-changes must stop reaching the device (see Resize). A
+// network device sets its paging from the terminal size: Cisco IOS answers
+// every window-change with terminal length = rows, undoing "terminal length
+// 0". A shell's pager setting (export PAGER=cat …) is an environment
+// variable, which no window-change touches — and a Linux host needs the
+// window-changes for vim, less and htop to size themselves. Only the
+// shell-style steps are told apart; a device command not in the list below
+// is treated as a device pager, as every pager was before.
+func pagerFreezesWindow(steps []profile.Step) bool {
+	for _, st := range steps {
+		cmd := strings.TrimSpace(st.Send)
+		if cmd == "" {
+			cmd = strings.TrimSpace(st.SendRaw)
+		}
+		if cmd == "" {
+			continue
+		}
+		if shellPagerStep(cmd) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// devicePagerWords are the pager-off commands of network devices known to
+// size their paging from the terminal (Cisco IOS / NX-OS / ASA, Juniper,
+// NetScreen, Comware, ProCurve, Yamaha, Alaxala, NEC, FortiOS, PAN-OS,
+// Extreme, Brocade, Nokia, Avaya …): named here so a reader can see which
+// ones the freeze is for. The decision above is by exclusion (a shell
+// setting is the only kind let through), so a command missing from this
+// list is still frozen, as before.
+var devicePagerWords = []string{
+	"terminal length", "terminal pager", "terminal more", "terminal datadump", "terminal no-more",
+	"screen-length", "screen length", "no page", "console lines", "console page",
+	"cli pager", "pager off", "pager disable", "output standard", "clipaging",
+	"skip-page-display", "no more", "set length", "paging",
+}
+
+// shellPagerStep reports a pager step that is a shell setting, not a device
+// command: an environment variable (export PAGER=cat, PAGER=cat, setenv,
+// unset), an alias, or stty.
+func shellPagerStep(cmd string) bool {
+	low := strings.ToLower(cmd)
+	for _, w := range devicePagerWords {
+		if strings.Contains(low, w) {
+			return false
+		}
+	}
+	first, _, _ := strings.Cut(low, " ")
+	switch first {
+	case "export", "unset", "setenv", "alias", "stty":
+		return true
+	}
+	// "PAGER=cat", "LESS=-FRX" … — a name=value at the start.
+	name, _, ok := strings.Cut(cmd, "=")
+	if !ok || name == "" {
+		return false
+	}
+	for _, r := range name {
+		if !(r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *Term) connect(pw string) {
@@ -445,7 +545,7 @@ func (t *Term) connect(pw string) {
 			runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Kind: closedKind(err)})
 			return
 		}
-		t.attach(exp, dev, inv.Settings, false)
+		t.attach(exp, dev, inv.Settings, false, false)
 		return
 	}
 
@@ -476,8 +576,9 @@ func (t *Term) connect(pw string) {
 	t.mu.Lock()
 	t.cancelLogin = nil
 	// A completed login has sent the profile's pager-off command (when it
-	// has one): the window-changes that follow must not undo it.
-	t.pagerOff = err == nil && !t.switched && len(prof.Pager) > 0
+	// has one): the window-changes that follow must not undo it — on a
+	// device that sizes its paging from the terminal (pagerFreezesWindow).
+	t.pagerOff = err == nil && !t.switched && pagerFreezesWindow(prof.Pager)
 	switched := t.switched
 	t.switched = false
 	t.mu.Unlock()
@@ -502,7 +603,7 @@ func (t *Term) connect(pw string) {
 			}
 		}
 		t.manual = true
-		t.attach(exp, dev, inv.Settings, shown)
+		t.attach(exp, dev, inv.Settings, shown, false)
 		return
 	}
 	if err != nil {
@@ -526,7 +627,27 @@ func (t *Term) connect(pw string) {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: err.Error(), Kind: closedKind(err), Takeover: true, AtJump: runpkg.AtJumpHost(err), AtJumpLogin: runpkg.AtJumpLogin(err)})
 		return
 	}
-	t.attach(exp, dev, inv.Settings, true)
+	t.attach(exp, dev, inv.Settings, true, false)
+}
+
+// HostKeyChangeBlocked says why the host key that the last connection
+// attempt refused cannot be allowed from this window: it is a jump host's
+// (shared by every device behind it; model.ReplacedHostKeyNames). "" when
+// it is the device's own key, which 機器を交換したので許可して再接続 may
+// drop. The page hides that button on a reason and shows where to go
+// instead — the button used to lead round in a circle: allow, refused for
+// the same reason, allow again.
+func (t *Term) HostKeyChangeBlocked() string {
+	t.mu.Lock()
+	dev, mismatched := t.dev, t.hkMismatch
+	t.mu.Unlock()
+	if dev == nil || mismatched == "" {
+		return ""
+	}
+	if _, err := dev.ReplacedHostKeyNames(mismatched); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 // SwitchToManual abandons the automatic login that is running and hands the
@@ -581,7 +702,7 @@ func (t *Term) Takeover() error {
 	if exp == nil {
 		return fmt.Errorf("引き継げる接続がありません")
 	}
-	t.attach(exp, dev, settings, true)
+	t.attach(exp, dev, settings, true, true)
 	return nil
 }
 
@@ -603,8 +724,9 @@ func (t *Term) Discard() {
 // attach starts the session log and hands the open session to the terminal.
 // shown says the transcript so far is already on screen (the login streamed
 // as it ran, or a failed login being taken over): it then goes to the log
-// only, not to the screen again.
-func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Settings, shown bool) {
+// only, not to the screen again. takeover: a failed login continued by hand
+// (termReady.Takeover).
+func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Settings, shown, takeover bool) {
 	d := *dev
 	// The transcript goes to one file, named at connect time by the same
 	// template as a batch log with the stage "work", in the group's work
@@ -718,7 +840,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	if tr := exp.Transport(); tr != "" {
 		host = tr
 	}
-	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Group: d.Group, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions())})
+	runtime.EventsEmit(t.ctx, "term:ready", termReady{Device: t.label, Group: d.Group, Host: host, Conn: string(d.Conn), Manual: t.manual, Hops: len(d.ActiveBastions()), Takeover: takeover})
 }
 
 // workRunDir is the folder a terminal session of group logs into: the
@@ -791,15 +913,24 @@ func (t *Term) AllowHostKeyChange() error {
 
 // OpenLogWindow shows this session's log in a viewer window that follows
 // the file as it grows. Whatever is still held back is written first.
+// After the disconnect it opens the session's log as it was left (no
+// following): the button used to answer 接続していません then, with the log
+// of the session just ended a click away.
 func (t *Term) OpenLogWindow() error {
 	if t.isLocked() {
 		return errLocked
 	}
 	t.mu.Lock()
-	l := t.slog
+	l, last := t.slog, t.lastLog
 	t.mu.Unlock()
 	if l == nil {
-		return fmt.Errorf("接続していません")
+		if last == "" {
+			return fmt.Errorf("接続していません")
+		}
+		if _, err := os.Stat(last); err != nil {
+			return fmt.Errorf("前回のログが見つかりません: %s", last)
+		}
+		return spawnWindow(nil, "--view", last)
 	}
 	p, err := l.Flush()
 	if err != nil {
@@ -1260,7 +1391,7 @@ func (t *Term) Reconnect() error {
 	pw, live := t.pw, t.send != nil
 	t.mu.Unlock()
 	if pw == "" {
-		return fmt.Errorf("vault is locked")
+		return fmt.Errorf("ロック中です。本体で解錠してから再接続してください")
 	}
 	if live {
 		return nil

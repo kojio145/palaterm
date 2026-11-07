@@ -1,7 +1,7 @@
 package main
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
 	"github.com/kojio145/palaterm/internal/model"
@@ -26,7 +26,7 @@ func TestLockedBindingsRefuse(t *testing.T) {
 	if err := a.OpenLogDir(); err == nil {
 		t.Error("OpenLogDir while locked")
 	}
-	if err := a.RunScheduleNow("x"); err == nil || !strings.Contains(err.Error(), "locked") {
+	if err := a.RunScheduleNow("x"); !errors.Is(err, errVaultLocked) {
 		t.Errorf("RunScheduleNow while locked: %v", err)
 	}
 	if n := len(a.ListSchedules()); n != 0 {

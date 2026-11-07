@@ -37,7 +37,7 @@ func (a *App) GridRows(scope string) ([]model.GridRow, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	rows := []model.GridRow{}
 	for _, d := range a.inv.Devices {
@@ -63,7 +63,7 @@ func (a *App) GetGridDraft(scope string) (*model.GridDraft, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.inv == nil {
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	d, ok := a.inv.GridDrafts[scope]
 	if !ok {
@@ -78,7 +78,7 @@ func (a *App) SaveGridDraft(scope string, d model.GridDraft) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	if gridDraftChanges(d) == 0 {
 		delete(a.inv.GridDrafts, scope)
@@ -99,7 +99,7 @@ func (a *App) DiscardGridDraft(scope string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	_, had := a.inv.GridDrafts[scope]
 	delete(a.inv.GridDrafts, scope)
@@ -219,7 +219,7 @@ func (a *App) ApplyGrid(req GridApply) (*GridReport, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	rep, next, renames := planGrid(a.inv, req)
 	if next == nil {
@@ -368,6 +368,13 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 		for _, e := range errs {
 			addErr(r.UID, e.Col, e.Msg)
 		}
+		// A hop typed with the one before it empty: CellsDevice closed the
+		// gap, and the save would have moved the value one hop up — and a
+		// Validate message about "踏み台1" was marked on the hidden column
+		// of hop 1 (review 2026-11-07 D-A9).
+		if gap, next := csvio.HopGapNext(r.Cells); gap > 0 {
+			addErr(r.UID, fmt.Sprintf("bastion%dHost", gap), fmt.Sprintf("踏み台%dが空のまま踏み台%dがあります。踏み台%dを入力するか、踏み台%dの欄を踏み台%dへ移してください", gap, next, gap, next, gap))
+		}
 		if r.ID != "" {
 			if i, ok := idx[r.ID]; !ok {
 				if !over[r.UID] {
@@ -384,7 +391,13 @@ func planGrid(inv *model.Inventory, req GridApply) (*GridReport, []model.Device,
 			}
 		}
 		if err := inv.ValidateIn(&d); err != nil {
-			addErr(r.UID, csvio.ErrorColumn(err.Error()), err.Error())
+			col := csvio.HopErrorColumn(err.Error(), r.Cells)
+			// "「__」で始まる名前は使えません" is about the group when the
+			// name is fine (review 2026-11-07 D-C1).
+			if err.Error() == model.ReservedNameMsg && !model.ReservedName(d.Name) && model.ReservedName(d.Group) {
+				col = "group"
+			}
+			addErr(r.UID, col, err.Error())
 		}
 		if !profiles[d.OSType] {
 			addErr(r.UID, "osType", fmt.Sprintf("OSタイプ「%s」は登録されていません", d.OSType))

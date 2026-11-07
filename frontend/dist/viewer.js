@@ -45,6 +45,7 @@ async function bootViewerWindow() {
   // only the marks show through. Filled by the find below, else empty.
   const lvBody = document.getElementById("lv-body"), hl = document.getElementById("lv-hl");
   let refind = () => {}; // set by the find: repaints its marks after the text changed
+  let lineMarked = false; // the backdrop holds a mark on the line opened at (gotoLine)
   // 表示の色: by default a light page, unlike the black terminal, so a log
   // is never taken for a live session (colors.js).
   const applyColors = c => { lvBody.style.background = c.bg; ta.style.color = c.fg; };
@@ -66,6 +67,8 @@ async function bootViewerWindow() {
     const lines = d.text ? d.text.split(/\r\n|\r|\n/).length : 0;
     status.textContent = d.err ? "" : t("{n} 行 / {c} 文字", { n: lines.toLocaleString(), c: d.text.length.toLocaleString() }) + "　" + d.path;
     if (!keepPos || (atBottom && !hadSel)) ta.scrollTop = ta.scrollHeight; else ta.scrollTop = top;
+    // The line mark no longer sits on its line once the text changed.
+    if (lineMarked) { hl.textContent = ""; lineMarked = false; }
     refind();
   }
   show(doc, false);
@@ -82,11 +85,20 @@ async function bootViewerWindow() {
   const applyWrap = () => { [ta, hl].forEach(el => { el.style.whiteSpace = wrapBox.checked ? "pre-wrap" : "pre"; el.style.wordBreak = wrapBox.checked ? "break-all" : ""; }); };
   wrapBox.onchange = () => { applyWrap(); try { localStorage.setItem("palaterm_viewer_wrap", wrapBox.checked ? "1" : "0"); } catch (e) {} };
   applyWrap();
-  // Follow mode: poll every 2 s. On by default when the file is still being
-  // written (it was opened from a live interactive session), off otherwise.
+  // Follow mode: every 2 s ask whether the file changed (its size and time,
+  // Viewer.Changed) and load the text only then — the whole text used to
+  // cross from the backend every 2 s, to be compared here. A poll still
+  // running (a big log) is not joined by the next. On by default when the
+  // file is still being written (it was opened from a live interactive
+  // session), off otherwise.
   const follow = document.getElementById("lv-follow");
   follow.checked = !!doc.live;
-  setInterval(() => { if (follow.checked) reload(true); }, 2000);
+  let polling = false;
+  setInterval(async () => {
+    if (!follow.checked || polling) return;
+    polling = true;
+    try { if (await V().Changed()) await reload(true); } catch (e) { /* the next tick asks again */ } finally { polling = false; }
+  }, 2000);
   document.getElementById("lv-folder").onclick = () => V().OpenFolder().catch(e => flash(t("フォルダを開けません") + ": " + terr(e), "err"));
   // The whole text through the clipboard (copyText, app.js), not a select
   // of the textarea: selecting it scrolled the log to its top, and the place
@@ -101,17 +113,6 @@ async function bootViewerWindow() {
   zoom.set(zoom.size);
   zoom.buttons(document.getElementById("lv-font-inc"), document.getElementById("lv-font-dec"));
   zoom.wheel(ta);
-  // Opened at a line (a grep hit): that line selected and in the middle of
-  // the view, its number shown for a moment.
-  if (doc.line > 0 && !doc.err) {
-    const ls = ta.value.split("\n"), n = Math.min(doc.line, ls.length);
-    let off = 0;
-    for (let i = 0; i < n - 1; i++) off += ls[i].length + 1;
-    ta.setSelectionRange(off, off + ls[n - 1].length);
-    const lh = parseFloat(getComputedStyle(ta).lineHeight) || zoom.size * 1.25;
-    ta.scrollTop = Math.max(0, (n - 1) * lh - ta.clientHeight / 2);
-    flash(t("{n} 行目", { n }));
-  }
 
   // Find: case-insensitive. Every match is marked in the backdrop (lv-hl) as
   // the query is typed, the current one in a stronger colour, and Enter
@@ -129,7 +130,7 @@ async function bootViewerWindow() {
   const fitBackdrop = () => { hl.style.right = (ta.offsetWidth - ta.clientWidth) + "px"; hl.style.bottom = (ta.offsetHeight - ta.clientHeight) + "px"; syncScroll(); };
   new ResizeObserver(fitBackdrop).observe(ta);
   function paint() {
-    marks = [];
+    marks = []; lineMarked = false;
     if (!matches.length) { hl.textContent = ""; fitBackdrop(); return; }
     const s = ta.value, n = lastQ.length;
     const draw = matches.length <= maxMarks ? matches : [matches[Math.max(idx, 0)]];
@@ -186,6 +187,34 @@ async function bootViewerWindow() {
     // Esc closes an open find bar first, the window only after that (as the diff window).
     if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!bar.classList.contains("hidden")) closeFind(); else V().Close(); }
   });
+  // Opened at a line (a grep hit), or sent one later (viewer:line: the grep
+  // window reusing this window for another hit in the same file): that
+  // line selected and in the middle of the view, its number shown for a
+  // moment. Its place is measured on the backdrop, with a mark on the line
+  // there, as the find does: the textarea's line-height is "normal" (no
+  // number to multiply by) and a wrapped line takes several rows, so
+  // n × line-height scrolled to the wrong place and the line was off
+  // screen. The mark also shows the line while the keyboard is elsewhere.
+  function gotoLine(n) {
+    if (!(n > 0) || !ta.value) return;
+    const ls = ta.value.split("\n");
+    n = Math.min(n, ls.length);
+    let off = 0;
+    for (let i = 0; i < n - 1; i++) off += ls[i].length + 1;
+    const end = off + ls[n - 1].length;
+    const s = ta.value;
+    hl.innerHTML = esc(s.slice(0, off)) + '<mark class="lv-line">' + (esc(s.slice(off, end)) || " ") + "</mark>" + esc(s.slice(end));
+    lineMarked = true;
+    fitBackdrop();
+    ta.focus();
+    ta.setSelectionRange(off, end);
+    const el = hl.querySelector("mark.lv-line");
+    if (el) { ta.scrollTop = Math.max(0, el.offsetTop - ta.clientHeight / 2); ta.scrollLeft = 0; syncScroll(); }
+    if (lastQ) refind(); // a find in progress gets its marks back (the selection stays on the line)
+    flash(t("{n} 行目", { n }));
+  }
+  if (doc.line > 0 && !doc.err) gotoLine(doc.line);
+  rt().EventsOn("viewer:line", n => gotoLine(n));
   ta.focus();
 }
 
@@ -234,6 +263,7 @@ async function bootWatchWindow() {
   refit();
   window.addEventListener("resize", refit);
   zoom.buttons(document.getElementById("wv-font-inc"), document.getElementById("wv-font-dec"));
+  zoom.wheel(document.getElementById("wv-host")); // Ctrl+wheel, as the terminal window
   document.getElementById("wv-log").onclick = () => W().OpenLog().catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
 
   // Selection → Ctrl+C / right-click copies it (the terminal sends nothing).

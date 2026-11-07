@@ -185,7 +185,7 @@ func TestReview1101PassesReads(t *testing.T) {
 	safe := []string{
 		// Comware / VRP / VyOS exec-level resets
 		"reset counters", "reset counters interface GigabitEthernet1/0/1", "reset arp all",
-		"reset logbuffer", "reset ip bgp 192.0.2.1", "reset session",
+		"reset logbuffer", "reset ip bgp 192.0.2.1",
 		// pager-off lines a set may spell out
 		"set cli screen-length 0", "set cli pager off", "set terminal length 0",
 		"set console page 0", "set terminal pager disable", "no page",

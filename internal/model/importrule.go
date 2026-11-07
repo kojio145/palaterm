@@ -43,6 +43,10 @@ type ImportRule struct {
 	// the list, not a path). LastUsed is the date of the last import.
 	SampleName string `json:"sampleName,omitempty"`
 	LastUsed   string `json:"lastUsed,omitempty"`
+	// LastGroup is the group the rule last imported into: the next import
+	// of the same list proposes it (a monthly re-import used to default to
+	// a new group named after the file, doubling every device).
+	LastGroup string `json:"lastGroup,omitempty"`
 }
 
 // MaxImportUnits is how many devices one row may give (the first and up
@@ -183,13 +187,13 @@ func (r *ImportRule) Validate() error {
 		return fmt.Errorf("見出しの行は 1 以上にしてください")
 	}
 	if r.DataRow != 0 && r.DataRow <= r.HeaderRow {
-		return fmt.Errorf("値の開始行は見出しの行より後にしてください")
+		return fmt.Errorf("データの開始行は見出しの行より後にしてください")
 	}
 	if r.SheetIndex < 0 {
 		return fmt.Errorf("シートの番号は 1 以上にしてください")
 	}
 	if c := strings.TrimSpace(r.StartCol); c != "" && ColumnNumber(c) == 0 {
-		return fmt.Errorf("表の開始列は A、D、AB のような列の記号で入力してください")
+		return fmt.Errorf("表の左端の列は A、D、AB のような列の記号で入力してください")
 	}
 	seen := map[string]bool{}
 	hasName := false

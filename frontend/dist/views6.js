@@ -62,8 +62,7 @@ function liRenderList(root) {
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(t("外部一覧の変換"))}</div>
-        <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}<br>
-          ${esc(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div></div>
+        <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}${hintI(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="li-rimp" data-tip="${esc(t("人から受け取った変換ルール（JSON）を読み込みます"))}">${esc(t("ルールを読み込む"))}</button>
         <button class="btn" id="li-radd">${esc(t("＋ ルールを作る"))}</button>
@@ -358,19 +357,17 @@ function liRenderEdit(root) {
     </div></div>
 
     <div class="panel li-sec">
-      <div class="li-h"><b>${esc(t("読み取り位置"))}</b><span class="muted">${esc(t("見本の行番号を押すと見出しの行、列の記号を押すと表の開始列になります"))}</span></div>
+      <div class="li-h"><b>${esc(t("読み取り位置"))}${hintI(t("見本の行番号を押すと見出しの行、列の記号を押すと表の開始列になります"))}</b></div>
       <div class="li-fields li-pos">
         <div class="field"><label>${esc(t("シート"))}</label><select id="li-sheet" data-guard-skip>
           <option value="idx:0" ${!r.sheet && !r.sheetIndex ? "selected" : ""}>${esc(t("1 枚目"))}</option>
           ${((test && test.sheets) || (r.sheet ? [r.sheet] : [])).map((s, i) => `<option value="${esc("name:" + s)}" ${r.sheet === s ? "selected" : ""}>${esc(t("名前で「{s}」", { s }))}</option>`).join("")}
           ${((test && test.sheets) || []).slice(1).map((s, i) => `<option value="idx:${i + 2}" ${!r.sheet && r.sheetIndex === i + 2 ? "selected" : ""}>${esc(t("{n} 枚目", { n: i + 2 }))}</option>`).join("")}
+          ${!r.sheet && r.sheetIndex > 1 && !((test && test.sheets) || []).slice(1).some((s, i) => i + 2 === r.sheetIndex) ? `<option value="idx:${r.sheetIndex}" selected>${esc(t("{n} 枚目", { n: r.sheetIndex }))}</option>` : ""}
         </select></div>
-        <div class="field"><label for="li-hrow">${esc(t("見出しの行（何行目）"))}${LI.tent.has("headerRow") ? ` <span class="li-tentb">${esc(t("仮"))}</span>` : ""}</label><input type="number" min="1" id="li-hrow" value="${r.headerRow}" data-guard-skip>
-          <div class="li-hint">${esc(t("項目名（ホスト名・IP など）が書いてある行"))}</div></div>
-        <div class="field"><label for="li-drow">${esc(t("データの開始行（何行目）"))}</label><input type="number" min="0" id="li-drow" value="${r.dataRow || ""}" placeholder="${esc(t("空欄＝見出しのすぐ下"))}" data-guard-skip>
-          <div class="li-hint">${esc(t("普通は空欄。見出しとデータの間に説明の行があるときだけ"))}</div></div>
-        <div class="field"><label for="li-scol">${esc(t("表の左端の列（AE など）"))}</label><input type="text" id="li-scol" value="${esc(r.startCol || "")}" placeholder="${esc(t("空欄＝自動"))}" maxlength="3" data-guard-skip>
-          <div class="li-hint">${esc(t("普通は空欄。表の左にメモなど関係ない列があるときだけ"))}</div></div>
+        <div class="field"><label for="li-hrow">${esc(t("見出しの行（何行目）"))}${hintI(t("項目名（ホスト名・IP など）が書いてある行"))}${LI.tent.has("headerRow") ? ` <span class="li-tentb">${esc(t("仮"))}</span>` : ""}</label><input type="number" min="1" id="li-hrow" value="${r.headerRow}" data-guard-skip></div>
+        <div class="field"><label for="li-drow">${esc(t("データの開始行（何行目）"))}${hintI(t("普通は空欄。見出しとデータの間に説明の行があるときだけ"))}</label><input type="number" min="0" id="li-drow" value="${r.dataRow || ""}" placeholder="${esc(t("空欄＝見出しのすぐ下"))}" data-guard-skip></div>
+        <div class="field"><label for="li-scol">${esc(t("表の左端の列（AE など）"))}${hintI(t("普通は空欄。表の左にメモなど関係ない列があるときだけ"))}</label><input type="text" id="li-scol" value="${esc(r.startCol || "")}" placeholder="${esc(t("空欄＝自動"))}" maxlength="3" data-guard-skip></div>
         <div class="field"><label>${esc(t("結合セル"))}</label><select id="li-merge" data-guard-skip>
           <option value="fill" ${r.mergeOnlyFirst ? "" : "selected"}>${esc(t("すべてのセルで同じ値"))}</option>
           <option value="first" ${r.mergeOnlyFirst ? "selected" : ""}>${esc(t("左上のセルだけ"))}</option></select></div>
@@ -381,11 +378,11 @@ function liRenderEdit(root) {
     </div>
 
     <div class="panel li-sec">
-      <div class="li-h"><b>${esc(t("項目の紐付け"))}</b><span class="muted">${esc(t("加工手順は上から順に行います。加工したあとも空のときは既定値で埋めます"))}</span></div>
+      <div class="li-h"><b>${esc(t("項目の紐付け"))}${hintI(t("加工手順は上から順に行います。加工したあとも空のときは既定値で埋めます"))}</b></div>
       ${LI.tentUndo ? `<div class="li-tentbar"><span>${esc(t("見出しの名前から仮の紐付けを入れました（{n} 項目）。「仮」の札の欄を確かめて、違っていれば選び直してください", { n: LI.tentN }))}</span>
         <span class="row-inline" style="gap:6px"><button class="btn sm" id="li-tundo">${esc(t("元に戻す"))}</button><button class="btn sm" id="li-tok">${esc(t("確認した（札を消す）"))}</button></span></div>` : ""}
       <div class="li-units">
-        <span class="muted">${esc(t("1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目で値が違う項目だけ元の値を選びます。選ばない項目は 1 台目と同じ値です。2 台目の機器名が空の行では 2 台目を作りません。"))}</span>
+        <span class="muted">${esc(t("1 行に 2 台分が載っている一覧（冗長構成など）は、2 台目を追加します"))}${hintI(t("1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目で値が違う項目だけ元の値を選びます。選ばない項目は 1 台目と同じ値です。2 台目の機器名が空の行では 2 台目を作りません。"))}</span>
         <div class="row-inline" style="flex-wrap:wrap;gap:6px 12px;margin-top:6px">
           ${units.map((un, u) => `<span class="li-unitchip"><b>${esc(t("{n}台目", { n: u + 2 }))}</b>
             <input type="text" data-ulabel="${u}" value="${esc(un.label || "")}" placeholder="${esc(t("名前（例: バックアップ）"))}" maxlength="40" data-guard-skip>
@@ -877,7 +874,12 @@ function liStepEditor(key, unit = 0) {
     const type = node.querySelector("#se-type").value;
     const s = { type };
     if (type === "split") Object.assign(s, { sep: "/", pos: "first", keep: "right" });
-    if (type === "map") Object.assign(s, { rows: [{ match: "contains", from: "", to: "" }, { match: "contains", from: "", to: "" }], miss: "empty" });
+    // An OS type or a command set is guessed from a model name (含む, and
+    // a value the table does not name is empty, to be filled by the
+    // default); any other field (a site, a role) keeps what the table does
+    // not name, matched whole — "含む" on a site's table emptied sites.
+    const guessy = key === "osType" || key === "commandSet";
+    if (type === "map") Object.assign(s, { rows: [{ match: guessy ? "contains" : "equals", from: "", to: "" }, { match: guessy ? "contains" : "equals", from: "", to: "" }], miss: guessy ? "empty" : "keep" });
     steps.push(s);
     draw();
   };
@@ -915,8 +917,14 @@ async function liStartImport(path) {
     const byFile = rules.find(r => r.sampleName && r.sampleName.replace(/\.[^.]+$/, "") === base);
     const last = rules.slice().sort((a, b) => String(b.lastUsed || "").localeCompare(String(a.lastUsed || "")))[0];
     const groups = (INV.deviceGroups || []).map(g => g.name);
-    const same = groups.find(g => g === base);
-    LI.imp = { path, ruleId: (byFile || last || {}).id || "", group: same || base, newGroup: !same, decisions: {}, deleteIds: [], preview: null, error: "", filter: { excl: true } };
+    const rule = byFile || last || {};
+    // The group this rule imported into last time (rule.lastGroup, kept by
+    // ApplyListImport), while it still exists: a monthly list imported
+    // again goes to the same group instead of a second one named after the
+    // file. Else the group named as the file, new unless it exists.
+    const again = rule.lastGroup && groups.includes(rule.lastGroup) ? rule.lastGroup : "";
+    const same = again || groups.find(g => g === base);
+    LI.imp = { path, ruleId: rule.id || "", group: same || base, newGroup: !same, decisions: {}, deleteIds: [], preview: null, error: "", filter: { excl: true } };
     LI.view = "import";
     renderListImport();
     liPreview();
@@ -943,6 +951,20 @@ async function liPreview() {
       imp.notice = t("元の一覧（ファイルまたは変換ルール）が変わったため、行ごとの選択と削除の指定を取り消しました。選び直してください");
       return liPreview();
     }
+    // A password (or passphrase) the file would empty is kept unless the
+    // user picks 「ファイルの値にする」 for it: the choice is written down
+    // once, and the preview worked out again with it.
+    let kept = false;
+    for (const row of (p.plan && p.plan.rows) || []) {
+      for (const c of row.cells || []) {
+        if (!(c.secret && !c.file && c.cur && c.choice === "file")) continue;
+        const d = imp.decisions[row.id] = imp.decisions[row.id] || { link: "", choices: {} };
+        if (d.choices[c.key]) continue;
+        d.choices[c.key] = "keep";
+        kept = true;
+      }
+    }
+    if (kept) return liPreview();
     imp.preview = p; imp.error = "";
     // A device linked to a row since it was ticked is no longer missing:
     // its tick goes, or the count and the warning would speak of it.
@@ -969,7 +991,7 @@ const LI_STATUS = {
   err: ["li-p-err", "取り込めない"], same: ["li-p-same", "変更なし"], skip: ["li-p-skip", "取り込まない"],
   excl: ["li-p-skip", "除外"],
 };
-const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", fill: "PalaTerm では空", guess: "推測（既存の機器は変えません）", new: "" };
+const LI_STATE = { take: "元のシステムで変更", keep: "PalaTerm で変更済み", ask: "両方で変更", nobase: "前回の記録なし", fill: "PalaTerm では空", guess: "推測（既存の機器は変えません）", new: "" };
 
 // liRowStatus is the status a preview row is shown and filtered under: a
 // row the rule leaves out (an exclusion, no name) is 除外, apart from one
@@ -1024,9 +1046,12 @@ function liRenderImport(root) {
   const cellLine = (row, c) => {
     const ch = c.choice === "file";
     const cur = c.secret ? (c.cur ? "●●●●●●" : t("（空）")) : (c.cur ? liDisp(c.key, c.cur) : t("（空）"));
-    const fil = c.secret ? (c.file ? "●●●●●●" : t("（空）")) : (c.file ? liDisp(c.key, c.file) : t("（空）"));
+    // A password the file has no value for: 「ファイルの値にする」 would
+    // empty it, which "変更あり" did not say.
+    const gone = c.secret && !c.file && c.cur;
+    const fil = gone ? t("（空）→ 消えます") : c.secret ? (c.file ? "●●●●●●" : t("（空）")) : (c.file ? liDisp(c.key, c.file) : t("（空）"));
     return `<div class="li-cell"><span class="li-ck">${esc(liFieldLabel(c.key))}</span>
-      <span class="li-cv">${c.secret ? esc(t("変更あり")) : `<span class="${ch ? "li-old" : "li-new"}"><span class="li-src">PalaTerm</span> ${esc(cur)}</span> <span class="li-src">/</span> <span class="${ch ? "li-new" : "li-old"}"><span class="li-src">${esc(t("ファイル"))}</span> ${esc(fil)}</span>`}</span>
+      <span class="li-cv">${c.secret && !gone ? esc(t("変更あり")) : `<span class="${ch ? "li-old" : "li-new"}"><span class="li-src">PalaTerm</span> ${esc(cur)}</span> <span class="li-src">/</span> <span class="${ch ? "li-new" : "li-old"}"><span class="li-src">${esc(t("ファイル"))}</span> ${esc(fil)}</span>`}</span>
       ${LI_STATE[c.state] ? `<span class="li-cs li-cs-${c.state}">${esc(t(LI_STATE[c.state]))}</span>` : c.guessed ? `<span class="li-guess">${esc(t("推測"))}</span>` : ""}
       <select data-choice="${row.id}:${esc(c.key)}" data-guard-skip>
         <option value="keep" ${ch ? "" : "selected"}>${esc(t("PalaTerm の値を残す"))}</option>
@@ -1115,11 +1140,14 @@ function liRenderImport(root) {
 function liFitPreview(root) {
   const box = root.querySelector(".li-prevbox");
   if (!box) return;
-  const sc = box.closest(".content");
-  const top = box.getBoundingClientRect().top + (sc ? sc.scrollTop : 0);
+  // getBoundingClientRect is in window pixels, which differ by the page
+  // zoom (app.js uiZoom); the heights set and measured below are in the
+  // page's own (as fitPanels, app.js).
+  const z = uiZoom(), sc = box.closest(".content");
+  const top = box.getBoundingClientRect().top + (sc ? sc.scrollTop * z : 0);
   let below = 0;
   for (let el = box.nextElementSibling; el; el = el.nextElementSibling) below += el.offsetHeight;
-  box.style.maxHeight = Math.max(180, Math.floor(window.innerHeight - top - below - 28)) + "px";
+  box.style.maxHeight = Math.max(180, Math.floor((window.innerHeight - top) / z - below - 28)) + "px";
 }
 window.addEventListener("resize", () => {
   if (LI.view === "import") liFitPreview(document.getElementById("tab-import"));
@@ -1196,7 +1224,17 @@ function liWireImport(root) {
       LI.view = "list"; LI.imp = null;
       App().ForgetListFile();
       const msg = t("取り込みました（追加 {a}・更新 {u}・削除 {d}）", { a: res.added, u: res.updated, d: res.deleted });
-      if ((res.failed || []).length) toast(msg + " " + t("取り込めなかった行: {n}", { n: res.failed.length }), "warn"); else toast(msg, "ok");
+      const failed = res.failed || [];
+      if (failed.length) {
+        toast(msg + " " + t("取り込めなかった行: {n}", { n: failed.length }), "warn");
+        // Each row with its reason ("12: …"): a count alone left the user
+        // to find them in the file.
+        await uiChoice({
+          title: t("取り込めなかった行があります"),
+          message: esc(t("次の {n} 行は取り込めませんでした。ファイルを直して取り込み直してください。", { n: failed.length })) + `<ul style="margin:6px 0 0;padding-left:20px;font-size:13px;max-height:40vh;overflow:auto">${failed.map(f => `<li>${esc(terr(f))}</li>`).join("")}</ul>`,
+          buttons: [{ id: "ok", label: t("閉じる"), cls: "primary" }],
+        });
+      } else toast(msg, "ok");
       deviceView = { mode: "list", group };
       switchTab("devices");
     } catch (e) {

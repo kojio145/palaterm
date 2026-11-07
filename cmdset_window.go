@@ -315,7 +315,7 @@ func (a *App) OpenCommandSetWindow(name string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	cs := a.commandSetCopyLocked(name)
 	a.mu.Unlock()

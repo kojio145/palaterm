@@ -71,7 +71,7 @@ func (a *App) SaveImportRule(r model.ImportRule) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	if a.ruleNameTaken(r.Name, r.ID) {
 		a.mu.Unlock()
@@ -79,6 +79,7 @@ func (a *App) SaveImportRule(r model.ImportRule) (string, error) {
 	}
 	if i := a.ruleIndex(r.ID); r.ID != "" && i >= 0 {
 		r.LastUsed = a.inv.ImportRules[i].LastUsed
+		r.LastGroup = a.inv.ImportRules[i].LastGroup
 		a.inv.ImportRules[i] = r
 	} else {
 		r.ID = model.NewDeviceID()
@@ -94,7 +95,7 @@ func (a *App) ReorderImportRules(order []string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	reorderSlots(a.inv.ImportRules, func(r model.ImportRule) string { return r.ID }, order)
 	a.mu.Unlock()
@@ -106,7 +107,7 @@ func (a *App) DeleteImportRule(id string) error {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return fmt.Errorf("vault is locked")
+		return errVaultLocked
 	}
 	i := a.ruleIndex(id)
 	if i < 0 {
@@ -133,7 +134,7 @@ func (a *App) ExportImportRule(id string) (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	i := a.ruleIndex(id)
 	if i < 0 {
@@ -184,7 +185,7 @@ func (a *App) ImportImportRuleFile() (string, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return "", fmt.Errorf("vault is locked")
+		return "", errVaultLocked
 	}
 	r.ID = model.NewDeviceID()
 	r.Name = a.uniqueRuleName(r.Name)
@@ -325,7 +326,7 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 	bookCache.Lock()
 	if a.locked() {
 		bookCache.Unlock()
-		return nil, "", nil, nil, fmt.Errorf("vault is locked")
+		return nil, "", nil, nil, errVaultLocked
 	}
 	gen := bookCache.gen
 	var b *sheet.Book
@@ -368,7 +369,7 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 	bookCache.Lock()
 	defer bookCache.Unlock()
 	if a.locked() {
-		return nil, "", nil, nil, fmt.Errorf("vault is locked")
+		return nil, "", nil, nil, errVaultLocked
 	}
 	if bookCache.gen != gen {
 		// Forgotten while reading (the screen left): answered, not kept.
@@ -389,7 +390,7 @@ func (a *App) readList(path string, r *model.ImportRule, env *listimport.Env, en
 // a rule renamed between the preview and the import reads the same rows.
 func ruleSig(r *model.ImportRule) string {
 	c := *r
-	c.ID, c.Name, c.LastUsed, c.SampleName = "", "", "", ""
+	c.ID, c.Name, c.LastUsed, c.SampleName, c.LastGroup = "", "", "", "", ""
 	b, _ := json.Marshal(c)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
@@ -571,7 +572,7 @@ func (a *App) readForImport(req ListImportReq) (*model.ImportRule, *sheet.Book, 
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, nil, nil, nil, "", fmt.Errorf("vault is locked")
+		return nil, nil, nil, nil, "", errVaultLocked
 	}
 	i := a.ruleIndex(req.RuleID)
 	if i < 0 {
@@ -620,7 +621,7 @@ func (a *App) PreviewListImport(req ListImportReq) (*ListPreview, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	if err := a.importGroup(&req); err != nil {
 		a.mu.Unlock()
@@ -636,8 +637,13 @@ func (a *App) PreviewListImport(req ListImportReq) (*ListPreview, error) {
 			}
 		}
 	}
+	// A field the rule does not map that the file's values fail on (a jump
+	// host's user name mapped, its host not): said above the preview too,
+	// as the rule editor says it (review 2026-11-07 D-A8).
+	warnings := append(append([]string{}, b.Warnings...), t.Warnings...)
+	warnings = append(warnings, listimport.UnmappedErrors(conv)...)
 	return &ListPreview{File: filepath.Base(req.Path), Format: b.Format, Sheet: t.Sheet, Rule: r.Name,
-		Warnings: append(append([]string{}, b.Warnings...), t.Warnings...), Missing: conv.Missing, Plan: p, Stamp: stamp}, nil
+		Warnings: warnings, Missing: conv.Missing, Plan: p, Stamp: stamp}, nil
 }
 
 // ApplyListImport imports the file as previewed with the user's choices.
@@ -654,13 +660,16 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return nil, fmt.Errorf("vault is locked")
+		return nil, errVaultLocked
 	}
 	if err := a.importGroup(&req); err != nil {
 		a.mu.Unlock()
 		return nil, err
 	}
 	p := listimport.BuildPlan(a.inv, conv, r, listimport.Options{Group: req.Group, Decisions: req.Decisions})
+	// Put back if the vault cannot be written (ApplyGrid's rule): the page
+	// says the import failed, and memory must agree (review 2026-11-07 D-A4).
+	snap := a.snapshotLocked()
 	before := append([]model.Device(nil), a.inv.Devices...) // Apply changes them in place
 	res := listimport.Apply(a.inv, p, req.Group, req.DeleteIDs)
 	// A new group only once a device is in it: an import whose every row
@@ -679,10 +688,13 @@ func (a *App) ApplyListImport(req ListImportReq) (*listimport.Result, error) {
 	if i := a.ruleIndex(r.ID); i >= 0 {
 		a.inv.ImportRules[i].LastUsed = listimport.Today()
 		a.inv.ImportRules[i].SampleName = filepath.Base(req.Path)
+		// The group it went into: the next import of this list proposes
+		// it (a re-import used to default to a new group named after the
+		// file, review 2026-11-07 D-A1).
+		a.inv.ImportRules[i].LastGroup = req.Group
 	}
 	a.mu.Unlock()
-	a.logStopped(stopped)
-	if err := a.persist(); err != nil {
+	if err := a.persistOr(snap, stopped); err != nil {
 		return nil, err
 	}
 	return &res, nil

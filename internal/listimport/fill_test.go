@@ -40,9 +40,10 @@ func TestFillEmptyFieldAddedToRule(t *testing.T) {
 	if c := cell(row, "bastion2Username"); c.State != "fill" || c.Choice != "file" {
 		t.Errorf("bastion2Username = %+v, want fill/file", c)
 	}
-	// A yes/no has no "empty": its empty cell is a "no", so it is asked.
-	if c := cell(row, "bastion2LegacyAlgos"); c.State != "ask" || c.Choice != "keep" {
-		t.Errorf("bastion2LegacyAlgos = %+v, want ask/keep", c)
+	// A yes/no has no "empty": its empty cell is a "no", so it is asked
+	// (no record of the last import: "nobase", kept by default).
+	if c := cell(row, "bastion2LegacyAlgos"); c.State != "nobase" || c.Choice != "keep" {
+		t.Errorf("bastion2LegacyAlgos = %+v, want nobase/keep", c)
 	}
 	if row.Status != "ask" {
 		t.Errorf("status = %s (the yes/no is asked)", row.Status)
@@ -92,8 +93,8 @@ func TestFillHandMadeDevice(t *testing.T) {
 	inv.Devices = []model.Device{{ID: "a1", Name: "core-sw01", Group: "拠点A", Host: "192.0.2.99", Conn: "ssh", OSType: "cisco-ios", Enabled: true}}
 	p := plan(t, inv, fixture(), fixtureRule(), nil)
 	row := rowOf(p, 5)
-	if c := cell(row, "host"); c.State != "ask" || c.Choice != "keep" {
-		t.Errorf("host = %+v, want ask/keep", c)
+	if c := cell(row, "host"); c.State != "nobase" || c.Choice != "keep" {
+		t.Errorf("host = %+v, want nobase/keep", c)
 	}
 	for _, k := range []string{"username", "password", "site"} {
 		if c := cell(row, k); c.State != "fill" || c.Choice != "file" {

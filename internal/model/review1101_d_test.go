@@ -148,7 +148,7 @@ func TestCheckProfileSendsCaps(t *testing.T) {
 	}
 	p = base
 	p.Login = []profile.Step{{Expect: huge, Send: "x"}}
-	if err := CheckProfileSends(p); err == nil || !strings.Contains(err.Error(), "待つ文字列の正規表現が複雑すぎます") {
+	if err := CheckProfileSends(p); err == nil || !strings.Contains(err.Error(), "待つ文字列が複雑すぎます") {
 		t.Errorf("huge expect: %v", err)
 	}
 	p = base

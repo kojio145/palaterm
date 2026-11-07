@@ -17,8 +17,10 @@ const GRID_UNGROUPED = "__ungrouped__";
 const GRID_UNDO_MAX = 100;
 
 // ---- values ----
-const GRID_BOOL_T = ["true", "1", "yes", "y", "on", "はい", "○", "◯", "有効"];
-const GRID_BOOL_F = ["false", "0", "no", "n", "off", "いいえ", "×", "無効"];
+// The words for yes and no as internal/listimport/choices.go reads them
+// (and the ticks a sheet uses: ✓ ✔ レ 済, x).
+const GRID_BOOL_T = ["true", "1", "yes", "y", "on", "はい", "○", "◯", "〇", "有効", "有", "あり", "する", "使う", "enable", "enabled", "✓", "✔", "✅", "☑", "レ", "済"];
+const GRID_BOOL_F = ["false", "0", "no", "n", "off", "いいえ", "×", "x", "無効", "無", "なし", "しない", "使わない", "disable", "disabled", "-", "ー", "☐"];
 // The choices are built once per inventory load: the table asks for them
 // for every cell it draws, and a thousand rows made that the slow part.
 let gridOptCache = { inv: null, prof: null, m: {}, lbl: {} };
@@ -54,9 +56,14 @@ const GRID_FREE = { text: 1, secret: 1, int: 1, group: 1 };
 function gridNorm(col, text) {
   text = String(text ?? "");
   if (col.kind !== "secret") text = text.replace(/\r?\n/g, " ");
+  // Full-width letters and digits (ＳＳＨ, ２２) read as their half-width
+  // selves, as internal/listimport/choices.go reads them; a name (text) is
+  // kept as typed.
+  if (col.kind === "int") return text.trim().normalize("NFKC").trim();
   if (GRID_FREE[col.kind]) return col.kind === "secret" ? text : text.trim();
   const s = text.trim();
   if (s === "") return "";
+  const fold = s.normalize("NFKC").trim();
   const low = s.toLowerCase();
   const opts = gridOptions(col.kind) || [];
   // The stored value first: two OS profiles may share a display name.
@@ -64,7 +71,45 @@ function gridNorm(col, text) {
   for (const o of opts) {
     if (o.label.toLowerCase() === low || (o.alias || []).some(a => a.toLowerCase() === low)) return o.v;
   }
+  const w = fold.toLowerCase().replace(/\s+/g, "");
+  if (w !== low) {
+    for (const o of opts) if (o.v.toLowerCase() === w) return o.v;
+    for (const o of opts) {
+      if (o.label.toLowerCase() === w || (o.alias || []).some(a => a.toLowerCase() === w)) return o.v;
+    }
+  }
+  const loose = gridNormLoose(col.kind, w);
+  if (loose) return loose;
   return s; // unknown: kept as typed, and the check names the cell
+}
+// gridNormLoose reads the usual ways another system writes a choice, as
+// choices.go does: SSH2, SSHv2 → ssh; TELNET(23) → telnet; CONSOLE, COM3 →
+// serial; 公開鍵, rsa → publickey. "" when it cannot place the word.
+function gridNormLoose(kind, w) {
+  const has = (...words) => words.some(x => w.includes(x));
+  switch (kind) {
+    case "conn":
+    case "hopMethod":
+      // "Telnet（SSH不可）" names SSH only to rule it out: left as typed.
+      if (has("不可", "なし", "disabled", "no") && (has("ssh") || has("telnet"))) return "";
+      if (has("ssh")) return "ssh";
+      if (has("telnet")) return "telnet";
+      if (kind === "conn" && (has("serial", "console", "シリアル", "コンソール") || w.startsWith("com"))) return "serial";
+      return "";
+    case "auth":
+      if (has("publickey", "pubkey", "公開鍵", "鍵", "key", "rsa", "ed25519", "ecdsa")) return "publickey";
+      if (has("password", "passwd", "パスワード", "pass")) return "password";
+      return "";
+    case "scheme":
+      if (has("https")) return "https";
+      if (has("http")) return "http";
+      return "";
+    case "mode":
+      if (has("tunnel", "トンネル")) return "tunnel";
+      if (has("shell", "コマンド")) return "shell";
+      return "";
+  }
+  return "";
 }
 // gridLabel is how a stored value shows in the table (and copies out).
 function gridLabel(col, v) {
@@ -448,7 +493,7 @@ function renderGrid(force) {
       <button class="btn sm" id="g-addrow">${esc(t("＋ 末尾に行を追加"))}</button>
     </div>
     <div class="row-inline" style="gap:12px;margin-bottom:8px;flex-wrap:wrap">
-      <span class="muted" style="font-size:12px">${esc(t("Ctrl+C / Ctrl+V で Excel と相互にコピー・貼り付け ／ Ctrl+D 上の値を下へ ／ 右下の ■ をドラッグで連番（ダブルクリックで最後の行まで） ／ 見出しの ▾ で並べ替え・絞り込み ／ 行番号の左の ＋ でその下に行を挿入"))}</span>
+      <span class="muted" style="font-size:12px">${esc(t("Excel と同じ操作（Ctrl+C / Ctrl+V・Ctrl+D・■ で連番）"))}${hintI(t("Ctrl+C / Ctrl+V で Excel と相互にコピー・貼り付け ／ Ctrl+D 上の値を下へ ／ 右下の ■ をドラッグで連番（ダブルクリックで最後の行まで） ／ 見出しの ▾ で並べ替え・絞り込み ／ 行番号の左の ＋ でその下に行を挿入").replace(/ ／ /g, "\n"))}</span>
       <span class="muted" id="g-selinfo" style="font-size:12px;margin-left:auto"></span>
     </div>
     <div id="g-findbar" class="g-findbar hidden"></div>
@@ -468,7 +513,34 @@ function renderGrid(force) {
   G.wrap = document.getElementById("g-wrap");
   gridWire(root);
   gridRenderBody();
+  gridFit();
   G.wrap.focus({ preventScroll: true });
+}
+
+// gridFit caps the table at the window's bottom edge from where its top
+// is (as fitPanels, app.js, does for the lists): a fixed allowance for
+// what is above it left the last rows under the window's edge when the
+// status line wrapped or the find bar was open.
+function gridFit() {
+  const w = G && G.mounted && document.getElementById("g-wrap");
+  if (!w) return;
+  const z = uiZoom(), sc = w.closest(".content");
+  const top = w.getBoundingClientRect().top + (sc ? sc.scrollTop * z : 0);
+  const h = Math.max(160, Math.floor((window.innerHeight - top) / z - 24));
+  if (w.style.maxHeight !== h + "px") { w.style.maxHeight = h + "px"; gridPaintSel(); }
+}
+// What is above the table changes height (the find bar opens, the status
+// line wraps): the tab's height changes with it, so the table is sized
+// again. Sizing it never changes the tab a second time, so this settles.
+{
+  let gridFitQueued = false;
+  const obs = new ResizeObserver(() => {
+    if (gridFitQueued) return;
+    gridFitQueued = true;
+    requestAnimationFrame(() => { gridFitQueued = false; gridFit(); });
+  });
+  const tab = document.getElementById("tab-devices");
+  if (tab) obs.observe(tab);
 }
 
 // gridRenderBody draws the rows. With the same rows in the same order and
@@ -527,6 +599,7 @@ function gridStatus() {
   if (Object.keys(G.conflicts).length) parts.push(`<span style="color:var(--warn)">${esc(t("他の画面と競合 {n} 行", { n: Object.keys(G.conflicts).length }))}</span>`);
   if (G.sort.key || G.filter || Object.keys(G.colFilter).length) parts.push(esc(t("並べ替え・絞り込みは表示だけ（保存される順番は変わりません）")) + (G.sort.key ? ` <a href="#" class="link" id="g-sortfix">${esc(t("この並び順で確定"))}</a>` : "") + ` <a href="#" class="link" id="g-viewreset">${esc(t("解除"))}</a>`);
   if (G.busy) parts.push(`<b style="color:var(--accent)">${esc(t("保存中…"))}</b>`);
+  if (G.trouble) Object.values(G.trouble).forEach(m => parts.push(`<span style="color:var(--err)">${esc(m)}</span>`));
   if (gridChangeCount()) parts.push(esc(G.savedAt ? t("下書きを自動保存 {t}", { t: G.savedAt.toTimeString().slice(0, 8) }) : t("下書きは自動保存されます")));
   else parts.push(esc(t("未保存の変更はありません")));
   el.innerHTML = parts.join(t(" ・ "));
@@ -638,7 +711,11 @@ function gridOpenList() {
   if (!opts || !row || !td || !list) return;
   gridEnsureVisible(G.sel.fr, G.sel.fc);
   const cur = row.cells[col.key] || "";
-  list.innerHTML = opts.map((o, i) => `<div class="g-opt${o.v === cur ? " on" : ""}" data-i="${i}">${esc(o.label)}</div>`).join("");
+  // Two choices with one label (two OS profiles named alike) are told
+  // apart by their keys.
+  const n = new Map();
+  opts.forEach(o => n.set(o.label, (n.get(o.label) || 0) + 1));
+  list.innerHTML = opts.map((o, i) => `<div class="g-opt${o.v === cur ? " on" : ""}" data-i="${i}">${esc(o.label)}${n.get(o.label) > 1 ? ` <span class="muted">(${esc(o.v)})</span>` : ""}</div>`).join("");
   const cb = gridBox(td), w = G.wrap;
   list.style.left = cb.left + "px";
   list.style.minWidth = Math.max(cb.width, 160) + "px";
@@ -791,12 +868,22 @@ function gridUndo(redo) {
 }
 function gridRowAt(r) { return G.rows[G.view[r]]; }
 // gridSetCells sets [viewRow, viewCol, text] cells, each normalised for its
-// column (a pasted 「はい」 lands as true).
+// column (a pasted 「はい」 lands as true); [r, c, value, true] stores the
+// value as it is.
 function gridSetCells(list) {
-  return gridMutate(() => list.forEach(([r, c, text]) => {
+  return gridMutate(() => list.forEach(([r, c, text, raw]) => {
     const row = gridRowAt(r), col = G.vc[c];
-    if (row && col) row.cells[col.key] = gridNorm(col, text);
+    if (row && col) row.cells[col.key] = raw ? text : gridNorm(col, text);
   }));
+}
+// gridEditValue is what the editor's text sets a cell to: the text, or the
+// cell's own value when the text is still its label — two OS profiles may
+// share a display name, and F2 then Enter must not move the cell to the
+// other one.
+function gridEditValue(row, col, text) {
+  const v = row.cells[col.key] || "";
+  if (v && !GRID_FREE[col.kind] && col.kind !== "secret" && text === gridLabel(col, v)) return [v, true];
+  return [text, false];
 }
 
 // ---- cell editor ----
@@ -858,14 +945,21 @@ function gridCommitEdit(move, all, focusTo) {
   const text = e.inp.value;
   e.inp.remove();
   if (all) {
-    const g = gridRange(), list = [];
-    for (let r = g.r0; r <= g.r1; r++) for (let c = g.c0; c <= g.c1; c++) list.push([r, c, text]);
+    // Ctrl+Enter over several rows: the empty rows under the devices stay
+    // empty (as a paste leaves them); the row being typed in always takes
+    // the value.
+    const g = gridRange(), list = [], many = g.r1 > g.r0;
+    for (let r = g.r0; r <= g.r1; r++) {
+      const row = gridRowAt(r);
+      if (!row || (many && row.uid !== e.uid && gridIsBlank(row))) continue;
+      for (let c = g.c0; c <= g.c1; c++) if (G.vc[c]) list.push([r, c, ...gridEditValue(row, G.vc[c], text)]);
+    }
     gridSetCells(list);
   } else {
     // The row may have moved (sorted) while typing: find it by its UID.
     const r = G.view.findIndex(i => G.rows[i].uid === e.uid);
     const c = G.vc.findIndex(x => x.key === e.key);
-    if (r >= 0 && c >= 0) gridSetCells([[r, c, text]]);
+    if (r >= 0 && c >= 0) gridSetCells([[r, c, ...gridEditValue(G.rows[G.view[r]], G.vc[c], text)]]);
   }
   if (move) gridMove(move[0], move[1]);
   else gridPaintSel();
@@ -922,6 +1016,19 @@ function gridTSV(g) {
   }
   return lines.join("\r\n");
 }
+// gridQuoteEnd: the index of the quote closing a cell that starts at i, or
+// -1 when it is not a quoted cell — the quote never closes (a value that
+// just starts with "), or what follows the closing quote is not a tab, a
+// line end or the end: a cell read as quoted then swallowed every cell
+// after it.
+function gridQuoteEnd(text, i) {
+  for (let j = i + 1; j < text.length; j++) {
+    if (text[j] !== '"') continue;
+    if (text[j + 1] === '"') { j++; continue; }
+    return j + 1 >= text.length || "\t\r\n".includes(text[j + 1]) ? j : -1;
+  }
+  return -1;
+}
 function gridParseTSV(text) {
   const rows = [];
   let row = [], cur = "", q = false;
@@ -932,7 +1039,7 @@ function gridParseTSV(text) {
       else cur += ch;
       continue;
     }
-    if (ch === '"' && cur === "") { q = true; continue; }
+    if (ch === '"' && cur === "" && gridQuoteEnd(text, i) >= 0) { q = true; continue; }
     if (ch === "\t") { row.push(cur); cur = ""; continue; }
     if (ch === "\r" || ch === "\n") {
       if (ch === "\r" && text[i + 1] === "\n") i++;
@@ -1010,9 +1117,16 @@ function gridPasteText(text) {
   const own = G.clip && gridClipText(G.clip.text) === text ? G.clip : null;
   const cutSrc = own && own.cut ? own : null;
   const data = own ? own.raw : gridParseTSV(text).map(r => r.map(gridCellIn));
-  if (!data.length) return;
+  // One empty cell copied in Excel is a line end alone: pasted, it empties
+  // the selection, as it does there.
+  if (!data.length) { if (!own && text.trim() === "") gridClear(); return; }
   const h = data.length, w = Math.max(...data.map(r => r.length));
   const g = G.view.length ? gridRange() : { r0: 0, r1: 0, c0: 0, c1: 0 };
+  // Columns past the table's right edge are not pasted: said, with the
+  // hidden columns named when there are any (a paste never lands in them).
+  const over = g.c0 + w - G.vc.length;
+  const hiddenCols = G.cols.length > G.vc.length;
+  if (over > 0) toast(t("{n} 列は右端を超えるため貼り付けませんでした", { n: over }) + (hiddenCols ? t("（隠している列には入りません。「列の表示…」で表示してから貼り付けてください）") : ""), "warn", { ms: 6000 });
   const sr = g.r1 - g.r0 + 1, sc = g.c1 - g.c0 + 1;
   const list = [];
   let endR = g.r0 + h - 1, endC = Math.min(g.c0 + w - 1, G.vc.length - 1);
@@ -1319,7 +1433,7 @@ function gridDeleteRows() {
   if (!G.view.length) return;
   const rows = gridSelRows();
   const g = gridRange();
-  gridMutate(() => {
+  const did = gridMutate(() => {
     const gone = new Set(rows.map(r => r.uid));
     // Each remembers the nearest row above it that stays, to go back under
     // it if the deletion is called off in the conflict dialog.
@@ -1331,6 +1445,7 @@ function gridDeleteRows() {
     });
     G.rows = G.rows.filter(r => !gone.has(r.uid));
   });
+  if (!did) return; // refused while a save runs (gridMutate said so)
   gridSelect(Math.min(g.r0, G.view.length - 1), g.c0);
   const n = rows.filter(r => r.id).length;
   if (n) toast(t("{n} 行を削除しました（保存するまで機器は消えません。元に戻す: Ctrl+Z）", { n }), "ok");
@@ -1362,13 +1477,29 @@ function gridDuplicateRows() {
 // closing the window straight after an edit loses nothing.
 function gridScheduleSave() {
   clearTimeout(G.saveT);
-  G.saveT = setTimeout(() => gridSaveDraft().catch(() => { }), 0);
+  G.saveT = setTimeout(() => gridSaveDraft().catch(e => gridTrouble("draft", e)), 0);
   gridScheduleCheck(700);
+}
+// gridTrouble notes a draft save or a check that failed (the vault locked
+// meanwhile, a disk full): the status line says so until the next one
+// succeeds, and a toast once per failure.
+function gridTrouble(what, e) {
+  if (!G) return;
+  const msg = (what === "draft" ? t("下書きを保存できません") : t("検証できません")) + ": " + terr(e);
+  G.trouble = G.trouble || {};
+  const first = !G.trouble[what];
+  G.trouble[what] = msg;
+  gridStatus();
+  if (first) toast(msg, "err", { ms: 6000 });
+}
+function gridFine(what) {
+  if (G && G.trouble && G.trouble[what]) { delete G.trouble[what]; gridStatus(); }
 }
 async function gridSaveDraft() {
   if (!G) return;
   clearTimeout(G.saveT); G.saveT = null;
   await App().SaveGridDraft(G.scope, { rows: gridPayloadRows(), deleted: G.deleted });
+  gridFine("draft");
   G.savedAt = new Date();
   const n = gridChangeCount();
   if (n) GRID_COUNTS[G.scope] = n; else delete GRID_COUNTS[G.scope];
@@ -1376,7 +1507,7 @@ async function gridSaveDraft() {
 }
 function gridScheduleCheck(ms) {
   clearTimeout(G.chkT);
-  G.chkT = setTimeout(() => gridCheck().catch(() => { }), ms);
+  G.chkT = setTimeout(() => gridCheck().catch(e => gridTrouble("check", e)), ms);
 }
 function gridApplyReport(rep) {
   G.errors = {};
@@ -1393,6 +1524,7 @@ async function gridCheck() {
   const scope = G.scope;
   const rep = await App().ApplyGrid({ scope, rows: gridPayloadRows(), deleted: G.deleted, mode: "check", overwrite: [] });
   if (!G || G.scope !== scope) return;
+  gridFine("check");
   gridApplyReport(rep);
   if (!G.edit) gridRenderBody(); else gridStatus();
 }
@@ -1424,14 +1556,18 @@ async function gridSaveRun() {
   const errRows = Object.keys(rep.errors || {}).length;
   let mode = "all";
   if (errRows) {
+    const colOf = k => G.cols.find(c => c.key === k);
     const sample = Object.entries(G.errors).slice(0, 5).map(([uid, m]) => {
       const row = G.rows.find(r => r.uid === uid);
       const name = (row && row.cells.name) || t("（名前なし）");
-      return `<li><b>${esc(name)}</b>: ${esc(Object.values(m).join(t(" ／ ")))}</li>`;
+      return `<li><b>${esc(name)}</b>: ${esc(Object.entries(m).map(([k, msg]) => (colOf(k) ? gridColTitle(colOf(k)) + ": " : "") + msg).join(t(" ／ ")))}</li>`;
     }).join("");
+    // Every error row hidden by the filter: said, or the red cells are
+    // nowhere to be seen.
+    const hidden = G.hidden && Object.keys(G.errors).every(uid => G.hidden.has(uid));
     const c = await uiChoice({
       title: t("エラーのある行があります"),
-      message: esc(t("{n} 行にエラーがあります（赤枠のセル。マウスを当てると理由が出ます）。", { n: errRows })) + `<ul style="margin:6px 0 0;padding-left:20px;font-size:13px">${sample}</ul>`,
+      message: esc(t("{n} 行にエラーがあります（赤枠のセル。マウスを当てると理由が出ます）。", { n: errRows })) + (hidden ? ` <span style="color:var(--warn)">${esc(t("エラーの行は絞り込みで隠れています。絞り込みを解除してください"))}</span>` : "") + `<ul style="margin:6px 0 0;padding-left:20px;font-size:13px">${sample}</ul>`,
       buttons: [{ id: "cancel", label: t("キャンセル") }, { id: "back", label: t("すべて保存しない（編集に戻る）") }, { id: "valid", label: t("エラーのない行だけ保存（エラー行は下書きとして保存）"), cls: "primary" }],
     });
     if (c === "back") { gridFocusFirstError(); return; }
@@ -1460,6 +1596,9 @@ async function gridAfterSave(rep) {
   await refreshInventory();
   await gridCheck();
   gridView(); gridRenderBody();
+  // The rows left as a draft are the error rows: the first is brought
+  // into view, as 「すべて保存しない」 does.
+  if (Object.keys(G.errors).length) gridFocusFirstError();
   const n = Object.keys(saved).length + gone.size;
   if (!rep.applied && !n) { toast(t("保存できる行がありませんでした"), "err"); return; }
   // The undo steps went with the save (they held the rows as they were
@@ -1476,6 +1615,8 @@ function gridFocusFirstError() {
     if (c < 0) toast(t("エラーの列が表示されていません。「列の表示…」で表示してください"), "err");
     return;
   }
+  // None in sight: the error rows are hidden by the filter.
+  if (Object.keys(G.errors).length) toast(t("エラーの行は絞り込みで隠れています。絞り込みを解除してください"), "err");
 }
 // Rows whose device changed or went elsewhere since the table read it: for
 // each, keep the table's version or the other one. Resolves to the UIDs to
@@ -1569,6 +1710,8 @@ function gridFind(replace) {
   }
   bar.onkeydown = e => {
     e.stopPropagation();
+    // Enter and Esc while the IME is converting are the IME's.
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Escape") { e.preventDefault(); close(); }
     else if (e.key === "Enter") { e.preventDefault(); gridFindStep(e.shiftKey ? -1 : 1); }
     else if ((e.ctrlKey || e.metaKey) && ["r", "d", "s"].includes(e.key.toLowerCase())) e.preventDefault();
@@ -1608,11 +1751,20 @@ function gridFindStep(dir) {
   G.findRange = keep;
   if (info) info.textContent = t("{n} 件中 {i} 件目", { n: m.length, i: i + 1 });
 }
+// gridReplaced is the cell's value after the replacement, or null when the
+// column has fixed choices and the result is none of them ("S" → "T" over
+// 「SSH」 would store "TSH"): the cell is left as it is.
 function gridReplaced(col, v) {
   const q = G.findQ || "";
-  if (G.findWhole) return gridNorm(col, G.findR || "");
-  const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), G.findCase ? "g" : "gi");
-  return gridNorm(col, gridLabelRawVal(col, v).replace(re, () => G.findR || ""));
+  let out;
+  if (G.findWhole) out = gridNorm(col, G.findR || "");
+  else {
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), G.findCase ? "g" : "gi");
+    out = gridNorm(col, gridLabelRawVal(col, v).replace(re, () => G.findR || ""));
+  }
+  const opts = gridChoices(col);
+  if (opts && out !== "" && !opts.some(o => o.v === out)) return null;
+  return out;
 }
 function gridLabelRawVal(col, v) { return col.kind === "secret" || GRID_FREE[col.kind] ? (v || "") : gridLabel(col, v); }
 function gridReplaceOne() {
@@ -1620,7 +1772,9 @@ function gridReplaceOne() {
   const hit = m.find(([r, c]) => r === G.sel.fr && c === G.sel.fc);
   if (hit) {
     const col = G.vc[hit[1]], row = gridRowAt(hit[0]);
-    gridMutate(() => { row.cells[col.key] = gridReplaced(col, row.cells[col.key]); });
+    const nv = gridReplaced(col, row.cells[col.key]);
+    if (nv === null) toast(t("置換後の値が選択肢にないため飛ばしました"), "warn");
+    else gridMutate(() => { row.cells[col.key] = nv; });
   }
   gridFindStep(1);
 }
@@ -1628,8 +1782,13 @@ function gridReplaceAll() {
   const m = gridMatches();
   if (!m.length) { document.getElementById("gf-info").textContent = t("見つかりません"); return; }
   const cells = m.map(([r, c]) => [gridRowAt(r), G.vc[c]]);
-  gridMutate(() => cells.forEach(([row, col]) => { row.cells[col.key] = gridReplaced(col, row.cells[col.key]); }));
-  toast(t("{n} 件を置換しました", { n: m.length }), "ok");
+  let skipped = 0;
+  gridMutate(() => cells.forEach(([row, col]) => {
+    const nv = gridReplaced(col, row.cells[col.key]);
+    if (nv === null) skipped++; else row.cells[col.key] = nv;
+  }));
+  if (skipped) toast(t("{n} 件を置換しました（{m} 件は置換後の値が選択肢にないため飛ばしました）", { n: m.length - skipped, m: skipped }), "warn", { ms: 6000 });
+  else toast(t("{n} 件を置換しました", { n: m.length }), "ok");
 }
 
 // ---- columns ----
@@ -1655,10 +1814,20 @@ function gridColsDialog() {
     </div>
   </div>`);
   openModal(node, "mid");
+  // "-hopN" (the hop stays hidden when a device gets that hop, gridLoadVis)
+  // is set only for a hop that was shown and is unchecked here, or one a
+  // device has: marking every unchecked hop stopped the automatic showing
+  // of a hop for good before any device had it.
+  const wasOn = new Set([...node.querySelectorAll("[data-hop]")].filter(b => b.checked).map(b => +b.dataset.hop));
   const apply = () => {
     const vis = new Set(["name"]);
+    const used = new Set(gridHopsUsed());
     node.querySelectorAll("[data-col]").forEach(b => { if (b.checked) vis.add(b.dataset.col); });
-    node.querySelectorAll("[data-hop]").forEach(b => { if (b.checked) G.cols.filter(c => c.hop === +b.dataset.hop).forEach(c => vis.add(c.key)); else vis.add("-hop" + b.dataset.hop); });
+    node.querySelectorAll("[data-hop]").forEach(b => {
+      const n = +b.dataset.hop;
+      if (b.checked) { G.cols.filter(c => c.hop === n).forEach(c => vis.add(c.key)); wasOn.add(n); }
+      else if (wasOn.has(n) || used.has(n)) vis.add("-hop" + n);
+    });
     G.vis = vis;
     // Hiding the sort column would leave the sort on with no ▲▼ in sight.
     if (G.sort.key && !vis.has(G.sort.key)) gridClearSort();
@@ -1718,7 +1887,7 @@ function gridHeaderMenu(key, anchor) {
   const close = () => { pop.remove(); document.removeEventListener("mousedown", outside, true); if (G && G.wrap) G.wrap.focus({ preventScroll: true }); };
   const outside = ev => { if (!pop.contains(ev.target)) close(); };
   setTimeout(() => document.addEventListener("mousedown", outside, true), 0);
-  pop.onkeydown = ev => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); } };
+  pop.onkeydown = ev => { if (ev.isComposing || ev.keyCode === 229) return; if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); } };
   pop.querySelectorAll("[data-a]").forEach(b => b.onclick = () => {
     const a = b.dataset.a;
     if (a === "asc" || a === "desc") { G.sort = { key, dir: a === "asc" ? 1 : -1 }; gridResort(); }
@@ -1827,8 +1996,10 @@ function gridWire(root) {
     }
   };
   const filt = $g("g-filter");
-  filt.oninput = () => { G.filter = filt.value; gridRedrawRows(); };
-  filt.onkeydown = e => { if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); G.wrap.focus(); } };
+  // The rows follow a pause in the typing, not an IME conversion in
+  // progress (wireFilterInput, app.js).
+  wireFilterInput(filt, () => { if (!G || !G.mounted) return; G.filter = filt.value; gridRedrawRows(); });
+  filt.onkeydown = e => { if (e.isComposing || e.keyCode === 229) return; if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); G.wrap.focus(); } };
   gridWireHead(root);
   const wrap = G.wrap;
   wrap.addEventListener("scroll", () => { if (!gridDrag) gridPaintSel(); });
@@ -1926,7 +2097,7 @@ function gridWire(root) {
 }
 // The fill handle and the copy frame are placed in pixels: redrawn when the
 // window changes size. A dialog closing gives the keys back to the table.
-window.addEventListener("resize", () => { if (G && G.mounted && document.getElementById("g-wrap")) gridPaintSel(); });
+window.addEventListener("resize", () => { if (G && G.mounted && document.getElementById("g-wrap")) { gridFit(); gridPaintSel(); } });
 document.addEventListener("modal-closed", () => {
   setTimeout(() => { if (gridOnScreen() && !G.edit && !document.querySelector(".g-findbar:not(.hidden) input:focus")) G.wrap.focus({ preventScroll: true }); }, 0);
 });

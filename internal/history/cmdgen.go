@@ -61,7 +61,10 @@ func GenerateCommands(a, b, direction, osType string) CmdGen {
 		}
 	}
 	g.Family, g.FamilyBy = detectFamily(cfg, osType)
-	w := &cmdWriter{res: r, rows: direction == "rollback", os: strings.ToLower(osType)}
+	w := &cmdWriter{res: r, rows: direction == "rollback", os: strings.ToLower(osType), comment: "#"}
+	if g.Family == "cisco" {
+		w.comment = "!"
+	}
 	switch g.Family {
 	case "cisco":
 		w.cisco()
@@ -297,6 +300,7 @@ type cmdWriter struct {
 	res       DiffResult
 	rows      bool   // keep row references (rollback)
 	os        string // the profile key, lower-cased ("" when unknown)
+	comment   string // the family's comment marker ("!" Cisco, "#" the rest)
 	out       []CmdLine
 	manual    int
 	skipped   int
@@ -318,9 +322,20 @@ func (w *cmdWriter) ctx(text string, row int) CmdLine {
 	return l
 }
 
+// note is a line to check by hand: written as a comment — "! 手で確認
+// （why）: line" — so that the copy, a command set saved from the result
+// and the run tab's 今回だけ入力 never type it to a device as a command
+// (review 2026-11-07 C-A1). Note keeps the reason for the UI; the line's
+// indentation stays in front of the marker.
 func (w *cmdWriter) note(text, why string, row int) CmdLine {
 	w.manual++
-	l := w.line(text, row)
+	trimmed := strings.TrimLeft(text, " 	")
+	indent := text[:len(text)-len(trimmed)]
+	marker := w.comment
+	if marker == "" {
+		marker = "!"
+	}
+	l := w.line(indent+marker+" 手で確認（"+why+"）: "+trimmed, row)
 	l.Note = why
 	return l
 }
@@ -698,7 +713,7 @@ func (w *cmdWriter) ciscoBlock(n *cnode, depth int) {
 			continue
 		}
 		if k.head {
-			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os}
+			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os, comment: w.comment}
 			sub.ciscoBlock(k, depth+1)
 			for _, sc := range sub.chunks {
 				rest = append(rest, sc.lines...)
@@ -1632,7 +1647,7 @@ func (w *cmdWriter) comwareBlock(n *cnode) {
 			continue
 		}
 		if k.head {
-			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os}
+			sub := &cmdWriter{res: w.res, rows: w.rows, os: w.os, comment: w.comment}
 			sub.comwareBlock(k)
 			for _, sc := range sub.chunks {
 				rest = append(rest, sc.lines...)

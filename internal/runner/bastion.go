@@ -134,7 +134,13 @@ func waitShell(ctx context.Context, exp *expecter, timeout time.Duration) {
 //   - the hop's prompt line, as it stood before the jump command, coming
 //     back at the tail before anything was logged into;
 //   - after the login, a prompt identical to that hop's (see landing.check).
-var reJumpFailed = regexp.MustCompile(`(?im)(connection refused|connection timed out|operation timed out|no route to host|network is unreachable|host is unreachable|could not resolve|name or service not known|unknown host|connection closed by|closed by foreign host|connection reset by|unable to connect to remote host|host key verification failed|kex_exchange_identification|permission denied \(|command not found|too many authentication failures|received disconnect from|disconnected from|connection to \S+ closed|bad port|^[ \t]*%[ \t]*(connection|destination unreachable|unknown command or computer name|bad ip address|host|invalid input))`)
+//
+// The words count at the start of a line only — after the program's own
+// prefix ("ssh:", "telnet:", "bash: ssh:", "ssh_exchange_identification:
+// read:") and OpenSSH's "connect to host X port N:" — never in the middle
+// of a sentence: a login banner's "Unauthorized users will be disconnected
+// from the network." ended the jump as failed (review 2026-11-07 F-A-3).
+var reJumpFailed = regexp.MustCompile(`(?im)^[ \t]*(?:\[?(?:[A-Za-z0-9_.@\-]+:[ \t]+)*(?:connect to (?:host|address) \S+(?: port \S+)?:[ \t]+)?)?(?:connection refused|connection timed out|operation timed out|no route to host|network is unreachable|host is unreachable|could not resolve|name or service not known|unknown host|connection closed by|closed by foreign host|connection reset by|unable to connect to remote host|host key verification failed|kex_exchange_identification|permission denied \(|command not found|too many authentication failures|received disconnect from|disconnected from|connection to \S+ closed|bad port)|^[ \t]*%[ \t]*(?:connection|destination unreachable|unknown command or computer name|bad ip address|host|invalid input)`)
 
 // jumpFailLine is the hop's line saying the jump failed ("" for none), cut
 // to a readable length, escape sequences and control characters out.

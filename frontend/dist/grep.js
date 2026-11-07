@@ -118,19 +118,26 @@ async function bootGrepWindow() {
     return s;
   }
   const shownHits = res => res.files.reduce((n, f) => n + f.hits.length, 0);
+  // Each search is numbered: Enter during a search starts another, and the
+  // answer of the older one (a slow share) could arrive after the newer's
+  // and replace it. Only the newest search's answer is shown.
+  let searchSeq = 0;
   async function search() {
     const req = request();
     if (!req.query) { q.focus(); return; }
     opts = { regex: req.regex, cs: req.caseSensitive, days: req.days, noHit: noHit.checked }; saveOpts();
+    const seq = ++searchSeq;
     go.disabled = true; sum.textContent = t("検索中…"); sum.style.color = "";
     try {
       const res = await G().Search(req);
+      if (seq !== searchSeq) return; // a newer search is running: its answer counts
       last = { req, res };
       for (const k in open) delete open[k];
       draw();
       sum.textContent = summary(res);
       copyBtn.disabled = saveBtn.disabled = !res.files.length && !res.noHit.length;
     } catch (e) {
+      if (seq !== searchSeq) return;
       last = null; draw();
       sum.textContent = t("検索できません") + ": " + terr(e); sum.style.color = "var(--err)";
       copyBtn.disabled = saveBtn.disabled = true;

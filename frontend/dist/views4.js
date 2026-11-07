@@ -44,11 +44,19 @@ function schedDeviceList(sc) {
   }
   return (INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group) && d.enabled && !d.cliOff).map(d => d.name);
 }
+// The named devices of a schedule that are no longer in its group (deleted
+// or moved since): they are not run, so they are not counted as devices.
+function schedGoneNames(sc) {
+  if (!sc.names) return [];
+  const have = new Set((INV.devices || []).filter(d => (sc.ungrouped ? !d.group : d.group === sc.group)).map(d => d.name));
+  return sc.names.filter(n => !have.has(n));
+}
 function schedDevicesLabel(sc) {
   const g = sc.ungrouped ? t("（グループ未設定）") : sc.group;
-  const names = schedDeviceList(sc);
+  const gone = new Set(schedGoneNames(sc));
+  const names = schedDeviceList(sc).filter(n => !gone.has(n));
   const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? t(" ほか {n} 台", { n: names.length - 4 }) : "");
-  return t("{g}：{n} 台（{list}）", { g, n: names.length, list: shown || t("なし") });
+  return t("{g}：{n} 台（{list}）", { g, n: names.length, list: shown || t("なし") }) + (gone.size ? t("（削除済み {n} 台）", { n: gone.size }) : "");
 }
 // The commands it sends: the set chosen for it, or each device's own set.
 function schedCommandsLabel(sc) {
@@ -372,13 +380,17 @@ function editSchedule(sc, prefill) {
   // The default end time is a whole hour at least an hour away (an hour from
   // 10:59:58 rounded down was 11:00:00 — before a start 5 seconds away).
   const later = new Date(Date.now() + 2 * 3600000);
+  // A slot without a date and time (a new one) starts at the next whole
+  // hour — date and time taken together, so at 23:30 it is tomorrow 00:00
+  // and not today 00:00 (a time already past).
+  const nh = nextHourAt();
   let slots = (s.slots || []).map(x => {
     const sec = slotPeriodSec(x) || 60;
     // A new slot says "60 秒" (typing 10 then means 10 seconds); a saved
     // one shows its period in the largest whole unit.
     const unit = x.unit || unitOf(sec);
     const [ud, ut] = (x.until || "").split(" ");
-    return { kind: x.kind, date: x.date || todayStr(0), time: x.time || nextHourStr(), weekdays: x.weekdays || [],
+    return { kind: x.kind, date: x.date || nh.date, time: x.time || nh.time, weekdays: x.weekdays || [],
       // A copy (prefill) of an interval schedule that already started: the
       // copy starts when saved (its old start is in the past and would be
       // refused).
@@ -391,6 +403,9 @@ function editSchedule(sc, prefill) {
       // start (moving it to today restarted the count and the clock).
       orig: sc ? { date: x.date || "", time: x.time || "", untilDate: ud || "" } : null };
   });
+  // A new one-off (a copy of a schedule that ran, say) at a time already
+  // past starts at the next whole hour, like one switched to 1回だけ.
+  if (!sc) slots.forEach(sl => { if (sl.kind === "once") slotToFuture(sl); });
   const grpVal = s.ungrouped ? RUN_UNGROUPED : (s.group || "");
   // The schedule's command set no longer exists: shown as such, selected,
   // and the save refuses it (the first option used to be picked quietly,
@@ -418,7 +433,8 @@ function editSchedule(sc, prefill) {
         <b id="sc-count" style="margin-left:auto"></b>
       </div>
       <div id="sc-devs" class="panel sc-devs"></div>
-      <div class="muted" style="font-size:11px;margin-top:2px">${esc(t("Shift＋クリックでまとめて選べます"))}</div></div>
+      <div class="muted" style="font-size:11px;margin-top:2px">${esc(t("Shift＋クリックでまとめて選べます"))}</div>
+      ${sc && schedGoneNames(sc).length ? `<div style="font-size:12px;margin-top:4px;color:var(--warn)">${esc(t("この予約の機器のうち削除済み（保存すると外れます）: {s}", { s: schedGoneNames(sc).join(", ") }))}</div>` : ""}</div>
 
     <div class="field"><label>${esc(t("③ 何を実行しますか"))}</label>
       <label class="row-inline" style="gap:8px;font-weight:normal;cursor:pointer"><input type="radio" name="sc-cmdmode" value="set" style="width:auto" ${typed.length ? "" : "checked"}> ${esc(t("コマンドセットから選ぶ"))}</label>
@@ -510,9 +526,14 @@ function editSchedule(sc, prefill) {
       // Its period starts at 60 秒 (in seconds, so typing 10 means 10 seconds)
       // and it ends after 10 times — the same as a new one.
       if (kind === "interval" && slots[i].kind !== "interval") Object.assign(slots[i], { startNow: true, unit: 1, every: 60, end: "count", count: 10 });
+      // Switched to 1回だけ, or a repeat switched to 日時を指定: a date and
+      // time already past (毎日 03:00 kept its 03:00, with today's date)
+      // move to the next whole hour, so the save is not refused at once.
+      const kindWas = slots[i].kind, wasNow = slots[i].startNow;
       slots[i].kind = kind;
       // Dates and times are kept in slots[i] by their pickers as they change.
       if (q(".sl-start") && kind === "interval") slots[i].startNow = q(".sl-start").value === "now";
+      if ((kind === "once" && kindWas !== "once") || (kind === "interval" && wasNow && !slots[i].startNow)) slotToFuture(slots[i]);
       if (q(".sl-every")) {
         // As typed (1.5 時間 is 90 minutes); checked at 保存, not cut down.
         slots[i].every = Number(q(".sl-every").value) || 0;
@@ -523,6 +544,17 @@ function editSchedule(sc, prefill) {
       }
       if (q(".sl-wd")) slots[i].weekdays = [...row.querySelectorAll(".sl-wd:checked")].map(x => +x.value);
     });
+  }
+  // A one-off (or a repeat's start) at a date and time already past: the
+  // next whole hour (tomorrow's 00:00 after 23:00). A saved slot's own
+  // time is left alone (the save decides what to say about it).
+  function slotToFuture(sl) {
+    if (sl.orig && sl.date === sl.orig.date && sl.time === sl.orig.time) return;
+    const p2 = n => String(n).padStart(2, "0");
+    const now = new Date();
+    if (`${sl.date} ${sl.time}` >= `${ymd(now)} ${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`) return;
+    const nh = nextHourAt();
+    sl.date = nh.date; sl.time = nh.time;
   }
   const kinds = [["once", "1回だけ"], ["daily", "毎日"], ["weekly", "毎週"], ["interval", "一定間隔で繰り返す"]];
   function renderSlots() {
@@ -552,7 +584,7 @@ function editSchedule(sc, prefill) {
           <label class="row-inline" style="gap:6px;font-weight:normal;cursor:pointer"><input type="radio" class="sl-end" name="${endName}" value="never" style="width:auto" ${sl.end === "never" ? "checked" : ""}>${esc(t("止めるまで続ける"))}</label>
           </div>
         </div>
-        ${sl.end === "never" ? `<div style="font-size:12px;margin-top:4px;color:var(--warn)">${esc(t("⚠ 「⏸ 止める」を押すまで、ずっと続きます"))}</div>` : ""}` : ""}
+        <div class="sl-never-warn" style="font-size:12px;margin-top:4px;color:var(--warn);display:${sl.end === "never" ? "" : "none"}">${esc(t("⚠ 「⏸ 止める」を押すまで、ずっと続きます"))}</div>` : ""}
       </div>`;
     }).join("") + (slots.length > 1 ? `<div class="muted" style="font-size:12px">${esc(t("この予約には日時が複数あります（以前の版で作ったもの）。別の時刻にしたいときは、予約を分けて作るのがおすすめです"))}</div>` : "");
     slotBox.querySelectorAll(".sl-date-host").forEach(host => {
@@ -564,8 +596,14 @@ function editSchedule(sc, prefill) {
       const sl = slots[+host.dataset.i];
       mountTimePicker(host, sl.time, v => { sl.time = v; });
     });
-    // Picking a value next to a radio picks the radio too.
-    const pickEnd = (host, v) => { const r = host.closest("[data-slot]").querySelector(`.sl-end[value="${v}"]`); if (r) r.checked = true; };
+    // Picking a value next to a radio picks the radio too — and the
+    // 止めるまで warning follows the radio (it stayed when the radio moved).
+    const pickEnd = (host, v) => {
+      const row = host.closest("[data-slot]"), r = row.querySelector(`.sl-end[value="${v}"]`);
+      if (r) r.checked = true;
+      const warn = row.querySelector(".sl-never-warn");
+      if (warn) warn.style.display = v === "never" ? "" : "none";
+    };
     slotBox.querySelectorAll(".sl-until-date-host").forEach(host => {
       const sl = slots[+host.dataset.i];
       if (sl.untilDate < todayStr(0) && !(sl.orig && sl.untilDate === sl.orig.untilDate)) sl.untilDate = todayStr(0);
@@ -614,15 +652,25 @@ function editSchedule(sc, prefill) {
       // but only after the confirmation; said here instead, like the
       // repeat's start below (the saved time of an edit is kept).
       if (x.kind === "once") {
+        // The saved time of an edit, already past (the one-off ran, or
+        // was missed): the backend refuses it too, but only after the
+        // confirmation — said here, with what to do instead.
         const kept = x.orig && x.date === x.orig.date && x.time === x.orig.time;
-        if (!kept && `${x.date} ${x.time}` < stamp(new Date())) { toast(t("① の日時が過ぎています。今より後の時刻にしてください"), "err"); return; }
+        if (`${x.date} ${x.time}` < stamp(new Date())) {
+          toast(kept ? t("① の日時が過ぎています。日時を直すか、一覧の「複製」で新しい予約を作ってください") : t("① の日時が過ぎています。今より後の時刻にしてください"), "err");
+          return;
+        }
         continue;
       }
       if (x.kind !== "interval") continue;
       const sec = x.every * x.unit;
       if (!(sec > 0) || Math.abs(sec - Math.round(sec)) > 1e-6) { toast(t("① の間隔は秒単位で割り切れる数で入れてください（例 1.5 時間 = 90 分）"), "err"); return; }
       if (Math.round(sec) < 10) { toast(t("① の間隔は 10 秒以上にしてください"), "err"); return; }
+      // The backend's limits (schedule.go MaxInterval / MaxCount), said
+      // before the confirmation like the ones above.
+      if (Math.round(sec) > SCHED_MAX_INTERVAL_SEC) { toast(t("① の間隔は 7 日以内にしてください"), "err"); return; }
       if (x.end === "count" && !(Number.isInteger(x.count) && x.count >= 1)) { toast(t("① の回数を 1 以上の整数で入れてください"), "err"); return; }
+      if (x.end === "count" && x.count > SCHED_MAX_COUNT) { toast(t("① の回数は {n} 回以内にしてください", { n: SCHED_MAX_COUNT }), "err"); return; }
       // A start already behind would silently drop the firings before now
       // (they are never caught up on) — unless it is the saved one, kept.
       const start = x.startNow ? stamp(new Date()) : `${x.date} ${x.time}`;
@@ -668,7 +716,7 @@ function editSchedule(sc, prefill) {
     // Over the editor (not in its place): 戻って直す keeps everything typed.
     if (!(await subConfirm(`<b>${esc(sc ? t("この内容で保存しますか？") : t("この内容で予約しますか？"))}</b><br>${lines.join("<br>")}`, t("保存"), t("戻って直す"), "primary"))) return;
     obj = build(new Date(Date.now() + 5000));
-    obj.name = schedAutoName(obj);
+    obj.name = schedNameFor(obj, sc);
     try {
       await App().SaveSchedule(obj);
       closeModal(); toast(t("予約を保存しました（止めるときは一覧の「⏸ 止める」）"), "ok");
@@ -686,11 +734,34 @@ function schedAutoName(sc) {
   const when = (sc.slots || []).length ? slotLabel(sc.slots[0]) + (sc.slots.length > 1 ? t(" ほか") : "") : "";
   return [g, cmd, when].join(t("・"));
 }
-
-function nextHourStr() {
-  const d = new Date(Date.now() + 3600000);
-  return `${String(d.getHours()).padStart(2, "0")}:00:00`;
+// The name to save a schedule under. A name the user has seen stays when
+// it is not the one made from the schedule (an older version's naming, a
+// "（2）" given below): an edit used to rename it every time. A new name
+// the list already has (two schedules of the same group, set and time)
+// gets "（2）", "（3）" … so the list and the 実行記録 tell them apart.
+function schedNameFor(obj, sc) {
+  if (sc && sc.name && sc.name !== schedAutoName(sc)) return sc.name;
+  const base = schedAutoName(obj);
+  const taken = new Set(((schedTab.data && schedTab.data.list) || []).filter(x => x.id !== obj.id).map(x => x.name));
+  let name = base;
+  for (let k = 2; taken.has(name); k++) name = base + t("（{n}）", { n: k });
+  return name;
 }
+
+// The backend's limits of a repeat (schedule.go MinInterval / MaxInterval /
+// MaxCount): checked here first so the confirmation is not shown for a
+// schedule the save would refuse.
+const SCHED_MAX_INTERVAL_SEC = 7 * 24 * 3600;
+const SCHED_MAX_COUNT = 100000;
+
+// The next whole hour as a date and a time: tomorrow's 00:00 after 23:00
+// (the time alone, with today's date, was a time already past).
+function nextHourAt() {
+  const d = new Date();
+  d.setHours(d.getHours() + 1, 0, 0, 0);
+  return { date: ymd(d), time: `${String(d.getHours()).padStart(2, "0")}:00:00` };
+}
+function nextHourStr() { return nextHourAt().time; }
 
 // ---- date / time pickers ----
 // WebView2 does not open the native popup of <input type="date">, and typing
@@ -708,7 +779,7 @@ function parseYmd(s) {
 }
 function dateLabel(s) {
   const d = parseYmd(s);
-  return `${s}（${t(WEEKDAYS[d.getDay()])}）`;
+  return t("{d}（{w}）", { d: s, w: t(WEEKDAYS[d.getDay()]) });
 }
 
 // mountDatePicker puts a date button in host; a click opens a month
@@ -727,17 +798,25 @@ function mountDatePicker(host, value, onChange, opts) {
     if (!pop) return;
     pop.remove(); pop = null;
     document.removeEventListener("mousedown", outside, true);
+    document.removeEventListener("keydown", onKey, true);
     window.removeEventListener("resize", close);
     document.removeEventListener("scroll", close, true);
   };
   const outside = e => { if (pop && !host.contains(e.target) && !pop.contains(e.target)) close(); };
+  // Esc closes the calendar alone (before the dialog's own Esc, app.js,
+  // which used to cancel the whole editor).
+  const onKey = e => { if (e.key === "Escape" && pop) { e.preventDefault(); e.stopImmediatePropagation(); close(); btn.focus(); } };
   // Fixed to the window, under the button — or above it when the window
-  // has no room below (inside a dialog it was cut off at the bottom).
+  // has no room below (inside a dialog it was cut off at the bottom). In
+  // page pixels: the rect and the window size are in window pixels, which
+  // differ by the page zoom (app.js uiZoom; the calendar sat off its
+  // button at 125 %).
   const place = () => {
-    const r = btn.getBoundingClientRect(), ph = pop.offsetHeight, pw = pop.offsetWidth;
-    const below = r.bottom + 4 + ph <= window.innerHeight - 8;
-    pop.style.top = (below ? r.bottom + 4 : Math.max(8, r.top - 4 - ph)) + "px";
-    pop.style.left = Math.min(r.left, window.innerWidth - pw - 8) + "px";
+    const z = uiZoom(), r = btn.getBoundingClientRect(), ph = pop.offsetHeight, pw = pop.offsetWidth;
+    const top = r.top / z, bottom = r.bottom / z, left = r.left / z, W = window.innerWidth / z, H = window.innerHeight / z;
+    const below = bottom + 4 + ph <= H - 8;
+    pop.style.top = (below ? bottom + 4 : Math.max(8, top - 4 - ph)) + "px";
+    pop.style.left = Math.max(0, Math.min(left, W - pw - 8)) + "px";
   };
   btn.onclick = () => {
     if (pop) { close(); return; }
@@ -767,6 +846,7 @@ function mountDatePicker(host, value, onChange, opts) {
     draw();
     place();
     document.addEventListener("mousedown", outside, true);
+    document.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", close);
     // Scrolling the dialog would leave the calendar behind: close it.
     setTimeout(() => document.addEventListener("scroll", close, true), 0);

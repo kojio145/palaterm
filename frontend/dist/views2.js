@@ -23,7 +23,7 @@ function renderCommands() {
       ${listViewDragCell(LV)}
       <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
-      <td class="mono muted cs-preview" data-view="${esc(s.name)}" style="cursor:pointer"><div class="clip" data-tip="${esc((s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
+      <td class="mono muted cs-preview" data-view="${esc(s.name)}" style="cursor:pointer"><div class="clip" data-tip="${esc(t("クリックで別窓に表示（「表示」と同じ）") + "\n\n" + (s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
       <td class="ops"><div class="ops-btns">
         <button class="btn sm act-view" data-view="${esc(s.name)}" data-tip="${esc(t("読み取り専用の別窓で開きます（端末窓の横に置いて見ながら打てます）"))}">${esc(LANG === "ja" ? "表示" : t("コマンドセット:表示"))}</button>
         <button class="btn sm act-edit" data-edit="${esc(s.name)}">${esc(t("編集"))}</button>
@@ -35,7 +35,7 @@ function renderCommands() {
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("メニュー:コマンドセット"))}</div>
-        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書き出し（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます"))}</div></div>
+        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群"))}${hintI(t("書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます"))}</div></div>
       <div class="row-inline">
         <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
@@ -120,7 +120,10 @@ function bulkCommandsDialog(onAdd) {
   };
   ov.querySelector("#bulk-cancel").onclick = close;
   ov.querySelector("#bulk-ok").onclick = ok;
-  ta.addEventListener("keydown", e => {
+  // On the window, not the text box alone: Esc (and Ctrl+Enter) work with
+  // the focus on a button too (the page's own Esc handler leaves a small
+  // window to itself, so Esc used to do nothing there).
+  ov.addEventListener("keydown", e => {
     if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); ok(); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
   });
@@ -153,7 +156,7 @@ function editCommandSet(set, tpl) {
     </table></div>
     <button class="btn sm" id="add-cmd" type="button" style="margin-top:8px">${esc(t("＋ 行を追加"))}</button>
     <button class="btn sm" id="bulk-cmd" type="button" style="margin-top:8px" data-tip="${esc(t("複数のコマンドを 1 行 1 コマンドで入力して一度に追加します（待機はすべて 1 秒）"))}">${esc(t("＋ まとめて追加…"))}</button>
-    <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}</div>
+    <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
@@ -227,7 +230,9 @@ function editCommandSet(set, tpl) {
         cmds = collect();
         const lines = txt.split("\n").map(l => l.trim()).filter(l => l);
         const add = lines.map(text => ({ text, pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec, wait: "" }));
-        cmds.splice(i, 1, ...add);
+        // A row that holds a command keeps it: the pasted lines go in
+        // below it (pasting over a typed row used to replace the row).
+        if (cmds[i].text.trim()) cmds.splice(i + 1, 0, ...add); else cmds.splice(i, 1, ...add);
         render();
       }
     }));
@@ -256,17 +261,28 @@ function editCommandSet(set, tpl) {
     if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
     const commands = collect().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
+    let renamed = false;
     try {
       // An edited set may have been renamed: move it (and the devices that
       // use it) to the new name first, then save the commands under it.
-      if (set && name !== set.name) await App().RenameCommandSet(set.name, name);
+      if (set && name !== set.name) {
+        await App().RenameCommandSet(set.name, name);
+        // The rename took: a save that fails after it must not rename once
+        // more on the next try (「既にあります」 — the set could never be saved).
+        set.name = name;
+        renamed = true;
+      }
       // A new set must not land on an existing name (SaveCommandSet replaces
       // by name: a typo of "backup" used to overwrite backup's 30 lines).
       if (set) await App().SaveCommandSet({ name, commands, pauseOff: !usePause.checked });
       else await App().CreateCommandSet({ name, commands, pauseOff: !usePause.checked });
       closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
     }
-    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
+    catch (e) {
+      toast(t("保存失敗") + ": " + terr(e), "err");
+      // The list behind the editor shows the new name (the rename is saved).
+      if (renamed) await refreshInventory().catch(() => {});
+    }
   };
 }
 
@@ -290,9 +306,16 @@ function runLidNote() {
 // say 中止中… and the completion toast can say what was stopped.
 let cancelling = false;
 // Devices the last run left unfinished: real failures plus the ones 中止 cut
-// off or never started. Both can be re-run with one button.
+// off or never started. Both can be re-run with one button. A row's ⚡ that
+// failed is in too (fix the login, ⚡ it, then ↻ the lot — user decision
+// 2026-11-07: as it always was).
 function unfinishedNames() {
   return Object.keys(runState).filter(n => ["error", "canceled"].includes((runState[n] || {}).phase));
+}
+// The backend's copy of the last batch (what an unlock puts back on the
+// table) goes with the results it kept. Older builds have no such call.
+function discardLastRun() {
+  if (typeof App().DiscardLastRun === "function") App().DiscardLastRun().catch(() => {});
 }
 // Group last chosen with the run tab's group selector (kept across re-renders
 // so the selector and the heading show what is targeted).
@@ -494,10 +517,13 @@ function renderRun() {
   const th = (k, label, w) => `<th ${w ? `style="width:${w}"` : ""} class="sortable" tabindex="0" data-sort="${k}" data-tip="${esc(t("クリックで並び替え"))}">${esc(label)}${sortArrow(k)}</th>`;
   const vals = Object.values(runState);
   const failedCount = vals.filter(s => s.phase === "error").length;
-  const canceledCount = vals.filter(s => s.phase === "canceled").length;
-  const retryLabel = failedCount && canceledCount ? t("↻ 失敗・中止のみ再実行（{n}台）", { n: failedCount + canceledCount })
-    : canceledCount ? t("↻ 中止分のみ再実行（{n}台）", { n: canceledCount })
-    : t("↻ 失敗のみ再実行（{n}台）", { n: failedCount });
+  // ↻ counts the rows it would re-run (unfinishedNames).
+  const unfinished = unfinishedNames().map(n => runState[n]);
+  const retryFailed = unfinished.filter(s => s.phase === "error").length;
+  const retryCanceled = unfinished.filter(s => s.phase === "canceled").length;
+  const retryLabel = retryFailed && retryCanceled ? t("↻ 失敗・中止のみ再実行（{n}台）", { n: retryFailed + retryCanceled })
+    : retryCanceled ? t("↻ 中止分のみ再実行（{n}台）", { n: retryCanceled })
+    : t("↻ 失敗のみ再実行（{n}台）", { n: retryFailed });
   const hasResults = vals.length > 0;
   const groups = INV.deviceGroups || [];
   const ungroupedCount = (INV.devices || []).filter(d => !d.group).length;
@@ -511,7 +537,7 @@ function renderRun() {
   const html = `
     <div class="page-head">
       <div><div class="page-title">${esc(t("実行"))}${runGroupSel ? ` <span style="font-size:15px;font-weight:600;color:var(--accent)">${esc(runGroupSel === RUN_UNGROUPED ? runGroupLabel() : t("グループ「{g}」", { g: runGroupSel }))}</span>` : ""}</div>
-        <div class="page-sub"${fewChecked ? ' style="color:var(--warn)"' : ""}>${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台（チェック=実行対象。Shift+クリックで範囲をまとめて切替）", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
+        <div class="page-sub"${fewChecked ? ' style="color:var(--warn)"' : ""}>${esc(runGroupSel ? (filtered ? t("絞り込み中: 表示 {b} 台のうち対象 {a} 台（表示されている機器だけが実行されます）", { a: enabledCount, b: visible.length }) : t("対象 {a} / {b} 台", { a: enabledCount, b: devs.length })) : t("まず「グループで対象を選択…」から実行するグループを選んでください"))}${runGroupSel && !filtered ? hintI(t("チェック＝実行対象。Shift+クリックで範囲をまとめて切替")) : ""}${runGroupSel ? " " + gridDraftBadge(runGroupSel, true) : ""}</div></div>
       <div class="row-inline" style="gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
         <div class="run-stat" style="margin-left:0">
           <div>${esc(t("成功"))} <b id="rc-ok" style="color:var(--ok)">0</b></div>
@@ -526,10 +552,10 @@ function renderRun() {
       </div>
     </div>
     <div class="run-toolbar">
-      <button class="btn run" id="btn-run" ${running || enabledCount === 0 ? "disabled" : ""}>${esc(filtered ? t("▶ 表示中の {n} 台を実行", { n: enabledCount }) : t("▶ 一括実行"))}</button>
-      <button class="btn" id="btn-dry" ${running || enabledCount === 0 ? "disabled" : ""} data-tip="${esc(t("接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に"))}">${esc(t("⚡ 接続確認のみ"))}</button>
+      <button class="btn run" id="btn-run" ${running || (enabledCount === 0 && !runFilter.exact) ? "disabled" : ""}>${esc(filtered ? t("▶ 表示中の {n} 台を実行", { n: enabledCount }) : t("▶ 一括実行"))}</button>
+      <button class="btn" id="btn-dry" ${running || (enabledCount === 0 && !runFilter.exact) ? "disabled" : ""} data-tip="${esc(t("接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に"))}">${esc(t("⚡ 接続確認のみ"))}</button>
       <button class="btn danger" id="btn-cancel" ${running && !cancelling ? "" : "disabled"}>${esc(cancelling ? t("中止中…") : t("■ 中止"))}</button>
-      ${!running && (failedCount || canceledCount) ? `<button class="btn err-outline" id="btn-retry">${esc(retryLabel)}</button>` : ""}
+      ${!running && (retryFailed || retryCanceled) ? `<button class="btn err-outline" id="btn-retry">${esc(retryLabel)}</button>` : ""}
       ${!running && failedCount ? `<button class="btn" id="btn-fail-csv" data-tip="${esc(t("エラーになった機器を、機器名・IP・拠点・接続方式・踏み台・エラー内容の表（CSV）にして export\\run-results に書き出します。パスワードは含みません"))}">${esc(t("⇩ エラーの機器をCSV出力（{n}台）", { n: failedCount }))}</button>` : ""}
       ${runGroupSel && devs.length ? `<button class="btn" id="btn-tile" ${tileCount === 0 ? "disabled" : ""} data-tip="${esc(t("チェックした実行対象の機器（絞り込み中は表示中の機器だけ）の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）。「踏み台: 使わない」もこの窓に効きます"))}">${esc(t("並べて接続（{n}台）", { n: tileCount }))}</button>` : ""}
       ${!running && hasResults ? `<button class="btn" id="btn-clear" data-tip="${esc(t("表の結果を消して全機器を「順番待ち」に戻します（ログは残ります）"))}">${esc(t("✕ 結果をクリア"))}</button>` : ""}
@@ -693,7 +719,7 @@ function renderRun() {
   if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
   // The 📂 button belongs to the results: it goes with them.
-  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; lastRunAfter = null; renderRun(); };
+  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; lastRunAfter = null; discardLastRun(); renderRun(); };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const btnRunDir = document.getElementById("btn-rundir");
   if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
@@ -732,32 +758,7 @@ function renderRun() {
   wireGridBadges(root);
   const runGrp = document.getElementById("run-grp");
   if (runGrp) runGrp.onchange = async () => {
-    // Results (and the 失敗のみ再実行 button) belong to the previous group's
-    // run — warn before dropping them along with the switch.
-    const failed = unfinishedNames().length;
-    if (failed) {
-      const ok = await uiConfirm({
-        title: t("実行結果のクリア"),
-        message: t("グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。<br>切り替えますか？", { n: failed }),
-        okLabel: t("切り替える"),
-        danger: true,
-      });
-      if (!ok) { runGrp.value = runGroupSel; return; }
-    }
-    for (const k in runState) delete runState[k];
-    lastRunDir = ""; // the 📂 folder was the previous group's run
-    lastRunAfter = null; // and so was the 作業後 run of ⇄ 作業前と比較
-    runFilter.exact = ""; // the one-device view named a device of the previous group
-    // Each device keeps its own チェック state — switching groups no longer
-    // rewrites Enabled flags, so selections survive group changes.
-    runGroupSel = runGrp.value;
-    // 踏み台を使わない is for the group it was chosen for: another group
-    // starts from its devices' own settings again — said, since on site
-    // the choice has to be made again for every group.
-    const wasDirect = runDirect;
-    runDirect = false;
-    renderRun(); // the heading names the group: no toast on top
-    if (wasDirect && runGroupSel) toast(t("踏み台の選択を「機器の設定どおり」に戻しました（グループごとに選び直してください）"), "warn");
+    if (!(await runSwitchGroup(runGrp.value))) runGrp.value = runGroupSel;
   };
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
@@ -779,6 +780,39 @@ function renderRun() {
   root.querySelectorAll("[data-watch]").forEach(el => el.onclick = () => App().OpenWatchWindow(el.dataset.watch).catch(e => toast(t("画面を開けません") + ": " + terr(e), "err")));
   wireConnectButtons(root, () => runDirect);
   updateCounts();
+}
+
+// The run tab moves to group sel (the selector, and OS タイプ's 保存して接続
+// 確認へ). Results (and the 失敗のみ再実行 button) belong to the previous
+// group's run — asked about before they go; false when the user keeps them
+// (the group stays). The caller redraws when render is false.
+async function runSwitchGroup(sel, render = true) {
+  const failed = unfinishedNames().length;
+  if (failed) {
+    const ok = await uiConfirm({
+      title: t("実行結果のクリア"),
+      message: t("グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。<br>切り替えますか？", { n: failed }),
+      okLabel: t("切り替える"),
+      danger: true,
+    });
+    if (!ok) return false;
+  }
+  for (const k in runState) delete runState[k];
+  lastRunDir = ""; // the 📂 folder was the previous group's run
+  lastRunAfter = null; // and so was the 作業後 run of ⇄ 作業前と比較
+  runFilter.exact = ""; // the one-device view named a device of the previous group
+  discardLastRun(); // an unlock would put the previous group's results back
+  // Each device keeps its own チェック state — switching groups no longer
+  // rewrites Enabled flags, so selections survive group changes.
+  runGroupSel = sel;
+  // 踏み台を使わない is for the group it was chosen for: another group
+  // starts from its devices' own settings again — said, since on site
+  // the choice has to be made again for every group.
+  const wasDirect = runDirect;
+  runDirect = false;
+  if (render) renderRun(); // the heading names the group: no toast on top
+  if (wasDirect && runGroupSel) toast(t("踏み台の選択を「機器の設定どおり」に戻しました（グループごとに選び直してください）"), "warn");
+  return true;
 }
 
 // Backend messages that flow through untranslated get their known phrases
@@ -1002,18 +1036,21 @@ async function startRun(dryRun) {
   // {enable}) sends it wherever that line points: named here, with the
   // note that such a run is logged masked whatever the setting says.
   const secretNote = secretCommandNote(req0, targets);
+  // The notes both confirmations carry: devices with nothing to run (no
+  // set, a deleted set, an empty one), a password in a command line, the
+  // route (踏み台を使わない / 自分の踏み台 not registered).
+  const noSetNote = noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ 実行するコマンドが無い機器 {n} 台はログインのみで終わります（セット未割り当て・削除済み・空のセット。ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "";
+  const extraNote = noSetNote + secretNote + directNote(runDirect, targets);
   // A command set that changes the device (conf t / write / reload …) gets
   // its own warning with an explicit acknowledgement before anything runs.
   const warnings = await App().CheckDangerousCommands(runRequest(targets, false)).catch(() => []);
   if (warnings && warnings.length) {
-    if (!(await dangerConfirm(warnings, targets.length, scope, runStage, secretNote))) return;
+    if (!(await dangerConfirm(warnings, targets.length, scope, runStage, extraNote))) return;
   } else {
-    const stage = (runSetSel ? `<br><span style="font-size:12px;color:var(--accent)">${esc(t("コマンド（今回のみ）: {s}", { s: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text).join(" / ") : runSetSel }))}</span>` : "")
-      + (noSet.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ コマンドセット未割り当ての機器 {n} 台はログインのみで終わります（ログはログイン画面だけ）: {list}", { n: noSet.length, list: noSet.slice(0, 10).join(", ") + (noSet.length > 10 ? " …" : "") }))}</span>` : "")
-      + secretNote;
+    const stage = (runSetSel ? `<br><span style="font-size:12px;color:var(--accent)">${esc(t("コマンド（今回のみ）: {s}", { s: runSetSel === RUN_ADHOC ? runAdHocCommands().map(c => c.text).join(" / ") : runSetSel }))}</span>` : "");
     const ok = await uiConfirm({
       title: t("一括実行"),
-      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + directNote(runDirect, targets),
+      message: stageBanner(runStage) + t("{s}<b>{n} 台</b>に一括実行します。よろしいですか？", { s: scope, n: targets.length }) + stage + extraNote,
       okLabel: stageRunLabel(runStage),
     });
     if (!ok) return;
@@ -1113,12 +1150,17 @@ async function confirmRerun(names) {
   const warnings = await App().CheckDangerousCommands(req).catch(() => []);
   if (warnings && warnings.length) {
     const scope = runGroupSel ? t("グループ「<b>{g}</b>」の ", { g: esc(runGroupLabel()) }) : "";
-    return dangerConfirm(warnings, names.length, scope, req.stage);
+    // What the re-run sends (the batch's set, stage, folder, route), as the
+    // plain question says it.
+    return dangerConfirm(warnings, names.length, scope, req.stage, rerunDetail());
   }
   return null; // nothing to warn about: the caller asks its own question
 }
 
 async function doRun(names, dryRun, partial, keepRows) {
+  // A start the backend refuses (RunWith throws) puts the table back as it
+  // was — the previous results and ↻ included.
+  const keep = { rows: { ...runState }, req: lastRunReq, dry: lastRunDry, targets: runTargets, totals: runTotals, start: runStartMs };
   // A full run starts from a clean table; a partial re-run (失敗・中断のみ)
   // resets only its own rows, so the devices that already finished keep
   // showing 完了 and their ログ表示 link. keepRows does the same for a
@@ -1135,13 +1177,22 @@ async function doRun(names, dryRun, partial, keepRows) {
   if (partial && lastRunDir && !dryRun) req.retryDir = lastRunDir; else delete req.retryDir;
   if (!partial) lastRunReq = req;
   lastRunDry = !!dryRun;
-  targets.forEach(n => runState[n] = { phase: "queued" });
+  targets.forEach(n => {
+    // dry: a check's row, told apart from the batch's (unfinishedNames).
+    // keptLog: a finished row's log, back on the row once a ⚡ of it ends
+    // (a check writes no log, so its last event would clear the link).
+    const prev = runState[n] || {};
+    const row = { phase: "queued", dry: !!dryRun };
+    if (dryRun && prev.logPath) row.keptLog = prev.logPath;
+    runState[n] = row;
+  });
   cancelling = false;
-  // For the overall ETA: how many commands each target will run.
+  // For the overall ETA: how many commands each target will run (none on
+  // a check: the estimate is the connections, not 計測中…).
   runTargets = targets.slice();
   runTotals = {};
   targets.forEach(n => {
-    runTotals[n] = reqCommandCount(req, runDev(n));
+    runTotals[n] = dryRun ? 0 : reqCommandCount(req, runDev(n));
   });
   runStartMs = Date.now();
   clearInterval(etaTimer);
@@ -1150,7 +1201,15 @@ async function doRun(names, dryRun, partial, keepRows) {
   runPower = null;
   renderRun();
   try { await App().RunWith(req); }
-  catch (e) { toast(t("実行開始に失敗") + ": " + terr(e), "err"); running = false; renderRun(); }
+  catch (e) {
+    toast(t("実行開始に失敗") + ": " + terr(e), "err");
+    running = false; cancelling = false;
+    clearInterval(etaTimer); etaTimer = 0;
+    for (const k in runState) delete runState[k];
+    Object.assign(runState, keep.rows);
+    lastRunReq = keep.req; lastRunDry = keep.dry; runTargets = keep.targets; runTotals = keep.totals; runStartMs = keep.start;
+    renderRun();
+  }
 }
 
 // ---- overall ETA（予想残り時間） ----
@@ -1200,7 +1259,8 @@ function computeEta() {
   const slots = [], queued = [];
   for (const n of runTargets) {
     const st = runState[n] || {};
-    const pauses = devPauses(n);
+    // No commands on this device (a 接続確認): no pauses to wait out either.
+    const pauses = n in runTotals && runTotals[n] === 0 ? [] : devPauses(n);
     const full = avgConn + avgExec * (runTotals[n] || 0) + sum(pauses);
     switch (st.phase) {
       case "running": { const r = devEtaSec(n, st); slots.push(r == null ? avgExec * (st.total || 0) + sum(pauses) : r); break; }
@@ -1402,7 +1462,9 @@ function wireEvents() {
       // The log is written while the device runs, so ログ表示 is there from
       // the connection on; the last event says which file was kept (none
       // when nothing was read).
-      logPath: ["done", "error", "canceled"].includes(ev.phase) ? (ev.logPath || "") : (ev.logPath || prev.logPath),
+      logPath: ["done", "error", "canceled"].includes(ev.phase) ? (ev.logPath || prev.keptLog || "") : (ev.logPath || prev.logPath),
+      // A check's row, and the log it had before the check (doRun).
+      dry: prev.dry, keptLog: prev.keptLog,
       // 中止 pressed on this row, until the device's last event.
       stopping: !["done", "error", "canceled"].includes(ev.phase) && !!prev.stopping };
     // Hundreds of devices send events in bursts: one re-render per frame.
@@ -1445,12 +1507,14 @@ function applyRunDone(payload) {
     runState[r.device] = {
       phase: r.success ? "done" : (r.canceled ? "canceled" : "error"),
       message: r.success ? (r.logPath || (wasDry ? t("接続・ログイン OK（コマンドは送っていません）") : "")) : r.error,
-      logPath: r.logPath,
+      // A check writes no log: the row's log from before it stays (doRun).
+      logPath: r.logPath || prev.keptLog || "",
       output: r.output || "",
       done: r.success ? prev.total : prev.done,
       total: prev.total,
       startedAt: prev.startedAt, connectAt: prev.connectAt, finishedAt: prev.finishedAt || Date.now(),
       warnings: r.warnings || [],
+      dry: prev.dry != null ? prev.dry : wasDry,
     };
   });
   // The batch stopped on an internal error (logged in data\error.log):
@@ -1469,8 +1533,15 @@ function applyRunDone(payload) {
   // Clear the "実行中" notice on the settings tab (unless mid-edit).
   else if (active && active.id === "tab-settings" && !settingsDirty && !myLoginsDirty) renderSettings();
   // Results the backend kept across a lock (restoreRunFromBackend): back on
-  // the table, without the completion toasts of a run that just ended.
+  // the table, without the completion toasts of a run that just ended. The
+  // stage is not moved on again (the page's storage kept the moved one).
   if (payload && payload.restored) {
+    // ⇄ 作業前と比較 for a 作業後 batch, as for one that ends on the page.
+    const stage = lastRunReq ? (lastRunReq.stage || "") : "";
+    if (!wasDry && !wasCancel && !internalErr && stage === "after" && runDir) {
+      lastRunAfter = { dir: runDir, group: (lastRunReq && lastRunReq.group) || "" };
+      if (active && active.id === "tab-run") renderRun();
+    }
     toast(t("ロック前の一括実行の結果を表に戻しました"), "ok");
     return;
   }
@@ -1546,7 +1617,7 @@ function renderSettings() {
       </div>
       <div class="grid-2">
         <div class="field"><label>${esc(t("コマンドタイムアウト（秒）"))}</label><input id="set-cmt" type="number" value="${s.commandTimeout ?? 30}"></div>
-        <div class="field"><label>${esc(t("ログ保存フォルダ"))}</label>
+        <div class="field"><label>${esc(t("ログ保存フォルダ"))}${hintI(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</label>
           <div class="row-inline" style="gap:6px">
             <input id="set-dir" style="flex:1" value="${esc(s.logDir || "logs")}">
             <button class="btn sm" id="set-dir-pick" type="button">${esc(t("参照…"))}</button>
@@ -1582,8 +1653,8 @@ function renderSettings() {
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px"><input id="set-rc-confirm" type="checkbox" ${s.rightClickPasteConfirm ? "checked" : ""}> ${esc(t("マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）"))}</label></div>
       <div class="field"><label><span data-tip="${esc(t("機器一覧・実行タブの「並べて接続」で開いた窓を、最初から同時入力オンにするかどうかです。オフ（既定）なら、同時入力は各窓の「同時入力」ボタンで必要な窓だけオンにします。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続の同時入力 ⓘ"))}</span></label>
         <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal"><input id="set-tile-bcast" type="checkbox" ${s.tiledBroadcast ? "checked" : ""}> ${esc(t("並べて接続した窓を同時入力オンで開く（既定: オフ）"))}</label>
-        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px;align-items:flex-start"><input id="set-tile-keep" type="checkbox" ${s.tileKeepMain ? "checked" : ""} style="margin-top:3px"> <span data-tip="${esc(t("並べた端末窓がこの画面（実行タブ）を覆わないようにします。1 画面のときは右端にメイン窓の幅ぶんを空けて並べ、2 画面ならメイン窓と別の画面に並べます。変更は、このあと開く窓から反映されます"))}">${esc(t("並べて接続でメイン窓の場所を空ける（1 画面のとき右端にメイン窓の幅ぶんを空け、2 画面ならメイン窓と別の画面に並べる） ⓘ"))}</span></label></div>
-      <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー。フォルダ名は {date} {time} {hhmm} {group} {stage} のみ）:"))}</div>
+        <label class="row-inline" style="gap:8px;cursor:pointer;font-weight:normal;margin-top:4px;align-items:flex-start"><input id="set-tile-keep" type="checkbox" ${s.tileKeepMain ? "checked" : ""} style="margin-top:3px"> <span data-tip="${esc(t("並べた端末窓がこの画面（実行タブ）を覆わないようにします。1 画面のときは右端にメイン窓の幅ぶんを空けて並べ、2 画面ならメイン窓と別の画面に並べます。変更は、このあと開く窓から反映されます"))}" class="hint-text">${esc(t("並べて接続でメイン窓の場所を空ける ⓘ"))}</span></label></div>
+      <div class="muted" style="font-size:12px;margin-top:2px">${esc(t("テンプレートに使える変数（クリックでコピー）:"))}${hintI(t("フォルダ名のテンプレートには {date} {time} {hhmm} {group} {stage} だけが使えます。ファイル名にはすべての変数が使えます"))}</div>
       <table class="ph-table"><tbody>
         <tr><td class="mono">{host}</td><td>${esc(t("機器名"))}</td><td class="mono">{date}</td><td>${esc(t("日付（yyyymmdd）"))}</td></tr>
         <tr><td class="mono">{ip}</td><td>${esc(t("IPアドレス"))}</td><td class="mono">{time}</td><td>${esc(t("時刻（hhmmss）"))}</td></tr>
@@ -1592,12 +1663,11 @@ function renderSettings() {
         <tr><td class="mono">{role}</td><td colspan="3">${esc(t("役割（機器編集の「役割（任意）」。空なら詰められます）"))}</td></tr>
         <tr><td class="mono">{stage}</td><td colspan="3">${esc(t("作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve・指定なし=Current。上の欄で変更可。予約で指定なしのときは reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます"))}</td></tr>
       </tbody></table>
-      <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</div>
       <div class="modal-actions"><button class="btn primary" id="set-save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button></div>
     </div>
     <div class="panel" style="padding:22px;max-width:620px;margin-top:16px" id="my-bastion">
       <div style="font-weight:600;margin-bottom:4px">${esc(t("自分の踏み台"))}</div>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書き出し・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("人ごとに秘密鍵が違う社内の踏み台など（最大 5 段・手前から順）"))}${hintI(t("社内の踏み台など、人ごとに秘密鍵が違う踏み台を登録します（最大5段・外側＝手前から順に）。機器の編集で「自分の踏み台（設定タブ）を先に通る」にチェックした機器は、ここの踏み台を順に通ってから、機器ごとの踏み台・機器へ進みます。この PC の vault にだけ保存され、一式書き出し・CSV には入りません（機器には「使う」ことだけが保存されます）。"))}</div>
       <div id="mb-rows"></div>
       <button class="btn sm" id="mb-add" type="button" style="margin-top:6px">${esc(t("＋ 踏み台を追加"))}</button>
       ${(INV.myBastions || []).some(b => b.host) ? `<button class="btn sm warn-outline" id="mb-forget-keys" type="button" style="margin:6px 0 0 8px" data-tip="${esc(t("自分の踏み台のホストキーの記録を消します。踏み台を交換した（鍵が変わった）ときだけ。次の接続で新しい鍵を記録します"))}">${esc(t("この踏み台のホストキーを忘れる（交換したとき）"))}</button>` : ""}
@@ -1606,7 +1676,7 @@ function renderSettings() {
     ${screenColorsPanelHTML()}
     <div class="panel" style="padding:22px;max-width:620px;margin-top:16px;border-color:var(--err)">
       <div style="font-weight:600;margin-bottom:4px;color:var(--err)">${esc(t("危険な操作"))}</div>
-      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワードを削除して、はじめての起動の状態に戻します（ログと export フォルダは残ります）。マスターパスワードの入力と 2 回の確認があります。"))}</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">${esc(t("すべてのデータを消して、はじめての起動の状態に戻します（ログと export は残ります）"))}${hintI(t("すべての機器・グループ・コマンドセット・OSタイププロファイル・マスターパスワードを削除して、はじめての起動の状態に戻します（ログと export フォルダは残ります）。マスターパスワードの入力と 2 回の確認があります。"))}</div>
       <button class="btn danger" id="set-reset" type="button">${esc(t("すべてのデータをリセット（初期化）"))}</button>
     </div>`;
   renderMyBastion();
@@ -1652,10 +1722,32 @@ function renderSettings() {
     if (btn) btn.click();
   };
   document.getElementById("set-save").onclick = async () => {
+    // The numbers: an empty field is its default, a value outside the range
+    // is refused at the field (an empty 並列数 used to save as 0 = no limit,
+    // an empty ロック as never, a timeout of 0 as a run that cannot wait).
+    const num = (id, def, min, max, what) => {
+      const el = document.getElementById(id);
+      const raw = el.value.trim();
+      const v = raw === "" ? def : Number(raw);
+      if (!Number.isInteger(v) || v < min || v > max) {
+        fieldError(el, t("{what}は {min}〜{max} の整数で入力してください（空欄なら {def}）", { what, min, max, def }));
+        return null;
+      }
+      el.value = v; // an empty field shows the default it saves as
+      return v;
+    };
+    const maxParallel = num("set-par", 10, 0, 200, t("最大並列数"));
+    if (maxParallel === null) return;
+    const connectTimeout = num("set-ct", 20, 1, 3600, t("接続タイムアウト"));
+    if (connectTimeout === null) return;
+    const commandTimeout = num("set-cmt", 30, 1, 3600, t("コマンドタイムアウト"));
+    if (commandTimeout === null) return;
+    const lockMin = num("set-lock", 30, 0, 1440, t("自動ロック"));
+    if (lockMin === null) return;
     const out = {
-      maxParallel: parseInt(document.getElementById("set-par").value, 10) || 0,
-      connectTimeout: parseInt(document.getElementById("set-ct").value, 10) || 20,
-      commandTimeout: parseInt(document.getElementById("set-cmt").value, 10) || 30,
+      maxParallel,
+      connectTimeout,
+      commandTimeout,
       // Without the quotes Explorer's パスのコピー puts around it (the
       // backend also checks the folder can be made, and says why not).
       logDir: document.getElementById("set-dir").value.trim().replace(/^["']+|["']+$/g, "").trim() || "logs",
@@ -1668,7 +1760,6 @@ function renderSettings() {
       stageTokenSchedule: document.getElementById("set-st-sched").value.trim(),
       stageTokenNone: document.getElementById("set-st-none").value.trim(),
     };
-    const lockMin = parseInt(document.getElementById("set-lock").value, 10);
     out.autoLockOff = !(lockMin > 0);
     out.autoLockMin = lockMin > 0 ? lockMin : 30;
     out.maskLogSecrets = !!document.getElementById("set-mask").checked;
@@ -1683,9 +1774,21 @@ function renderSettings() {
     if (!document.getElementById("set-join-off").checked && (isNaN(joinH) || joinH < 0 || joinH > 168)) { toast(t("作業中をまとめる時間は 1〜168 の時間で入力してください（空欄なら 12 時間）"), "err"); return; }
     out.workJoinHours = document.getElementById("set-join-off").checked ? -1 : joinH;
     document.getElementById("set-dir").value = out.logDir;
-    try { await App().SaveSettings(out); settingsDirty = false; await refreshInventory(); toast(t("保存しました"), "ok"); }
+    try { await App().SaveSettings(out); settingsDirty = false; await settingsPanelSaved(); toast(t("保存しました"), "ok"); }
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
+}
+
+// After one of the settings tab's panels is saved: INV read again and the
+// tab redrawn — unless the other panel holds edits not saved yet, which the
+// redraw would throw away (then INV alone is renewed and the form stays;
+// the saved panel's redraw is the caller's, when it has one).
+async function settingsPanelSaved() {
+  if (!(settingsDirty || myLoginsDirty)) { await refreshInventory(); return false; }
+  INV = await App().GetInventory();
+  if (!INV.devices) INV.devices = [];
+  if (!INV.commandSets) INV.commandSets = [];
+  return true;
 }
 
 // 自分の踏み台: the user's own jump host chain (model Inventory.MyBastions,
@@ -1782,7 +1885,9 @@ function renderMyBastion() {
     try {
       await App().SaveMyBastions(chain);
       myLoginsDirty = false;
-      await refreshInventory();
+      // The settings panel above holds unsaved edits: this panel alone is
+      // redrawn from what was saved.
+      if (await settingsPanelSaved()) renderMyBastion();
       toast(chain.some(b => b.host) ? t("保存しました") : t("自分の踏み台の登録を消しました"), "ok");
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
@@ -1805,7 +1910,7 @@ function renderOSTypes() {
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(LANG === "ja" ? "OSタイプ" : t("メニュー:OSタイプ"))}</div>
-        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（expect/send）。待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルのJSONは export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても読み込みで戻せます。書き出しは「機器」タブの一式書き出しにまとまっています"))}</div></div>
+        <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（待つ文字 → 送る文字）"))}${hintI(t("待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルの JSON は export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても「読み込み」で戻せます。書き出しは「機器一覧」の一式書き出しに含まれます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="prof-add">${esc(t("＋ OSタイプを追加"))}</button>
@@ -2011,9 +2116,12 @@ function editProfile(prof, tpl) {
       if (!saved) return;
       const devs = (INV.devices || []).filter(d => d.osType === saved.key && !d.cliOff);
       if (!devs.length) { toast(t("この OS タイプの機器がまだありません。機器の編集で OS タイプに「{n}」を選んでから、実行タブの「⚡ 接続確認のみ」で試せます", { n: saved.name }), "warn"); return; }
+      // A batch going on the run tab is left alone (its group, its rows).
+      if (running) { toast(t("一括実行中のため実行タブは切り替えません。終了後に実行タブの「⚡ 接続確認のみ」で試せます"), "warn"); return; }
       if (!runGroupSel || !devs.some(d => (d.group || "") === (runGroupSel === RUN_UNGROUPED ? "" : runGroupSel))) {
-        for (const k in runState) delete runState[k];
-        runGroupSel = devs[0].group || RUN_UNGROUPED;
+        // As the run tab's own group selector: the previous group's results
+        // (and ↻) are asked about before they go.
+        if (!(await runSwitchGroup(devs[0].group || RUN_UNGROUPED, false))) { toast(t("前回の実行結果を残したため、実行タブのグループは切り替えませんでした"), "warn"); return; }
       }
       runFilter.text = saved.name; runFilter.site = ""; runFilter.status = "";
       await switchTab("run");
@@ -2114,7 +2222,10 @@ async function unlockNotices() {
         "<br>" + esc(t("新しい版の PalaTerm を使うことをお勧めします。この版では読み取り専用で開きます。")),
       buttons: [{ id: "edit", label: t("この版で編集する（新しい版の設定は消えます）"), cls: "danger" }, { id: "ro", label: t("読み取り専用で開く"), cls: "primary" }],
     });
-    if (c === "edit") { await App().AllowOlderSave(); toast(t("この版で保存できるようにしました"), "warn"); }
+    if (c === "edit") {
+      try { await App().AllowOlderSave(); toast(t("この版で保存できるようにしました"), "warn"); }
+      catch (e) { toast(t("この版で保存できるようにできませんでした（読み取り専用のままです）") + ": " + terr(e), "err"); }
+    }
     else toast(t("読み取り専用で開いています（変更は保存されません）"), "warn");
   }
 }

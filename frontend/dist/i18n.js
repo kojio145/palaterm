@@ -28,18 +28,98 @@ function t(s, vars) {
 // pattern table (patterns replace in place, so a translated fragment inside a
 // longer wrapped error also converts).
 function terr(e) {
-  let s = String(e ?? "");
+  const s = String(e ?? "");
   if (LANG === "ja") return s;
+  return terrEN(s);
+}
+
+// terrEN(s) — the English of one backend message: the table, then the
+// patterns over the whole message. When Japanese is left, a "name: message"
+// wrapper (a device name from "%s: %w", a column label from the list
+// conversion) is split at its first ": " and the part after it is tried on
+// its own; the head stays (translated when it is a column label, a table
+// entry or a prefix pattern), and the split wins only when it leaves less
+// Japanese than the whole-message pass.
+function terrEN(s) {
   if (I18N_EN[s] !== undefined) return I18N_EN[s];
+  const out = terrPatterns(s);
+  if (!RE_JA.test(out)) return out;
+  const i = s.indexOf(": ");
+  if (i > 0 && i + 2 < s.length) {
+    const head = s.slice(0, i), tail = s.slice(i + 2);
+    const tt = terrEN(tail);
+    if (tt !== tail) {
+      let th = colLabelEN(head);
+      if (th === head) th = terrPatterns(head + ": ").replace(/: $/, "");
+      const joined = th + ": " + tt;
+      if (countJA(joined) < countJA(out)) return joined;
+    }
+  }
+  return out;
+}
+
+function terrPatterns(s) {
   for (const [re, rep] of I18N_EN_PATTERNS) {
     if (re.test(s)) s = s.replace(re, rep);
   }
   return s;
 }
 
+const RE_JA = /[぀-ヿ㐀-鿿]/;
+function countJA(s) { return (s.match(/[぀-ヿ㐀-鿿]/g) || []).length; }
+
+// colLabelEN(label) — the English of a table column's Japanese label
+// (csvio.FieldLabel: "機器名", "踏み台1_ホスト"…), as the table shows it;
+// anything else comes back as it is.
+function colLabelEN(label) {
+  const m = /^踏み台(\d)_(.+)$/.exec(label);
+  if (m) return t("踏み台{n}_", { n: m[1] }) + t(m[2]);
+  return I18N_EN[label] !== undefined ? I18N_EN[label] : label;
+}
+
 // Backend messages that carry a dynamic value.
 const STAGE_LBL = { "作業前": "before", "作業中": "during", "作業後": "after", "予約": "schedule", "指定なし": "not set" };
 const I18N_EN_PATTERNS = [
+  // ---- 2026-11-07 review fixes (FX3/FX5/FX6): whole-message patterns first ----
+  [/^機器 (\d+) 台がこの OS タイプを使用中のため削除できません（(.+?)）。機器の OS タイプを変えてから削除してください$/, "Cannot delete: $1 device(s) use this OS type ($2). Change their OS type first"],
+  [/^並列実行数は 0〜(\d+) で入力してください（0 = 制限なし）$/, "Enter a parallel count from 0 to $1 (0 = no limit)"],
+  [/^自動ロックまでの分数は 0〜(\d+) で入力してください$/, "Enter the auto-lock minutes from 0 to $1"],
+  [/^接続タイムアウトは 1〜(\d+) 秒で入力してください$/, "Enter a connect timeout from 1 to $1 seconds"],
+  [/^コマンドタイムアウトは 1〜(\d+) 秒で入力してください$/, "Enter a command timeout from 1 to $1 seconds"],
+  [/^(ログファイル名|ログフォルダ名)の書式が空の名前になります（\{host\} や \{date\} などを入れてください）$/, (m, a) => `The ${a === "ログファイル名" ? "log file name" : "log folder name"} template makes an empty name (use {host}, {date} and the like)`],
+  [/^(ログファイル名|ログフォルダ名)の書式に「(.+?)」は使えません$/, (m, a, b) => `The ${a === "ログファイル名" ? "log file name" : "log folder name"} template cannot contain "${b}"`],
+  [/^(ログファイル名|ログフォルダ名)の書式に制御文字（改行・タブなど）が含まれています$/, (m, a) => `The ${a === "ログファイル名" ? "log file name" : "log folder name"} template contains control characters (line breaks, tabs…)`],
+  [/^(ログファイル名|ログフォルダ名)の書式に Windows のファイル名に使えない文字（(.)）が含まれています$/, (m, a, b) => `The ${a === "ログファイル名" ? "log file name" : "log folder name"} template contains a character Windows does not allow in names (${b})`],
+  [/^(ログファイル名|ログフォルダ名)の書式の「(.+?)」は Windows の予約名のため使えません$/, (m, a, b) => `"${b}" in the ${a === "ログファイル名" ? "log file name" : "log folder name"} template is a Windows reserved name`],
+  [/^(ログファイル名|ログフォルダ名)の書式の「(.+?)」は末尾のドットや空白のため使えません$/, (m, a, b) => `"${b}" in the ${a === "ログファイル名" ? "log file name" : "log folder name"} template ends in a dot or a space`],
+  [/^コマンドセット「(.+?)」が見つかりません$/, 'Command set "$1" not found'],
+  [/^コマンドセット「(.+?)」が見つからないためログインのみ$/, 'Command set "$1" not found: login only'],
+  [/^同じ COM ポート（(.+?)）の機器が終わるのを待っています$/, "Waiting for the device on the same COM port ($1) to finish"],
+  [/^ページャ解除を飛ばしました: (.*)$/, "pager disable skipped: $1"],
+  [/^機器が新しい暗号方式に対応していない可能性があります。機器の編集画面で「レガシー暗号を許可」を有効にしてください（ssh dial (.*)）$/, 'The device may not support the newer cipher suites. Turn on "Allow legacy ciphers" in the device editor [ssh dial $1]'],
+  [/^ユーザー名またはパスワードが違います（ssh dial (.*)）$/, "Wrong username or password [ssh dial $1]"],
+  [/^ユーザー名またはパスワードが違います（またはサーバが受け付ける認証方式と合いません）（ssh dial (.*)）$/, "Wrong username or password (or it does not match the authentication methods the server accepts) [ssh dial $1]"],
+  [/^公開鍵が受け付けられませんでした。この秘密鍵に対応する公開鍵がサーバのユーザー「(.+?)」に登録されているか、ユーザー名が合っているかを確認してください（ssh dial (.*)）$/, 'The public key was refused. Check that the public key for this private key is registered for user "$1" on the server, and that the username is correct [ssh dial $2]'],
+  [/^機器側が接続直後に切断しました（VTY の ACL・同時接続数の上限・SSH 鍵未生成のいずれか）（ssh dial (.*)）$/, "The device closed the connection right after it was made (a VTY ACL, the session limit, or no SSH key generated) [ssh dial $1]"],
+  [/^接続はできましたが応答・認証が時間内に終わりません（認証サーバーの遅延など）（ssh dial (.*)）$/, "Connected, but the response / authentication did not finish in time (a slow authentication server, for example) [ssh dial $1]"],
+  [/^(.+?): 機器側が接続直後に切断しました（VTY の ACL・同時接続数の上限・SSH 鍵未生成のいずれか）（(.*)）$/, "$1: the device closed the connection right after it was made (a VTY ACL, the session limit, or no SSH key generated) [$2]"],
+  [/^(.+?): 接続はできましたが応答・認証が時間内に終わりません（認証サーバーの遅延など）（(.*)）$/, "$1: connected, but the response / authentication did not finish in time (a slow authentication server, for example) [$2]"],
+  [/^踏み台(\d)が空のまま踏み台(\d)があります。踏み台\dを入力するか、踏み台\dの欄を踏み台\dへ移してください$/, "Jump host $1 is empty while jump host $2 is filled in. Fill in jump host $1, or move jump host $2's values to jump host $1"],
+  [/^(.+?): OSタイプ「(.+?)」は登録されていません$/, (m, a, b) => `${colLabelEN(a)}: OS type "${b}" does not exist`],
+  [/^(.+?): コマンドセット「(.+?)」は登録されていません$/, (m, a, b) => `${colLabelEN(a)}: command set "${b}" does not exist`],
+  // ---- 2026-11-07 review fixes (FX3/FX5/FX6): whole-message patterns first ----
+  [/^(\s*)([!#]) 手で確認（(.+?)）: /, (m, a, b, c) => `${a}${b} check by hand (${t(c)}): `],
+  [/^(.+?) の中の変更$/, "change inside $1"],
+  [/^前回のログが見つかりません: (.+)$/, "The last session's log was not found: $1"],
+  [/^(.+?) に書けません（(.+)）。書き込める場所に PalaTerm を置くか、「結果をコピー」で貼り付けてください$/, 'Cannot write to $1 ($2). Put PalaTerm somewhere writable, or use "Copy results" and paste them'],
+  [/^プロファイル「(.+?)」のプロンプトが長すぎます（([0-9]+) 文字まで）$/, 'Profile "$1": the prompt is too long ($2 characters at most)'],
+  [/^プロファイル「(.+?)」のプロンプトが複雑すぎます（短くしてください）$/, 'Profile "$1": the prompt is too complex (shorten it)'],
+  [/^プロファイル「(.+?)」のページ送りプロンプトが長すぎます（([0-9]+) 文字まで）$/, 'Profile "$1": the pager prompt is too long ($2 characters at most)'],
+  [/^プロファイル「(.+?)」のページ送りプロンプトが複雑すぎます（短くしてください）$/, 'Profile "$1": the pager prompt is too complex (shorten it)'],
+  [/^プロファイル「(.+?)」の待つ文字列が長すぎます（([0-9]+) 文字まで）$/, 'Profile "$1": a wait-for text is too long ($2 characters at most)'],
+  [/^プロファイル「(.+?)」の待つ文字列が複雑すぎます（短くしてください）$/, 'Profile "$1": a wait-for text is too complex (shorten it)'],
+  // runner.shellName: a hop whose prompt showed no user@host is just 踏み台.
+  [/^踏み台 (?=で |の ssh が )/, "the jump host "],
   // Backend messages found untranslated in the 2026-10-18 review, and the
   // messages added with it.
   [/^公開鍵が受け付けられませんでした。この秘密鍵に対応する公開鍵がサーバのユーザー「(.+?)」に登録されているか、ユーザー名が合っているかを確認してください$/, 'The public key was refused. Check that the public key for this private key is registered for user "$1" on the server, and that the username is correct'],
@@ -80,10 +160,10 @@ const I18N_EN_PATTERNS = [
   [/^踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください）$/, "Jump host #$1 has no host (to skip this hop, leave all of its cells empty)"],
   // The list conversion's check of a field the rule does not map (the
   // preview's row error, and the rule editor's warning with a row count).
-  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください）（この項目はルールで紐付けていません）$/, "$1: jump host #$2 has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule"],
-  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください） — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, "$1: jump host #$2 has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule ($3 rows). The rows cannot be imported as they are"],
-  [/^(.+?): (.+?)（この項目はルールで紐付けていません）$/, "$1: $2 (this field is not mapped in the rule)"],
-  [/^(.+?): (.+?) — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, "$1: $2 — this field is not mapped in the rule ($3 rows). The rows cannot be imported as they are"],
+  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください）（この項目はルールで紐付けていません）$/, (m, a, b) => `${colLabelEN(a)}: jump host #${b} has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule`],
+  [/^(.+?): 踏み台(\d)のホストが空です（この段を使わないなら踏み台\dの欄をすべて空にしてください） — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, (m, a, b, c) => `${colLabelEN(a)}: jump host #${b} has no host (to skip this hop, leave all of its cells empty) — this field is not mapped in the rule (${c} rows). The rows cannot be imported as they are`],
+  [/^(.+?): (.+?)（この項目はルールで紐付けていません）$/, (m, a, b) => `${colLabelEN(a)}: ${terrEN(b)} (this field is not mapped in the rule)`],
+  [/^(.+?): (.+?) — この項目はルールで紐付けていません（(\d+) 行）。このままでは取り込めません$/, (m, a, b, c) => `${colLabelEN(a)}: ${terrEN(b)} — this field is not mapped in the rule (${c} rows). The rows cannot be imported as they are`],
   [/^OSタイプ「(.+)」は登録されていません$/, "OS type \"$1\" does not exist"],
   [/^コマンドセット「(.+)」は登録されていません$/, "Command set \"$1\" does not exist"],
   [/^グループ「(.+)」に「(.+)」が重複しています$/, "\"$2\" appears more than once in group \"$1\""],
@@ -166,8 +246,8 @@ const I18N_EN_PATTERNS = [
   [/^機器CSVが読めません: /, "Cannot read the devices CSV: "],
   [/^機器CSV: /, "Devices CSV: "],
   [/^コマンドセット「(.+?)」が読めません: /, 'Cannot read command set "$1": '],
-  [/^OSプロファイル「(.+?)」が読めません: /, 'Cannot read OS profile "$1": '],
-  [/^OSプロファイル「(.+?)」: /, 'OS profile "$1": '],
+  [/^OSプロファイル「(.+?)」が読めません: /, 'Cannot read OS type profile "$1": '],
+  [/^OSプロファイル「(.+?)」: /, 'OS type profile "$1": '],
   [/(.+?) の ssh が (.+?) と暗号方式を合意できません（(.*)）。機器が古い方式しか持たない場合は踏み台のジャンプコマンド欄で -o オプションを指定してください/, "ssh on $1 cannot agree on algorithms with $2 ($3). If the device only has old ones, add -o options in the jump host's jump command"],
   [/踏み台で使うユーザー名に使えない文字（空白・記号 ; \| & \$ など）が含まれています: /, "The username typed on the jump host contains characters that cannot be used (spaces or ; | & $ …): "],
   [/^グループ「(.+)」が見つかりません$/, 'Group "$1" not found'],
@@ -185,9 +265,10 @@ const I18N_EN_PATTERNS = [
   [/USBシリアル変換が見つからず、COMポートが複数あります（(.+?)）。機器の編集でCOMポートを指定してください/, (m, l) => `No USB serial adapter found and several COM ports exist (${l}). Choose the COM port in the device editor`],
   [/(?:no serial ports found — )?COMポートが見つかりません。USBシリアル変換ケーブルの接続を確認してください/, "No COM port found. Check that the USB-serial adapter is connected and its driver is installed"],
   // ログ設定: 作業タイミングの付与文字列の検証（logstore.StageTokens.Validate）
-  [/^(作業前|作業中|作業後)の付与文字列 (.+) は Windows の予約名のため使えません$/, (m, a, b) => `Stage word for "${STAGE_LBL[a]}" ${b} is a reserved name on Windows`],
-  [/^(作業前|作業中|作業後)と(作業前|作業中|作業後)の付与文字列が同じです: (.+)$/, (m, a, b, c) => `Stage words for "${STAGE_LBL[a]}" and "${STAGE_LBL[b]}" are the same: ${c}`],
-  [/^(作業前|作業中|作業後)の付与文字列 (.+) は「(作業前|作業中|作業後|指定なし)」の既定語なので使えません$/, (m, a, b, c) => `Stage word for "${STAGE_LBL[a]}" ${b} is the default word of "${STAGE_LBL[c]}" and cannot be used`],
+  [/^(作業前|作業中|作業後|予約|指定なし)の付与文字列 (.+) は Windows の予約名のため使えません$/, (m, a, b) => `Stage word for "${STAGE_LBL[a] || a}" ${b} is a reserved name on Windows`],
+  [/^(作業前|作業中|作業後|予約|指定なし)と(作業前|作業中|作業後|予約|指定なし)の付与文字列が同じです: (.+)$/, (m, a, b, c) => `Stage words for "${STAGE_LBL[a] || a}" and "${STAGE_LBL[b] || b}" are the same: ${c}`],
+  [/^(作業前|作業中|作業後|予約|指定なし)の付与文字列 (.+) は「(作業前|作業中|作業後|予約|指定なし)」の既定語なので使えません$/, (m, a, b, c) => `Stage word for "${STAGE_LBL[a] || a}" ${b} is the default word of "${STAGE_LBL[c] || c}" and cannot be used`],
+  [/^(作業前|作業中|作業後|予約|指定なし)の付与文字列にアンダースコア（_）は使えません（フォルダ名の区切りに使うため）: (".*")$/, (m, a, b) => `Stage word for "${STAGE_LBL[a] || a}" cannot contain an underscore (_), which separates the parts of a folder name: ${b}`],
   [/^「(.+)」は既に登録されています$/, '"$1" is already registered'],
   [/^機器名「(.+)」はグループ「(.+)」に既にあります$/, 'Group "$2" already has a device named "$1"'],
   [/^機器名「(.+)」はグループ未設定の機器に既にあります$/, 'An ungrouped device is already named "$1"'],
@@ -246,12 +327,12 @@ const I18N_EN_PATTERNS = [
   [/^マスターパスワードが違うか、vaultを開けません$/, "Wrong master password, or the vault could not be opened"],
   [/^PalaTerm の vault ファイルではありません（data\\palaterm_vault\.enc に別のファイルが置かれています）$/, "Not a PalaTerm vault file (something else sits at data\\palaterm_vault.enc)"],
   [/^enable（昇格）パスワードが受け付けられませんでした。機器の編集画面の enable パスワード（グループ既定を使う機器はグループの既定）を確認してください/, "The enable (privilege) password was not accepted. Check the enable password in the device's editor (the group's credentials for a device that uses them)"],
+  [/^踏み台1段目（(.+?)）/, "jump host #1 ($1)"],
+  [/^踏み台経由の (\S+)/, "$1 through the jump hosts"],
   [/^(.+?) に接続できません（応答がありません）。アドレスとポート、この PC からその機器へ通信できるか（VPN・踏み台の要否）を確認してください（(.*)）$/, "Could not reach $1 (no answer). Check the address and port, and that this PC can reach the device (VPN, jump host needed?) [$2]"],
   [/^(.+?) に接続を拒否されました。ポート番号と、機器側で SSH \/ Telnet が有効か（アクセス制限がないか）を確認してください（(.*)）$/, "Connection to $1 refused. Check the port number and that SSH / Telnet is enabled on the device (and not restricted by an access list) [$2]"],
   [/^(.+?) のホスト名を解決できません。アドレスのつづりと DNS を確認してください（(.*)）$/, "Cannot resolve the host name $1. Check the spelling of the address and DNS [$2]"],
   [/^(.+?) へのネットワーク経路がありません。この PC のネットワーク（VPN・踏み台の要否）を確認してください（(.*)）$/, "No network route to $1. Check this PC's network (VPN, jump host needed?) [$2]"],
-  [/^踏み台1段目（(.+?)）/, "jump host #1 ($1)"],
-  [/^踏み台経由の (\S+)/, "$1 through the jump hosts"],
   [/^ページャ解除コマンド「(.+?)」が通りませんでした（(.*?)）。出力の途中停止は --More-- への応答で続けます$/, 'The pager-disable command "$1" did not go through ($2). Paused output is continued by answering --More--'],
   [/^ページャ解除コマンド「(.+?)」を機器が受け付けませんでした: (.*)$/, 'The device refused the pager-disable command "$1": $2'],
   // Fragments inside other messages (applied after the whole-message ones).
@@ -444,7 +525,7 @@ const I18N_EN = {
   "⚠ 結論: 作業中に設定した内容のうち {m} / {c} 件が、{b} 台で作業後に反映されていません（{a} 台はすべて反映）": "⚠ Verdict: {m} of {c} setting lines are NOT present afterwards on {b} device(s) ({a} fully reflected)",
   "判定対象外 {n} 台（作業ログ無し、または設定コマンド無し）": "{n} device(s) not judged (no work log, or no setting commands)",
   "※ 作業中のログから設定コマンド行を抜き出し、作業後のログ（show running-config 等）にその設定があるかを 1 件ずつ照合しています（省略形・暗号化されたパスワード・まとめられた VLAN 一覧なども照合。？ はログからは判定できない行）": "Setting lines are extracted from the work log and each is looked up in the after log (e.g. show running-config), allowing for abbreviations, encrypted passwords and merged VLAN lists. ? marks a line the logs cannot tell.",
-  "結論を出せません: 作業後のログで照合できる設定がありません（作業後に show running-config 等を取得してください）": "No verdict: nothing in the after log can be checked against (capture show running-config or the like after the work)",
+  "結論を出せません: 作業後のログで照合できる設定がありません（作業後に show running-config 等を取得してください）": "No verdict: nothing in the after log can be checked against (capture show running-config or the like in the after run)",
   "✅ 結論: 作業中に設定した内容（{c} 件）のうち、作業後に反映されていないものはありません（全 {n} 台・要確認 {u} 件）": "✅ Verdict: none of the {c} setting lines entered during the work is missing afterwards (all {n} device(s), {u} to check)",
   "？ 要確認 {u} 件（ログからは判定できない行。未反映には数えていません）": "? {u} line(s) to check (the logs cannot tell; not counted as missing)",
   "{n} 台は作業後のログに設定の表示（show running-config 等）が見当たらないため照合できません": "{n} device(s) could not be checked: the after log shows no configuration (show running-config or the like)",
@@ -520,7 +601,7 @@ const I18N_EN = {
   "別のグループへ移す…": "Move to another group…",
   "機器名の接尾辞を入力してください": "Enter a device name suffix",
   "コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます": "Imports one command set file (CSV or legacy .list)",
-  "OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）": "Imports one OS profile JSON (also restores a deleted built-in profile)",
+  "OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）": "Imports one OS type profile JSON (also restores a deleted built-in profile)",
   "グループを複製": "Duplicate group",
   "グループ「{g}」の既定の認証情報と機器 {n} 台をコピーして新しいグループを作ります。機器名はグループが違えば同じままで構いません。": "Copies group \"{g}\" — its group credentials and {n} device(s) — into a new group. Device names may stay the same, since they only have to be unique within a group.",
   "機器名の接尾辞（任意）": "Device name suffix (optional)",
@@ -536,7 +617,6 @@ const I18N_EN = {
   "並び順を保存しました": "Order saved",
   "単独接続": "Interactive session",
   "作業タイミングの付与文字列（既定: 作業前=before・作業中と対話接続=work・作業後=after・予約=reserve・指定なし=Current。上の欄で変更可。予約で指定なしのときは reserve）。テンプレートに無いときはファイル名の末尾に自動で付きます": "Stage words (defaults: before / work (during and interactive) / after / reserve (schedules) / Current (not set); change them in the fields above. A schedule with no stage uses reserve). Appended to the file name automatically when the template lacks it.",
-  "作業タイミングの付与文字列 ⓘ": "Stage words for {stage} ⓘ",
   "作業前（before）": "before",
   "作業中（work）": "work",
   "作業後（after）": "after",
@@ -804,7 +884,7 @@ const I18N_EN = {
   "予約を実行しました（成功 {a}・失敗 {b}）": "Schedule ran ({a} ok, {b} failed)",
   "Shift＋クリックでまとめて選べます": "Shift+click selects a range",
   "※ conf t・write など、設定を変えるコマンドは使えません": "* Configuration-changing commands (conf t, write, …) are not allowed",
-  "作業の前後のログを比べたいときだけ選びます": "Only to compare the logs from before and after work",
+  "作業の前後のログを比べたいときだけ選びます": "Only to compare the before and after logs",
   "⚠ 「⏸ 止める」を押すまで、ずっと続きます": "⚠ Runs until you press \"⏸ Pause\"",
   "いつ": "When", "{a} ほか {n} 台": "{a} and {n} more", "機器ごとのコマンドセット": "each device's command set",
   "保存するとすぐ始まります": "Starts as soon as saved",
@@ -1043,7 +1123,7 @@ const I18N_EN = {
 
   // ---- command sets tab ----
   "機器ごとに割り当てて一括実行するコマンド群。書き出しは「機器」タブの一式書き出し（グループ単位、または全機器）にまとまっています。ここでは1ファイル（CSV / 旧 .list）を単体で読み込めます":
-    "Command bundles assigned per device and run in batch. Exporting is part of the Devices tab's Export bundle (per group, or all devices); here you can import a single file (CSV / legacy .list).",
+    "Named sets of commands assigned per device and run in batch. Exporting is part of the Devices tab's Export bundle (per group, or all devices); here you can import a single file (CSV / legacy .list).",
   "＋ セットを追加": "+ Add set",
   "コマンドセットがありません。": "No command sets.",
   "名前": "Name",
@@ -1069,7 +1149,7 @@ const I18N_EN = {
   "接続中です": "Still connected",
   "この機器との接続を切断して、ウィンドウを閉じますか？ ログはここまでの内容で保存されます。": "Disconnect from this device and close the window? The log is saved up to this point.",
   "切断して閉じる": "Disconnect and close",
-  "前回と同じく接続確認のみです（コマンドは送りません）": "Login test only, like the last run (no commands are sent)",
+  "前回と同じく接続確認のみです（コマンドは送りません）": "Test login only, like the last run (no commands are sent)",
   "今回だけ入力: {s}": "typed for this run: {s}",
   "{s}（今回のみ）": "{s} (this run only)",
   "機器ごとの設定どおり": "each device's own set",
@@ -1370,7 +1450,7 @@ const I18N_EN = {
   "作業後": "after",
   "接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に": "Connects and logs in only — no commands are sent and no logs are written. A rehearsal for credentials and reachability.",
   "⚡ 接続確認のみ": "⚡ Test login only",
-  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます": "Mark whether this capture is before, during or after the work. It is added to the log folder and file names, and the History & compare tab can compare before with after.",
+  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます": "Mark the stage of this capture: before, during or after. It is added to the log folder and file names, and the History & compare tab can compare before with after.",
   "作業タイミング: {s}": "Stage: {s}",
   "作業タイミング: 指定なし": "Stage: not set",
   "接続確認のみ": "Test login only",
@@ -1390,7 +1470,7 @@ const I18N_EN = {
   "マウス右ボタンでの貼り付けを確認する（メニューの「貼り付け」で貼り付け）": "Confirm pasting with the right mouse button (paste from the menu's \"Paste\")",
   "端末窓で右クリックしたときの動作です（Tera Term の［その他の設定］-［コピーと貼り付け］と同じ 2 項目）。どちらもオフなら、右クリックですぐに貼り付けます（既定）。「無効にする」がオンなら、もう一方は無視されます。変更は、このあと開く対話窓から反映されます": "What a right-click does in the terminal window (the same 2 options as Tera Term's Additional settings > Copy and Paste). With both off, a right-click pastes at once (default). When \"Disable\" is on, the other is ignored. Changes apply to terminal windows opened afterwards.",
   "作業前後の比較で自動では選ばれません。必要ならキャンセルして、実行タブの「作業タイミング」を選んでください": "The before/after comparison will not pick this run automatically. If needed, cancel and choose a stage on the Run tab.",
-  "接続確認が完了しました（OK {a}・失敗 {b}）": "Login test finished (OK {a}, failed {b})",
+  "接続確認が完了しました（OK {a}・失敗 {b}）": "Test login finished (OK {a}, failed {b})",
   "実行が完了しました。実行履歴・比較タブで作業前のログと比較できます": "Run finished. Compare with the before logs in the History & compare tab.",
   "接続・ログイン OK（コマンドは送っていません）": "Connected and logged in (no commands sent)",
   "設定モードに入る": "enters configuration mode",
@@ -1432,7 +1512,7 @@ const I18N_EN = {
   "作業": "Stage",
   "成功 / 失敗": "OK / failed",
   "両方の実行にログがある機器がありません（機器名が一致するログ同士を比べます）": "No device has a log in both runs (logs are paired by device name)",
-  "外部フォルダの機器名はファイル名から日付・時刻と作業の語（前／後・作業前ログ など）を除いて読み取っています。A と B で名前が違うときは、ファイル名をそろえてください": "An external folder's device names are read from the file names, less dates, times and stage words (before / after, 作業前ログ and the like). If A and B name a device differently, make the file names match",
+  "外部フォルダの機器名はファイル名から日付・時刻と作業の語（前／後・作業前ログ など）を除いて読み取っています。A と B で名前が違うときは、ファイル名をそろえてください": "An external folder's device names are read from the file names, minus dates, times and stage words (before / after, 作業前ログ and the like). If A and B name a device differently, make the file names match",
   "（ログなし）": "(no logs)",
   "比較中… {i} / {n} 台": "Comparing… {i} / {n} device(s)",
   "後の行で取り消し・上書き": "undone or replaced by a later line",
@@ -1708,7 +1788,7 @@ const I18N_EN = {
   "編集中のダイアログがあります。言語を切り替えると、その内容は保存されずに失われます。切り替えますか？": "A dialog is open. Switching the language discards what is in it. Switch anyway?",
   "すべてのグループの機器を 1 つの一覧で表示します（どのグループにある機器か探すときに）": "Every group's devices in one list (to find which group a device is in)",
   "認証情報をまとめて変更（パスワードの定期変更など）": "Change credentials in bulk (a password rotation, for example)",
-  "チェックした項目だけが、選択した全機器に設定されます。「グループ既定を使う」機器は、個別の欄が書き換わるだけでログインには既定が使われます。踏み台はその段がある機器にだけ入ります。": "Only the checked fields are set, on every selected device. A device on \"Use group credentials\" gets its own fields rewritten but keeps logging in with the defaults. The jump host fields go only to devices that have that jump host.",
+  "チェックした項目だけが、選択した全機器に設定されます。「グループ既定を使う」機器は、個別の欄が書き換わるだけでログインには既定が使われます。踏み台はその段がある機器にだけ入ります。": "Only the checked fields are set, on every selected device. A device on \"Use group credentials\" gets its own fields rewritten but keeps logging in with the group credentials. The jump host fields go only to devices that have that jump host.",
   "機器のユーザー名": "Device username",
   "機器のパスワード": "Device password",
   "enable パスワード": "Enable password",
@@ -1756,7 +1836,7 @@ const I18N_EN = {
   "グループを選ぶ…": "Choose a group…",
   "IP アドレスまたは DNS で解決できるホスト名（例: 192.0.2.1 / sw01.example.net）": "An IP address, or a host name DNS can resolve (e.g. 192.0.2.1 / sw01.example.net)",
   "IPアドレス / ホスト名 ⓘ": "IP address / host name ⓘ",
-  "踏み台上でコマンドを打つ（標準・ルーターの踏み台も可。表・CSV では「コマンド入力」）": "Type commands on the jump hosts (default; a router can be a jump host. \"コマンド入力\" in the table and CSV)",
+  "踏み台上でコマンドを打つ（標準・ルーターの踏み台も可。表・CSV では「コマンド入力」）": "Type commands on the jump hosts (default; a router can be a jump host. \"Typed commands\" in the table, shell in the CSV)",
   "COM ポートの一覧を読み直します（今挿した USB シリアルを出す）": "Reads the COM port list again (shows a USB-serial adapter plugged in just now)",
   "COM ポート: {n} 件": "COM ports: {n}",
   "COM ポートが見つかりません（USB シリアルの接続とドライバーを確認）": "No COM port found (check the USB-serial adapter and its driver)",
@@ -1780,7 +1860,7 @@ const I18N_EN = {
   "絞り込み（機器名・IP・拠点・役割・OS・コマンドセット）": "Filter (device name, IP, site, role, OS, command set)",
   "グループを切り替えると、前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。<br>切り替えますか？": "Switching the group clears the last run's results and the re-run button ({n} failed / stopped).<br>Switch?",
   "コピー": "Copy",
-  "接続確認の出力": "Login test output",
+  "接続確認の出力": "Test login output",
   "機器（踏み台）が表示した内容の末尾です。パスワードは伏せています。接続確認はログを残さないため、この画面を閉じると消えます": "The end of what the device (or jump host) showed, passwords masked. A login test keeps no log: this is gone once the dialog closes",
   "失敗・中止のみ再実行": "Re-run failed & stopped",
   "失敗・中止した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？": "Re-run only the <b>{n} device(s)</b> that failed or were stopped (finished ones stay)?",
@@ -1899,11 +1979,11 @@ const I18N_EN = {
   "機器の認証情報を含めない（人に渡す用） ⓘ": "Leave out device credentials (for handing over) ⓘ",
   "⚠ 認証情報を含めないチェックが入っていると、「全機器」でも完全なバックアップになりません": "⚠ With a \"leave out credentials\" box ticked, even \"All devices\" is not a complete backup",
   "⚠ OSタイプのログイン手順に、パスワード以外のプロンプトへパスワードを送る行があります。内容を確認してください: {g}": "⚠ An OS type's login steps send a password to a prompt that is not a password prompt. Check them: {g}",
-  "⚠ 「グループ既定を使う」機器がありますが、そのグループに既定の認証情報がありません（機器自身の認証情報で接続します。読み込み後に「グループ既定の認証情報…」で設定してください）: {g}": "⚠ Some devices use their group's default credentials, but that group has none (they connect with their own credentials; set the group defaults after the import with \"Group default credentials…\"): {g}",
+  "⚠ 「グループ既定を使う」機器がありますが、そのグループに既定の認証情報がありません（機器自身の認証情報で接続します。読み込み後に「グループ既定の認証情報…」で設定してください）: {g}": "⚠ Some devices use group credentials, but that group has none (they connect with their own credentials; set the group credentials after the import with \"Group credentials…\"): {g}",
   "{g}（{n} 台: {d}）": "{g} ({n} devices: {d})",
-  "グループ既定を編集…": "Edit group defaults…",
+  "グループ既定を編集…": "Edit group credentials…",
   "機器の編集を閉じて、グループ「{g}」の既定の認証情報を開きます（この画面で保存していない変更は失われます）": "Close the device editor and open the default credentials of group \"{g}\" (unsaved changes on this screen are lost)",
-  "グループ既定を開く": "Open group defaults",
+  "グループ既定を開く": "Open group credentials",
   "この踏み台のホストキーの記録を消します。踏み台を交換した（鍵が変わった）ときだけ。次の接続で新しい鍵を記録します": "Forgets the recorded host key of this jump host. Only when the jump host was replaced (its key changed). The next connection records the new key",
   "この踏み台のホストキーを忘れる（交換したとき）": "Forget this jump host's host key (after a replacement)",
   "この版では踏み台のホストキーを忘れる操作がありません": "This build has no way to forget a jump host's host key",
@@ -1988,17 +2068,17 @@ const I18N_EN = {
   "「{n}」を保存しました。次の機器を入力してください": "\"{n}\" saved. Enter the next device",
   "応答待ちのタイムアウトは OS タイプ（プロンプト・ページャ解除・確認への自動応答）で直します。この機器の OS タイプ「{p}」を開きます": "A wait timeout is fixed in the OS type (prompt, pager-off command, auto-answers). Opens this device's OS type \"{p}\"",
   "OS タイプ…": "OS type…",
-  "実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します": "Opens the History & compare tab and compares this after-work run (B) with the group's latest before-work run taken before it (A)",
+  "実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します": "Opens the History & compare tab and compares this after run (B) with the group's latest before run taken before it (A)",
   "⇄ 作業前と比較": "⇄ Compare with before",
   "OS タイプ「{k}」のプロファイルが見つかりません（OSタイプタブで確認してください）": "The profile of OS type \"{k}\" was not found (see the OS types tab)",
   "この機器の OS タイプ「{p}」を編集…": "Edit this device's OS type \"{p}\"…",
   "ページャの解除・プロンプト・確認への自動応答は OS タイプで直します。保存後は「保存して接続確認へ」で試せます": "The pager-off command, the prompt and the auto-answers live in the OS type. After saving, \"Save and test login\" tries it",
-  "実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます": "Run finished. \"⇄ Compare with before\" compares it with the before-work logs",
+  "実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます": "Run finished. \"⇄ Compare with before\" compares it with the before logs",
   "並べた端末窓がこの画面（実行タブ）を覆わないようにします。1 画面のときは右端にメイン窓の幅ぶんを空けて並べ、2 画面ならメイン窓と別の画面に並べます。変更は、このあと開く窓から反映されます": "Keeps the tiled terminal windows off this window (the Run tab). On one screen the right edge is left free for the main window's width; with two screens they are tiled on the screen the main window is not on. Applies to windows opened from now on",
   "並べて接続でメイン窓の場所を空ける（1 画面のとき右端にメイン窓の幅ぶんを空け、2 画面ならメイン窓と別の画面に並べる） ⓘ": "Leave room for the main window when tiling (one screen: the right edge, the main window's width; two screens: the other screen) ⓘ",
   "この実行が履歴に見つかりません（ログフォルダを確認してください）": "This run is not in the history (check the log folder)",
-  "グループ「{g}」の作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "Group \"{g}\" has no before-work run in the history. Pick A and press Compare",
-  "作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "There is no before-work run in the history. Pick A and press Compare",
+  "グループ「{g}」の作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "Group \"{g}\" has no before run in the history. Pick A and press Compare",
+  "作業前の実行が履歴にありません。A を選んで「比較する」を押してください": "There is no before run in the history. Pick A and press Compare",
   "ロック前に準備していた貼り付け内容があります": "A paste prepared before the lock is waiting",
   "ロック前に準備していた貼り付け内容があります（{n} 行）": "A paste prepared before the lock is waiting ({n} lines)",
   "貼り付けの確認ウィンドウにもう一度表示します（そこで「貼り付け」を押すまで機器へは送りません）": "Shows it in the paste-confirmation window again (nothing goes to the device until you press Paste there)",
@@ -2099,6 +2179,135 @@ Object.assign(I18N_EN, {
   "例: 資産管理（月次出力）": "e.g. Asset system (monthly export)",
   "見本ファイル（ルールには保存しません）": "Sample file (not saved in the rule)",
   "未選択": "None",
+  "そこにあるのはグループ「{g}」の書き出しです。このグループの書き出しで置き換わります": "What is there is the export of group \"{g}\"; this group's export replaces it",
+  "そこにあるのは全機器の書き出しです。このグループの書き出しで置き換わります": "What is there is the export of all devices; this group's export replaces it",
+  // ---- 2026-11-07 review fixes (FX1-FX6) ----
+  "機器側が接続直後に切断しました（VTY の ACL・同時接続数の上限・SSH 鍵未生成のいずれか）": "The device closed the connection right after it was made (a VTY ACL, the session limit, or no SSH key generated)",
+  "接続はできましたが応答・認証が時間内に終わりません（認証サーバーの遅延など）": "Connected, but the response / authentication did not finish in time (a slow authentication server, for example)",
+  // ---- 2026-11-07 review fixes (FX1-FX6) ----
+  "⚠ 見つからない: {x}": "⚠ Not found: {x}",
+  "機器名は空にできません": "The device name cannot be empty",
+  "保存はできましたが、一覧を更新できませんでした（ロックし直すと最新になります）": "Saved, but the list could not be refreshed (lock and unlock to see the latest)",
+  "グループ「<b>{g}</b>」を削除しますか？": "Delete group <b>{g}</b>?",
+  "所属機器 {n} 台は残り、グループ未設定になります": "Its {n} devices stay, with no group",
+  "うち {n} 台は「グループ既定を使う」のため、各機器の個別の認証情報でログインするようになります": "{n} of them use the group's default credentials: they will log in with their own instead",
+  "このグループの予約 {n} 件を停止します": "{n} schedules of this group stop",
+  "グループ未設定の予約 {n} 件も停止します（移った機器が対象に入るため）": "{n} schedules of the ungrouped devices stop too (the moved devices would join them)",
+  "「表で編集」の下書き {n} 行を破棄します": "The table editor's draft ({n} rows) is discarded",
+  "グループ未設定の機器と名前が重なる {n} 台は「名前_2」のように改名します": "{n} devices whose name an ungrouped device has are renamed, as in name_2",
+  "{g}（0台・書き出す機器なし）": "{g} (0 devices: nothing to export)",
+  "グループ未設定の機器（{n} 台）だけを書き出す選択はありません。「全機器」に含めて書き出します": "The ungrouped devices ({n}) cannot be exported on their own; they go out with \"All devices\"",
+  "制御キーはキー札で送れます": "Control keys go as key tokens",
+  "書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります": "The key tokens: {ctrl+a}-{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break} (case does not matter). Examples: {ctrl+z} leaves config mode, {ctrl+c} stops a command that does not end, {ctrl+^}x leaves a Cisco ping. A line holding a token is sent as it is, without a line ending: write {enter} at its end to send one too. {break} is a serial break signal. A token that does not exist ({ctrl+1} and the like) is refused at save",
+  "⚠ 実行するコマンドが無い機器 {n} 台はログインのみで終わります（セット未割り当て・削除済み・空のセット。ログはログイン画面だけ）: {list}": "⚠ {n} device(s) have no command to run and only log in (no set assigned, a deleted set, or an empty one; the log holds the login screen only): {list}",
+  "{what}は {min}〜{max} の整数で入力してください（空欄なら {def}）": "{what} must be a whole number from {min} to {max} (empty = {def})",
+  "最大並列数": "Max parallel",
+  "接続タイムアウト": "Connect timeout",
+  "コマンドタイムアウト": "Command timeout",
+  "自動ロック": "Auto-lock",
+  "一括実行中のため実行タブは切り替えません。終了後に実行タブの「⚡ 接続確認のみ」で試せます": "A batch is running: the run tab is left as it is. Try it with the run tab's ⚡ Check connections once the batch has finished",
+  "前回の実行結果を残したため、実行タブのグループは切り替えませんでした": "The run tab kept its group, so the last run's results stay",
+  "この版で保存できるようにできませんでした（読み取り専用のままです）": "Could not enable saving from this version (it stays read-only)",
+  "条件が変わりました。「比較する」を押し直してください": "The selection changed. Press \"Compare\" again",
+  "比較中です": "Comparing…",
+  "A と B を選んでください": "Choose A and B",
+  "A と B が同じ実行です。別の実行を選んでください": "A and B are the same run. Choose another run",
+  "（{s}）": " ({s})",
+  "作業前からあり {n} 件": "{n} already there before the work",
+  "取り消し・上書き {n} 件": "{n} undone or overwritten later",
+  "（うち {s}）": " (of which {s})",
+  "⚠ 結論: 作業中に設定した内容（合計 {c} 件）は、判定できた {n} 台で反映されています（{k} 台は判定できません）": "⚠ Verdict: what was configured during the work ({c} lines in total) is reflected on the {n} device(s) that could be judged ({k} device(s) could not be judged)",
+  "✅ 結論: 作業中に設定した内容（合計 {c} 件）が、作業後に {n} 台すべてで反映されています": "✅ Verdict: what was configured during the work ({c} lines in total) is reflected after the work on all {n} device(s)",
+  "⚠ 結論: 作業中に設定した内容（合計 {c} 件）のうち、判定できた {n} 台で反映されていないものはありません（要確認 {u} 件・{k} 台は判定できません）": "⚠ Verdict: of what was configured during the work ({c} lines in total), nothing is missing on the {n} device(s) that could be judged ({u} to check by hand; {k} device(s) could not be judged)",
+  "✅ 結論: 作業中に設定した内容（合計 {c} 件）のうち、作業後に反映されていないものはありません（{n} 台すべて・要確認 {u} 件）": "✅ Verdict: of what was configured during the work ({c} lines in total), nothing is missing after the work (all {n} device(s); {u} to check by hand)",
+  "⚠ {n} 台は判定できません（A か B で失敗、片方の実行にしか無い、またはログを読めない機器。下の表と注記で確認してください）": "⚠ {n} device(s) could not be judged (failed in A or B, in one run only, or the log could not be read; see the table and the notes below)",
+  "A にこの機器のログが無いため差分は出せません。チェックリストは B のログだけで判定しています": "A has no log of this device, so there is no diff. The checklist is judged on B's log alone",
+  "B のみ（比較なし）": "Only in B (not compared)",
+  "チェックリストを読めません": "Cannot read the checklist",
+  "雛形を作れません": "Cannot make the template lines",
+  "グループ / 機器名。同じ名前でもグループが違えば別の機器です": "Group / device name. The same name in another group is another device",
+  "実行タブの前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。続けますか？": "The run tab's previous results and the re-run button ({n} failed / canceled) will be cleared. Continue?",
+  "続ける": "Continue",
+  "（削除済み {n} 台）": " ({n} deleted)",
+  "この予約の機器のうち削除済み（保存すると外れます）: {s}": "Devices of this schedule that were deleted (dropped when saved): {s}",
+  "① の日時が過ぎています。日時を直すか、一覧の「複製」で新しい予約を作ってください": "The date and time in (1) have passed. Change them, or make a new schedule with \"Duplicate\" in the list",
+  "① の間隔は 7 日以内にしてください": "The interval in (1) must be 7 days or less",
+  "① の回数は {n} 回以内にしてください": "The count in (1) must be {n} or less",
+  "（{n}）": " ({n})",
+  "{d}（{w}）": "{d} ({w})",
+  "読み込めません": "Cannot load",
+  "（{s} の中）": " (inside {s})",
+  "ポートの up/down": "port up/down",
+  "説明・表示": "description / display",
+  "アドレス・経路": "address / route",
+  "ルーティング": "routing",
+  "ACL の適用": "ACL applied",
+  "ACL の中身": "ACL contents",
+  "ポリシー": "policy",
+  "接続・冗長・NAT": "link / redundancy / NAT",
+  "VLAN・DHCP": "VLAN / DHCP",
+  "時刻・名前解決": "time / name resolution",
+  "管理・認証": "management / authentication",
+  "オブジェクト・QoS": "objects / QoS",
+  "その他の設定": "other settings",
+  "並び順の変更": "order changed",
+  "評価順が変わる並び替え": "reorder that changes the evaluation order",
+  "ブロックの追加・削除": "block added / removed",
+  "Comware/VRP 系: undo に引数が要るかどうかは機種で違います。投入前に 1 行ずつ確認してください": "Comware / VRP: whether undo needs the arguments differs by model. Check every line before sending",
+  "この機器の種類ではコマンドを作れません。差分の一覧だけを出します": "Commands cannot be made for this kind of device. Only the list of differences is shown",
+  "物理ポートの設定を手で既定に戻す（この機種に default interface は無い）": "reset the physical port by hand (this model has no default interface)",
+  "種類の分からないインタフェース: 消すか既定に戻すかを手で確認": "interface of unknown kind: check by hand whether to delete it or reset it",
+  "vrf / switchport の切替で消えるアドレスを入れ直す": "re-enter the address that the vrf / switchport change removes",
+  "VLAN 一覧の none / all / except は手で確認": "none / all / except in a VLAN list: check by hand",
+  "username の削除は確認プロンプトが出る機種がある": "some models ask for confirmation when a username is deleted",
+  "ブロックの外の行": "line outside a block",
+  "unset の取り消しは元の値が分からない": "undoing an unset: the original value is unknown",
+  "逆の操作が分からない": "the reverse operation is unknown",
+  "物理ポートの設定を手で既定に戻す": "reset the physical port by hand",
+  "# [B で増えた行（戻すなら消す）]": "# [lines added in B (remove them to roll back)]",
+  "# [B で消えた行（戻すなら入れ直す）]": "# [lines removed in B (re-enter them to roll back)]",
+  "# [変わった行: 元の行    # ← 今の行]": "# [changed lines: original line    # ← current line]",
+  "エラーの行は絞り込みで隠れています。絞り込みを解除してください": "The rows with errors are hidden by the filter. Clear the filter",
+  "置換後の値が選択肢にないため飛ばしました": "Skipped: the replaced value is not one of the column's choices",
+  "{n} 件を置換しました（{m} 件は置換後の値が選択肢にないため飛ばしました）": "Replaced {n} ({m} skipped: the replaced value is not one of the column's choices)",
+  "{n} 列は右端を超えるため貼り付けませんでした": "{n} column(s) past the right edge were not pasted",
+  "（隠している列には入りません。「列の表示…」で表示してから貼り付けてください）": " (nothing is pasted into hidden columns: show them with \"Columns…\" first)",
+  "下書きを保存できません": "The draft cannot be saved",
+  "検証できません": "The check failed",
+  "前回の記録なし": "No record of the last import",
+  "（空）→ 消えます": "(empty) → will be cleared",
+  "取り込めなかった行があります": "Some rows could not be imported",
+  "次の {n} 行は取り込めませんでした。ファイルを直して取り込み直してください。": "These {n} row(s) could not be imported. Fix the file and import it again.",
+  "（記録停止中）": " (log stopped)",
+  "踏み台のホストキーはこの窓では許可できません。本体で消してから再接続してください（実行タブの結果の「踏み台のホストキーを忘れる…」、または機器編集の踏み台欄）": "A jump host's host key cannot be allowed from this window. Forget it in the main window, then reconnect (\"Forget jump host's host key…\" in the run tab's results, or the jump host section of the device editor)",
+  "ロック中です。本体で解錠してから再接続してください": "Locked. Unlock in the main window, then reconnect",
+  "この窓の位置を読めないため並べられません。窓を開き直してからもう一度お試しください": "Cannot tile: this window's position could not be read. Open the window again and retry",
+  "画面の大きさを読めないため並べられません。窓を別の画面へ動かすか、開き直してからもう一度お試しください": "Cannot tile: the screen size could not be read. Move the window to another screen, or open it again, and retry",
+  "ロック中です。解錠してから操作してください": "The vault is locked. Unlock it first",
+  "（コマンドなし）": "(no commands)",
+  "データの開始行は見出しの行より後にしてください": "The first data row must come after the header row",
+  "表の左端の列は A、D、AB のような列の記号で入力してください": "Enter the leftmost column as a letter such as A, D or AB",
+  "プロンプト（コマンド完了の目印）は必須です": "The prompt (what marks a finished command) is required",
+  "チェックした項目だけを、選択した全機器に設定します": "Only the ticked fields are set, on every selected device",
+  "選択した機器の 1 段目の踏み台をまとめて設定します": "Set the first jump host of the selected devices at once",
+  "機器ごとに割り当てて一括実行するコマンド群": "Named sets of commands, assigned per device and run on all of them at once",
+  "書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます": "Exporting is part of the Devices tab's bundle export (per group or all devices). The Import button here reads one file (CSV / legacy .list)",
+  "クリックで別窓に表示（「表示」と同じ）": "Click to open in its own window (same as View)",
+  "コマンド欄には複数行をまとめて貼り付けできます": "Several lines can be pasted into a command field at once",
+  "対象 {a} / {b} 台": "{a} of {b} devices selected",
+  "チェック＝実行対象。Shift+クリックで範囲をまとめて切替": "Ticked = will run. Shift+click toggles a range",
+  "機器種別ごとのログイン自動化（待つ文字 → 送る文字）": "Login automation per device type (text to wait for → text to send)",
+  "待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルの JSON は export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても「読み込み」で戻せます。書き出しは「機器一覧」の一式書き出しに含まれます": "The text to wait for is matched as is (substring), e.g. \"#\" or \"assword:\". The built-in profiles are also written to export\\os-profiles\\ and never removed by the app, so a deleted one comes back with Import. Exporting is part of the Devices tab's bundle export",
+  "並べて接続でメイン窓の場所を空ける ⓘ": "Keep the main window clear when tiling ⓘ",
+  "テンプレートに使える変数（クリックでコピー）:": "Template placeholders (click to copy):",
+  "フォルダ名のテンプレートには {date} {time} {hhmm} {group} {stage} だけが使えます。ファイル名にはすべての変数が使えます": "The folder name template takes only {date} {time} {hhmm} {group} {stage}; the file name template takes all of them",
+  "人ごとに秘密鍵が違う社内の踏み台など（最大 5 段・手前から順）": "Jump hosts whose key differs per person, such as the office jump host (up to 5 hops, outermost first)",
+  "すべてのデータを消して、はじめての起動の状態に戻します（ログと export は残ります）": "Erase all data and return to the first-run state (logs and the export folder stay)",
+  "実行ごとのログの一覧。▸ で機器ごとの結果、A と B を選んで「比較する」で作業前後の差分": "One row per run. ▸ shows each device; pick A and B and press Compare for the before/after diff",
+  "Excel と同じ操作（Ctrl+C / Ctrl+V・Ctrl+D・■ で連番）": "Works like Excel (Ctrl+C / Ctrl+V, Ctrl+D, ■ to fill a series)",
+  "1 行に 2 台分が載っている一覧（冗長構成など）は、2 台目を追加します": "A list with two devices per row (a redundant pair) gets a second device here",
+  "機器が色を付けて出す文字は機器側の色のまま": "Text the device colours keeps its own colours",
+  "別窓の文字色・背景色（変更はすぐ保存され、開いている窓にも反映）": "Text and background colours of the separate windows (saved at once, applied to open windows)",
   "前回の見本: {f}（見本は画面を離れると閉じます。確かめるには選び直してください）": "Last sample: {f} (a sample is closed when you leave the screen; choose it again to try the rule)",
   "見本ファイルの読み込み失敗": "Could not read the sample file",
   "この段のほかの項目を使うにはホストの紐付けが必要です（無いと取り込めません）": "The hop's other fields need its host mapped (the rows cannot be imported without it)",
@@ -2255,7 +2464,6 @@ I18N_EN_PATTERNS.push(
   [/^除外条件 (\d+) の対象が不正です$/, "Exclusion $1 has an invalid target"],
   [/^除外条件 (\d+) の対象を選んでください$/, "Choose what exclusion $1 looks at"],
   [/^除外条件 (\d+) の比べ方が不正です$/, "Exclusion $1 has an invalid comparison"],
-  [/正規表現が長すぎます（500 文字まで）/, "the regular expression is too long (500 characters at most)"],
   [/正規表現の書き方が正しくありません（(.*)）/, "the regular expression is not valid ($1)"],
   [/加工の種類「(.+?)」は使えません/, 'step type "$1" is not available'],
   [/^シート「(.+?)」がありません$/, 'No sheet "$1"'],
@@ -2477,7 +2685,6 @@ I18N_EN_PATTERNS.push(
   [/加工手順は (\d+) 個までです/, "$1 steps at most"],
   [/組み立ては (\d+) 文字までです/, "a combination is $1 characters at most"],
   [/「空のときは別の列」は (\d+) 個までです/, '"Another column if empty" takes $1 columns at most'],
-  [/正規表現が複雑すぎます/, "the regular expression is too complex"],
   [/置き換え表は (\d+) 行までです/, "a replacement table has $1 rows at most"],
   [/^シート「(.+?)」が大きすぎるため、(\d+) 行・(\d+) 列（合計 (\d+) セル）を超える部分は読み込んでいません$/, 'Sheet "$1" is too large: beyond $2 rows / $3 columns ($4 cells in all) was not read'],
   [/^シート「(.+?)」の結合セルが多すぎるため、(\d+) 個の結合範囲は左上のセルだけに値があるものとして読みました$/, 'Sheet "$1" has too many merged cells: $2 merged area(s) were read with the value in the top-left cell only'],
@@ -2513,7 +2720,7 @@ I18N_EN_PATTERNS.push(
 // vault's backup restore and newer-version guard, the log folder check,
 // internal errors.
 Object.assign(I18N_EN, {
-  "OSタイププロファイル": "OS profile",
+  "OSタイププロファイル": "OS type profile",
   "同じ名前があります": "Name already in use",
   "{what}「<b>{n}</b>」は既にあります。読み込んだファイルの内容で置き換えますか？": "The {what} \"<b>{n}</b>\" already exists. Replace it with the file's contents?",
   "置き換えると、今の内容は戻せません（使っている機器はそのまま置き換えた内容を使います）": "Replaced, the current contents cannot be brought back (devices using it then use the replaced contents)",
@@ -2530,7 +2737,7 @@ Object.assign(I18N_EN, {
   "保管庫のファイルが壊れています（1 世代前の控えから復元できます）": "The vault file is damaged (it can be restored from the previous copy)",
   "保管庫は既に開いています": "The vault is already open",
   "1 世代前の控えを開けません": "Cannot open the previous copy",
-  "同じ内部キーを持つOSタイププロファイルを分けました: {list}（機器は先にあったプロファイルのままです。こちらを使う機器があれば選び直してください）": "OS profiles sharing one internal key were separated: {list} (devices stay on the profile that was there first; choose this one again for any device meant to use it)",
+  "同じ内部キーを持つOSタイププロファイルを分けました: {list}（機器は先にあったプロファイルのままです。こちらを使う機器があれば選び直してください）": "OS type profiles sharing one internal key were separated: {list} (devices stay on the profile that was there first; choose this one again for any device meant to use it)",
   "新しい版で保存された保管庫です": "Vault saved by a newer version",
   "この保管庫は新しい版の PalaTerm{v} で保存されています。この版で保存すると、新しい版で追加された設定が消えます。": "This vault was saved by a newer PalaTerm{v}. Saving it with this version removes the settings the newer version added.",
   "新しい版の PalaTerm を使うことをお勧めします。この版では読み取り専用で開きます。": "Using the newer PalaTerm is recommended. This version opens it read-only.",
@@ -2660,11 +2867,11 @@ I18N_EN_PATTERNS.push(
   [/^シート「(.+?)」は別のシートと同じ内容を指しているため読み込んでいません$/, 'Sheet "$1" points at the same content as another sheet and was not read'],
   [/^シートが多すぎるため、([0-9]+) 枚目以降は読み込んでいません$/, "Too many sheets: sheet $1 and later were not read"],
   [/(\d+) 行目（/g, "line $1 ("],
-  [/^最終確認時刻（data\\\\(.+?)）を保存できないため、再起動後のこの回は実行しませんでした（二重実行を防ぐため）: (.*)$/, "Not run: the last look (data\\\\$1) could not be saved, so this run after the restart was skipped to keep it from running twice: $2"],
+  [/^最終確認時刻（data\\(.+?)）を保存できないため、再起動後のこの回は実行しませんでした（二重実行を防ぐため）: (.*)$/, "Not run: the last look (data\\$1) could not be saved, so this run after the restart was skipped to keep it from running twice: $2"],
   [/^PC の時計が最終確認時刻（(.+?)）より前に戻っていたため、最終確認時刻を今（(.+?)）に合わせました。時計を確かめてください$/, "The PC clock had been set back before the last look ($1); the last look was moved to now ($2). Check the clock"],
   [/^一式読込でグループ「(.+?)」の機器が変わったため停止しました（追加 (\d+) 台・アドレス変更 (\d+) 台）。対象を確かめてから再度有効にしてください$/, 'Stopped: a bundle import changed the devices of group "$1" ($2 added, $3 with another address). Check the targets, then enable it again'],
   [/^一式読込で機器「(.+?)」のアドレスが変わりました。対象を確かめてください$/, 'A bundle import changed the address of device "$1". Check the targets'],
-  [/^予約の記録ファイル data\\\\(.+?) を保存できません: (.*)$/, "The schedule file data\\\\$1 cannot be written: $2"],
+  [/^予約の記録ファイル data\\(.+?) を保存できません: (.*)$/, "The schedule file data\\$1 cannot be written: $2"],
   [/ログイン後のプロンプト（(".*?")）が踏み台のプロンプトと同じため、中止しました。踏み台から (.+?) への接続に失敗して、踏み台に戻っている可能性があります。踏み台のプロンプトにホスト名が無い（「\$ 」「# 」だけ）場合は、踏み台のプロンプト（PS1 など）にホスト名を入れると区別できます/,
     'The prompt after the login ($1) is the jump host\'s own prompt, so the run was stopped. The connection from the jump host to $2 may have failed, leaving the line on the jump host. If the jump host\'s prompt carries no host name (just "$ " or "# "), put the host name into its prompt (PS1 or the like) so the two can be told apart.'],
   [/踏み台から (.+?) へ入った後、ログインやパスワードの入力待ちが一度も出ないままプロンプトになったため、中止しました。踏み台から機器への接続に失敗して、踏み台に戻っている可能性があります。踏み台の上の鍵で入る機器なら、その機器の SSH 認証方式を「公開鍵」にしてください/,
@@ -2732,4 +2939,29 @@ Object.assign(I18N_EN, {
 I18N_EN_PATTERNS.push(
   [/^正規表現が不正です: (.*)$/s, 'Invalid regular expression: $1'],
   [/^フォルダがありません: (.*)$/, 'No such folder: $1'],
+);
+
+// 2026-11-07 full review (G): Go-side messages that still reached the
+// English UI in Japanese.
+Object.assign(I18N_EN, {
+  "すべて": "All",
+  "チェックリスト名を入力してください": "Enter a checklist name",
+  "ファイルが選ばれていません（「読込」からファイルを選び直してください）": "No file chosen (choose the file again from \"Import\")",
+  "GUIの方式は http / https のどちらかです": "The GUI scheme is http or https",
+  "（削除された機器）: 機器が見つかりません": "(deleted device): device not found",
+});
+I18N_EN_PATTERNS.push(
+  [/^チェックリスト「(.+?)」がありません$/, 'There is no checklist "$1"'],
+  [/^以前の vault の控え（\.bak \/ \.broken-\*）を削除できませんでした: (.*)$/, "The previous vault's copies (.bak / .broken-*) could not be deleted: $1"],
+  [/^パスワードは変更しましたが、旧パスワードで開ける控え（\.bak \/ \.broken-\*）を削除できませんでした: (.*)。ウイルス対策ソフトが掴んでいる場合は、しばらくしてからもう一度パスワードを変更してください$/, "The password was changed, but the copies that open with the old password (.bak / .broken-*) could not be deleted: $1. If antivirus software is holding them, change the password once more after a while"],
+  [/^vault は削除しましたが、控え（\.bak \/ \.broken-\*）を削除できませんでした: (.*)。data フォルダの残りを手で削除してください$/, "The vault was deleted, but its copies (.bak / .broken-*) could not be: $1. Delete what is left in the data folder by hand"],
+  [/^コマンドセット「(.+?)」が削除されたため停止しました$/, 'Stopped: command set "$1" was deleted'],
+  [/^(.+?) が鍵でのログインを受け付けず、ユーザー名・パスワードの入力待ちになっています（踏み台の上の鍵と、この踏み台の SSH 認証方式を確認してください）$/, "$1 did not accept the key and is waiting for a username / password (check the key on the jump host and this jump host's SSH auth method)"],
+  [/^ドライブ名だけでは指定できません（例: (.+)）$/, "A drive letter alone cannot be the log folder (e.g. $1)"],
+  [/^「(.+?)」はドライブ名の直後に \\ がありません（例: (.+)）$/, '"$1" has no \\ right after the drive letter (e.g. $2)'],
+  [/^項目「(.+?)」の元の値を選んでください$/, 'Choose the source of field "$1"'],
+  // Unanchored fragments, after every whole-message pattern: an OS type
+  // profile's own message (above) is matched whole before these touch it.
+  [/正規表現が長すぎます（(\d+) 文字まで）/, "the regular expression is too long ($1 characters at most)"],
+  [/正規表現が複雑すぎます/, "the regular expression is too complex"],
 );
