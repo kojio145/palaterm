@@ -2965,3 +2965,24 @@ I18N_EN_PATTERNS.push(
   [/正規表現が長すぎます（(\d+) 文字まで）/, "the regular expression is too long ($1 characters at most)"],
   [/正規表現が複雑すぎます/, "the regular expression is too complex"],
 );
+
+// v1.9.34: character set per device, login wait, paste line pacing
+Object.assign(I18N_EN, {
+  "文字コード": "Character set",
+  "UTF-8（既定）": "UTF-8 (default)",
+  "機器が日本語を Shift_JIS で出すときだけ Shift_JIS にします。画面表示・ログ・送るコマンドを変換します（ログは UTF-8 で保存）。通常は UTF-8 のままにしてください": "Choose Shift_JIS only for a device that writes Japanese in Shift_JIS. The display, the log and the commands sent are converted (the log is saved as UTF-8). Leave UTF-8 otherwise",
+  "ログイン待ち（秒・0 = コマンドタイムアウトと同じ）": "Login wait (s; 0 = same as the command timeout)",
+  "ログイン待ち": "Login wait",
+  "踏み台の通過・ユーザー名とパスワードの質問・最初のプロンプトを待つ上限です。応答しない機器を早めに「ログイン失敗」にしたいときだけ短くしてください。コマンドの待ち時間（コマンドタイムアウト）は変わりません": "The bound on each wait of the login: passing a jump host, the username and password questions, the first prompt. Shorten it only to report a device that never answers as a failed login sooner. The commands' own wait (the command timeout) is unchanged",
+  "貼り付けの行間待ち（ミリ秒）": "Pause between pasted lines (ms)",
+  "貼り付けの行間待ち（シリアル）": "Pause between pasted lines (serial)",
+  "貼り付けの行間待ち（SSH・Telnet）": "Pause between pasted lines (SSH / Telnet)",
+  "複数行を貼り付けたとき、1 行送るごとに待つ時間です。9600bps のコンソールに一度に流すと文字が欠けるため、シリアルは既定で 100 ミリ秒待ちます。1 文字ずつの打鍵や Enter だけの送信は待ちません。0 で待ちません": "How long a multi-line paste waits after each line before sending the next. A 9600-baud console given a whole block at once loses characters, so serial waits 100 ms by default. Single keystrokes and a lone Enter are never held. 0 = no wait",
+  "文字コードは UTF-8 / Shift_JIS か空欄です": "The character set is UTF-8 / Shift_JIS or empty",
+});
+I18N_EN_PATTERNS.push(
+  [/^ログイン待ちは 0〜(\d+) 秒で入力してください（0 = コマンドタイムアウトと同じ）$/, "Enter a login wait from 0 to $1 seconds (0 = same as the command timeout)"],
+  [/^貼り付けの行間待ち（シリアル）は 0〜(\d+) ミリ秒（0 = 既定の (\d+) ミリ秒、-1 = 待たない）で指定してください: (-?\d+)$/, "The pause between pasted lines (serial) must be 0–$1 ms (0 = the default of $2 ms, -1 = none): $3"],
+  [/^貼り付けの行間待ち（SSH・Telnet）は 0〜(\d+) ミリ秒（0 = 待たない）で指定してください: (-?\d+)$/, "The pause between pasted lines (SSH / Telnet) must be 0–$1 ms (0 = none): $2"],
+  [/^文字コードが不正です: "(.*)"（UTF-8 \/ Shift_JIS か空欄）$/, 'Invalid character set: "$1" (UTF-8 / Shift_JIS or empty)'],
+);

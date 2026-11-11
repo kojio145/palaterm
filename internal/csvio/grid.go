@@ -33,7 +33,7 @@ var deviceKinds = map[string]string{
 	"group": "group", "conn": "conn", "port": "int", "baud": "int",
 	"osType": "os", "commandSet": "set", "enabled": "bool", "useGroupCreds": "bool",
 	"password": "secret", "enablePassword": "secret", "keyPassphrase": "secret",
-	"authMethod": "auth", "legacyAlgos": "bool", "bastionMode": "mode", "guiPort": "int", "useMyBastion": "bool",
+	"authMethod": "auth", "legacyAlgos": "bool", "encoding": "enc", "bastionMode": "mode", "guiPort": "int", "useMyBastion": "bool",
 	"cli": "bool", "gui": "bool", "guiScheme": "scheme", "termColor": "tint",
 }
 
@@ -67,7 +67,7 @@ func DeviceCells(d model.Device) map[string]string {
 		"enabled": boolOut(d.Enabled, false), "useGroupCreds": boolOut(d.UseGroupCreds, false),
 		"username": d.Username, "password": d.Password, "enablePassword": d.EnablePassword,
 		"authMethod": orDefault(string(d.AuthMethod), "password"), "keyFile": d.KeyFile, "keyPassphrase": d.KeyPassphrase,
-		"legacyAlgos": boolOut(d.LegacyAlgos, false), "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, false),
+		"legacyAlgos": boolOut(d.LegacyAlgos, false), "encoding": d.Encoding, "bastionMode": modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, false),
 		"useMyBastion": boolOut(d.UseMyBastion, false),
 		"guiPort":      itoa(d.GUIPort),
 		"cli":          boolOut(!d.CLIOff, false), "gui": boolOut(d.GUIOn, false), "guiScheme": d.EffectiveGUIScheme(),
@@ -193,6 +193,14 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		return v
 	}
 
+	enc := func(k string) string {
+		v, ok := model.NormalizeEncoding(get(k))
+		if !ok {
+			bad(k, "文字コードは UTF-8 / Shift_JIS か空欄です")
+		}
+		return v
+	}
+
 	d := model.Device{
 		Name: get("name"), Group: get("group"), Site: get("site"), Role: get("role"),
 		Host: get("host"), Conn: model.ConnMethod(conn("conn", "ssh", "telnet", "serial")),
@@ -201,7 +209,7 @@ func CellsDevice(c map[string]string) (model.Device, []CellError) {
 		Enabled: flag("enabled", true), UseGroupCreds: flag("useGroupCreds", false),
 		Username: get("username"), Password: c["password"], EnablePassword: c["enablePassword"],
 		AuthMethod: auth("authMethod"), KeyFile: get("keyFile"), KeyPassphrase: c["keyPassphrase"],
-		LegacyAlgos: flag("legacyAlgos", false), GUIPort: num("guiPort"), UseMyBastion: flag("useMyBastion", false),
+		LegacyAlgos: flag("legacyAlgos", false), Encoding: enc("encoding"), GUIPort: num("guiPort"), UseMyBastion: flag("useMyBastion", false),
 		CLIOff: !flag("cli", true), GUIOn: flag("gui", false), GUIScheme: scheme("guiScheme"),
 		TermColor: tint("termColor"),
 	}

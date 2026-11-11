@@ -1617,6 +1617,14 @@ function renderSettings() {
       </div>
       <div class="grid-2">
         <div class="field"><label>${esc(t("コマンドタイムアウト（秒）"))}</label><input id="set-cmt" type="number" value="${s.commandTimeout ?? 30}"></div>
+        <div class="field"><label>${esc(t("ログイン待ち（秒・0 = コマンドタイムアウトと同じ）"))}${hintI(t("踏み台の通過・ユーザー名とパスワードの質問・最初のプロンプトを待つ上限です。応答しない機器を早めに「ログイン失敗」にしたいときだけ短くしてください。コマンドの待ち時間（コマンドタイムアウト）は変わりません"))}</label><input id="set-login" type="number" min="0" value="${s.loginTimeout || 0}"></div>
+      </div>
+      <div class="field"><label>${esc(t("貼り付けの行間待ち（ミリ秒）"))}${hintI(t("複数行を貼り付けたとき、1 行送るごとに待つ時間です。9600bps のコンソールに一度に流すと文字が欠けるため、シリアルは既定で 100 ミリ秒待ちます。1 文字ずつの打鍵や Enter だけの送信は待ちません。0 で待ちません"))}</label>
+        <div class="row-inline" style="gap:14px;flex-wrap:wrap;align-items:center">
+          <span class="muted" style="font-size:12px;white-space:nowrap">${esc(t("シリアル"))}</span><input id="set-pd-ser" type="number" min="0" max="5000" style="width:110px" value="${(s.pasteLineDelayMs || 0) < 0 ? 0 : (s.pasteLineDelayMs || 100)}">
+          <span class="muted" style="font-size:12px;white-space:nowrap">SSH・Telnet</span><input id="set-pd-net" type="number" min="0" max="5000" style="width:110px" value="${s.pasteLineDelayNetMs || 0}">
+        </div></div>
+      <div class="grid-2">
         <div class="field"><label>${esc(t("ログ保存フォルダ"))}${hintI(t("※ログ保存フォルダに相対パス（例: logs）を指定した場合、PalaTerm.exe と同じフォルダが基準になります"))}</label>
           <div class="row-inline" style="gap:6px">
             <input id="set-dir" style="flex:1" value="${esc(s.logDir || "logs")}">
@@ -1742,12 +1750,23 @@ function renderSettings() {
     if (connectTimeout === null) return;
     const commandTimeout = num("set-cmt", 30, 1, 3600, t("コマンドタイムアウト"));
     if (commandTimeout === null) return;
+    const loginTimeout = num("set-login", 0, 0, 3600, t("ログイン待ち"));
+    if (loginTimeout === null) return;
+    // The field shows the wait that applies; it is stored as the backend
+    // reads it (0 = the default 100 ms, -1 = none).
+    const pdSer = num("set-pd-ser", 100, 0, 5000, t("貼り付けの行間待ち（シリアル）"));
+    if (pdSer === null) return;
+    const pdNet = num("set-pd-net", 0, 0, 5000, t("貼り付けの行間待ち（SSH・Telnet）"));
+    if (pdNet === null) return;
     const lockMin = num("set-lock", 30, 0, 1440, t("自動ロック"));
     if (lockMin === null) return;
     const out = {
       maxParallel,
       connectTimeout,
       commandTimeout,
+      loginTimeout,
+      pasteLineDelayMs: pdSer === 0 ? -1 : (pdSer === 100 ? 0 : pdSer),
+      pasteLineDelayNetMs: pdNet,
       // Without the quotes Explorer's パスのコピー puts around it (the
       // backend also checks the folder can be made, and says why not).
       logDir: document.getElementById("set-dir").value.trim().replace(/^["']+|["']+$/g, "").trim() || "logs",

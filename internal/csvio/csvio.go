@@ -45,7 +45,7 @@ var deviceCols = []col{
 	{"useGroupCreds", "グループ既定の認証情報を使う"},
 	{"username", "ユーザー名"}, {"password", "パスワード"}, {"enablePassword", "enableパスワード"},
 	{"authMethod", "認証方式"}, {"keyFile", "鍵ファイル"}, {"keyPassphrase", "鍵パスフレーズ"},
-	{"legacyAlgos", "旧暗号を許可"}, {"useMyBastion", "自分の踏み台を使う"}, {"bastionMode", "踏み台の通り方"},
+	{"legacyAlgos", "旧暗号を許可"}, {"encoding", "文字コード"}, {"useMyBastion", "自分の踏み台を使う"}, {"bastionMode", "踏み台の通り方"},
 	{"cli", "CLIを使う"}, {"gui", "GUIを使う"}, {"guiScheme", "GUIの方式"}, {"guiPort", "GUIポート"},
 	{"termColor", "端末の色"},
 }
@@ -121,7 +121,7 @@ func ExportLang(devices []model.Device, lang string) (string, error) {
 			boolOut(d.UseGroupCreds, ja),
 			d.Username, d.Password, d.EnablePassword,
 			authOut(string(d.AuthMethod), ja), d.KeyFile, d.KeyPassphrase,
-			boolOut(d.LegacyAlgos, ja), boolOut(d.UseMyBastion, ja), modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, ja),
+			boolOut(d.LegacyAlgos, ja), encOut(d.Encoding), boolOut(d.UseMyBastion, ja), modeOut(d.BastionMode, len(d.Bastions) > 0 || d.UseMyBastion, ja),
 			boolOut(!d.CLIOff, ja), boolOut(d.GUIOn, ja), d.EffectiveGUIScheme(), itoa(d.GUIPort),
 			termColorOut(d.TermColor, ja),
 		}
@@ -285,6 +285,7 @@ func importWith(text string) ([]model.Device, func(string) bool, error) {
 			Password:       secret(row, "password"),
 			EnablePassword: secret(row, "enablePassword"),
 			LegacyAlgos:    parseBool(get(row, "legacyAlgos"), false),
+			Encoding:       encIn(get(row, "encoding")),
 			Enabled:        parseBool(get(row, "enabled"), true),
 			UseGroupCreds:  parseBool(get(row, "useGroupCreds"), false),
 			BastionMode:    modeIn(get(row, "bastionMode")),
@@ -416,6 +417,24 @@ func modeIn(v string) model.BastionMode {
 		return model.BastionViaTunnel
 	}
 	return model.BastionMode(strings.TrimSpace(v)) // Validate names it
+}
+
+// encOut writes the device's character set: empty for UTF-8 (the default,
+// so a file from before the column looks the same), "Shift_JIS" otherwise.
+func encOut(v string) string {
+	if v == model.EncodingSJIS {
+		return "Shift_JIS"
+	}
+	return ""
+}
+
+// encIn reads a character set cell in any of its spellings; a value that
+// is none of them is kept as typed so Validate can name it.
+func encIn(v string) string {
+	if e, ok := model.NormalizeEncoding(v); ok {
+		return e
+	}
+	return strings.TrimSpace(v)
 }
 
 func authOut(v string, ja bool) string {

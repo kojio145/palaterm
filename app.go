@@ -1491,6 +1491,7 @@ type DevicePatch struct {
 	CLI           *bool   `json:"cli,omitempty"`       // CLI を使う (Device.CLIOff = !CLI)
 	GUI           *bool   `json:"gui,omitempty"`       // GUI を使う
 	TermColor     *string `json:"termColor,omitempty"` // 端末の色 ("" = none)
+	Encoding      *string `json:"encoding,omitempty"`  // 文字コード ("" = UTF-8, "sjis")
 	// The devices' own credentials (a password rotated on fifty devices at
 	// once), and one jump-host hop's (BastionHop is 1-based; devices
 	// without that hop are left as they are).
@@ -1634,6 +1635,9 @@ func (a *App) UpdateDevices(ids []string, p DevicePatch) (UpdateReport, error) {
 		}
 		if p.GUI != nil {
 			d.GUIOn = *p.GUI
+		}
+		if p.Encoding != nil {
+			d.Encoding = *p.Encoding // checked and normalised by Validate below
 		}
 		if p.TermColor != nil {
 			d.TermColor = *p.TermColor // checked and normalised by ValidateIn below
@@ -2395,6 +2399,12 @@ func checkSettingsRanges(s model.Settings) error {
 	}
 	if s.CommandTimeout < 1 || s.CommandTimeout > maxTimeoutSec {
 		return fmt.Errorf("コマンドタイムアウトは 1〜%d 秒で入力してください", maxTimeoutSec)
+	}
+	if s.LoginTimeout < 0 || s.LoginTimeout > maxTimeoutSec {
+		return fmt.Errorf("ログイン待ちは 0〜%d 秒で入力してください（0 = コマンドタイムアウトと同じ）", maxTimeoutSec)
+	}
+	if err := s.ValidatePasteLineDelay(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -4078,7 +4088,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.33"
+const appVersion = "1.9.34"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

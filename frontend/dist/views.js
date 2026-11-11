@@ -764,6 +764,7 @@ function bulkEditDialog(ids) {
       <div class="field"><label><input type="checkbox" id="bk-site-on" style="width:auto"> ${esc(t("拠点を変更"))}</label><input id="bk-site" placeholder="${esc(t("空欄にすると拠点を消します"))}"></div>
       <div class="field"><label><input type="checkbox" id="bk-role-on" style="width:auto"> ${esc(t("役割を変更"))}</label><input id="bk-role" placeholder="${esc(t("空欄にすると役割を消します"))}"></div>
       <div class="field"><label>${esc(t("端末の色"))}</label><select id="bk-tint">${keep}<option value="">${esc(t("なし（窓の色のまま）"))}</option>${deviceTintKeys().map(k => `<option value="${k}">■ ${esc(t(DEVICE_TINTS[k].name))}</option>`).join("")}</select></div>
+      <div class="field"><label>${esc(t("文字コード"))}</label><select id="bk-enc">${keep}<option value="">${esc(t("UTF-8（既定）"))}</option><option value="sjis">Shift_JIS</option></select></div>
     </div>
     <details style="margin-top:4px"><summary class="link" style="text-decoration:none;font-size:13px">${esc(t("認証情報をまとめて変更（パスワードの定期変更など）"))}</summary>
       <div class="muted" style="font-size:12px;margin:6px 0 8px">${esc(t("チェックした項目だけを、選択した全機器に設定します"))}${hintI(t("チェックした項目だけが、選択した全機器に設定されます。「グループ既定を使う」機器は、個別の欄が書き換わるだけでログインには既定が使われます。踏み台はその段がある機器にだけ入ります。"))}</div>
@@ -902,7 +903,7 @@ function bulkEditDialog(ids) {
   async function bulkApply() {
     const patch = {};
     const pick = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v; };
-    pick("#bk-group", "group"); pick("#bk-set", "commandSet"); pick("#bk-os", "osType"); pick("#bk-tint", "termColor");
+    pick("#bk-group", "group"); pick("#bk-set", "commandSet"); pick("#bk-os", "osType"); pick("#bk-tint", "termColor"); pick("#bk-enc", "encoding");
     const cred = $n("#bk-cred").value;
     if (cred !== "__keep__") patch.useGroupCreds = cred === "group";
     const onOff = (id, key) => { const v = $n(id).value; if (v !== "__keep__") patch[key] = v === "on"; };
@@ -1300,6 +1301,8 @@ function editDevice(dev, preGroup, template, nextOf) {
         <input type="checkbox" id="f-legacy" ${d.legacyAlgos ? "checked" : ""} style="width:auto">
         <span data-tip="${esc(t("SSHで古い暗号方式（SHA-1系の鍵交換・CBC・3DES）も候補に含めます。通常はオフのまま（強い方式のみ）。新しい方式に対応していない古い機器で接続エラーになる場合だけ有効にしてください"))}">${esc(t("レガシー暗号を許可（古い機器向け・通常はオフ） ⓘ"))}</span>
       </label></div>
+    <div class="field" id="fw-enc" style="max-width:260px"><label>${esc(t("文字コード"))}${hintI(t("機器が日本語を Shift_JIS で出すときだけ Shift_JIS にします。画面表示・ログ・送るコマンドを変換します（ログは UTF-8 で保存）。通常は UTF-8 のままにしてください"))}</label>
+      <select id="f-enc"><option value="">${esc(t("UTF-8（既定）"))}</option><option value="sjis" ${d.encoding === "sjis" ? "selected" : ""}>Shift_JIS</option></select></div>
 
     <div id="fw-cli2">
     <div class="section-label">${esc(t("踏み台サーバ（任意・最大5段。外側＝手前から順に）"))}</div>
@@ -1379,6 +1382,7 @@ function editDevice(dev, preGroup, template, nextOf) {
     node.querySelector("#fw-gui").style.display = gui ? "" : "none";
     node.querySelector("#f-http-warn").style.display = gui && node.querySelector("#f-guischeme").value === "http" ? "" : "none";
     node.querySelector("#fw-enable").style.display = cli ? "" : "none";
+    node.querySelector("#fw-enc").style.display = cli ? "" : "none";
     if (!cli) ["#fw-authmethod", "#fw-keyfile", "#fw-keypass", "#fw-legacy"].forEach(s => { node.querySelector(s).style.display = "none"; });
     // A serial device has no address: the IP field is required only for a
     // network CLI or a GUI.
@@ -1641,6 +1645,7 @@ function editDevice(dev, preGroup, template, nextOf) {
       keyFile: node.querySelector("#f-key").value,
       keyPassphrase: node.querySelector("#f-keypass").value,
       legacyAlgos: node.querySelector("#f-legacy").checked,
+      encoding: node.querySelector("#f-enc").value,
       useGroupCreds: !!node.querySelector("#f-group").value.trim() && node.querySelector("#f-credmode").value === "group",
       enabled: d.enabled !== false,
       cliOff: !node.querySelector("#f-cli").checked,

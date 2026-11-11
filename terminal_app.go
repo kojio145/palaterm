@@ -512,11 +512,7 @@ func (t *Term) connect(pw string) {
 	if total <= 0 {
 		total = 20
 	}
-	if ct := inv.Settings.CommandTimeout; ct > 0 {
-		total += ct
-	} else {
-		total += 30
-	}
+	total += int(inv.Settings.LoginWait().Seconds())
 	progressDone := make(chan struct{})
 	var progressOnce sync.Once
 	stopProgress := func() { progressOnce.Do(func() { close(progressDone) }) }
@@ -825,6 +821,9 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	} else {
 		send, resize, closeFn = t.runner.StartInteractive(exp, sink, onClose)
 	}
+	// A multi-line paste goes out a line at a time on a console (see
+	// pacedSend); keys typed one by one are not held.
+	send = pacedSend(send, settings.PasteLineDelay(d.Conn))
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
 	cols, rows := t.cols, t.rows

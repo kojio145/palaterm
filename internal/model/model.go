@@ -27,6 +27,28 @@ const (
 	ConnSerial ConnMethod = "serial"
 )
 
+// Device.Encoding values. Empty is UTF-8 too.
+const (
+	EncodingUTF8 = "utf-8"
+	EncodingSJIS = "sjis"
+)
+
+// NormalizeEncoding maps the spellings a CSV or a hand-typed cell may hold
+// ("Shift_JIS", "CP932", "windows-31j", "UTF8", "") to a Device.Encoding
+// value: "" for UTF-8, EncodingSJIS for Shift_JIS, "" with ok=false for
+// anything else.
+func NormalizeEncoding(v string) (enc string, ok bool) {
+	k := strings.ToLower(strings.TrimSpace(v))
+	k = strings.NewReplacer("-", "", "_", "", " ", "").Replace(k)
+	switch k {
+	case "", "utf8", "unicode", "既定", "default":
+		return "", true
+	case "sjis", "shiftjis", "cp932", "windows31j", "ms932", "mskanji":
+		return EncodingSJIS, true
+	}
+	return "", false
+}
+
 // BastionMethod is how PalaTerm reaches a device through a jump host.
 type BastionMethod string
 
@@ -164,6 +186,13 @@ type Device struct {
 	// LegacyAlgos additionally offers old SSH KEX/ciphers (SHA-1 DH groups,
 	// CBC, 3DES) for gear that supports nothing newer. Off by default.
 	LegacyAlgos bool `json:"legacyAlgos,omitempty"`
+
+	// Encoding is the character set the device talks in: empty (or
+	// EncodingUTF8) means UTF-8, as every device was taken to be before
+	// v1.9.34; EncodingSJIS means Shift_JIS (CP932) — what it sends is
+	// decoded to UTF-8 before anything else sees it (the window, the log,
+	// the prompt match), and what is typed is encoded on its way out.
+	Encoding string `json:"encoding,omitempty"`
 
 	// Optional jump-host chain (up to MaxBastions hops, outermost first).
 	Bastions []Bastion `json:"bastions,omitempty"`
@@ -971,6 +1000,22 @@ type Settings struct {
 	StageTokenNone string `json:"stageTokenNone,omitempty"`
 	ConnectTimeout int    `json:"connectTimeout"` // seconds
 	CommandTimeout int    `json:"commandTimeout"` // seconds per expect
+	// LoginTimeout bounds each wait of the login — a jump host's prompts,
+	// the username/password questions, the first prompt — in seconds; 0 (the
+	// default) means CommandTimeout, as it always was. A device that never
+	// answers used to be reported only after that many command timeouts in
+	// a row; a shorter login wait ends it sooner without touching the
+	// commands' own limit.
+	LoginTimeout int `json:"loginTimeout,omitempty"`
+	// PasteLineDelayMs / PasteLineDelayNetMs: how long an interactive window
+	// waits after each line of a multi-line paste before sending the next,
+	// on a serial console and over SSH/Telnet. A 9600-baud console that gets
+	// a whole config at once loses characters (review 2026-11-07). Serial: 0
+	// = the default (DefaultPasteLineDelayMs), PasteLineDelayNone (-1) = no
+	// wait; network: 0 = no wait, as before. Single keystrokes and a lone
+	// Enter are never delayed.
+	PasteLineDelayMs    int `json:"pasteLineDelayMs,omitempty"`
+	PasteLineDelayNetMs int `json:"pasteLineDelayNetMs,omitempty"`
 
 	// LastKeyFile is the most recently chosen SSH private-key path; the device
 	// editor pre-fills it when public-key auth is selected.
@@ -1021,6 +1066,60 @@ type Settings struct {
 	// default (DefaultWorkJoinHours); WorkJoinNever (-1) = every window
 	// makes its own folder, as before v1.9.28; otherwise 1..MaxWorkJoinHours.
 	WorkJoinHours int `json:"workJoinHours,omitempty"`
+}
+
+// DefaultPasteLineDelayMs is the wait between pasted lines on a serial
+// console when PasteLineDelayMs is 0: a line's processing after its CR on a
+// 9600-baud line, with room to spare.
+const DefaultPasteLineDelayMs = 100
+
+// MaxPasteLineDelayMs is the longest wait between pasted lines (5 s).
+const MaxPasteLineDelayMs = 5000
+
+// PasteLineDelayNone is the PasteLineDelayMs value for no wait on serial.
+const PasteLineDelayNone = -1
+
+// PasteLineDelay is the wait between the lines of a paste on a conn of the
+// given kind; 0 means none.
+func (s Settings) PasteLineDelay(conn ConnMethod) time.Duration {
+	ms := s.PasteLineDelayNetMs
+	if conn == ConnSerial {
+		ms = s.PasteLineDelayMs
+		if ms == 0 {
+			ms = DefaultPasteLineDelayMs
+		}
+	}
+	if ms <= 0 || ms > MaxPasteLineDelayMs {
+		if ms > MaxPasteLineDelayMs {
+			return MaxPasteLineDelayMs * time.Millisecond
+		}
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// ValidatePasteLineDelay refuses a wait outside -1..MaxPasteLineDelayMs for
+// serial and 0..MaxPasteLineDelayMs for the network.
+func (s Settings) ValidatePasteLineDelay() error {
+	if s.PasteLineDelayMs < PasteLineDelayNone || s.PasteLineDelayMs > MaxPasteLineDelayMs {
+		return fmt.Errorf("貼り付けの行間待ち（シリアル）は 0〜%d ミリ秒（0 = 既定の %d ミリ秒、-1 = 待たない）で指定してください: %d", MaxPasteLineDelayMs, DefaultPasteLineDelayMs, s.PasteLineDelayMs)
+	}
+	if s.PasteLineDelayNetMs < 0 || s.PasteLineDelayNetMs > MaxPasteLineDelayMs {
+		return fmt.Errorf("貼り付けの行間待ち（SSH・Telnet）は 0〜%d ミリ秒（0 = 待たない）で指定してください: %d", MaxPasteLineDelayMs, s.PasteLineDelayNetMs)
+	}
+	return nil
+}
+
+// LoginWait is the bound on each login wait: LoginTimeout when set, else
+// the command timeout (its own default of 30 s applied).
+func (s Settings) LoginWait() time.Duration {
+	if s.LoginTimeout > 0 {
+		return time.Duration(s.LoginTimeout) * time.Second
+	}
+	if s.CommandTimeout > 0 {
+		return time.Duration(s.CommandTimeout) * time.Second
+	}
+	return 30 * time.Second
 }
 
 // DefaultWorkJoinHours is the join window when WorkJoinHours is 0; a work
@@ -1126,6 +1225,11 @@ func (d *Device) Validate() error {
 		d.TermColor = c
 	} else {
 		return fmt.Errorf("端末の色が不正です: %q（赤・橙・黄・緑・青・紫 か空欄）", d.TermColor)
+	}
+	if e, ok := NormalizeEncoding(d.Encoding); ok {
+		d.Encoding = e
+	} else {
+		return fmt.Errorf("文字コードが不正です: %q（UTF-8 / Shift_JIS か空欄）", d.Encoding)
 	}
 	switch d.Conn {
 	case ConnSSH, ConnTelnet:

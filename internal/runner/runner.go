@@ -649,11 +649,19 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 		cmdTimeout = 30 * time.Second
 	}
 
+	// Each wait of the login — a jump host's prompts, the credential
+	// questions, the first prompt — is bounded by the login wait, which is
+	// the command timeout unless set apart (v1.9.34).
+	loginTimeout := s.LoginWait()
+
 	bastions := dev.ActiveBastions()
 	sess, err := r.dialTransport(ctx, dev, bastions, connTimeout, emit)
 	if err != nil {
 		return nil, prof, "", err
 	}
+	// A Shift_JIS device is read and written through a converter, so the
+	// expecter, the log and the window see UTF-8 (a UTF-8 device: no wrap).
+	sess = session.Transcode(sess, dev.Encoding)
 	exp = newExpecterTee(sess, tee)
 
 	if dev.Conn == model.ConnSerial {
@@ -664,7 +672,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// the login below must not end on that shell (see landing).
 	var hop *landing
 	if len(bastions) > 0 && !dev.Tunneled() {
-		if hop, err = r.traverseBastions(ctx, exp, bastions, dev, cmdTimeout); err != nil {
+		if hop, err = r.traverseBastions(ctx, exp, bastions, dev, loginTimeout); err != nil {
 			return exp, prof, "", &hopError{err}
 		}
 	}
@@ -676,7 +684,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// {user}/{password} steps are skipped outright; through a bastion (or on
 	// Telnet/serial) the prompts arrive in-stream and the steps run.
 	skipCreds := (len(bastions) == 0 || dev.Tunneled()) && dev.Conn == model.ConnSSH
-	if err := r.runSteps(ctx, exp, prof.Login, vars, cmdTimeout, skipCreds, prof.Prompt); err != nil {
+	if err := r.runSteps(ctx, exp, prof.Login, vars, loginTimeout, skipCreds, prof.Prompt); err != nil {
 		return exp, prof, "", loginFailure(err, "login", hop, dev, prof, exp)
 	}
 	// Login lists need no trailing expect-only prompt row: when the last step
@@ -684,7 +692,7 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	// here. A profile that still ends with its own expect row keeps the old
 	// behavior — no second wait that would hang.
 	if n := len(prof.Login); n == 0 || prof.Login[n-1].Sends() {
-		if err := r.waitPrompt(ctx, exp, prof, cmdTimeout); err != nil {
+		if err := r.waitPrompt(ctx, exp, prof, loginTimeout); err != nil {
 			return exp, prof, "", loginFailure(err, "login: waiting for prompt", hop, dev, prof, exp)
 		}
 	}
@@ -936,7 +944,7 @@ func (r *Runner) Open(ctx context.Context, dev *model.Device, s model.Settings) 
 	if err != nil {
 		return nil, err
 	}
-	return newExpecter(sess), nil
+	return newExpecter(session.Transcode(sess, dev.Encoding)), nil
 }
 
 // StartInteractive hands a connected expecter over to raw pass-through mode:

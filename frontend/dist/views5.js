@@ -47,6 +47,7 @@ function gridOptionsBuild(kind) {
     case "set": return [{ v: "", label: t("（なし）"), alias: ["（なし）"] }].concat((INV.commandSets || []).map(s => ({ v: s.name, label: s.name })));
     case "group": return (INV.deviceGroups || []).map(g => ({ v: g.name, label: g.name }));
     case "scheme": return [{ v: "https", label: "https" }, { v: "http", label: "http" }];
+    case "enc": return [{ v: "", label: "UTF-8", alias: ["utf8", "utf-8", "unicode", "既定"] }, { v: "sjis", label: "Shift_JIS", alias: ["shift_jis", "shift-jis", "shiftjis", "sjis", "cp932", "windows-31j", "ms932"] }];
     case "tint": return [{ v: "", label: t("なし"), alias: ["なし", "none"] }].concat(deviceTintKeys().map(k => ({ v: k, label: t(DEVICE_TINTS[k].name), alias: [DEVICE_TINTS[k].name] })));
   }
   return null;
@@ -108,6 +109,10 @@ function gridNormLoose(kind, w) {
       if (has("tunnel", "トンネル")) return "tunnel";
       if (has("shell", "コマンド")) return "shell";
       return "";
+    case "enc":
+      if (has("sjis", "shift", "cp932", "31j", "ms932")) return "sjis";
+      if (has("utf")) return "";
+      return "";
   }
   return "";
 }
@@ -128,7 +133,7 @@ function gridColTitle(c) {
 const GRID_W = {
   name: 150, group: 110, site: 100, role: 90, host: 130, conn: 80, port: 78, serialPort: 110, baud: 96,
   osType: 150, commandSet: 150, enabled: 64, useGroupCreds: 100, username: 110, password: 100, enablePassword: 110,
-  authMethod: 90, keyFile: 180, keyPassphrase: 110, legacyAlgos: 90, bastionMode: 120,
+  authMethod: 90, keyFile: 180, keyPassphrase: 110, legacyAlgos: 90, encoding: 100, bastionMode: 120,
   Method: 80, Host: 130, Port: 78, Username: 100, Password: 100, AuthMethod: 90, KeyFile: 160, KeyPassphrase: 110, LegacyAlgos: 90, JumpCommand: 170,
 };
 const GRID_COLW_KEY = "palaterm_grid_colw";

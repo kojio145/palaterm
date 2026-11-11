@@ -286,6 +286,11 @@ func TestSaveSettingsRangesAndTemplates(t *testing.T) {
 		{func(s *model.Settings) { s.AutoLockMin = 1441 }, "自動ロックまでの分数は 0〜1440"},
 		{func(s *model.Settings) { s.ConnectTimeout = 0 }, "接続タイムアウトは 1〜3600"},
 		{func(s *model.Settings) { s.CommandTimeout = 3601 }, "コマンドタイムアウトは 1〜3600"},
+		{func(s *model.Settings) { s.LoginTimeout = 3601 }, "ログイン待ちは 0〜3600"},
+		{func(s *model.Settings) { s.LoginTimeout = -1 }, "ログイン待ちは 0〜3600"},
+		{func(s *model.Settings) { s.PasteLineDelayMs = 5001 }, "貼り付けの行間待ち（シリアル）は 0〜5000"},
+		{func(s *model.Settings) { s.PasteLineDelayMs = -2 }, "貼り付けの行間待ち（シリアル）は 0〜5000"},
+		{func(s *model.Settings) { s.PasteLineDelayNetMs = -1 }, "貼り付けの行間待ち（SSH・Telnet）は 0〜5000"},
 		{func(s *model.Settings) { s.LogNameTemplate = "{host}:{date}.txt" }, "ログファイル名の書式"},
 		{func(s *model.Settings) { s.LogDirTemplate = "{group}|{date}" }, "ログフォルダ名の書式"},
 	} {
