@@ -113,6 +113,67 @@ func (t StageTokens) Canonical(tok string) string {
 	return tok
 }
 
+// ValidateWord rejects a stage word that cannot be part of a folder or file
+// name: too long, a character a file name cannot hold, "_" (the folder
+// name's field separator), a trailing dot or a Windows reserved name. label
+// names the word in the error (作業前, or 作業タイミング for a word typed in
+// the run tab).
+func ValidateWord(label, w string) error {
+	if len([]rune(w)) > 32 {
+		return fmt.Errorf("%sの付与文字列が長すぎます（32文字まで）: %q", label, w)
+	}
+	if sanitize(w) != w {
+		return fmt.Errorf("%sの付与文字列にファイル名に使えない文字（空白や \\ / : * ? \" < > |）があります: %q", label, w)
+	}
+	if strings.ContainsFunc(w, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return fmt.Errorf("%sの付与文字列に制御文字が含まれています: %q", label, w)
+	}
+	if strings.HasSuffix(w, ".") {
+		return fmt.Errorf("%sの付与文字列の末尾にドットは使えません: %q", label, w)
+	}
+	// "_" separates the fields of a folder name, and the stage is read
+	// back as the last of them (parseDirName): "pre_work" would come back
+	// as "work".
+	if strings.Contains(w, "_") {
+		return fmt.Errorf("%sの付与文字列にアンダースコア（_）は使えません（フォルダ名の区切りに使うため）: %q", label, w)
+	}
+	if reservedName(w) {
+		return fmt.Errorf("%sの付与文字列 %q は Windows の予約名のため使えません", label, w)
+	}
+	return nil
+}
+
+// CustomStage resolves a stage word typed in the run tab (作業タイミング:
+// 今回だけ入力) to the stage a batch runs as. A word that is one of the
+// fixed stages' configured or default names is that stage ("pre" with
+// Before="pre" runs as 作業前, so the history tab pairs it as usual); the
+// 予約 and 指定なし words are refused (a folder would carry a word those
+// stages never put there); any other word is the stage itself, written into
+// the folder and file names as it is and shown as it is.
+func (t StageTokens) CustomStage(word string) (string, error) {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return "", fmt.Errorf("作業タイミングの語を入力してください")
+	}
+	if err := ValidateWord("作業タイミング", word); err != nil {
+		return "", err
+	}
+	t = t.Filled()
+	switch strings.ToLower(word) {
+	case strings.ToLower(t.Before), "before":
+		return "before", nil
+	case strings.ToLower(t.Work), StageWork, "during":
+		return "during", nil
+	case strings.ToLower(t.After), "after":
+		return "after", nil
+	case strings.ToLower(t.Schedule), "reserve", StageSchedule:
+		return "", fmt.Errorf("作業タイミングの語 %q は予約のログに付く語なので使えません", word)
+	case strings.ToLower(t.None), "current", "config":
+		return "", fmt.Errorf("作業タイミングの語 %q は「指定なし」のログに付く語なので使えません", word)
+	}
+	return word, nil
+}
+
 // Validate rejects words that cannot be part of a file name, that are the
 // same for two stages, or that would be read as a different stage.
 func (t StageTokens) Validate() error {
@@ -120,26 +181,8 @@ func (t StageTokens) Validate() error {
 	words := []struct{ label, w string }{{"作業前", t.Before}, {"作業中", t.Work}, {"作業後", t.After}, {"予約", t.Schedule}, {"指定なし", t.None}}
 	seen := map[string]string{}
 	for _, x := range words {
-		if len([]rune(x.w)) > 32 {
-			return fmt.Errorf("%sの付与文字列が長すぎます（32文字まで）: %q", x.label, x.w)
-		}
-		if sanitize(x.w) != x.w {
-			return fmt.Errorf("%sの付与文字列にファイル名に使えない文字（空白や \\ / : * ? \" < > |）があります: %q", x.label, x.w)
-		}
-		if strings.ContainsFunc(x.w, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
-			return fmt.Errorf("%sの付与文字列に制御文字が含まれています: %q", x.label, x.w)
-		}
-		if strings.HasSuffix(x.w, ".") {
-			return fmt.Errorf("%sの付与文字列の末尾にドットは使えません: %q", x.label, x.w)
-		}
-		// "_" separates the fields of a folder name, and the stage is read
-		// back as the last of them (parseDirName): "pre_work" would come back
-		// as "work".
-		if strings.Contains(x.w, "_") {
-			return fmt.Errorf("%sの付与文字列にアンダースコア（_）は使えません（フォルダ名の区切りに使うため）: %q", x.label, x.w)
-		}
-		if reservedName(x.w) {
-			return fmt.Errorf("%sの付与文字列 %q は Windows の予約名のため使えません", x.label, x.w)
+		if err := ValidateWord(x.label, x.w); err != nil {
+			return err
 		}
 		k := strings.ToLower(x.w)
 		if prev, dup := seen[k]; dup {

@@ -363,6 +363,13 @@ function runRequest(names, dryRun) {
 // maintenance job can be told apart, and the 実行履歴 tab can pair a before
 // with an after and show what changed.
 let runStage = "";
+// 作業タイミング: 今回だけ入力 — the select's value that opens the word
+// dialog; the word itself becomes runStage (anything outside STAGES), goes
+// into the folder and file names as it is, and is shown as it is. The last
+// typed word is kept for 入力を編集.
+const RUN_STAGE_CUSTOM = "__custom__";
+let runStageWord = "";
+function isCustomStage(st) { return !!st && !STAGES.includes(st); }
 // 踏み台を使わずに接続: this run (and the 接続 buttons of the run tab) reach
 // every device directly, its jump hosts left out — on site, plugged into
 // the devices' network. Nothing is saved.
@@ -565,9 +572,11 @@ function renderRun() {
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
         ${ungroupedCount ? `<option value="${RUN_UNGROUPED}" ${runGroupSel === RUN_UNGROUPED ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: t("（グループ未設定）"), n: ungroupedCount }))}</option>` : ""}
       </select>` : ""}
-      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます"))}">
+      <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます。「今回だけ入力…」で、その場で決めた語（切替前・rollback など）を付けられます。選んだ値は実行が終わっても変わりません"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
+        <option value="${RUN_STAGE_CUSTOM}" ${isCustomStage(runStage) ? "selected" : ""}>${esc(isCustomStage(runStage) ? t("作業タイミング: 今回だけ入力（{s}）", { s: runStage }) : t("作業タイミング: 今回だけ入力…"))}</option>
       </select>
+      ${isCustomStage(runStage) && !running ? `<button class="btn sm" id="run-stage-edit">${esc(t("入力を編集…"))}</button>` : ""}
       ${runGroupSel && !running && typeof App().CutWorkCycle === "function" ? `<button class="btn" id="btn-cut-work" data-tip="${esc(t("次の対話接続から新しい作業中フォルダに記録します"))}">${esc(t("作業中を区切る"))}</button>` : ""}
       ${anyBastion ? `<select id="run-route" class="btn${runDirect ? " warn-outline" : ""}" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("この実行と、この表の「接続」だけ、踏み台を通らずにこの PC から機器へ直接接続します（現場で機器のネットワークにつないでいるときなど）。機器の設定は変わりません"))}">
         <option value="" ${runDirect ? "" : "selected"}>${esc(t("踏み台: 機器の設定どおり"))}</option>
@@ -690,7 +699,14 @@ function renderRun() {
   const adEdit = document.getElementById("run-adhoc-edit");
   if (adEdit) adEdit.onclick = async () => { if (await adHocDialog()) renderRun(); };
   const stageSel = document.getElementById("run-stage");
-  if (stageSel) stageSel.onchange = () => { runStage = stageSel.value; };
+  if (stageSel) stageSel.onchange = async () => {
+    if (stageSel.value === RUN_STAGE_CUSTOM) {
+      if (!(await stageWordDialog())) { stageSel.value = isCustomStage(runStage) ? RUN_STAGE_CUSTOM : runStage; return; }
+    } else runStage = stageSel.value;
+    renderRun();
+  };
+  const stEdit = document.getElementById("run-stage-edit");
+  if (stEdit) stEdit.onclick = async () => { if (await stageWordDialog()) renderRun(); };
   const routeSel = document.getElementById("run-route");
   if (routeSel) routeSel.onchange = () => { runDirect = routeSel.value === "direct"; renderRun(); };
   document.getElementById("btn-cancel").onclick = async () => {
@@ -965,6 +981,43 @@ function adHocDialog() {
   });
 }
 
+// The word a 作業タイミング: 今回だけ入力 run is tagged with. The same
+// rules as the words of the settings tab (the Go side checks them again,
+// against the vault's own words, when the run starts).
+function stageWordProblem(w) {
+  if (!w) return t("語を入力してください");
+  if ([...w].length > 32) return t("32 文字までです");
+  for (const ch of w) if (ch <= " " || ch === String.fromCharCode(127) || "_\\/:*?\"<>|".includes(ch)) return t("空白・_ と \\ / : * ? \" < > | は使えません");
+  if (w.endsWith(".")) return t("末尾にドットは使えません");
+  return "";
+}
+function stageWordDialog() {
+  return new Promise(resolve => {
+    const node = h(`<div>
+      <h3>${esc(t("今回だけの作業タイミング"))}</h3>
+      <p class="muted" style="font-size:13px;margin-top:-6px">${esc(t("ログのフォルダ名とファイル名に付く語を入力します（例: 切替前・rollback）。実行履歴・比較タブにはこの語がそのまま出ます（作業前／作業後の自動の組み合わせには使われません）。保存はされません"))}</p>
+      <div class="field"><input id="sw-text" maxlength="32" placeholder="${esc(t("切替前"))}" value="${esc(isCustomStage(runStage) ? runStage : runStageWord)}"></div>
+      <div class="modal-actions">
+        <button class="btn" id="sw-cancel">${esc(t("キャンセル"))}</button>
+        <button class="btn primary" id="sw-ok">${esc(t("決定"))}</button>
+      </div>
+    </div>`);
+    openModal(node, "mid");
+    const inp = node.querySelector("#sw-text");
+    inp.focus(); inp.select();
+    guardDiscard(node, "#sw-cancel", null, () => resolve(false));
+    const ok = () => {
+      const w = inp.value.trim();
+      const why = stageWordProblem(w);
+      if (why) { toast(why, "err"); inp.focus(); return; }
+      runStageWord = w; runStage = w;
+      closeModal(); resolve(true);
+    };
+    node.querySelector("#sw-ok").onclick = ok;
+    inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); ok(); } };
+  });
+}
+
 // The developer-shaped fragments the Go side composes ("expect timeout",
 // "login: waiting for …") read in Japanese on the Japanese UI; terr handles
 // the English one.
@@ -994,7 +1047,7 @@ function statusLabel(p) {
 function stageBanner(st) {
   if (!st) return `<span class="stage-banner stage-none"><span class="sb-label">${esc(t("作業タイミング"))}</span><span class="sb-value">${esc(t("指定なし"))}</span>
     <span class="sb-note">${esc(t("作業前後の比較で自動では選ばれません。必要ならキャンセルして、実行タブの「作業タイミング」を選んでください"))}</span></span>`;
-  return `<span class="stage-banner stage-${esc(st === "work" ? "during" : st)}"><span class="sb-label">${esc(t("作業タイミング"))}</span><span class="sb-value">${esc(stageLabel(st))}</span></span>`;
+  return `<span class="stage-banner stage-${esc(st === "work" ? "during" : isCustomStage(st) ? "custom" : st)}"><span class="sb-label">${esc(t("作業タイミング"))}</span><span class="sb-value">${esc(stageLabel(st))}</span></span>`;
 }
 function stageRunLabel(st) { return st ? t("▶ {s}として実行", { s: stageLabel(st) }) : t("▶ 実行"); }
 
@@ -1549,16 +1602,11 @@ function applyRunDone(payload) {
     toast(t("一括実行が内部エラーで止まりました") + ": " + internalErr, "err");
     return;
   }
-  // The stage moves on with the work: a finished 作業前 run makes the next
-  // one 作業後 (the one most often forgotten at 3 a.m.), and a finished
-  // 作業後 run leaves no stage behind for the next night. A 接続確認 and a
-  // cancelled run change nothing; a re-run of failures goes by the stage
-  // of its batch (lastRunReq) and so lands the same way.
+  // The stage stays as chosen: a finished 作業前 run used to move the
+  // select on to 作業後, and 作業後 back to 指定なし — dropped in v1.9.35
+  // (the field asked for the value it set to stay put). A re-run of
+  // failures goes by the stage of its batch (lastRunReq).
   const ranStage = lastRunReq ? (lastRunReq.stage || "") : runStage;
-  let stageNote = "";
-  if (!wasDry && !wasCancel && ranStage === "before" && runStage === "before") { runStage = "after"; stageNote = " " + t("次は「作業後」として実行します"); }
-  else if (!wasDry && !wasCancel && ranStage === "after" && runStage === "after") { runStage = ""; stageNote = " " + t("作業タイミングを「指定なし」に戻しました"); }
-  if (stageNote && active && active.id === "tab-run") renderRun();
   if (wasCancel) {
     const v = Object.values(runState);
     toast(t("中止しました（完了 {a}・失敗 {b}・中止/未実行 {c}）", {
@@ -1571,8 +1619,8 @@ function applyRunDone(payload) {
     // renderRun below).
     lastRunAfter = { dir: runDir, group: (lastRunReq && lastRunReq.group) || (runGroupSel === RUN_UNGROUPED ? "" : runGroupSel) || "" };
     if (active && active.id === "tab-run") renderRun();
-    toast(t("実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます") + stageNote, "ok", { ms: 6000 });
-  } else toast(t("実行が完了しました") + stageNote, "ok", stageNote ? { ms: 6000 } : undefined);
+    toast(t("実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます"), "ok", { ms: 6000 });
+  } else toast(t("実行が完了しました"), "ok");
   // Refused commands are easy to miss in a long table: say so once more.
   const warned = Object.values(runState).filter(s => s.warnings && s.warnings.length).length;
   if (warned && !wasDry) setTimeout(() => toast(t("⚠ {n} 台で機器に拒否されたコマンドがあります（状態列の「警告」）", { n: warned }), "err"), 1500);

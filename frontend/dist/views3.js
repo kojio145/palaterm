@@ -29,7 +29,7 @@ function fmtRunTime(iso) {
 
 function stageBadge(st) {
   if (!st) return "";
-  return `<span class="badge stage-${esc(st === "work" ? "during" : st)}">${esc(stageLabel(st))}</span>`;
+  return `<span class="badge stage-${esc(st === "work" ? "during" : STAGES.includes(st) ? st : "custom")}">${esc(stageLabel(st))}</span>`;
 }
 
 // The run's folder name: what the user sees in the log folder, so it names

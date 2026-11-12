@@ -1450,7 +1450,7 @@ const I18N_EN = {
   "作業後": "after",
   "接続とログインだけを行い、コマンドは送りません。ログも残しません。認証情報や到達性の事前確認に": "Connects and logs in only — no commands are sent and no logs are written. A rehearsal for credentials and reachability.",
   "⚡ 接続確認のみ": "⚡ Test login only",
-  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます": "Mark the stage of this capture: before, during or after. It is added to the log folder and file names, and the History & compare tab can compare before with after.",
+  "作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます。「今回だけ入力…」で、その場で決めた語（切替前・rollback など）を付けられます。選んだ値は実行が終わっても変わりません": "Which stage of the work this capture is: before, during or after. It goes into the log folder and file names, and the history tab can compare a before with an after. \"Type for this run…\" tags the run with a word of your own (pre-cutover, rollback…). The choice stays as it is after the run",
   "作業タイミング: {s}": "Stage: {s}",
   "作業タイミング: 指定なし": "Stage: not set",
   "接続確認のみ": "Test login only",
@@ -2005,8 +2005,6 @@ const I18N_EN = {
   "この機器はグループ「{g}」の既定の認証情報でログインします。": "This device logs in with the default credentials of group \"{g}\".",
   "踏み台を交換したときだけ。設定タブ（自分の踏み台）と機器の編集（踏み台カード）にも同じボタンがあります": "Only after a jump host replacement. The same button is in Settings (My jump host) and in the device editor (jump host card)",
   "ロック前の一括実行の結果を表に戻しました": "The batch results from before the lock are back in the table",
-  "次は「作業後」として実行します": "The next run is tagged \"After work\"",
-  "作業タイミングを「指定なし」に戻しました": "The work stage is back to \"Not specified\"",
   "自分の踏み台のホストキーの記録を消します。踏み台を交換した（鍵が変わった）ときだけ。次の接続で新しい鍵を記録します": "Forgets the recorded host keys of My jump host. Only when the jump host was replaced (its key changed). The next connection records the new key",
   "自分の踏み台（全段）のホストキーの記録を消します。次の接続で新しい鍵を記録します。<br><b>踏み台を交換した／OSを再インストールした</b>場合だけ続けてください。心当たりがなければ、なりすましの可能性があるため続けずネットワーク管理者に確認してください。": "Forgets the recorded host keys of My jump host (every hop). The next connection records the new keys.<br>Continue only if <b>the jump host was replaced or its OS reinstalled</b>. If you do not know of such a change, do not continue: it may be an impersonation — ask your network administrator.",
   "表を開けません": "Cannot open the table",
@@ -2985,4 +2983,28 @@ I18N_EN_PATTERNS.push(
   [/^貼り付けの行間待ち（シリアル）は 0〜(\d+) ミリ秒（0 = 既定の (\d+) ミリ秒、-1 = 待たない）で指定してください: (-?\d+)$/, "The pause between pasted lines (serial) must be 0–$1 ms (0 = the default of $2 ms, -1 = none): $3"],
   [/^貼り付けの行間待ち（SSH・Telnet）は 0〜(\d+) ミリ秒（0 = 待たない）で指定してください: (-?\d+)$/, "The pause between pasted lines (SSH / Telnet) must be 0–$1 ms (0 = none): $2"],
   [/^文字コードが不正です: "(.*)"（UTF-8 \/ Shift_JIS か空欄）$/, 'Invalid character set: "$1" (UTF-8 / Shift_JIS or empty)'],
+);
+
+// v1.9.35: a stage word typed for one run; the stage no longer moves on by itself
+Object.assign(I18N_EN, {
+  "作業タイミング: 今回だけ入力…": "Work stage: type for this run…",
+  "作業タイミング: 今回だけ入力（{s}）": "Work stage: typed for this run ({s})",
+  "今回だけの作業タイミング": "Work stage for this run only",
+  "ログのフォルダ名とファイル名に付く語を入力します（例: 切替前・rollback）。実行履歴・比較タブにはこの語がそのまま出ます（作業前／作業後の自動の組み合わせには使われません）。保存はされません": "A word for the log folder and file names (pre-cutover, rollback…). The history tab shows it as it is (it is not paired as a before / after). Nothing is saved",
+  "切替前": "pre-cutover",
+  "語を入力してください": "Enter a word",
+  "32 文字までです": "32 characters at most",
+  "空白・_ と \\ / : * ? \" < > | は使えません": "No spaces, _ or \\ / : * ? \" < > |",
+  "末尾にドットは使えません": "It cannot end with a dot",
+  "作業タイミングの語を入力してください": "Enter a word for the work stage",
+});
+I18N_EN_PATTERNS.push(
+  [/^作業タイミングの語 "(.*)" は予約のログに付く語なので使えません$/, 'The work stage word "$1" is the word of scheduled runs and cannot be used'],
+  [/^作業タイミングの語 "(.*)" は「指定なし」のログに付く語なので使えません$/, 'The work stage word "$1" is the word of runs with no stage and cannot be used'],
+  [/^作業タイミングの付与文字列が長すぎます（32文字まで）: "(.*)"$/, 'The work stage word is too long (32 characters at most): "$1"'],
+  [/^作業タイミングの付与文字列にファイル名に使えない文字（.*）があります: "(.*)"$/, 'The work stage word has a character a file name cannot hold: "$1"'],
+  [/^作業タイミングの付与文字列に制御文字が含まれています: "(.*)"$/, 'The work stage word has a control character: "$1"'],
+  [/^作業タイミングの付与文字列の末尾にドットは使えません: "(.*)"$/, 'The work stage word cannot end with a dot: "$1"'],
+  [/^作業タイミングの付与文字列にアンダースコア（_）は使えません（フォルダ名の区切りに使うため）: "(.*)"$/, 'The work stage word cannot contain "_" (it separates the fields of a folder name): "$1"'],
+  [/^作業タイミングの付与文字列 "(.*)" は Windows の予約名のため使えません$/, 'The work stage word "$1" is a Windows reserved name and cannot be used'],
 );

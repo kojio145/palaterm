@@ -509,6 +509,7 @@ th.sortable:hover { color: var(--text); }
 .badge.stage-before { color: #93c5fd; border-color: #1d4ed8; }
 .badge.stage-during { color: #fcd34d; border-color: #b45309; }
 .badge.stage-after { color: #86efac; border-color: #15803d; }
+.badge.stage-custom { color: #d8b4fe; border-color: #7e22ce; }
 .hist-devs td { padding: 6px 12px; font-size: 12px; }
 .hist-devs { background: var(--bg); }
 .diff-wrap { background: #0b0e13; border: 1px solid var(--border); border-radius: 10px;
@@ -529,6 +530,7 @@ th.sortable:hover { color: var(--text); }
 .stage-banner.stage-before { border-color: #1d4ed8; background: rgba(29, 78, 216, .15); } .stage-banner.stage-before .sb-value { color: #93c5fd; }
 .stage-banner.stage-during { border-color: #b45309; background: rgba(180, 83, 9, .15); } .stage-banner.stage-during .sb-value { color: #fcd34d; }
 .stage-banner.stage-after { border-color: #15803d; background: rgba(21, 128, 61, .15); } .stage-banner.stage-after .sb-value { color: #86efac; }
+.stage-banner.stage-custom { border-color: #7e22ce; background: rgba(126, 34, 206, .15); } .stage-banner.stage-custom .sb-value { color: #d8b4fe; }
 .stage-banner.stage-none { border-color: var(--warn); border-style: dashed; } .stage-banner.stage-none .sb-value, .stage-banner.stage-none .sb-note { color: var(--warn); }
 /* One look for every warning box (and the import screen's .li-warn / .li-err
    are the same box): tinted, with a border of its colour. */

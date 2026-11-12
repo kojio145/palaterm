@@ -2566,14 +2566,27 @@ func snapshotOf(inv *model.Inventory, req RunRequest) (*model.Inventory, error) 
 }
 
 func (a *App) run(req RunRequest) error {
-	stage := model.Stage(req.Stage)
-	if !stage.Valid() {
-		return fmt.Errorf("作業タイミングの値が不正です: %q", req.Stage)
+	// The stage is one of the fixed four, or a word typed in the run tab
+	// (作業タイミング: 今回だけ入力) — checked against the vault's stage
+	// words below, once the vault is known to be open.
+	custom := !model.Stage(req.Stage).Valid()
+	if custom {
+		if err := logstore.ValidateWord("作業タイミング", req.Stage); err != nil {
+			return err
+		}
 	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
 		return errVaultLocked
+	}
+	if custom {
+		st, err := a.inv.Settings.StageTokens().CustomStage(req.Stage)
+		if err != nil {
+			a.mu.Unlock()
+			return err
+		}
+		req.Stage = st
 	}
 	snap, err := a.runSnapshot(req)
 	if err != nil {
@@ -4088,7 +4101,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.34"
+const appVersion = "1.9.35"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
