@@ -5,7 +5,8 @@
 // the left marking every difference, and 前の差分 / 次の差分 to walk them.
 // The comparison itself is history.DiffWith (Go): blocks paired by their
 // heading, the configuration listing alone when both logs have one
-// (範囲: 設定だけ), secrets and noise left out and counted. Loaded in every
+// (範囲: 設定だけ) or one typed command's output alone (範囲: コマンドごと,
+// v1.9.36), secrets and noise left out and counted. Loaded in every
 // window; only runs when DiffWin is bound.
 // User-visible strings are Japanese source text wrapped in t() (see i18n.js).
 
@@ -15,9 +16,17 @@ async function bootDiffWindow() {
   document.body.style.background = "var(--bg)";
   const D = () => window.go.main.DiffWin;
   // Options remembered per PC: what is left out, the range, the folding.
+  // The folding is off unless turned on (v1.9.36, user: every line the
+  // command printed is shown, show run included; the folded view read as
+  // "only the differences"). Options saved before that carry no v: their
+  // fold is reset once, the rest kept.
   const OPTS_KEY = "palaterm_diff_opts";
-  let opts = { noise: true, secrets: true, configOnly: true, fold: true };
-  try { opts = Object.assign(opts, JSON.parse(localStorage.getItem(OPTS_KEY) || "{}")); } catch (e) { /* defaults */ }
+  let opts = { noise: true, secrets: true, configOnly: true, fold: false, v: 2 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(OPTS_KEY) || "{}");
+    opts = Object.assign(opts, saved);
+    if (saved.v !== 2) { opts.fold = false; opts.v = 2; }
+  } catch (e) { /* defaults */ }
   const saveOpts = () => { try { localStorage.setItem(OPTS_KEY, JSON.stringify(opts)); } catch (e) { /* ignore */ } };
   const wrap = h(`<div style="position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);font-family:'Segoe UI',sans-serif">
     <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
@@ -38,7 +47,7 @@ async function bootDiffWindow() {
     </div>
     <div style="display:flex;align-items:center;gap:10px;padding:4px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap;font-size:12px;color:#c7d0dc">
       <label style="display:flex;align-items:center;gap:5px;white-space:nowrap">${esc(t("範囲"))}
-        <select id="dw-range" style="width:auto;font-size:12px;padding:2px 6px"><option value="config">${esc(t("設定だけ（show running-config 等）"))}</option><option value="whole">${esc(t("ログ全体"))}</option></select></label>
+        <select id="dw-range" style="width:auto;max-width:300px;font-size:12px;padding:2px 6px"><option value="config">${esc(t("設定だけ（show running-config 等）"))}</option><option value="whole">${esc(t("ログ全体"))}</option></select></label>
       <label style="display:flex;align-items:center;gap:5px;white-space:nowrap">${esc(t("セクション"))}
         <select id="dw-sec" style="width:auto;max-width:260px;font-size:12px;padding:2px 6px"></select></label>
       <label id="dw-cmd-wrap" style="display:flex;align-items:center;gap:5px;white-space:nowrap">${esc(t("コマンド"))}
@@ -100,6 +109,22 @@ async function bootDiffWindow() {
   $("dw-color").onclick = e => openScreenColorPanel("diff", e.currentTarget, applyColors);
   $("dw-noise").checked = opts.noise; $("dw-secrets").checked = opts.secrets; $("dw-fold").checked = opts.fold;
   $("dw-range").value = opts.configOnly ? "config" : "whole";
+  // 範囲: コマンドごと — the command whose output alone is compared, "" for
+  // 設定だけ / ログ全体. Per pair of logs, so not remembered.
+  const RANGE_CMD = "cmd:";
+  let rangeCmd = "";
+  // The list: 設定だけ (off when either log has no listing), ログ全体, then
+  // every command with output typed in A or B (DiffResult.commandList).
+  function fillRange(both, cmds, mode, command) {
+    const range = $("dw-range");
+    const list = cmds.slice();
+    if (mode === "command" && command && !list.includes(command)) list.push(command);
+    let html = `<option value="config" ${both ? "" : "disabled"}>${esc(t("設定だけ（show running-config 等）"))}</option><option value="whole">${esc(t("ログ全体"))}</option>`;
+    if (list.length) html += `<optgroup label="${esc(t("コマンドごと（その出力だけ）"))}">${list.map(c => `<option value="${esc(RANGE_CMD + c)}">${esc(c)}</option>`).join("")}</optgroup>`;
+    range.innerHTML = html;
+    range.value = mode === "command" ? RANGE_CMD + command : mode === "config" ? "config" : "whole";
+    range.disabled = !both && !list.length;
+  }
 
   let doc = null, rows = [], blocks = [], cur = -1;
   // folds: start row → end row (inclusive) of each run of equal rows that
@@ -417,10 +442,14 @@ async function bootDiffWindow() {
   }
   async function loadOnce() {
     const keep = doc ? { la: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].la : 0, lb: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].lb : 0, scroll: body.scrollTop, expanded: new Set(expanded) } : null;
-    opts.noise = $("dw-noise").checked; opts.secrets = $("dw-secrets").checked; opts.configOnly = $("dw-range").value === "config";
+    opts.noise = $("dw-noise").checked; opts.secrets = $("dw-secrets").checked;
+    const rv = $("dw-range").value;
+    rangeCmd = rv.startsWith(RANGE_CMD) ? rv.slice(RANGE_CMD.length) : "";
+    // A command chosen leaves the remembered default (設定だけ / ログ全体) as it was.
+    if (!rangeCmd) opts.configOnly = rv === "config";
     saveOpts();
     body.innerHTML = `<div class="muted" style="padding:14px">${esc(t("読み込み中…"))}</div>`;
-    doc = await D().Load({ ignoreNoise: opts.noise, ignoreSecrets: opts.secrets, configOnly: opts.configOnly });
+    doc = await D().Load({ ignoreNoise: opts.noise, ignoreSecrets: opts.secrets, configOnly: opts.configOnly, command: rangeCmd });
     $("dw-title").textContent = (doc.label ? doc.label + "　" : "") + t("差分");
     $("dw-name-a").textContent = doc.nameA; $("dw-name-a").dataset.tip = doc.pathA;
     $("dw-name-b").textContent = doc.nameB; $("dw-name-b").dataset.tip = doc.pathB;
@@ -438,18 +467,24 @@ async function bootDiffWindow() {
       blocks.forEach((b, k) => { const x = rows[b.start]; const d = Math.abs((x.la || x.lb) - (keep.la || keep.lb)); if (d < dist) { dist = d; best = k; } });
       cur = best;
     } else if (blocks.length) cur = 0;
-    // Range: only when both logs hold a configuration listing.
+    // Range: 設定だけ only when both logs hold a configuration listing;
+    // コマンドごと when either typed a command with output.
     const range = $("dw-range");
     const both = r.configA && r.configB;
-    range.disabled = !both;
-    range.value = r.mode === "config" ? "config" : "whole";
-    range.parentElement.dataset.tip = both ? t("設定だけ: 両方のログの show running-config 等の出力だけを比べます。ログ全体: show の出力も含めてすべて比べます")
+    const cmdList = r.commandList || [];
+    fillRange(both, cmdList, r.mode, r.command || "");
+    const cfgTip = both ? t("設定だけ: 両方のログの show running-config 等の出力だけを比べます。ログ全体: show の出力も含めてすべて比べます")
       : !r.configA && !r.configB ? t("A・B とも設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています")
         : !r.configA ? t("A のログに設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています") : t("B のログに設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています");
+    range.parentElement.dataset.tip = cfgTip + (cmdList.length ? "\n" + t("コマンドごと: 一覧のコマンドを選ぶと、A・B でそのコマンドを打った出力（最後に打った分）だけを比べます") : "");
     const note = $("dw-note");
     const notes = [];
-    if (opts.configOnly && !both) notes.push(range.parentElement.dataset.tip);
-    $("dw-cmd-wrap").classList.toggle("hidden", r.mode === "config");
+    if (r.mode === "command") {
+      if (!r.commandA && !r.commandB) notes.push(t("A・B とも「{c}」を打った出力がありません", { c: r.command }));
+      else if (!r.commandA) notes.push(t("A のログに「{c}」を打った出力がありません（B の出力だけを表示しています）", { c: r.command }));
+      else if (!r.commandB) notes.push(t("B のログに「{c}」を打った出力がありません（A の出力だけを表示しています）", { c: r.command }));
+    } else if (opts.configOnly && !both) notes.push(cfgTip);
+    $("dw-cmd-wrap").classList.toggle("hidden", r.mode !== "whole");
     fillSelect($("dw-sec"), r.sections || [], t("-- セクションへ移動 --"));
     fillSelect($("dw-cmd"), r.commands || [], t("-- コマンドへ移動 ({n}) --", { n: (r.commands || []).length }));
     const changed = r.added + r.removed + (r.changed || 0) + (r.moved || 0) > 0;
@@ -472,6 +507,7 @@ async function bootDiffWindow() {
     if (opts.noise) parts.push(t("時刻・カウンタ等 {n} 行を除外", { n: r.noiseLines || 0 }));
     if (r.secretLines) parts.push(t("証明書・暗号化値・UUID {n} 行を除外（薄く表示）", { n: r.secretLines }));
     if (r.mode === "config") parts.push(t("設定だけを比較中"));
+    if (r.mode === "command") parts.push(t("「{c}」の出力だけを比較中", { c: r.command }));
     if (r.approx) parts.push(t("（大きすぎるため概算: 行をそのまま突き合わせています）"));
     $("dw-counts").textContent = parts.join("　");
     // The scroll position / the first block: once every row is in (a

@@ -38,11 +38,18 @@ type DiffResult struct {
 	Moved       int    `json:"moved,omitempty"`
 	NoiseLines  int    `json:"noiseLines,omitempty"`  // blank, prompt and pager lines left out (A + B)
 	SecretLines int    `json:"secretLines,omitempty"` // certificate / encrypted / UUID lines left out (A + B)
-	Mode        string `json:"mode,omitempty"`        // "whole" / "config"
+	Mode        string `json:"mode,omitempty"`        // "whole" / "config" / "command"
 	ConfigA     bool   `json:"configA,omitempty"`     // A holds a configuration listing
 	ConfigB     bool   `json:"configB,omitempty"`
 	Sections    []Jump `json:"sections,omitempty"`
 	Commands    []Jump `json:"commands,omitempty"`
+	// Mode "command" (DiffOpts.Command): the command compared, as typed,
+	// and whether each log typed it. CommandList (every mode) is what the
+	// 範囲 list offers: the commands with output typed in A or B.
+	Command     string   `json:"command,omitempty"`
+	CommandA    bool     `json:"commandA,omitempty"`
+	CommandB    bool     `json:"commandB,omitempty"`
+	CommandList []string `json:"commandList,omitempty"`
 	// Impact: the reading of the configuration changes (Mode "config" only).
 	Impact *ImpactResult `json:"impact,omitempty"`
 }

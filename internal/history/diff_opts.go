@@ -21,6 +21,11 @@ type DiffOpts struct {
 	// either log has none the whole logs are compared and the result says
 	// so (DiffResult.Mode, ConfigA, ConfigB).
 	ConfigOnly bool `json:"configOnly"`
+	// Command: only the output of this typed command in each log is
+	// compared (the last time it was typed; see diff_command.go). It wins
+	// over ConfigOnly. A log that never typed it contributes nothing, and
+	// the result says so (CommandA, CommandB).
+	Command string `json:"command,omitempty"`
 }
 
 // Jump is a place in the result the window can go to: a section heading,
@@ -82,11 +87,34 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 	selA, kindA := configSectionIdx(la)
 	selB, kindB := configSectionIdx(lb)
 	res := DiffResult{Mode: "whole", ConfigA: kindA != noListing, ConfigB: kindB != noListing}
+	orderA, outsA := typedCommands(la)
+	orderB, outsB := typedCommands(lb)
+	res.CommandList = commandList(orderA, orderB, outsA, outsB)
 	// The listing's lines get the listing normaliser (normalizeConfig):
 	// every compared line when the listings alone are compared, the lines
-	// of a listing found among the show commands when the whole logs are.
+	// of a listing found among the show commands when the whole logs are
+	// (or one command's output is).
 	var cfgA, cfgB []bool
-	if o.ConfigOnly && res.ConfigA && res.ConfigB {
+	if cmd := strings.Join(strings.Fields(o.Command), " "); cmd != "" {
+		res.Mode = "command"
+		res.Command = commandName(outsA, outsB, cmd)
+		cfgA, cfgB = listingSet(len(la), selA, kindA), listingSet(len(lb), selB, kindB)
+		selA, res.CommandA = commandSelection(outsA, cmd)
+		selB, res.CommandB = commandSelection(outsB, cmd)
+		// A listing asked for by name is compared as a listing on both
+		// sides, whichever listing each log's 設定だけ takes: "show
+		// startup-config" next to "show running-config" would otherwise
+		// get the show outputs' rules, where "timeout 1:00:00" and
+		// "timeout 2:00:00" are one clock reading.
+		if showConfig.MatchString(res.Command) {
+			for _, k := range selA {
+				cfgA[k] = true
+			}
+			for _, k := range selB {
+				cfgB[k] = true
+			}
+		}
+	} else if o.ConfigOnly && res.ConfigA && res.ConfigB {
 		res.Mode = "config"
 		cfgA, cfgB = listingSet(len(la), selA, oneListing), listingSet(len(lb), selB, oneListing)
 	} else {
@@ -121,6 +149,7 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 // configuration listing, for the listings alone.
 func Summarize(a, b string, o DiffOpts) DiffSummary {
 	o.ConfigOnly = false
+	o.Command = "" // the whole logs and the listings, never one command
 	w := DiffWith(a, b, o)
 	s := DiffSummary{Whole: counts(w), ConfigA: w.ConfigA, ConfigB: w.ConfigB, Approx: w.Approx}
 	if w.ConfigA && w.ConfigB {

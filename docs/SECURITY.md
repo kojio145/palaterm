@@ -387,6 +387,7 @@ v2.0 で (beta) を外す前に、HEAD（v1.9.25 公開後）を読み取り専�
 
 - GitHub Actions の `actions/checkout`・`setup-go`・`upload-artifact` をタグではなくコミット SHA で固定し、`govulncheck`（v1.1.4）をビルドのたびに実行する（`.github/workflows/build.yml`）
   - **初回の成果（v1.9.26 のタグ実行）**: govulncheck が到達可能な既知脆弱性 2 件を検出して止まった。GO-2026-6860（`golang.org/x/net` の HTML 解析がテキストノードの結合で二次計算量になる＝一覧の取り込みで開く細工した HTML ファイルによる遅延。`internal/sheet/html.go`）→ `x/net` v0.62.0 へ更新。GO-2026-6809（標準ライブラリ `crypto/x509` が侵害された中間証明書を失効させる）→ Go 1.26.10 へ更新。あわせて `x/crypto` v0.58.0・`x/sys` v0.49.0・`x/text` v0.43.0。v1.9.26 の公開物はこの更新前のビルド（公開物は書き換えない方針）で、次の版に含める
+  - **2 回目（v1.9.35 のタグ実行・2026-11-12）**: GO-2026-6859（標準ライブラリ `net/http` の HTTP/1 サーバで MaxBytesReader のヘッダ競合によりサーバが落ちる。Go 1.26.10 に存在・1.26.11 で修正）を検出して止まった。到達経路は `csvio.ExportLang → csv.Writer.Error → http.CanonicalHeaderKey` などインターフェース経由の呼び出しグラフ上のもので、PalaTerm は HTTP/1 サーバを公開していないため実害はない。Go 1.26.11 へ更新（go.mod の toolchain・CI の go-version）。v1.9.35 の公開物は更新前のビルド（再現ビルドの照合なし）で、v1.9.36 から更新後
 
 **確認した範囲（変更なし）**: index.html の CSP、フロントの補間はすべて `esc()`・textContent・xterm 経由、localStorage に秘密なし、GUI 窓の http 選択時の警告表示、子プロセスへの受け渡しは標準入力のみ、`FileNameSafe`、`underLogRoot`、単一インスタンスのロック。
 

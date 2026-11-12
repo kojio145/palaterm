@@ -368,6 +368,10 @@ let runStage = "";
 // into the folder and file names as it is, and is shown as it is. The last
 // typed word is kept for 入力を編集.
 const RUN_STAGE_CUSTOM = "__custom__";
+// While a typed word is in force, the list also offers "…の語を変える…":
+// choosing the selected entry again fires no change event, so without it
+// the word could only be changed from the 入力を編集 button (v1.9.36).
+const RUN_STAGE_EDIT = "__custom_edit__";
 let runStageWord = "";
 function isCustomStage(st) { return !!st && !STAGES.includes(st); }
 // 踏み台を使わずに接続: this run (and the 接続 buttons of the run tab) reach
@@ -575,6 +579,7 @@ function renderRun() {
       <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます。「今回だけ入力…」で、その場で決めた語（切替前・rollback など）を付けられます。選んだ値は実行が終わっても変わりません"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
         <option value="${RUN_STAGE_CUSTOM}" ${isCustomStage(runStage) ? "selected" : ""}>${esc(isCustomStage(runStage) ? t("作業タイミング: 今回だけ入力（{s}）", { s: runStage }) : t("作業タイミング: 今回だけ入力…"))}</option>
+        ${isCustomStage(runStage) ? `<option value="${RUN_STAGE_EDIT}">${esc(t("作業タイミング: 今回だけ入力の語を変える…"))}</option>` : ""}
       </select>
       ${isCustomStage(runStage) && !running ? `<button class="btn sm" id="run-stage-edit">${esc(t("入力を編集…"))}</button>` : ""}
       ${runGroupSel && !running && typeof App().CutWorkCycle === "function" ? `<button class="btn" id="btn-cut-work" data-tip="${esc(t("次の対話接続から新しい作業中フォルダに記録します"))}">${esc(t("作業中を区切る"))}</button>` : ""}
@@ -700,7 +705,7 @@ function renderRun() {
   if (adEdit) adEdit.onclick = async () => { if (await adHocDialog()) renderRun(); };
   const stageSel = document.getElementById("run-stage");
   if (stageSel) stageSel.onchange = async () => {
-    if (stageSel.value === RUN_STAGE_CUSTOM) {
+    if (stageSel.value === RUN_STAGE_CUSTOM || stageSel.value === RUN_STAGE_EDIT) {
       if (!(await stageWordDialog())) { stageSel.value = isCustomStage(runStage) ? RUN_STAGE_CUSTOM : runStage; return; }
     } else runStage = stageSel.value;
     renderRun();

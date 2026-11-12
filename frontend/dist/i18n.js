@@ -499,6 +499,13 @@ const I18N_EN = {
   "時刻・カウンタ等 {n} 行を除外": "{n} clock / counter line(s) left out",
   "証明書・暗号化値・UUID {n} 行を除外（薄く表示）": "{n} certificate / encrypted / UUID line(s) left out (dimmed)",
   "設定だけを比較中": "comparing the configuration only",
+  // v1.9.36: 範囲: コマンドごと
+  "コマンドごと（その出力だけ）": "Per command (its output only)",
+  "コマンドごと: 一覧のコマンドを選ぶと、A・B でそのコマンドを打った出力（最後に打った分）だけを比べます": "Per command: pick a command from the list to compare only its output in A and B (the last time it was typed)",
+  "A・B とも「{c}」を打った出力がありません": "Neither A nor B holds output of \"{c}\"",
+  "A のログに「{c}」を打った出力がありません（B の出力だけを表示しています）": "Log A holds no output of \"{c}\" (only B's output is shown)",
+  "B のログに「{c}」を打った出力がありません（A の出力だけを表示しています）": "Log B holds no output of \"{c}\" (only A's output is shown)",
+  "「{c}」の出力だけを比較中": "comparing the output of \"{c}\" only",
   "設定の差分あり": "configuration changed",
   "状態のみ変化": "state only",
   "差分あり（設定が見当たらない）": "changed (no configuration listing)",
@@ -2989,6 +2996,7 @@ I18N_EN_PATTERNS.push(
 Object.assign(I18N_EN, {
   "作業タイミング: 今回だけ入力…": "Work stage: type for this run…",
   "作業タイミング: 今回だけ入力（{s}）": "Work stage: typed for this run ({s})",
+  "作業タイミング: 今回だけ入力の語を変える…": "Work stage: change the typed word…",
   "今回だけの作業タイミング": "Work stage for this run only",
   "ログのフォルダ名とファイル名に付く語を入力します（例: 切替前・rollback）。実行履歴・比較タブにはこの語がそのまま出ます（作業前／作業後の自動の組み合わせには使われません）。保存はされません": "A word for the log folder and file names (pre-cutover, rollback…). The history tab shows it as it is (it is not paired as a before / after). Nothing is saved",
   "切替前": "pre-cutover",
