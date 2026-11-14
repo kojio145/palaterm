@@ -87,8 +87,15 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 	selA, kindA := configSectionIdx(la)
 	selB, kindB := configSectionIdx(lb)
 	res := DiffResult{Mode: "whole", ConfigA: kindA != noListing, ConfigB: kindB != noListing}
-	orderA, outsA := typedCommands(la)
-	orderB, outsB := typedCommands(lb)
+	// A command either log typed in several contexts is listed per
+	// context in both (typedLog.entries).
+	typedA, typedB := typedLogOf(la), typedLogOf(lb)
+	split := typedA.split()
+	for k := range typedB.split() {
+		split[k] = true
+	}
+	orderA, outsA := typedA.entries(split)
+	orderB, outsB := typedB.entries(split)
 	res.CommandList = commandList(orderA, orderB, outsA, outsB)
 	// The listing's lines get the listing normaliser (normalizeConfig):
 	// every compared line when the listings alone are compared, the lines
@@ -97,7 +104,8 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 	var cfgA, cfgB []bool
 	if cmd := strings.Join(strings.Fields(o.Command), " "); cmd != "" {
 		res.Mode = "command"
-		res.Command = commandName(outsA, outsB, cmd)
+		var typed string
+		res.Command, typed = commandName(outsA, outsB, cmd)
 		cfgA, cfgB = listingSet(len(la), selA, kindA), listingSet(len(lb), selB, kindB)
 		selA, res.CommandA = commandSelection(outsA, cmd)
 		selB, res.CommandB = commandSelection(outsB, cmd)
@@ -106,7 +114,7 @@ func DiffWith(a, b string, o DiffOpts) DiffResult {
 		// startup-config" next to "show running-config" would otherwise
 		// get the show outputs' rules, where "timeout 1:00:00" and
 		// "timeout 2:00:00" are one clock reading.
-		if showConfig.MatchString(res.Command) {
+		if showConfig.MatchString(typed) {
 			for _, k := range selA {
 				cfgA[k] = true
 			}

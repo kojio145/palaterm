@@ -460,6 +460,9 @@ th.sortable:hover { color: var(--text); }
 /* ---- 差分ウィンドウ（WinMerge 風） ---- */
 .dw-body { font-family: "Consolas", monospace; }
 .dw-table { table-layout: fixed; width: 100%; border-collapse: collapse; }
+/* A log of over 2,000 rows is drawn as one table per 2,000 rows (diff.js);
+   the browser lays out only the parts near the view. */
+.dw-part { content-visibility: auto; }
 .dw-table td { padding: 0 6px; border-bottom: none; white-space: pre; overflow: hidden; text-overflow: ellipsis; line-height: 1.45; vertical-align: top; }
 .dw-table td.dw-ln { color: #475569; text-align: right; user-select: none; background: #0e1219; border-right: 1px solid #1f2733; }
 .dw-table td.dw-txt { color: var(--dw-fg, #cbd5e1); }

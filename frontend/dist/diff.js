@@ -113,6 +113,10 @@ async function bootDiffWindow() {
   // 設定だけ / ログ全体. Per pair of logs, so not remembered.
   const RANGE_CMD = "cmd:";
   let rangeCmd = "";
+  // The range the user picked, until a load takes it: a load that is
+  // running fills the list again when it ends, with its own range, and the
+  // load waiting for it used to read that instead of the pick (v1.9.37).
+  let rangePick = null;
   // The list: 設定だけ (off when either log has no listing), ログ全体, then
   // every command with output typed in A or B (DiffResult.commandList).
   function fillRange(both, cmds, mode, command) {
@@ -172,12 +176,54 @@ async function bootDiffWindow() {
     }
   }
   const segHTML = (segs, text, kind) => segs ? segs.map(s => s.k === "=" ? esc(s.t) : `<span class="dw-seg-${s.k === "-" ? "del" : "add"}">${esc(s.t)}</span>`).join("") : esc(text);
-  // Rows go into the page this many at a time (one chunk per animation
+  // Rows go into the page this many at a time (a few chunks per animation
   // frame): a show tech-class log with the folding off is 100,000 rows,
   // and one innerHTML of them froze the window. done() runs once every
   // row is in (at once when there are few).
+  // Over CHUNK rows each chunk is a table of its own inside a .dw-part,
+  // which the browser lays out only near the view (content-visibility,
+  // style.css): rows added to one table laid the whole table out again
+  // for every chunk, 30 seconds for 100,000 rows. A part not laid out
+  // takes the height sizeParts gives it. Up to CHUNK rows it is one table
+  // straight in the body, as before.
   const CHUNK = 2000;
   let renderSeq = 0;
+  let parts = []; // per .dw-part: its rows, and how many are folded runs / the 絞込 banner
+  // The height of a part while it is not laid out: its rows times the
+  // height of a row. A folded run's row and the banner are measured apart
+  // (their font size is their own). rowH is null until the first part is
+  // in; sizeParts measures again and sets every part (the last chunk, a
+  // font size change).
+  // Measured on three rows of their own at the top of the window, there
+  // for a moment: a row a million pixels down measures to 1/16 of a pixel
+  // only, and 2,000 times that is two rows.
+  let rowH = null;
+  function measureRows() {
+    const cell = `<td class="dw-ln">1</td><td class="dw-txt">x</td>`;
+    body.insertAdjacentHTML("beforeend", `<table class="dw-table" style="position:absolute;top:0;left:0;width:400px;visibility:hidden"><tbody><tr class="dw-same">${cell}${cell}</tr><tr class="dw-skip"><td colspan="4">x</td></tr><tr class="dw-banner"><td colspan="4">x</td></tr></tbody></table>`);
+    const m = body.lastElementChild, hOf = k => m.rows[k].getBoundingClientRect().height;
+    rowH = { row: hOf(0), skip: hOf(1), banner: hOf(2) };
+    m.remove();
+  }
+  const partHeight = c => (c.n - c.skip - c.banner) * rowH.row + c.skip * rowH.skip + c.banner * rowH.banner;
+  // forget: after a font size change. A part that was laid out once keeps
+  // that height while it is away from the view (content-visibility: auto
+  // remembers it) — the height of the font size before. Hidden and back
+  // makes it forget; the parts in the view are laid out again as they are.
+  function sizeParts(forget) {
+    if (!parts.length) return;
+    measureRows();
+    const els = [...body.querySelectorAll(".dw-part")];
+    const view = body.getBoundingClientRect();
+    const away = forget ? els.filter(el => { const r = el.getBoundingClientRect(); return r.bottom < view.top || r.top > view.bottom; }) : [];
+    els.forEach((el, k) => { if (parts[k]) el.style.containIntrinsicHeight = partHeight(parts[k]) + "px"; });
+    away.forEach(el => { el.style.contentVisibility = "hidden"; });
+    if (away.length) void body.offsetHeight;
+    away.forEach(el => { el.style.contentVisibility = ""; });
+  }
+  // A row's distance from the top of the text area's contents (offsetTop
+  // counts from the row's own table, and with parts there are several).
+  const rowTop = tr => parts.length ? tr.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop : tr.offsetTop;
   function render(done) {
     if (!doc) return;
     computeFolds();
@@ -205,21 +251,37 @@ async function bootDiffWindow() {
     const chunkNote = $("dw-chunk");
     const table = first => `<table class="dw-table"><colgroup><col style="width:52px"><col style="width:calc(50% - 52px)"><col style="width:52px"><col style="width:calc(50% - 52px)"></colgroup><tbody>${first}</tbody></table>`;
     chunkNote.textContent = "";
-    const wireSkips = () => body.querySelectorAll("tr.dw-skip").forEach(tr => { if (!tr.onclick) tr.onclick = () => { expanded.add(foldKey(parseInt(tr.dataset.fold, 10))); render(); }; });
+    // A fold opened by a click stays where it is on screen: a view in
+    // parts is drawn from its first part again, which left the scroll at
+    // the top (v1.9.37). A view of one table keeps its scroll by itself.
+    const wireSkips = root => (root || body).querySelectorAll("tr.dw-skip").forEach(tr => { if (!tr.onclick) tr.onclick = () => { expanded.add(foldKey(parseInt(tr.dataset.fold, 10))); const top = body.scrollTop; render(() => { if (parts.length) body.scrollTop = top; }); }; });
+    parts = []; rowH = null;
     if (!rows.length) body.innerHTML = `<div class="muted" style="padding:14px">${esc(t("差分はありません"))}</div>`;
     else if (html.length <= CHUNK) body.innerHTML = table(html.join(""));
     else {
-      body.innerHTML = table(html.slice(0, CHUNK).join(""));
-      const tb = body.querySelector("tbody");
+      // One part: its table, and what sizeParts counts.
+      const part = at => {
+        const list = html.slice(at, at + CHUNK);
+        const c = { n: list.length, skip: list.filter(x => x.startsWith('<tr class="dw-skip"')).length, banner: list.filter(x => x.startsWith('<tr class="dw-banner"')).length };
+        parts.push(c);
+        return `<div class="dw-part"${rowH ? ` style="contain-intrinsic-height:${partHeight(c)}px"` : ""}>${table(list.join(""))}</div>`;
+      };
+      body.innerHTML = part(0);
       const onDone = done;
       let at = CHUNK;
       const more = () => {
         if (seq !== renderSeq) return; // drawn again meanwhile
-        tb.insertAdjacentHTML("beforeend", html.slice(at, at + CHUNK).join(""));
-        at += CHUNK;
-        wireSkips();
+        if (!rowH) measureRows(); // from the first part, before any other is in
+        // As many parts as fit in a few milliseconds of the frame.
+        const t0 = performance.now();
+        do {
+          body.insertAdjacentHTML("beforeend", part(at));
+          at += CHUNK;
+          wireSkips(body.lastElementChild);
+        } while (at < html.length && performance.now() - t0 < 8);
         if (at < html.length) { chunkNote.textContent = t("描画中… {a} / {b} 行", { a: at, b: html.length }); requestAnimationFrame(more); return; }
         chunkNote.textContent = "";
+        sizeParts();
         updateView(); markCurrent();
         if (jumpRow >= 0) { const tr = body.querySelector(`tr[data-i="${jumpRow}"]`); if (tr) tr.classList.add("dw-jump"); }
         if (onDone) onDone();
@@ -269,7 +331,7 @@ async function bootDiffWindow() {
   // jumped to). Null when the row is not in the page yet.
   function scrollToRow(i) {
     const tr = body.querySelector(`tr[data-i="${i}"]`);
-    if (tr) { body.scrollTop = Math.max(0, tr.offsetTop - body.clientHeight / 3); if (jumpRow === i) tr.classList.add("dw-jump"); }
+    if (tr) { body.scrollTop = Math.max(0, rowTop(tr) - body.clientHeight / 3); if (jumpRow === i) tr.classList.add("dw-jump"); }
     return tr;
   }
   // Scroll a row into the middle, opening the fold it sits in. A fold to
@@ -370,7 +432,8 @@ async function bootDiffWindow() {
   $("dw-fold").onchange = () => { opts.fold = $("dw-fold").checked; saveOpts(); render(() => { if (cur >= 0) reveal(blocks[cur].start); }); };
   $("dw-expand").onclick = () => {
     if (folds.every(f => expanded.has(foldKey(f.start)))) expanded.clear(); else folds.forEach(f => expanded.add(foldKey(f.start)));
-    render();
+    const top = body.scrollTop;
+    render(() => { if (parts.length) body.scrollTop = top; });
   };
   // One side at a time: pressing the mouse in A's column makes only A
   // selectable (and the other way round), so a drag takes one side.
@@ -384,7 +447,8 @@ async function bootDiffWindow() {
     body.dataset.side = side;
     const tb = body.querySelector("tbody"); if (!tb) return;
     const s = window.getSelection(); if (!s) return;
-    const range = document.createRange(); range.selectNodeContents(tb);
+    // Every part's table when the rows are in parts.
+    const range = document.createRange(); range.selectNodeContents(parts.length ? body : tb);
     s.removeAllRanges(); s.addRange(range);
   }
   const sideText = side => rows.filter(r => (side === "a" ? r.a : r.b) !== null).map(r => side === "a" ? r.a : r.b).join("\r\n");
@@ -443,10 +507,14 @@ async function bootDiffWindow() {
   async function loadOnce() {
     const keep = doc ? { la: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].la : 0, lb: cur >= 0 && blocks[cur] ? rows[blocks[cur].start].lb : 0, scroll: body.scrollTop, expanded: new Set(expanded) } : null;
     opts.noise = $("dw-noise").checked; opts.secrets = $("dw-secrets").checked;
-    const rv = $("dw-range").value;
+    const rv = rangePick !== null ? rangePick : $("dw-range").value;
+    rangePick = null;
     rangeCmd = rv.startsWith(RANGE_CMD) ? rv.slice(RANGE_CMD.length) : "";
-    // A command chosen leaves the remembered default (設定だけ / ログ全体) as it was.
-    if (!rangeCmd) opts.configOnly = rv === "config";
+    // A command chosen leaves the remembered default (設定だけ / ログ全体) as
+    // it was. So does ログ全体 on a pair where 設定だけ is off (a log without
+    // a listing): the list shows ログ全体 there by itself, and a check box
+    // toggled on such a pair used to turn the default into ログ全体 (v1.9.37).
+    if (!rangeCmd && !(rv === "whole" && $("dw-range").options[0].disabled)) opts.configOnly = rv === "config";
     saveOpts();
     body.innerHTML = `<div class="muted" style="padding:14px">${esc(t("読み込み中…"))}</div>`;
     doc = await D().Load({ ignoreNoise: opts.noise, ignoreSecrets: opts.secrets, configOnly: opts.configOnly, command: rangeCmd });
@@ -473,6 +541,7 @@ async function bootDiffWindow() {
     const both = r.configA && r.configB;
     const cmdList = r.commandList || [];
     fillRange(both, cmdList, r.mode, r.command || "");
+    if (rangePick !== null) range.value = rangePick; // picked meanwhile: the next load's
     const cfgTip = both ? t("設定だけ: 両方のログの show running-config 等の出力だけを比べます。ログ全体: show の出力も含めてすべて比べます")
       : !r.configA && !r.configB ? t("A・B とも設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています")
         : !r.configA ? t("A のログに設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています") : t("B のログに設定の表示（show running-config 等）が見当たらないため、ログ全体を比べています");
@@ -519,7 +588,7 @@ async function bootDiffWindow() {
   }
   $("dw-noise").onchange = load;
   $("dw-secrets").onchange = load;
-  $("dw-range").onchange = load;
+  $("dw-range").onchange = () => { rangePick = $("dw-range").value; load(); };
   // 戻す / 揃える: the commands made from the comparison, in a pane on the
   // right for copying (the compare tab also saves and hands them to the
   // run tab; this window has no vault).
@@ -588,7 +657,7 @@ async function bootDiffWindow() {
   $("dw-open-a").onclick = () => D().OpenLog("a").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   $("dw-open-b").onclick = () => D().OpenLog("b").catch(e => toast(t("ログを開けません") + ": " + terr(e), "err"));
   // Font size (wireFontZoom, app.js).
-  const zoom = wireFontZoom("palaterm_diff_font", px => { body.style.fontSize = px + "px"; updateView(); }, { def: 12 });
+  const zoom = wireFontZoom("palaterm_diff_font", px => { body.style.fontSize = px + "px"; sizeParts(true); updateView(); }, { def: 12 });
   zoom.set(zoom.size);
   zoom.buttons($("dw-font-inc"), $("dw-font-dec"));
   zoom.wheel(body);
