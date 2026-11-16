@@ -172,6 +172,19 @@ tr:hover td { background: var(--bg-2); }
    the window), so the page title, toolbar and filter row stay put and the
    header row sticks to the top of the panel while the rows scroll under it. */
 .panel.scrollx > table thead th { position: sticky; top: 0; background: var(--panel); z-index: 3; }
+/* 実行履歴・比較 の結果の表: a window narrower than its columns scrolls it
+   sideways with the row buttons kept at the right edge, as the lists do
+   (td.ops). It used to be cut off by the panel, with 差分を開く out of
+   reach and the 差分 column a letter wide — at the default window size
+   too, once a failed device's message was long: that cell (.cmp-msg) no
+   longer claims its text's width. */
+.cmp-scroll { overflow-x: auto; }
+.cmp-scroll th, .cmp-scroll .nw { white-space: nowrap; }
+.cmp-scroll td.cmp-msg { max-width: 0; }
+.cmp-scroll .cmp-ops { position: sticky; right: 0; z-index: 1; background: var(--panel); }
+.cmp-scroll.over .cmp-ops { box-shadow: -8px 0 8px -8px rgba(0,0,0,.6); }
+.cmp-scroll tr.cmp-fail td.cmp-ops { background: linear-gradient(rgba(239,68,68,.08), rgba(239,68,68,.08)), var(--panel); }
+.cmp-scroll tr:hover td.cmp-ops { background: var(--bg-2); }
 .muted { color: var(--text-dim); }
 .empty { padding: 40px; text-align: center; color: var(--text-dim); }
 

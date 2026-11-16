@@ -695,6 +695,18 @@ function cmpDupNote(e) {
   return parts.length ? `<div class="muted" style="font-size:11px;font-weight:400">${esc(parts.join(" ／ "))}</div>` : "";
 }
 
+// The buttons of the result table stay at the right edge of a window narrower
+// than the columns (.cmp-ops); "over" marks the table as scrolling
+// sideways, so their shadow shows only while columns pass under them.
+let cmpWidthObs = null;
+function cmpWatchWidth(box) {
+  if (cmpWidthObs) cmpWidthObs.disconnect();
+  if (!box) return;
+  cmpWidthObs = new ResizeObserver(() => box.classList.toggle("over", box.scrollWidth > box.clientWidth + 1));
+  cmpWidthObs.observe(box);
+  cmpWidthObs.observe(box.firstElementChild);
+}
+
 // Draws the comparison kept in histState.cmp, when it is the comparison of
 // the runs selected now.
 function drawCompare() {
@@ -794,34 +806,35 @@ function drawCompare() {
     </div>`;
   out.innerHTML = groupWarn + banner + tools + `
     ${failRows.length ? `<div style="margin-top:10px;font-size:13px;color:var(--err)">${esc(t("⚠ {n} 台は A または B で失敗しているため比較していません（下の表の先頭に赤で示します）", { n: failRows.length }))}</div>` : ""}
-    <table style="margin-top:12px"><thead><tr><th>${esc(t("機器名"))}</th><th style="width:150px">${esc(t("差分"))}</th><th style="width:150px" data-tip="${esc(t("show running-config 等の出力だけを比べた行数（追加 / 削除 / 変更 / 順序）"))}">${esc(t("設定（行）"))}</th><th style="width:150px" data-tip="${esc(t("設定以外（show の出力など）の行数。設定が見当たらないときはログ全体"))}">${esc(t("その他（行）"))}</th><th style="width:70px" data-tip="${esc(t("設定の変更の影響の大きさ（読む順番の目安）。アドレス・経路・ACL・ポリシー・ポートの up/down は高、VLAN・管理系は中、説明文は低"))}">${esc(t("影響"))}</th>${cmpChecklist() ? `<th>${esc(t("期待値（チェックリスト）"))}</th>` : ""}${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th style="width:120px"></th></tr></thead><tbody>
-      ${failRows.map(r => `<tr style="background:rgba(239,68,68,.08)">
-        <td><b>${esc(r.name)}</b></td>
-        <td><span style="color:var(--err)">${esc(t("{w} で失敗", { w: r.fail }))}</span></td>
-        <td colspan="${3 + (work ? 1 : 0) + (cmpChecklist() ? 1 : 0)}" class="muted" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
-        <td style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
+    <div class="cmp-scroll" style="margin-top:12px"><table><thead><tr><th>${esc(t("機器名"))}</th><th style="width:150px;min-width:120px">${esc(t("差分"))}</th><th style="width:150px;min-width:110px" data-tip="${esc(t("show running-config 等の出力だけを比べた行数（追加 / 削除 / 変更 / 順序）"))}">${esc(t("設定（行）"))}</th><th style="width:150px;min-width:110px" data-tip="${esc(t("設定以外（show の出力など）の行数。設定が見当たらないときはログ全体"))}">${esc(t("その他（行）"))}</th><th style="width:70px" data-tip="${esc(t("設定の変更の影響の大きさ（読む順番の目安）。アドレス・経路・ACL・ポリシー・ポートの up/down は高、VLAN・管理系は中、説明文は低"))}">${esc(t("影響"))}</th>${cmpChecklist() ? `<th>${esc(t("期待値（チェックリスト）"))}</th>` : ""}${work ? `<th>${esc(t("結論（設定行の照合）"))}</th>` : ""}<th class="cmp-ops" style="width:120px"></th></tr></thead><tbody>
+      ${failRows.map(r => `<tr class="cmp-fail" style="background:rgba(239,68,68,.08)">
+        <td><b class="nw">${esc(r.name)}</b></td>
+        <td><span class="nw" style="color:var(--err)">${esc(t("{w} で失敗", { w: r.fail }))}</span></td>
+        <td colspan="${3 + (work ? 1 : 0) + (cmpChecklist() ? 1 : 0)}" class="muted cmp-msg" style="font-size:12px"><div class="clip" data-tip="${esc(r.msg)}">${esc(r.msg)}</div></td>
+        <td class="cmp-ops" style="text-align:right;white-space:nowrap">${r.a ? `<span class="link" data-log="${esc(r.a)}">A</span> ` : ""}${r.b ? `<span class="link" data-log="${esc(r.b)}">B</span>` : ""}</td>
       </tr>`).join("")}
       ${rows.map(r => r.bOnly ? `<tr>
-        <td><b>${esc(r.name)}</b></td>
-        <td><span class="muted" data-tip="${esc(t("A にこの機器のログが無いため差分は出せません。チェックリストは B のログだけで判定しています"))}">${esc(t("B のみ（比較なし）"))}</span></td>
+        <td><b class="nw">${esc(r.name)}</b></td>
+        <td><span class="muted nw" data-tip="${esc(t("A にこの機器のログが無いため差分は出せません。チェックリストは B のログだけで判定しています"))}">${esc(t("B のみ（比較なし）"))}</span></td>
         <td class="mono"><span class="muted">${esc(t("—"))}</span></td><td class="mono"><span class="muted">${esc(t("—"))}</span></td><td><span class="muted">—</span></td>
         ${cmpChecklist() ? `<td>${cmpCheckHTML(r.check)}</td>` : ""}
         ${work ? `<td></td>` : ""}
-        <td style="text-align:right;white-space:nowrap">${byName[r.name] && byName[r.name].b ? `<span class="link" data-log="${esc(byName[r.name].b)}">${esc(t("ログ表示"))}</span>` : ""}</td>
+        <td class="cmp-ops" style="text-align:right;white-space:nowrap">${byName[r.name] && byName[r.name].b ? `<span class="link" data-log="${esc(byName[r.name].b)}">${esc(t("ログ表示"))}</span>` : ""}</td>
       </tr>` : `<tr>
-        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(byName[r.name].pairedBy === "key" ? t("名前が完全には一致しないため、ファイル名の番号を除いた名前が同じログ同士を比べています") : t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
+        <td><b class="nw">${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(byName[r.name].pairedBy === "key" ? t("名前が完全には一致しないため、ファイル名の番号を除いた名前が同じログ同士を比べています") : t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
         <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
         <td class="mono">${r.err ? "" : cmpCountsHTML(r.hasConfig ? cmpRest(r) : r.whole)}</td>
         <td>${cmpImpactHTML(r)}</td>
         ${cmpChecklist() ? `<td>${cmpCheckHTML(r.check)}</td>` : ""}
         ${work ? `<td>${verdict(r)}</td>` : ""}
-        <td style="text-align:right;white-space:nowrap">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}${r.err || !(r.hasConfig && r.cfgDiff) ? "" : ` <button class="btn sm" data-cmd="rollback" data-dev="${esc(r.name)}" data-tip="${esc(t("作業後（B）の機器を作業前（A）の設定に戻すコマンドを差分から作ります（実行はしません）"))}">${esc(t("戻す"))}</button> <button class="btn sm" data-cmd="forward" data-dev="${esc(r.name)}" data-tip="${esc(t("作業前（A）の機器を作業後（B）と同じにするコマンドを差分から作ります（別の機器への横展開に。実行はしません）"))}">${esc(t("揃える"))}</button>`}</td>
+        <td class="cmp-ops" style="text-align:right;white-space:nowrap">${r.err ? "" : `<button class="btn sm" data-diff="${esc(r.name)}">${esc(t("差分を開く"))}</button>`}${r.err || !(r.hasConfig && r.cfgDiff) ? "" : ` <button class="btn sm" data-cmd="rollback" data-dev="${esc(r.name)}" data-tip="${esc(t("作業後（B）の機器を作業前（A）の設定に戻すコマンドを差分から作ります（実行はしません）"))}">${esc(t("戻す"))}</button> <button class="btn sm" data-cmd="forward" data-dev="${esc(r.name)}" data-tip="${esc(t("作業前（A）の機器を作業後（B）と同じにするコマンドを差分から作ります（別の機器への横展開に。実行はしません）"))}">${esc(t("揃える"))}</button>`}</td>
       </tr>`).join("")}
-    </tbody></table>
+    </tbody></table></div>
     ${onlyNg ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("ほか {n} 台は問題なし（チェックを外すと表示）", { n: all.length - rows.length }))}</div>` : ""}
     ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("片方の実行にしか含まれていない機器:"))} ${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}
     ${noLog.length ? `<div class="muted" id="cmp-nolog" style="font-size:12px;margin-top:8px">${esc(t("ログファイルが見つからないため比較していない機器: {d}", { d: noLog.map(x => `${x.name}（${x.where}）`).join(", ") }))}</div>` : ""}`;
+  cmpWatchWidth(out.querySelector(".cmp-scroll"));
   out.querySelectorAll("[data-diff]").forEach(btn => btn.onclick = () => showDiff(btn.dataset.diff, byName[btn.dataset.diff].a, byName[btn.dataset.diff].b));
   out.querySelectorAll("[data-cmd]").forEach(btn => btn.onclick = () => cmdDialog(btn.dataset.dev, byName[btn.dataset.dev].a, byName[btn.dataset.dev].b, btn.dataset.cmd, b.group || a.group || ""));
   out.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));
