@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -23,20 +24,40 @@ import (
 // The terminal keeps the stdin pipe open: a pasteLineDump line on it (its
 // Lock) asks for the text as it is now, answered with a Draft line and the
 // window closing — the terminal keeps it for after the unlock (M-13).
+//
+// A spare ("--paste <device> --spare") is started hidden, ahead of the
+// paste, by the terminal window last in use (see Term.focused): a new
+// process and its WebView2 take 0.4 s or more, and Alt+V then only hands
+// the spare its text. It shows once its page has drawn it (Focus), over the
+// terminal as it is then; one whose stdin closes before any text came ends.
 type Paste struct {
 	ctx   context.Context
 	title string
 	reqCh chan pasteReq
+	spare bool
 
 	mu       sync.Mutex
 	req      pasteReq // what arrived on stdin
+	got      bool     // req has arrived
 	loaded   bool     // the page has it (Load)
 	answered bool     // a line has gone back on stdout
+	hidden   bool     // a spare not shown yet
+
+	readyOnce sync.Once // pasteLineReady goes out once
 }
+
+// pasteLineReady is what a spare writes on stdout once its page is up and
+// waiting for its text (Load): only then does the terminal hand it one — a
+// spare whose page has not come up is passed over for a new window.
+const pasteLineReady = "READY"
 
 // pasteLineDump is what the terminal writes to the paste window's stdin
 // to ask for the text it holds now.
 const pasteLineDump = "DUMP"
+
+// pasteSpareShowWait is how long a spare that has its text waits for its
+// page before it shows anyway.
+const pasteSpareShowWait = 1500 * time.Millisecond
 
 // pasteDumpPageWait is how long the page gets to answer paste:dump before
 // the text as handed over is sent back instead.
@@ -53,6 +74,9 @@ type pasteReq struct {
 	// Single: a one-line paste, confirmed only because of 同時入力 (no
 	// Enter unless CR, whatever the remembered checkbox says).
 	Single bool `json:"single,omitempty"`
+	// Parent is the terminal's rectangle ("l,t,r,b") for a spare, which
+	// was started before the terminal last moved.
+	Parent string `json:"parent,omitempty"`
 }
 
 // pasteRes is the answer: OK false means cancelled.
@@ -65,22 +89,35 @@ type pasteRes struct {
 	Draft bool `json:"draft,omitempty"`
 }
 
-func NewPaste(title string) *Paste {
-	p := &Paste{title: title, reqCh: make(chan pasteReq, 1)}
+func NewPaste(title string, spare bool) *Paste {
+	p := &Paste{title: title, reqCh: make(chan pasteReq, 1), spare: spare, hidden: spare}
 	go func() {
 		sc := bufio.NewScanner(os.Stdin)
 		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024) // pasted configs can be big
 		var r pasteReq
 		if sc.Scan() && json.Unmarshal(sc.Bytes(), &r) == nil {
 			p.mu.Lock()
-			p.req = r
+			p.req, p.got = r, true
 			p.mu.Unlock()
 			p.reqCh <- r
+			// The page shows it (Focus); this is in case it cannot.
+			if spare {
+				time.AfterFunc(pasteSpareShowWait, p.reveal)
+			}
+		} else if spare {
+			// Dropped (another terminal window in use, a lock) or its
+			// terminal is gone: nothing was shown, nothing to answer.
+			os.Exit(0)
 		}
 		for sc.Scan() {
 			if sc.Text() == pasteLineDump {
 				p.dump()
 			}
+		}
+		// A spare handed its text that never showed has nothing on screen
+		// to close: it ends with its terminal.
+		if spare && p.isHidden() {
+			os.Exit(0)
 		}
 	}()
 	return p
@@ -133,22 +170,72 @@ func (p *Paste) startup(ctx context.Context) {
 	p.ctx = ctx
 	p.mu.Unlock()
 	pasteWin.fit(ctx)
-	placeNearParent(ctx, pasteWin)
+	if !p.spare {
+		placeNearParent(ctx, pasteWin)
+	}
 	go keepKeyboardOnWebview(ctx)
 }
 
 // domReady brings the new window to the front with keyboard focus, so Enter
-// pastes the moment it appears instead of after a click into it.
+// pastes the moment it appears instead of after a click into it. A spare
+// stays hidden until it has its text (Focus).
 func (p *Paste) domReady(ctx context.Context) {
-	go focusOwnWindow()
+	if !p.spare {
+		go focusOwnWindow()
+	}
 }
 
 // Focus is called by the page once its textarea is ready (a second nudge,
-// in case the window was found before it could take focus).
-func (p *Paste) Focus() { go focusOwnWindow() }
+// in case the window was found before it could take focus); a spare shows
+// now, drawn already.
+func (p *Paste) Focus() {
+	p.reveal()
+	go focusOwnWindow()
+}
+
+// reveal shows a spare that has its text over its terminal; once.
+func (p *Paste) reveal() {
+	p.mu.Lock()
+	ctx, parent := p.ctx, p.req.Parent
+	show := p.hidden && p.got && ctx != nil
+	if show {
+		p.hidden = false
+	}
+	p.mu.Unlock()
+	if !show {
+		return
+	}
+	placeHiddenOver(ctx, pasteWin, parent)
+	runtime.WindowShow(ctx)
+	go focusOwnWindow()
+}
+
+// isHidden: a spare not shown yet (keepForegroundWhileHidden).
+func (p *Paste) isHidden() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.hidden
+}
 
 // Load hands the UI the text to show (empty if nothing arrived on stdin).
+// A spare waits for it as long as it takes.
 func (p *Paste) Load() pasteReq {
+	if p.spare {
+		// Once: a reload of the page (F5) gets the text it already had.
+		p.mu.Lock()
+		if p.loaded {
+			r := p.req
+			p.mu.Unlock()
+			return r
+		}
+		p.mu.Unlock()
+		p.readyOnce.Do(func() { fmt.Fprintln(os.Stdout, pasteLineReady) })
+		r := <-p.reqCh
+		p.mu.Lock()
+		p.loaded = true
+		p.mu.Unlock()
+		return r
+	}
 	select {
 	case r := <-p.reqCh:
 		p.mu.Lock()

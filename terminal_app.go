@@ -100,15 +100,22 @@ type Term struct {
 	pasteGone   chan struct{}    // closed once it has ended (Lock waits on it)
 	pasteSent   pasteReq         // what it was handed (kept if it cannot say what it holds)
 	pasteDraft  *pasteDraft      // the paste a Lock closed, for after the unlock (memory only)
-	unlockFails int              // wrong passwords in a row at the lock screen
-	quitting    bool             // quitForParent: close without asking
-	bc          bcastState       // 同時入力 (term_bcast.go)
-	inQ         *lineQueue       // INPUT waiting to be sent (bcastSend)
-	placeQ      *lineQueue       // grid places waiting to be made (doPlace)
-	placed      bool             // a PLACE came before startup: it wins over the start place
-	sendMu      sync.Mutex       // one send at a time: here and the relay in the same order
-	tiled       bool             // placed in a grid: its size is not remembered
-	unlockMu    sync.Mutex       // serialises Unlock attempts
+	// pasteSpare is a paste window started hidden ahead of the paste while
+	// this is the terminal window last in use (Focused); spareStarting: its
+	// process is being started; spareGen counts drops, so one that was
+	// starting through a drop is not kept.
+	pasteSpare    *pasteProc
+	spareStarting bool
+	spareGen      int
+	unlockFails   int        // wrong passwords in a row at the lock screen
+	quitting      bool       // quitForParent: close without asking
+	bc            bcastState // 同時入力 (term_bcast.go)
+	inQ           *lineQueue // INPUT waiting to be sent (bcastSend)
+	placeQ        *lineQueue // grid places waiting to be made (doPlace)
+	placed        bool       // a PLACE came before startup: it wins over the start place
+	sendMu        sync.Mutex // one send at a time: here and the relay in the same order
+	tiled         bool       // placed in a grid: its size is not remembered
+	unlockMu      sync.Mutex // serialises Unlock attempts
 	// replacedKeys are the stale pins dropped by AllowHostKeyChange, by
 	// address. The main window removes them from the vault a moment later,
 	// but connect reads the vault again right away; until the vault stops
@@ -197,6 +204,8 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 				t.bcastNamesLine(strings.TrimPrefix(line, termLineBcNames+" "))
 			case line == termLineBcOff:
 				t.SetBroadcast(false) // the main window's 同時入力をすべてオフ
+			case line == termLineSpareOff:
+				t.dropPasteSpare() // another terminal window is in use
 			case strings.HasPrefix(line, termLinePlace+" "):
 				if r, ok := parseRect(strings.TrimPrefix(line, termLinePlace+" ")); ok {
 					// Flagged and queued under one lock, as startup reads
@@ -215,6 +224,7 @@ func NewTerm(device, label string, manual, direct bool) *Term {
 
 func (t *Term) startup(ctx context.Context) {
 	go keepKeyboardOnWebview(ctx)
+	go t.watchForeground(ctx)
 	cell, ok := parseRect(os.Getenv(tileEnv))
 	// The flag and the queue under one lock (see PLACE in NewTerm): a
 	// 並べ直す that reached the window while it was starting keeps its
@@ -498,8 +508,10 @@ func (t *Term) connect(pw string) {
 		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, Error: "機器が見つかりません"})
 		return
 	}
-	// The device's 端末の色, shown from the start of the login.
-	runtime.EventsEmit(t.ctx, "term:device", map[string]string{"tint": dev.TermColor})
+	// The device's 端末の色, shown from the start of the login — and its
+	// group, for the title of a window whose connection never gets to
+	// term:ready (failed, stopped at a jump host).
+	runtime.EventsEmit(t.ctx, "term:device", map[string]string{"tint": dev.TermColor, "group": dev.Group})
 
 	// Tick elapsed/total seconds to the UI while connecting, so a slow or
 	// failing connection shows progress instead of a silent wait.
@@ -1010,39 +1022,57 @@ func (t *Term) openPaste(raw string, withCR, single bool) error {
 	if relay {
 		peers = t.bcastPeers()
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		t.pasteDone()
-		return err
-	}
-	cmd := exec.Command(exe, "--paste", t.label)
-	cmd.Env = windowEnv()
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		t.pasteDone()
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		t.pasteDone()
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		t.pasteDone()
-		return err
-	}
 	req := pasteReq{Device: t.label, Text: raw, CR: withCR, Bcast: peers, Single: single}
+	// The spare when there is one and its page is up (it shows at once),
+	// handed its text here; one still starting, or one whose pipe fails
+	// (it has gone), is passed over for a new window.
+	var p *pasteProc
+	t.mu.Lock()
+	sp := t.pasteSpare
+	t.pasteSpare = nil
+	t.mu.Unlock()
+	if sp != nil {
+		select {
+		case <-sp.ready:
+		default:
+			sp.discard()
+			sp = nil
+		}
+	}
+	if sp != nil {
+		sreq := req
+		sreq.Parent = parentRectString()
+		t.pasteInMu.Lock()
+		err := json.NewEncoder(sp.in).Encode(sreq)
+		t.pasteInMu.Unlock()
+		if err == nil {
+			p = sp
+		} else {
+			sp.discard()
+		}
+	}
+	fresh := p == nil
+	if fresh {
+		var err error
+		if p, err = startPasteProc(t.label, false); err != nil {
+			t.pasteDone()
+			return err
+		}
+	}
+	cmd, stdin, stdout := p.cmd, p.in, p.rd
 	t.mu.Lock()
 	t.pasteProc = cmd.Process
 	// The pipe stays open for Lock's pasteLineDump; Wait closes it.
 	t.pasteIn, t.pasteGone, t.pasteSent = stdin, make(chan struct{}), req
 	t.mu.Unlock()
-	go func() {
-		defer recoverGo("paste window stdin")
-		t.pasteInMu.Lock()
-		defer t.pasteInMu.Unlock()
-		_ = json.NewEncoder(stdin).Encode(req)
-	}()
+	if fresh {
+		go func() {
+			defer recoverGo("paste window stdin")
+			t.pasteInMu.Lock()
+			defer t.pasteInMu.Unlock()
+			_ = json.NewEncoder(stdin).Encode(req)
+		}()
+	}
 	go func() {
 		defer t.pasteDone()
 		defer recoverGo("paste window stdout")
@@ -1050,7 +1080,11 @@ func (t *Term) openPaste(raw string, withCR, single bool) error {
 		answered := false // a line came back (Submit, Cancel or Draft); none: the X, or Lock's Kill
 		sc := bufio.NewScanner(stdout)
 		sc.Buffer(make([]byte, 1024*1024), 64*1024*1024)
-		if sc.Scan() {
+		ok := sc.Scan()
+		if ok && sc.Text() == pasteLineReady {
+			ok = sc.Scan() // a spare's, read twice (its page reloaded)
+		}
+		if ok {
 			answered = json.Unmarshal(sc.Bytes(), &res) == nil
 		}
 		_ = cmd.Wait()
@@ -1099,6 +1133,166 @@ func pasteText(res pasteRes) (string, bool) {
 	return s, true
 }
 
+// pasteProc is a paste window's process and its pipes. rd reads its
+// stdout: a spare's first line (pasteLineReady, which closes ready), then
+// the answer. readDone is closed once that first line has been read (at
+// once for a window that is not a spare).
+type pasteProc struct {
+	cmd      *exec.Cmd
+	in       io.WriteCloser
+	out      io.ReadCloser
+	rd       *bufio.Reader
+	ready    chan struct{}
+	readDone chan struct{}
+}
+
+// startPasteProc starts a paste window for device (spare: hidden, waiting
+// for its text).
+func startPasteProc(device string, spare bool) (*pasteProc, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"--paste", device}
+	if spare {
+		args = append(args, "--spare")
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Env = windowEnv()
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return newPasteProc(cmd, stdin, stdout, spare), nil
+}
+
+// newPasteProc wraps a started paste window; for a spare, its first line
+// is waited for (ready).
+func newPasteProc(cmd *exec.Cmd, in io.WriteCloser, out io.ReadCloser, spare bool) *pasteProc {
+	p := &pasteProc{cmd: cmd, in: in, out: out, rd: bufio.NewReaderSize(out, 1024*1024),
+		ready: make(chan struct{}), readDone: make(chan struct{})}
+	if !spare {
+		close(p.ready)
+		close(p.readDone)
+		return p
+	}
+	go func() {
+		defer close(p.readDone)
+		if line, err := p.rd.ReadString('\n'); err == nil && strings.TrimSpace(line) == pasteLineReady {
+			close(p.ready)
+		}
+	}()
+	return p
+}
+
+// discard ends a spare that was never handed a text: its stdin closing
+// ends it (NewPaste), and it is waited for so nothing is left behind.
+func (p *pasteProc) discard() {
+	_ = p.in.Close()
+	go func() {
+		defer recoverGo("paste spare")
+		<-p.readDone
+		_, _ = io.Copy(io.Discard, p.rd)
+		_ = p.cmd.Wait()
+	}()
+}
+
+// spawnPasteSpare starts a spare paste window for device (replaced in
+// tests).
+var spawnPasteSpare = func(device string) (*pasteProc, error) { return startPasteProc(device, true) }
+
+// watchForeground calls focused each time this window becomes the
+// foreground one (the page's focus event does not come reliably when the
+// window is activated again).
+func (t *Term) watchForeground(ctx context.Context) {
+	tk := time.NewTicker(150 * time.Millisecond)
+	defer tk.Stop()
+	was := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tk.C:
+		}
+		h := ownTopLevelWindow()
+		fg := h != 0 && foregroundWindow() == h
+		if fg && !was {
+			t.focused()
+		}
+		was = fg
+	}
+}
+
+// focused: this window became the active one. The main window is told (the
+// other terminal windows drop their spares, see termEventFocus), and a
+// spare paste window is started here if there is none, so the next paste
+// confirmation shows at once — one spare in all, with the window last in
+// use.
+func (t *Term) focused() {
+	childLine(termEventFocus)
+	t.respare()
+}
+
+// pasteSpareOn: whether a spare paste window is kept at all. Off: a hidden
+// window that starts takes the foreground from the terminal for some tens
+// of milliseconds — Wails centres a new frame with a SetWindowPos that
+// activates it, shown or not, and nothing done from this side stops that —
+// and letters typed in the terminal just then are lost (probe 2026-11-16:
+// 14 of 320 typed after a paste with it on, none with it off). So a paste
+// window is started when asked for, as before; the spare is kept for a
+// build in which the frame is not activated.
+var pasteSpareOn = false
+
+// respare starts the spare paste window unless one is there or starting,
+// a paste window is open, or the window is locked or closing.
+func (t *Term) respare() {
+	if !pasteSpareOn {
+		return
+	}
+	t.mu.Lock()
+	if t.pasteSpare != nil || t.spareStarting || t.pasteOpen || t.locked || t.quitting {
+		t.mu.Unlock()
+		return
+	}
+	t.spareStarting = true
+	gen := t.spareGen
+	t.mu.Unlock()
+	go func() {
+		defer recoverGo("paste spare start")
+		p, err := spawnPasteSpare(t.label)
+		t.mu.Lock()
+		t.spareStarting = false
+		keep := err == nil && gen == t.spareGen && !t.locked && !t.quitting && !t.pasteOpen
+		if keep {
+			t.pasteSpare = p
+		}
+		t.mu.Unlock()
+		if err == nil && !keep {
+			p.discard()
+		}
+	}()
+}
+
+// dropPasteSpare ends the spare paste window (another terminal window is
+// in use, or this one locked).
+func (t *Term) dropPasteSpare() {
+	t.mu.Lock()
+	sp := t.pasteSpare
+	t.pasteSpare = nil
+	t.spareGen++
+	t.mu.Unlock()
+	if sp != nil {
+		sp.discard()
+	}
+}
+
 func (t *Term) pasteDone() {
 	t.mu.Lock()
 	t.pasteOpen = false
@@ -1108,7 +1302,19 @@ func (t *Term) pasteDone() {
 		t.pasteGone = nil
 	}
 	t.mu.Unlock()
+	// The window took the foreground back before this (watchForeground saw
+	// it while the paste window was still open): the next spare starts
+	// now, if it is still the window in use.
+	time.AfterFunc(pasteRespareAfter, func() {
+		if h := ownTopLevelWindow(); h != 0 && foregroundWindow() == h {
+			t.respare()
+		}
+	})
 }
+
+// pasteRespareAfter is how long after a paste window ends the next spare
+// starts: once the terminal holds the foreground again.
+const pasteRespareAfter = 600 * time.Millisecond
 
 // keepDraft stores what a paste window ended by Lock held (see
 // pasteDraft): its Draft answer, a Submit that arrived in the same instant,
@@ -1293,6 +1499,7 @@ func (t *Term) Lock() {
 	t.locked = true
 	ctx, pp, in, gone := t.ctx, t.pasteProc, t.pasteIn, t.pasteGone
 	t.mu.Unlock()
+	t.dropPasteSpare()
 	t.bcastReport()
 	// The lock screen first: what follows may take a moment.
 	if ctx != nil {
@@ -1350,6 +1557,11 @@ func (t *Term) Unlock(pw string) bool {
 			case <-gone:
 			case <-time.After(pasteDumpWait):
 			}
+		}
+		// Unlocked in place: the window stays the active one, so
+		// watchForeground does not start the spare the lock dropped.
+		if h := ownTopLevelWindow(); h != 0 && foregroundWindow() == h {
+			t.respare()
 		}
 		return true
 	}

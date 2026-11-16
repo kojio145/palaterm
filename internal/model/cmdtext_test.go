@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kojio145/palaterm/internal/profile"
@@ -45,5 +46,22 @@ func TestCheckProfileSendsRefusesCredentialAnswers(t *testing.T) {
 		Answers: []profile.Step{{Expect: "[confirm]", Send: "y"}}}
 	if err := CheckProfileSends(p); err != nil {
 		t.Errorf("login step sending {password} refused: %v", err)
+	}
+}
+
+func TestCheckCommandPauses(t *testing.T) {
+	ok := []Command{{Text: "show clock"}, {Text: "show version", PauseSec: 3, SerialSec: 5}}
+	if err := CheckCommandPauses(ok); err != nil {
+		t.Errorf("0 and positive waits must pass: %v", err)
+	}
+	for _, c := range []Command{{Text: "show clock", PauseSec: -1, SerialSec: 1}, {Text: "show clock", PauseSec: 1, SerialSec: -1}} {
+		err := CheckCommandPauses([]Command{{Text: "show version", PauseSec: 1, SerialSec: 1}, c})
+		if err == nil || !strings.Contains(err.Error(), "2 行目の待機秒がマイナス") {
+			t.Errorf("a negative wait must be refused with its row: %+v → %v", c, err)
+		}
+	}
+	// The runs keep taking a set saved before the check.
+	if err := CheckCommands([]Command{{Text: "show clock", PauseSec: -1, SerialSec: -1}}); err != nil {
+		t.Errorf("CheckCommands (applied on every run) must not look at the waits: %v", err)
 	}
 }

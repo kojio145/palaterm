@@ -783,7 +783,7 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
 
 /* v1.9.10 G5: a field that keeps a form from being saved (fieldError), the
    master password's length hint, and the lock screen's language choice. */
-.field input.field-bad, .field select.field-bad { border-color: var(--err); box-shadow: 0 0 0 1px var(--err) inset; }
+.field input.field-bad, .field select.field-bad, #cmd-rows input.field-bad { border-color: var(--err); box-shadow: 0 0 0 1px var(--err) inset; }
 .field-err { color: var(--err); font-size: 12px; margin-top: 5px; text-align: left; }
 .lock-screen { position: relative; }
 .lock-lang { position: absolute; top: 14px; right: 16px; margin: 0; }

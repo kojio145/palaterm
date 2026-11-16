@@ -288,6 +288,15 @@ async function bootTerminalWindow() {
     // ^ key sits where Equal is, which read as 文字を大きく — before zoom.key.
     if (e.ctrlKey && !e.altKey && (e.key === "^" || (e.shiftKey && e.code === "Digit6"))) { typed("\x1e"); return false; }
     if (zoom.key(e)) return false;
+    // Ctrl+↑ / Ctrl+↓ scroll the scrollback a line, Ctrl+PageUp / PageDown
+    // a page, as in Tera Term — nothing reaches the device (xterm.js sent
+    // ESC[1;5A …). A full-screen program (vim, less) has no scrollback, so
+    // there they still go to the device.
+    if (e.ctrlKey && !e.shiftKey && term.buffer.active.type !== "alternate") {
+      const line = { ArrowUp: -1, ArrowDown: 1 }[e.key], page = { PageUp: -1, PageDown: 1 }[e.key];
+      if (line) { term.scrollLines(line); return false; }
+      if (page) { term.scrollPages(page); return false; }
+    }
     if (e.ctrlKey && !e.shiftKey && isV) return false;
     if (e.shiftKey && !e.ctrlKey && isIns) return false;
     return true;
@@ -803,6 +812,9 @@ async function bootTerminalWindow() {
     const base = "PalaTerm - " + (osTitleGroup ? osTitleGroup + " / " : "") + osTitleDev + (osTitleHost ? " - " + osTitleHost : "");
     try { rt().WindowSetTitle(base + (osTitleState ? " - " + osTitleState : "")); } catch (e) {}
   }
+  // The group is known before the connection is made: a window whose first
+  // connection fails (term:ready never names it) has it in its title too.
+  rt().EventsOn("term:device", ev => { osTitleGroup = (ev && ev.group) || ""; });
   rt().EventsOn("term:closed", ev => {
     closed = true;
     stateBase = "";

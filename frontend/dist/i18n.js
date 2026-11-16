@@ -193,6 +193,7 @@ const I18N_EN_PATTERNS = [
   [/（機器の最後の表示: (".*")）/, " (the device last showed $1)"],
   [/([0-9]+) 行目のコマンドに制御文字（改行・タブなど）が含まれています: /, "the command on line $1 contains control characters (line breaks, tabs…): "],
   [/([0-9]+) 行目のコマンドに使えないキー札があります: (.+?)（使えるのは (.+?)）/, "the command on line $1 has an unknown key token: $2 (the keys are $3)"],
+  [/([0-9]+) 行目の待機秒がマイナスです（0 以上で指定してください）/, "the pause on line $1 is negative (use 0 or more)"],
   [/^プロファイル「(.+?)」の送信文字に制御文字（改行・タブなど）が含まれています: /, 'Profile "$1" sends text with control characters (line breaks, tabs…): '],
   [/^制御文字（改行・タブなど）が含まれています: /, "Contains control characters (line breaks, tabs…): "],
   [/^GUIポートが範囲外です: (.+)（0〜65535）$/, "GUI port out of range: $1 (0–65535)"],
@@ -1062,6 +1063,8 @@ const I18N_EN = {
   "「待機秒を使う」がオフのため使いません": "Not used: \"Use pauses\" is off",
   "「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）": "\"Use pauses\" is off for this set (each command goes as soon as the prompt appears)",
   "待機秒なし": "no pauses",
+  "{n} 行目の待機秒がマイナスです（0 以上で指定してください）": "Line {n}: the pause is negative (use 0 or more)",
+  "0 以上で入力": "0 or more",
   "既存の機器で認証情報（ユーザー名・パスワード等）の欄が空の行は、その機器の今の認証情報を残します。":
     "For existing devices, credential fields (username, password, etc.) left empty keep the device's current credentials.",
   "認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}": "Empty credential fields keep the existing devices' values ({n}): {g}",
@@ -1895,6 +1898,8 @@ const I18N_EN = {
   "PalaTerm 以外で取ったログのフォルダ（logs フォルダに置いたもの）。機器名はファイル名から、作業前・作業中・作業後はフォルダ名の語（before / after / 作業前 など）から推定しています": "A folder of logs PalaTerm did not write (put directly into the logs folder). Device names are guessed from the file names, before / during / after from words in the folder name (before / after …, or the Japanese 前 / 中 / 後)",
   "他で取ったログも、フォルダごと logs フォルダの直下に置けば「外部」として並び、A・B・作業中のどれにも選べます（フォルダ名の 前／中／後・before／after などがあれば既定の選択に使います）": "Logs taken elsewhere can be compared the same way: drop the folder directly into the logs folder and it is listed as \"External\", selectable as A, B or the work run (words in the folder name such as before / after, or the Japanese 前 / 中 / 後, set the default choice)",
   "名前が完全には一致しないため、先頭が同じログ同士を比べています": "The names do not match exactly: logs whose names start the same way are compared",
+  "名前が完全には一致しないため、ファイル名の番号を除いた名前が同じログ同士を比べています": "The names do not match exactly: logs whose names are the same without a number in the file name are compared",
+  "ログファイルが見つからないため比較していない機器: {d}": "Not compared, the log file was not found: {d}",
   // v1.8.0: 表示の色・端末の色・並べて接続・同時入力
   "機器が見つかりません（削除されたか、一覧が更新されました）": "Device not found (deleted, or the list was refreshed)",
   "選択した機器の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）": "Open the selected devices' terminal windows at once, laid out over the screen (up to 16; like Tera Term's Window > Tile). Turn on \"Broadcast\" in the windows and keys typed in any of them go to every window that has it on (whether they open with it on is set on the Settings tab)",

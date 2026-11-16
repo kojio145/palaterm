@@ -457,20 +457,37 @@ async function compareRuns() {
   // sessions picked as A or B): its latest log is compared, and na / nb
   // let the row say so.
   const byName = {};
-  latestDevices(a).forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "", na: d.logs.length }; });
-  latestDevices(b).forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; e.nb = d.logs.length; });
+  latestDevices(a).forEach(d => { byName[d.name] = { a: d.logPath || "", sa: d.status, ea: d.error || "", na: d.logs.length, ka: d.keys || [] }; });
+  latestDevices(b).forEach(d => { const e = byName[d.name] = byName[d.name] || {}; e.b = d.logPath || ""; e.sb = d.status; e.eb = d.error || ""; e.nb = d.logs.length; e.kb = d.keys || []; });
   // Names that pair nowhere by exact match pair with the only name on the
-  // other side they stand for (namesPair), and the row says so.
+  // other side they stand for, and the row says so (pairedWith).
   const aOnly = Object.keys(byName).filter(n => byName[n].sa && !byName[n].sb);
   const bOnly = Object.keys(byName).filter(n => !byName[n].sa && byName[n].sb);
-  const loose = {};
+  const taken = {};
+  const pair = (an, bn, by) => {
+    const eb = byName[bn];
+    byName[an].b = eb.b; byName[an].sb = eb.sb; byName[an].eb = eb.eb; byName[an].nb = eb.nb; byName[an].pairedWith = bn; byName[an].pairedBy = by;
+    taken[bn] = true; delete byName[bn];
+  };
+  // First by what else the file names read as (keys: the name without the
+  // number its file was numbered with — 02_lab-sw03 and 03_lab-sw03 once a
+  // device is missing on one side — or without a number before the date
+  // that sets no two devices of its folder apart): two names that share a
+  // reading, each the only one on its side that shares it with the other.
+  const low = l => (l || []).map(x => x.toLowerCase());
+  const shares = (an, bn) => {
+    const ka = low(byName[an].ka), kb = low(byName[bn].kb);
+    return kb.includes(an.toLowerCase()) || ka.includes(bn.toLowerCase()) || ka.some(k => kb.includes(k));
+  };
+  aOnly.map(an => [an, bOnly.filter(bn => shares(an, bn))])
+    .filter(([, hits]) => hits.length === 1 && aOnly.filter(x => shares(x, hits[0])).length === 1)
+    .map(([an, hits]) => [an, hits[0]])
+    .forEach(([an, bn]) => pair(an, bn, "key"));
+  // Then by the start of the name (namesPair).
   for (const an of aOnly) {
-    const hits = bOnly.filter(bn => !loose[bn] && namesPair(an, bn));
-    if (hits.length === 1) {
-      const bn = hits[0], eb = byName[bn];
-      byName[an].b = eb.b; byName[an].sb = eb.sb; byName[an].eb = eb.eb; byName[an].nb = eb.nb; byName[an].pairedWith = bn;
-      loose[bn] = true; delete byName[bn];
-    }
+    if (byName[an].pairedWith) continue;
+    const hits = bOnly.filter(bn => !taken[bn] && namesPair(an, bn));
+    if (hits.length === 1) pair(an, hits[0], "");
   }
   const names = Object.keys(byName);
   // "unknown" (a folder without a summary: an old run, an external folder)
@@ -548,12 +565,17 @@ async function compareRuns() {
   // not here; a B-only device judged by the checklist is a row).
   const onlyA = names.filter(n => byName[n].sa && !byName[n].sb && !failedIn(n).length);
   const onlyB = names.filter(n => !byName[n].sa && byName[n].sb && !failedIn(n).length && !checkOnly.includes(n));
+  // Devices both runs included whose log is gone on a side (the file was
+  // moved or deleted since): not compared, and said so — they used to be
+  // left out without a word.
+  const noLog = names.filter(n => byName[n].sa && byName[n].sb && !failedIn(n).length && !(byName[n].a && byName[n].b))
+    .map(n => ({ name: n, where: [byName[n].a ? "" : "A", byName[n].b ? "" : "B"].filter(Boolean).join("/") }));
   const failRows = failed.map(n => {
     const e = byName[n]; const where = failedIn(n);
     const msg = where.map(w => `${w}: ${fmtRunMsg((w === "A" ? e.ea : e.eb) || t("ログなし"))}`).join(" ／ ");
     return { name: n, fail: where.join("/"), msg, a: e.a, b: e.b };
   });
-  histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB, at: new Date().toISOString() };
+  histState.cmp = { key, a, b, work, works, byName, rows, failRows, onlyA, onlyB, noLog, at: new Date().toISOString() };
   finish();
   if (cmpKey() === key) drawCompare();
 }
@@ -680,6 +702,7 @@ function drawCompare() {
   const C = histState.cmp;
   if (!out || !C || C.key !== cmpKey()) return;
   const { a, b, work, works, byName, failRows, onlyA, onlyB } = C;
+  const noLog = C.noLog || [];
   const sev = cmpSorted(C);
   const needs = sev.filter(x => x.k < 4).length;
   const onlyNg = !!histState.cmpOnlyNg && needs > 0;
@@ -702,7 +725,7 @@ function drawCompare() {
     // Devices the verdict could not cover: failed in A or B, in one run
     // only, or not readable. A verdict of "every device" used to leave
     // them out without a word.
-    const unjudged = failRows.length + onlyA.length + onlyB.length + all.filter(r => r.bOnly || r.err || (r.strict && r.strict.err)).length;
+    const unjudged = failRows.length + onlyA.length + onlyB.length + noLog.length + all.filter(r => r.bOnly || r.err || (r.strict && r.strict.err)).length;
     // The count is of lines (the sum over the devices): "合計", since
     // "{c} 件 … 全 {n} 台" was read as c lines per device.
     let cls, headline;
@@ -786,7 +809,7 @@ function drawCompare() {
         ${work ? `<td></td>` : ""}
         <td style="text-align:right;white-space:nowrap">${byName[r.name] && byName[r.name].b ? `<span class="link" data-log="${esc(byName[r.name].b)}">${esc(t("ログ表示"))}</span>` : ""}</td>
       </tr>` : `<tr>
-        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
+        <td><b>${esc(r.name)}</b>${byName[r.name] && byName[r.name].pairedWith ? ` <span class="muted" style="font-size:11px" data-tip="${esc(byName[r.name].pairedBy === "key" ? t("名前が完全には一致しないため、ファイル名の番号を除いた名前が同じログ同士を比べています") : t("名前が完全には一致しないため、先頭が同じログ同士を比べています"))}">↔ ${esc(byName[r.name].pairedWith)}</span>` : ""}${cmpDupNote(byName[r.name])}</td>
         <td>${r.err ? `<span style="color:var(--err)">${esc(r.err)}</span>` : `<span style="color:var(--${cmpDiffColor(r)})">${esc(cmpDiffText(r))}</span>`}</td>
         <td class="mono">${r.err ? "" : r.hasConfig ? cmpCountsHTML(r.config) : `<span class="muted">${esc(t("—"))}</span>`}</td>
         <td class="mono">${r.err ? "" : cmpCountsHTML(r.hasConfig ? cmpRest(r) : r.whole)}</td>
@@ -797,7 +820,8 @@ function drawCompare() {
       </tr>`).join("")}
     </tbody></table>
     ${onlyNg ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("ほか {n} 台は問題なし（チェックを外すと表示）", { n: all.length - rows.length }))}</div>` : ""}
-    ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("片方の実行にしか含まれていない機器:"))} ${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}`;
+    ${onlyA.length || onlyB.length ? `<div class="muted" style="font-size:12px;margin-top:8px">${esc(t("片方の実行にしか含まれていない機器:"))} ${onlyA.length ? esc(t("A のみ: {d}", { d: onlyA.join(", ") })) : ""}${onlyA.length && onlyB.length ? "　" : ""}${onlyB.length ? esc(t("B のみ: {d}", { d: onlyB.join(", ") })) : ""}</div>` : ""}
+    ${noLog.length ? `<div class="muted" id="cmp-nolog" style="font-size:12px;margin-top:8px">${esc(t("ログファイルが見つからないため比較していない機器: {d}", { d: noLog.map(x => `${x.name}（${x.where}）`).join(", ") }))}</div>` : ""}`;
   out.querySelectorAll("[data-diff]").forEach(btn => btn.onclick = () => showDiff(btn.dataset.diff, byName[btn.dataset.diff].a, byName[btn.dataset.diff].b));
   out.querySelectorAll("[data-cmd]").forEach(btn => btn.onclick = () => cmdDialog(btn.dataset.dev, byName[btn.dataset.dev].a, byName[btn.dataset.dev].b, btn.dataset.cmd, b.group || a.group || ""));
   out.querySelectorAll("[data-log]").forEach(el => el.onclick = () => showLog(el.dataset.log));

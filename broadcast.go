@@ -37,6 +37,9 @@ import (
 //	main → child  "BCN <joined> <ready>"            how many windows take part
 //	main → child  "BCOFF"                           turn 同時入力 off (LeaveAllBroadcast)
 //	main → child  "PLACE <l,t,r,b>"                 where to sit (physical pixels)
+//	child → main  "PALATERM focus"                  this window became the active one
+//	main → child  "SPAREOFF"                        drop the spare paste window (another
+//	                                                terminal window is in use)
 //
 // A window takes INPUT only while 同時入力 is on there and its session is
 // connected and unlocked; one still logging in, disconnected or locked
@@ -51,6 +54,8 @@ const (
 	termLineBcNames  = "BCNAMES"
 	termLineBcOff    = "BCOFF"
 	termLinePlace    = "PLACE"
+	termEventFocus   = "PALATERM focus"
+	termLineSpareOff = "SPAREOFF"
 
 	// tileEnv / bcastEnv start a terminal window at its grid cell, and with
 	// 同時入力 on (並べて接続; bcastEnv only with Settings.TiledBroadcast).
@@ -378,6 +383,15 @@ func (a *App) termLine(cmd *exec.Cmd, line string) {
 		}
 		a.termsMu.Unlock()
 		a.sendBcastCounts()
+	case line == termEventFocus:
+		// One spare paste window in all: with the window last in use.
+		a.termsMu.Lock()
+		for c, ch := range a.terms {
+			if c != cmd {
+				ch.put(termLineSpareOff)
+			}
+		}
+		a.termsMu.Unlock()
 	case strings.HasPrefix(line, termEventTile+" "):
 		if work, ok := parseRect(strings.TrimPrefix(line, termEventTile+" ")); ok {
 			a.retile(work)

@@ -89,13 +89,14 @@ func main() {
 		runCmdsetWindow()
 		return
 	}
-	// Paste-confirmation window opened by a terminal window: "--paste <device>".
+	// Paste-confirmation window opened by a terminal window: "--paste <device>"
+	// ("--paste <device> --spare": started hidden ahead of the paste).
 	if len(os.Args) >= 2 && os.Args[1] == "--paste" {
 		dev := ""
 		if len(os.Args) >= 3 {
 			dev = os.Args[2]
 		}
-		runPasteWindow(dev)
+		runPasteWindow(dev, len(os.Args) >= 4 && os.Args[3] == "--spare")
 		return
 	}
 	runMainApp()
@@ -219,15 +220,20 @@ func runCmdsetWindow() {
 	})
 }
 
-func runPasteWindow(device string) {
+func runPasteWindow(device string, spare bool) {
 	title := "PalaTerm - " + winWord("貼り付けの確認", "Paste")
 	if device != "" {
 		title += " - " + device
 	}
-	p := NewPaste(title)
+	p := NewPaste(title, spare)
+	if spare {
+		// The terminal the user is typing in gets the foreground back if
+		// the hidden frame takes it.
+		go keepForegroundWhileHidden(foregroundWindow(), p.isHidden)
+	}
 	// Stays above the terminal it belongs to, like Tera Term's dialog; it
 	// can still be moved aside to read the terminal underneath.
-	runChildWindow(childWindow{title: title, size: pasteWin, bg: pasteBG, bind: p, onTop: true, startup: p.startup, domReady: p.domReady, beforeClose: p.beforeClose})
+	runChildWindow(childWindow{title: title, size: pasteWin, bg: pasteBG, bind: p, hidden: spare, onTop: true, startup: p.startup, domReady: p.domReady, beforeClose: p.beforeClose})
 }
 
 func runMainApp() {

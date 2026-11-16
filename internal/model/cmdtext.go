@@ -40,6 +40,19 @@ func CheckCommands(cmds []Command) error {
 	return nil
 }
 
+// CheckCommandPauses refuses a negative wait. It is kept apart from
+// CheckCommands, which every run applies as well: a set saved before this
+// check still runs (a negative wait is no wait) and is only refused where
+// it is saved.
+func CheckCommandPauses(cmds []Command) error {
+	for i, c := range cmds {
+		if c.PauseSec < 0 || c.SerialSec < 0 {
+			return fmt.Errorf("%d 行目の待機秒がマイナスです（0 以上で指定してください）", i+1)
+		}
+	}
+	return nil
+}
+
 // CheckProfileSends applies CheckCommandText to everything a profile types
 // (login, pager, disconnect steps and answers), and refuses a credential
 // variable in an answer. Answers go to whatever question matches,

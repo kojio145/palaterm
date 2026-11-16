@@ -259,6 +259,19 @@ function editCommandSet(set, tpl) {
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
     // "__adhoc__" and the like are the run tab's own markers.
     if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
+    // A negative pause runs as no pause: refused where it is typed, at the
+    // field (only while the pauses are used — off, the fields are greyed).
+    if (usePause.checked) {
+      const rows = [...tbody.querySelectorAll("tr")];
+      for (let i = 0; i < rows.length; i++) {
+        if (!rows[i].querySelector(".c-text").value.trim()) continue;
+        const bad = [...rows[i].querySelectorAll(".c-pause, .c-spause")].find(inp => parseInt(inp.value, 10) < 0);
+        if (!bad) continue;
+        toast(t("{n} 行目の待機秒がマイナスです（0 以上で指定してください）", { n: i + 1 }), "err");
+        fieldError(bad, t("0 以上で入力"));
+        return;
+      }
+    }
     const commands = collect().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
     let renamed = false;
@@ -494,7 +507,7 @@ function renderRun() {
     return `<tr>
       <td><input type="checkbox" data-enable="${esc(d.id)}" ${d.enabled ? "checked" : ""} ${running ? "disabled" : ""}></td>
       <td><span class="dot st-${st.phase === "off" ? "queued" : st.phase}"></span>${statusLabel(st.phase)}${st.warnings && st.warnings.length ? ` <span class="badge" style="color:var(--warn);border:1px solid var(--warn);background:none" data-tip="${esc(st.warnings.map(terr).join(String.fromCharCode(10)))}">${esc(t("警告 {n}", { n: st.warnings.length }))}</span>` : ""}${pbar}</td>
-      <td><div class="clip" data-tip="${esc(d.name)}"><b>${esc(d.name)}</b></div></td>
+      <td${DEVICE_TINTS[d.termColor] ? ` style="box-shadow:inset 4px 0 0 ${DEVICE_TINTS[d.termColor].band}"` : ""}><div class="clip" data-tip="${esc(d.name)}"><b>${esc(d.name)}</b></div></td>
       <td class="mono"><div class="clip" data-tip="${esc(d.host)}">${esc(d.host)}</div></td>
       <td><div class="clip" data-tip="${esc(d.site || "")}">${esc(d.site || "")}</div></td>
       <td><div class="clip" data-tip="${esc(d.role || "")}">${esc(d.role || "")}</div></td>

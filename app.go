@@ -2072,7 +2072,9 @@ var errNameEmpty = errors.New("名前が空です")
 
 // checkCommandSet trims the set's name and refuses an empty one or a command
 // with control characters — the same for a set saved and one created, so no
-// "" or "bk " set is made by either.
+// "" or "bk " set is made by either. A negative wait is refused here only
+// (and only while the set's waits are used): it runs as no wait, and the
+// runs keep taking a set saved before this check.
 func checkCommandSet(cs *model.CommandSet) error {
 	cs.Name = strings.TrimSpace(cs.Name)
 	if cs.Name == "" {
@@ -2081,7 +2083,13 @@ func checkCommandSet(cs *model.CommandSet) error {
 	if model.ReservedName(cs.Name) {
 		return errors.New(model.ReservedNameMsg)
 	}
-	return model.CheckCommands(cs.Commands)
+	if err := model.CheckCommands(cs.Commands); err != nil {
+		return err
+	}
+	if cs.PauseOff {
+		return nil
+	}
+	return model.CheckCommandPauses(cs.Commands)
 }
 
 // SaveCommandSet inserts or updates a command set by name.
@@ -4101,7 +4109,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.37"
+const appVersion = "1.9.38"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

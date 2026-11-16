@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/kojio145/palaterm/internal/logstore"
 )
@@ -175,6 +176,10 @@ type Device struct {
 	Status  string `json:"status"` // ok / error / canceled / unknown
 	Error   string `json:"error,omitempty"`
 	LogPath string `json:"logPath,omitempty"` // absolute, "" when the file is gone
+	// Keys: what else the log's file name may be read as (a folder without
+	// a summary: see fileKeys). The comparison pairs a name left over on
+	// one side by them.
+	Keys []string `json:"keys,omitempty"`
 	// Warnings: commands the device refused during that run.
 	Warnings []string `json:"warnings,omitempty"`
 	// StartedAt / EndedAt: an interactive session's times (see
@@ -382,6 +387,10 @@ func readExternal(dir, label string, tok logstore.StageTokens) Run {
 	r := Run{Dir: dir, Name: label, External: true, Devices: []Device{}, Stage: stageFromName(label, tok)}
 	entries, _ := os.ReadDir(dir)
 	var newest time.Time
+	// wide: the name with every number next to a date read as a part of it
+	// (see dateFieldsWide) → the names it stands for in this folder.
+	wide := map[string]map[string]bool{}
+	var wides []string
 	for _, e := range entries {
 		if e.IsDir() || !isLogFile(e.Name()) {
 			continue
@@ -389,13 +398,81 @@ func readExternal(dir, label string, tok logstore.StageTokens) Run {
 		if info, err := e.Info(); err == nil && info.ModTime().After(newest) {
 			newest = info.ModTime()
 		}
-		r.Devices = append(r.Devices, Device{Name: externalDeviceKey(e.Name(), tok), Status: "unknown", LogPath: filepath.Join(dir, e.Name())})
+		name := externalDeviceKey(e.Name(), tok)
+		w := deviceKey(e.Name(), tok, dateFieldsWide)
+		if wide[w] == nil {
+			wide[w] = map[string]bool{}
+		}
+		wide[w][name] = true
+		wides = append(wides, w)
+		r.Devices = append(r.Devices, Device{Name: name, Status: "unknown", LogPath: filepath.Join(dir, e.Name()), Keys: fileKeys(name)})
+	}
+	// A number before a date that is the device's when several devices of
+	// the folder differ by it (lab-sw-01_20261101, lab-sw-02_20261101) may
+	// be a part of the date, or the number of the take, when it sets no two
+	// devices apart (sw01_01_0900 here, sw01_02_1100 in the other folder):
+	// the name without it goes along, for the comparison to pair them by.
+	for i := range r.Devices {
+		if w, name := wides[i], r.Devices[i].Name; w != name && len(wide[w]) == 1 {
+			r.Devices[i].Keys = append(r.Devices[i].Keys, w)
+		}
 	}
 	if !newest.IsZero() {
 		r.StartedAt = newest.Format(time.RFC3339)
 	}
 	r.DeviceCount = distinctNames(r.Devices)
 	return r
+}
+
+// fileKeys is what else a name read from a file name may stand for: the
+// name without the number its file was numbered with (01_lab-sw01,
+// 2 lab-sw02; an address, 192.0.2.1, has none). Files numbered in the
+// order they were taken carry other numbers once one device is missing on
+// one side, and no name paired from there on.
+func fileKeys(name string) []string {
+	n := 0
+	for n < len(name) && name[n] >= '0' && name[n] <= '9' {
+		n++
+	}
+	if n == 0 || n > 3 {
+		return nil
+	}
+	seps := "_- " + string(rune(0x3000))
+	rest := strings.TrimLeft(name[n:], seps)
+	if len(rest) == len(name[n:]) {
+		return nil
+	}
+	rest = strings.Trim(rest, seps+".")
+	if !strings.ContainsFunc(rest, unicode.IsLetter) {
+		return nil
+	}
+	return []string{rest}
+}
+
+// runFileKey is externalDeviceKey for a file this app named: the _2 a
+// second log of the same second carries after the time (logstore: create,
+// UniquePath) is not a part of the name — two logs of one device stay one
+// device. Only after a date or a time: lab_sw_2 is a device.
+func runFileKey(file string, tok logstore.StageTokens) string {
+	key := externalDeviceKey(file, tok)
+	base := strings.TrimSuffix(file, filepath.Ext(file))
+	i := strings.LastIndex(base, "_")
+	if i <= 0 || len(key) <= len(base)-i || !strings.HasSuffix(key, base[i:]) {
+		return key
+	}
+	if n := base[i+1:]; n == "" || len(n) > 4 || strings.Trim(n, "0123456789") != "" {
+		return key
+	}
+	var fields []string
+	for _, seg := range nameSegments(base[:i]) {
+		if seg.field != "" {
+			fields = append(fields, seg.field)
+		}
+	}
+	if st := dateFields(fields); len(st) == 0 || !st[len(st)-1] {
+		return key
+	}
+	return strings.TrimSuffix(key, base[i:])
 }
 
 // distinctNames counts the device names in devs once each.
@@ -489,6 +566,12 @@ func stageFromName(name string, tok logstore.StageTokens) string {
 // joined to the rest of a field is taken out of it (sw01_作業後ログ_… and
 // sw01作業前 → sw01), so the before and after files of one device pair up.
 func externalDeviceKey(file string, tok logstore.StageTokens) string {
+	return deviceKey(file, tok, dateFields)
+}
+
+// deviceKey is externalDeviceKey with the fields that dates marks as dates
+// or times.
+func deviceKey(file string, tok logstore.StageTokens, dates func([]string) []bool) string {
 	base := strings.TrimSuffix(file, filepath.Ext(file))
 	words := stageWords(tok)
 	cjk := cjkStageWords(words)
@@ -508,7 +591,7 @@ func externalDeviceKey(file string, tok logstore.StageTokens) string {
 	for i, seg := range segs {
 		fields[i] = strings.ReplaceAll(seg.field, string(ipDot), ".")
 	}
-	stamp := dateFields(fields)
+	stamp := dates(fields)
 	for i, seg := range segs {
 		f := fields[i]
 		drop := false
@@ -593,11 +676,46 @@ func isNameSep(r rune) bool {
 
 // dateFields marks the fields of a name that are a date or a time. A
 // field of two or three digits alone ("01", "10") is a date or time part
-// only next to one — the "09" and "01" of an already split 2026-09-01, the
-// "14" and "30" of 20260901_14_30 — and a device's number otherwise:
-// lab-sw-01 and lab-sw-02 both came out as "lab-sw" and were one device
-// (review 2026-11-01, A-4).
+// only where one is written in parts — after a date or time (the "09" and
+// "01" of an already split 2026-09-01, the "14" and "30" of
+// 20260901_14_30), or two of them before a year or a time (09-01-2026,
+// 11_01_0900) — and a device's number otherwise: lab-sw-01 and lab-sw-02
+// both came out as "lab-sw" and were one device (review 2026-11-01, A-4),
+// and so did lab-sw-01_20261101 and lab-sw-02_20261101, the number taken
+// for a part of the date that follows it (2026-11-16: a folder of such
+// files was one device, and only its last log was compared).
 func dateFields(fields []string) []bool {
+	stamp := make([]bool, len(fields))
+	for i, f := range fields {
+		stamp[i] = isDateOrTime(f) && !shortNumber(f)
+	}
+	whole := make([]bool, len(fields))
+	for i := range fields {
+		whole[i] = stamp[i] && wholeDate(fields, i)
+	}
+	for i := 1; i < len(fields); i++ {
+		if !stamp[i] && shortNumber(fields[i]) && stamp[i-1] {
+			stamp[i] = true
+		}
+	}
+	// Before a date that is whole in itself nothing is a part of it; one
+	// short number before a year or a time is the device's (lab-sw-02_1101).
+	for i := range fields {
+		if !stamp[i] || shortNumber(fields[i]) || whole[i] {
+			continue
+		}
+		if i >= 2 && !stamp[i-1] && !stamp[i-2] && shortNumber(fields[i-1]) && shortNumber(fields[i-2]) {
+			stamp[i-1], stamp[i-2] = true, true
+		}
+	}
+	return stamp
+}
+
+// dateFieldsWide is dateFields as it was until v1.9.37: every number of two
+// or three digits next to a date or a time, on either side, is a part of
+// it. What a name reads as this way is kept as another reading of it
+// (readExternal).
+func dateFieldsWide(fields []string) []bool {
 	stamp := make([]bool, len(fields))
 	for i, f := range fields {
 		stamp[i] = isDateOrTime(f) && !shortNumber(f)
@@ -614,6 +732,33 @@ func dateFields(fields []string) []bool {
 		}
 	}
 	return stamp
+}
+
+// wholeDate: fields[i] is a date needing no part before it — eight digits
+// or more (20261101, 20261101090000, 2026年11月01日), or a year followed by
+// its month and day (2026-11-01).
+func wholeDate(fields []string, i int) bool {
+	f := fields[i]
+	digits := 0
+	for _, r := range f {
+		if r >= '0' && r <= '9' {
+			digits++
+		}
+	}
+	if digits >= 8 {
+		return true
+	}
+	if len(f) != 4 || digits != 4 || (f[:2] != "19" && f[:2] != "20") || i+2 >= len(fields) {
+		return false
+	}
+	in := func(s string, lo, hi int) bool {
+		if len(s) != 2 || !shortNumber(s) {
+			return false
+		}
+		n := int(s[0]-'0')*10 + int(s[1]-'0')
+		return n >= lo && n <= hi
+	}
+	return in(fields[i+1], 1, 12) && in(fields[i+2], 1, 31)
 }
 
 // shortNumber: two or three digits and nothing else.
@@ -713,7 +858,17 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 	// (A device named with "_" loses its tail here; reading the name the way
 	// an external folder's is read would add the site and role instead and
 	// no longer pair with the runs that have a summary, so the guess stays.)
+	//
+	// Files of several devices that the guess gives one name (lab_sw01 and
+	// lab_sw02 → "lab"; a template that opens with the date) are named the
+	// way an external folder's are instead: they were one device, and only
+	// its last log was compared. Files the guess keeps apart, or several
+	// logs of one device, keep the guess; what the file name reads as goes
+	// along (Keys), for the folder of the same run that holds one device.
 	entries, _ := os.ReadDir(dir)
+	type guessed struct{ guess, key, path string }
+	var files []guessed
+	keysOf := map[string]map[string]bool{}
 	for _, e := range entries {
 		if e.IsDir() || e.Name() == SummaryName {
 			continue
@@ -722,7 +877,21 @@ func readRun(dir string, tok logstore.StageTokens) Run {
 		if i := strings.Index(name, "_"); i > 0 {
 			name = name[:i]
 		}
-		r.Devices = append(r.Devices, Device{Name: name, Status: "unknown", LogPath: filepath.Join(dir, e.Name())})
+		key := runFileKey(e.Name(), tok)
+		files = append(files, guessed{name, key, filepath.Join(dir, e.Name())})
+		if keysOf[name] == nil {
+			keysOf[name] = map[string]bool{}
+		}
+		keysOf[name][key] = true
+	}
+	for _, f := range files {
+		d := Device{Name: f.guess, Status: "unknown", LogPath: f.path}
+		if len(keysOf[f.guess]) > 1 {
+			d.Name = f.key
+		} else if f.key != f.guess {
+			d.Keys = []string{f.key}
+		}
+		r.Devices = append(r.Devices, d)
 	}
 	r.DeviceCount = distinctNames(r.Devices)
 	return r
