@@ -23,6 +23,11 @@ The full text of each license is reproduced below.
 | xterm.js (xterm) | 5.3.0 | MIT |
 | xterm-addon-fit | 0.8.0 | MIT |
 
+From v1.9.40, the Wails winc component is built with one function changed
+(`Center` in `winc/form.go`: a window that is still hidden is not made the
+active window by being centred). The change is in `tools/mkwails.go` in the
+PalaTerm source; the license of the component is unchanged.
+
 ---
 
 ## Go standard library / runtime (BSD-3-Clause)

@@ -35,7 +35,9 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+          # The exe is built with a copy of Wails that has one function changed (tools/mkwails.go, docs/BUILD.md)
+          go run tools/mkwails.go
+          go build -modfile build/release.mod -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
           sha256sum build/bin/PalaTerm.exe | tee build/bin/PalaTerm.exe.sha256
           echo "SHA-256 of PalaTerm.exe: \`$(cut -d' ' -f1 build/bin/PalaTerm.exe.sha256)\`" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

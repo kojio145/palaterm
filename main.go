@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -127,7 +128,29 @@ var (
 	pasteBG  = options.RGBA{R: 26, G: 33, B: 43, A: 1}
 )
 
+// A release build is made with a copy of Wails in which centring a frame
+// that is still hidden does not make it the active window (tools/mkwails.go
+// has the why). The two sides talk through the environment, each value
+// being this process's id so that a child that inherits it is not taken
+// for the one that set it:
+//   - wailsPatchEnv is set by the changed Wails file as the program starts:
+//     this build has it.
+//   - hiddenStartEnv is set here for a window started hidden: leave this
+//     process's frame alone. With Wails as it comes it does nothing.
+const (
+	wailsPatchEnv  = "PALATERM_WAILS_PATCH"
+	hiddenStartEnv = "PALATERM_HIDDEN_START"
+)
+
+// wailsLeavesHiddenFrames: this exe was built with the changed Wails file.
+func wailsLeavesHiddenFrames() bool {
+	return os.Getenv(wailsPatchEnv) == strconv.Itoa(os.Getpid())
+}
+
 func runChildWindow(w childWindow) {
+	if w.hidden {
+		os.Setenv(hiddenStartEnv, strconv.Itoa(os.Getpid()))
+	}
 	bg := w.bg
 	err := wails.Run(&options.App{
 		StartHidden: w.hidden,

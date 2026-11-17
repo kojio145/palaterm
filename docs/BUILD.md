@@ -14,11 +14,14 @@ Wails アプリはビルドタグを付けた `go build` で直接 exe 化でき
 npm も wails CLI も不要です。
 
 ```bash
-go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+go run tools/mkwails.go
+go build -modfile build/release.mod -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
 ```
 
-（リポジトリ直下の `build.bat` も同じコマンドです。）
+（リポジトリ直下の `build.bat` も同じ 2 行です。リポジトリの直下で実行します。）
 
+- `go run tools/mkwails.go` : Wails の写し（関数を 1 つ直したもの）と、それを指す `build/release.mod` を作る（下の「Wails の写しでビルドする理由」）
+- `-modfile build/release.mod` : `go.mod` の代わりにそれを使う（`go.mod`・モジュールキャッシュは書き換えません）
 - `-trimpath`        : exe にビルド環境のパスを埋め込まない
 - `-buildvcs=false`  : git の状態（コミット・変更の有無）を埋め込まない（下の「公開 exe と同じものを作る」用）
 - `-tags production` : 埋め込み済みフロントエンド資産を使う（開発サーバに接続しない）
@@ -26,6 +29,24 @@ go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -
 - `-s -w`            : デバッグ情報を除去してサイズ削減
 
 生成物: `build/bin/PalaTerm.exe`（約 11MB、単一ファイル、インストール不要）
+
+### Wails の写しでビルドする理由（v1.9.40〜）
+
+対話窓の「貼り付けの確認」ウィンドウをすぐ開くために、PalaTerm は見えない確認ウィンドウを 1 つ先に起動しておきます。
+ところが Wails v2.9.2 は、新しいウィンドウを画面の中央へ寄せるときに、**まだ表示していないウィンドウでもアクティブにします**
+（`internal/frontend/desktop/windows/winc/form.go` の `Center` が `SetWindowPos` に `SWP_NOACTIVATE` を付けない）。
+見えないウィンドウが数十ミリ秒だけキー入力の先になり、その瞬間に対話窓で打った文字が失われました（計測: 320 打鍵中 14）。
+アプリの側からは止められないため、公開 exe は **`Center` だけを直した Wails の写し**でビルドします。
+
+- `tools/mkwails.go` が、モジュールキャッシュの Wails（`go.sum` で照合済みのもの）を `build/wails` へ写し、`form.go` の 3 か所を書き換えます:
+  `Center` が「まだ見えていない・かつ隠れたまま起動すると名乗ったプロセスのウィンドウ」のときだけ `SWP_NOACTIVATE | SWP_NOZORDER` を付ける／
+  その判断に使う import 2 つ／「この exe は直した Wails でできている」と名乗る 1 行。**表示して開くウィンドウは、元の Wails とまったく同じ呼び出しのまま**です
+- 書き換える前の `form.go` の SHA-256 を道具が確かめます（Wails を更新すると、変更を見直すまでビルドが止まります）
+- `build/release.mod` は `go.mod` に `replace github.com/wailsapp/wails/v2 => ./build/wails` を足しただけのもの。`build/wails`・`build/release.mod`・`build/release.sum` は毎回作り直され、リポジトリには入りません
+- 見えない確認ウィンドウを先に起動するのは、直した Wails でできた exe だけです（exe が起動時に自分で確かめます）。
+  今までの 1 行（`go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .`）でもビルドでき、
+  その exe は確認ウィンドウを押してから起動します（v1.9.39 と同じ動き。打鍵は失われません）
+- `go version -m PalaTerm.exe` には `github.com/wailsapp/wails/v2 v2.9.2 => ./build/wails (devel)` と出ます
 
 ### 公開 exe と同じものを作る（再現可能なビルド）
 
@@ -35,10 +56,13 @@ v1.9.20 以降のリリースは、タグごとに GitHub Actions（`.github/wor
 
 ```bash
 git clone -c core.autocrlf=false https://github.com/kojio145/palaterm.git
-cd palaterm && git checkout v1.9.20        # 確かめたい版
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
+cd palaterm && git checkout v1.9.40        # 確かめたい版
+go run tools/mkwails.go
+CGO_ENABLED=0 go build -modfile build/release.mod -trimpath -buildvcs=false -tags production -ldflags="-H windowsgui -s -w" -o build/bin/PalaTerm.exe .
 sha256sum build/bin/PalaTerm.exe
 ```
+
+v1.9.20〜v1.9.39 のタグは `go run tools/mkwails.go` の行と `-modfile build/release.mod` が無い 1 行（その版の `docs/BUILD.md` のとおり）でビルドします。
 
 ## テスト
 

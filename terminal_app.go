@@ -1240,15 +1240,16 @@ func (t *Term) focused() {
 	t.respare()
 }
 
-// pasteSpareOn: whether a spare paste window is kept at all. Off: a hidden
+// pasteSpareOn: whether a spare paste window is kept at all. A hidden
 // window that starts takes the foreground from the terminal for some tens
 // of milliseconds — Wails centres a new frame with a SetWindowPos that
 // activates it, shown or not, and nothing done from this side stops that —
 // and letters typed in the terminal just then are lost (probe 2026-11-16:
-// 14 of 320 typed after a paste with it on, none with it off). So a paste
-// window is started when asked for, as before; the spare is kept for a
-// build in which the frame is not activated.
-var pasteSpareOn = false
+// 14 of 320 typed after a paste with it on, none with it off). So the
+// spare is kept only in a build made with the Wails file in which a hidden
+// frame is not activated (wailsLeavesHiddenFrames); in any other a paste
+// window is started when asked for.
+var pasteSpareOn = wailsLeavesHiddenFrames()
 
 // respare starts the spare paste window unless one is there or starting,
 // a paste window is open, or the window is locked or closing.

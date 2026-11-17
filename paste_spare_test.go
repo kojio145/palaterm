@@ -74,8 +74,8 @@ func withFakeSpares(t *testing.T, f *fakeSpares) {
 	})
 }
 
-// As built, no spare is kept (pasteSpareOn): a terminal window that became
-// the active one starts none.
+// A build with Wails as it comes (as go test is) keeps no spare: a terminal
+// window that became the active one starts none.
 func TestNoSpareAsBuilt(t *testing.T) {
 	if pasteSpareOn {
 		t.Fatal("pasteSpareOn は false のはず")

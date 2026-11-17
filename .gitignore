@@ -1,5 +1,9 @@
 # Build artifacts (keep build/windows icon sources tracked)
 /build/bin/
+# written by tools/mkwails.go for the build
+/build/wails/
+/build/release.mod
+/build/release.sum
 /dist/
 *.exe
 *.syso
