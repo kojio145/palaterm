@@ -107,7 +107,7 @@ function renderGroupChooser() {
     </div>
     ${!devs.length ? `<div class="muted" style="font-size:13px;line-height:1.9;margin-top:14px;max-width:720px">
       <b>${esc(t("はじめかた"))}</b><br>
-      ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンド一覧タブにあります"))}
+      ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンドセット一覧タブにあります"))}
     </div>` : ""}`);
   listViewWire(LV, root, renderGroupChooser, focus);
   const gs = document.getElementById("grp-sort");

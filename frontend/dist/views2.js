@@ -38,7 +38,7 @@ function renderCommands() {
 
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(LANG === "ja" ? "コマンド一覧" : t("メニュー:コマンドセット"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット一覧" : t("メニュー:コマンドセット"))}</div>
         <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群"))}${hintI(t("書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます"))}</div></div>
       <div class="row-inline">
         <button class="btn" style="margin-right:18px" id="fr-open" data-tip="${esc(t("一覧ファイル（Excel・CSV など）の値を、機器ごとに変数としてコマンドに入れます。どの列をどの変数にするかは、ルールで決めます"))}">${esc(t("変数の取り込み設定"))}</button>
@@ -972,7 +972,7 @@ function profileNameOf(key) {
 // Open the editor of the device's OS type (保存して接続確認へ is in there).
 function editDeviceProfile(dev) {
   const prof = (INV.customProfiles || []).find(p => p.key === dev.osType);
-  if (!prof) { toast(t("OS タイプ「{k}」のプロファイルが見つかりません（OS一覧タブで確認してください）", { k: profileNameOf(dev.osType) }), "err"); return; }
+  if (!prof) { toast(t("OS タイプ「{k}」のプロファイルが見つかりません（OSタイプ一覧タブで確認してください）", { k: profileNameOf(dev.osType) }), "err"); return; }
   editProfile(prof);
 }
 // A host-key mismatch of a jump host rather than of the device itself: the
@@ -2108,7 +2108,7 @@ function renderOSTypes() {
     (p, k) => k === "login" ? (p.login || []).length : p[k]);
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(LANG === "ja" ? "OS一覧" : t("メニュー:OSタイプ"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "OSタイプ一覧" : t("メニュー:OSタイプ"))}</div>
         <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（待つ文字 → 送る文字）"))}${hintI(t("待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルの JSON は export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても「読み込み」で戻せます。書き出しは「機器一覧」の一式書き出しに含まれます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>

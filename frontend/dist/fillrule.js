@@ -19,7 +19,7 @@ function fillChip(name) { return `<span class="fill-chip">{{${esc(name)}}}</span
 function fillRules() { return INV.fillRules || []; }
 function fillRule(id) { return fillRules().find(r => r.id === id); }
 
-// FR: the variable rules' state in the コマンド一覧 tab. view "sets" shows
+// FR: the variable rules' state in the コマンドセット一覧 tab. view "sets" shows
 // the command sets as always; "list" the rules' page (変数の取り込み設定, from
 // the tab's button of that name — as 機器一覧 reaches 他システムの一覧の
 // 変換ルール); "edit" a rule's editor. sample is the picked sample file's path
@@ -50,7 +50,7 @@ function frRenderList(root) {
       <div><div class="page-title">${esc(t("変数の取り込み設定"))}</div>
         <div class="page-sub">${esc(t("一覧ファイル（Excel・CSV など）の何列目を、どの変数にするかを、ルールで決めます。ルールでファイルを読み込むと、変数入りのコマンドセットができます"))}${hintI(t("コマンドに {{変数名}} と書いた所が、実行のとき、機器ごとの値に置き換わります。読み込んだ値はコマンドセットと一緒に保存されます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
-        <button class="btn" id="fr-back">${esc(t("← コマンド一覧"))}</button>
+        <button class="btn" id="fr-back">${esc(t("← コマンドセット一覧"))}</button>
         <button class="btn" id="fr-imp" data-tip="${esc(t("人から受け取った変数ルール（JSON）を読み込みます"))}">${esc(t("ルールを読み込む"))}</button>
         <button class="btn primary" id="fr-add">${esc(t("＋ ルールを作る"))}</button>
       </div>
@@ -492,7 +492,7 @@ function fillEditorBand(box, name, api) {
           <button class="btn sm" type="button" id="fb-other">${esc(t("別のファイルにする…"))}</button>
           <button class="btn sm" type="button" id="fb-unlink">${esc(t("✕ 外す"))}</button>`
         : name ? `<span class="muted" style="font-size:12px">${esc(t("なし"))}</span>
-          ${rules.length ? `<button class="btn sm" type="button" id="fb-link">${esc(t("変数の一覧を紐づける…"))}</button>` : `<span class="muted" style="font-size:12px">${esc(t("（先にコマンド一覧の「変数の取り込み設定」でルールを作ってください）"))}</span>`}`
+          ${rules.length ? `<button class="btn sm" type="button" id="fb-link">${esc(t("変数の一覧を紐づける…"))}</button>` : `<span class="muted" style="font-size:12px">${esc(t("（先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください）"))}</span>`}`
         : `<span class="muted" style="font-size:12px">${esc(t("セットを保存したあとで紐づけられます"))}</span>`}
       </div>
       ${f || has ? `<div class="row-inline" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">

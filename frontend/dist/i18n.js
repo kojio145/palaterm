@@ -1830,7 +1830,7 @@ const I18N_EN = {
   "折り返し": "Wrap lines",
   "書き出す機器がありません": "No devices to export",
   "はじめかた": "Getting started",
-  "① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンド一覧タブにあります": "① \"+ New group\" makes a unit such as a company or a site → ② open the group and add devices (\"+ Add device\" one by one, \"Edit as table\" to paste from Excel, or \"Import\" for a CSV or a bundle) → ③ run commands from the Run tab. Sample command sets are on the Command sets tab",
+  "① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンドセット一覧タブにあります": "① \"+ New group\" makes a unit such as a company or a site → ② open the group and add devices (\"+ Add device\" one by one, \"Edit as table\" to paste from Excel, or \"Import\" for a CSV or a bundle) → ③ run commands from the Run tab. Sample command sets are on the Command sets tab",
   "絞り込み（機器名・IP・グループ・拠点・役割・接続・OS・コマンドセット）": "Filter (device name, IP, group, site, role, connection, OS, command set)",
   "絞り込み（機器名・IP・拠点・役割・接続・OS・コマンドセット）": "Filter (device name, IP, site, role, connection, OS, command set)",
   "機器がありません。": "No devices yet.",
@@ -2080,7 +2080,7 @@ const I18N_EN = {
   "OS タイプ…": "OS type…",
   "実行履歴・比較タブへ移り、この作業後の実行（B）を、同じグループの直前の作業前の実行（A）と比較します": "Opens the History & compare tab and compares this after run (B) with the group's latest before run taken before it (A)",
   "⇄ 作業前と比較": "⇄ Compare with before",
-  "OS タイプ「{k}」のプロファイルが見つかりません（OS一覧タブで確認してください）": "The profile of OS type \"{k}\" was not found (see the OS types tab)",
+  "OS タイプ「{k}」のプロファイルが見つかりません（OSタイプ一覧タブで確認してください）": "The profile of OS type \"{k}\" was not found (see the OS types tab)",
   "この機器の OS タイプ「{p}」を編集…": "Edit this device's OS type \"{p}\"…",
   "ページャの解除・プロンプト・確認への自動応答は OS タイプで直します。保存後は「保存して接続確認へ」で試せます": "The pager-off command, the prompt and the auto-answers live in the OS type. After saving, \"Save and test login\" tries it",
   "実行が完了しました。「⇄ 作業前と比較」で作業前のログと比較できます": "Run finished. \"⇄ Compare with before\" compares it with the before logs",
@@ -3022,11 +3022,11 @@ I18N_EN_PATTERNS.push(
   [/^作業タイミングの付与文字列 "(.*)" は Windows の予約名のため使えません$/, 'The work stage word "$1" is a Windows reserved name and cannot be used'],
 );
 // 変数 — variable rules, a list linked to a command set, text editing of a set (fillrule.js, views2.js, app_fill.go);
-// the menu (コマンド一覧 / OS一覧 / 他システムの一覧の取り込み設定); 最新版の確認 (update.js, update_app.go)
+// the menu (コマンドセット一覧 / OSタイプ一覧 / 他システムの一覧の取り込み設定); 最新版の確認 (update.js, update_app.go)
 Object.assign(I18N_EN, {
   "一覧ファイル（Excel・CSV など）の何列目を、どの変数にするかを、ルールで決めます。ルールでファイルを読み込むと、変数入りのコマンドセットができます": "A rule says which column of a list file (Excel, CSV…) gives which variable. Reading a file with the rule makes a command set with those variables",
   "コマンドに {{変数名}} と書いた所が、実行のとき、機器ごとの値に置き換わります。読み込んだ値はコマンドセットと一緒に保存されます": "Where a command says {{variable}}, each device's own value goes in when it runs. The values read are saved with the command set",
-  "← コマンド一覧": "← Command sets",
+  "← コマンドセット一覧": "← Command sets",
   "人から受け取った変数ルール（JSON）を読み込みます": "Loads a variable rule (JSON) someone gave you",
   "変数ルールがありません。「＋ ルールを作る」で、一覧ファイルのどの列を、どの変数にするかを決めてください。": "No variable rules. With + Create rule, choose which column of a list file gives which variable.",
   "機器名の列": "Device name column",
@@ -3088,7 +3088,7 @@ Object.assign(I18N_EN, {
   "別のファイルにする…": "Another file…",
   "✕ 外す": "✕ Unlink",
   "変数の一覧を紐づける…": "Link a list of variables…",
-  "（先にコマンド一覧の「変数の取り込み設定」でルールを作ってください）": "(first create a rule under Variable import settings in Command sets)",
+  "（先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください）": "(first create a rule under Variable import settings in Command sets)",
   "セットを保存したあとで紐づけられます": "Can be linked once the set is saved",
   "変数（押すとカーソルの位置に入ります）:": "Variables (click to put one in at the cursor):",
   "選んだ行（テキストでは選んだ範囲の行）を {{#each}} と {{/each}} で囲みます。その間は、一覧にあるその機器の行の数だけ繰り返して送ります": "Puts {{#each}} and {{/each}} around the chosen line (in text, the lines selected). What is between them is sent once per row the list has for the device",
