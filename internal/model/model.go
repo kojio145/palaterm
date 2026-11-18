@@ -460,6 +460,10 @@ type CommandSet struct {
 	// kept for when it is turned back on): each command goes as soon as the
 	// prompt, or its Wait, shows. 待機秒を使う = !PauseOff.
 	PauseOff bool `json:"pauseOff,omitempty"`
+	// Fill is the list linked to a set with {{name}} lines (変数): the
+	// values read from it, per device. Only the link / re-read / unlink
+	// bindings change it; a save of the commands keeps it.
+	Fill *SetFill `json:"fill,omitempty"`
 }
 
 // SecretCommands returns the commands that type a credential as part of a
@@ -821,8 +825,10 @@ func (inv *Inventory) NormalizeGroups() {
 // Raise it in any release that adds vault data an older PalaTerm would drop
 // on its next save: an older build that finds a higher number warns and
 // opens the vault read-only instead of silently losing the newer data.
-// 1 = up to v1.9.9 (which never compared it); 2 = from v1.9.10, which does.
-const InventoryVersion = 2
+// 1 = up to v1.9.9 (which never compared it); 2 = from v1.9.10, which does;
+// 3 = 変数ルール and the lists linked to command sets (FillRules,
+// CommandSet.Fill).
+const InventoryVersion = 3
 
 // Inventory is the full persisted state, stored encrypted on disk.
 type Inventory struct {
@@ -894,6 +900,9 @@ type Inventory struct {
 	// ImportRules are the 変換ルール of 一覧の取り込み (in the vault: a
 	// default value may be a password).
 	ImportRules []ImportRule `json:"importRules,omitempty"`
+	// FillRules are the 変数ルール: which column of a list gives which
+	// {{name}} of a command set (fillrule.go).
+	FillRules []FillRule `json:"fillRules,omitempty"`
 
 	// ImportRecords are 一覧の取り込み's records, by device ID: kept beside
 	// the devices rather than on them, so the editors that save a whole

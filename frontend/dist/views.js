@@ -67,7 +67,7 @@ function renderGroupChooser() {
       <div><div class="page-title">${esc(t("機器グループを選択"))}</div>
         <div class="page-sub">${esc(t("グループを選ぶか、新規に作成してください。グループ作成後にそのグループへ機器を追加します"))}</div></div>
       <div class="row-inline">
-        <button class="btn" style="margin-right:18px" id="ext-import" data-tip="${esc(t("他のシステムが出力した Excel/CSV の機器一覧を、変換ルールで PalaTerm の機器に変換して取り込みます（PalaTerm で書き出した CSV は「読み込み」）"))}">${esc(t("他システムの一覧から取り込む…"))}</button>
+        <button class="btn" style="margin-right:18px" id="ext-import" data-tip="${esc(t("他のシステムが出力した Excel/CSV の機器一覧を、変換ルールで PalaTerm の機器に変換して取り込みます（PalaTerm で書き出した CSV は「読み込み」）"))}">${esc(t("他システムの一覧の取り込み設定"))}</button>
         <button class="btn" id="imp-csv">${esc(t("読み込み"))}</button>
         <button class="btn" id="exp-csv" ${devs.length ? "" : `disabled data-tip="${esc(t("書き出す機器がありません"))}"`}>${esc(t("一式書き出し"))}</button>
       </div>
@@ -107,7 +107,7 @@ function renderGroupChooser() {
     </div>
     ${!devs.length ? `<div class="muted" style="font-size:13px;line-height:1.9;margin-top:14px;max-width:720px">
       <b>${esc(t("はじめかた"))}</b><br>
-      ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンドセットタブにあります"))}
+      ${esc(t("① 「＋ 新規グループ作成」で会社・拠点などの単位を作る → ② グループを開いて機器を入れる（「＋ 機器を追加」で 1 台ずつ、「表で編集」で Excel から貼り付け、または「読み込み」で CSV・一式）→ ③ 実行タブでコマンドを流す。サンプルのコマンドセットはコマンド一覧タブにあります"))}
     </div>` : ""}`);
   listViewWire(LV, root, renderGroupChooser, focus);
   const gs = document.getElementById("grp-sort");
@@ -396,7 +396,7 @@ function renderDeviceList() {
         <button class="btn" id="grp-rename">${esc(t("グループ名変更"))}</button>
         <button class="btn danger" id="grp-delete">${esc(t("グループ削除"))}</button>` : ""}
         ${gridDraftBadge(gridScopeOf(deviceView.group))}
-        <button class="btn" style="margin:0 12px" id="ext-import" data-tip="${esc(t("他のシステムが出力した Excel/CSV の機器一覧を、変換ルールで PalaTerm の機器に変換して取り込みます（PalaTerm で書き出した CSV は「読み込み」）"))}">${esc(t("他システムの一覧から取り込む…"))}</button>
+        <button class="btn" style="margin:0 12px" id="ext-import" data-tip="${esc(t("他のシステムが出力した Excel/CSV の機器一覧を、変換ルールで PalaTerm の機器に変換して取り込みます（PalaTerm で書き出した CSV は「読み込み」）"))}">${esc(t("他システムの一覧の取り込み設定"))}</button>
         <button class="btn" id="grid-open" data-tip="${esc(t("Excel のように表の上で複数の機器をまとめて編集します（コピー・貼り付け・Ctrl+D・連番など）。保存するまでは下書きです"))}">${esc(t("表で編集"))}</button>
         <button class="btn" id="imp-csv">${esc(t("読み込み"))}</button>
         <button class="btn" id="exp-csv" ${devs.length ? "" : `disabled data-tip="${esc(t("書き出す機器がありません"))}"`}>${esc(t("一式書き出し"))}</button>

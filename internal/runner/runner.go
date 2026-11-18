@@ -231,7 +231,17 @@ type Options struct {
 	// instead of Stage's: a 予約 run with no stage is named "予約" rather
 	// than the plain capture's 指定なし word ("Current").
 	LogStage string
+	// DeviceSets are the sets with their values filled in (変数), by
+	// device name: such a device runs its own instead of the set it names.
+	// A device whose set fills in values and that has none here is not
+	// connected to (a 予約, a device the linked list lacks): the set's
+	// {{name}} lines would reach the device as they are.
+	DeviceSets map[string]*model.CommandSet
 }
+
+// FillMissingMsg is the result of a device left out because its command
+// set fills in values (変数) and the run has none for it.
+const FillMissingMsg = "変数のあるコマンドセットですが、この機器の変数の値がないため実行しませんでした（コマンドセットに紐づけた変数の一覧に、この機器の行があるか確かめてください）"
 
 // logStage is what the log file names call the run's stage.
 func (o Options) logStage() model.Stage {
@@ -1974,6 +1984,13 @@ func (r *Runner) RunBatchOpts(ctx context.Context, inv *model.Inventory, opts Op
 			var set *model.CommandSet
 			if cs, ok := sets[d.CommandSet]; ok {
 				set = cs
+			}
+			if ds, ok := opts.DeviceSets[d.Name]; ok {
+				set = ds
+			} else if set != nil && !opts.DryRun && model.HasFill(set.Commands) {
+				results[idx] = DeviceResult{Device: d.Name, Error: FillMissingMsg}
+				r.emit(emit, d.Name, PhaseError, FillMissingMsg)
+				return
 			}
 			res := r.runDevice(dctx, d, set, inv.Settings, runDir, now, emit, opts)
 			// A set the device names that no longer exists (renamed or

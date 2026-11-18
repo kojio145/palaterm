@@ -48,6 +48,22 @@ var defaults = []Profile{
 		Answers:    ciscoAnswers,
 	},
 	{
+		// Firepower (FTD / ASA image): IOS's login, with ASA's pager
+		// command (generation 4, user request 2026-11-19).
+		Key:    "cisco-firepower",
+		Name:   "Cisco Firepower",
+		Prompt: "#",
+		Login: []Step{
+			{Expect: "sername:", Send: "{user}"},
+			{Expect: "assword:", Send: "{password}"},
+			{Expect: ">", Send: "enable"},
+			{Expect: "assword:", Send: "{enable}"},
+		},
+		Pager:      []Step{{Send: "terminal pager 0"}},
+		Disconnect: []Step{{Send: "exit"}},
+		Answers:    ciscoAnswers,
+	},
+	{
 		// The operational prompt is "user@host> " — with its trailing
 		// space, which is what tells it from the ">" closing an XML tag:
 		// "| display xml" output paused for a beat on "</interface>" was
@@ -368,7 +384,7 @@ func Defaults() []Profile {
 // introduced in a later generation is added to it exactly once on unlock, so
 // an existing vault picks up new OS types without resurrecting defaults the
 // user deleted. Bump it together with introducedIn when adding a default.
-const SeedGen = 3
+const SeedGen = 4
 
 // introducedIn maps a default's key to the generation that added it; keys
 // absent here belong to the original set (generation 0).
@@ -376,6 +392,8 @@ var introducedIn = map[string]int{
 	"alaxala-ax": 1,
 	"linux":      2,
 	"linux-root": 2,
+	// 4: Cisco Firepower.
+	"cisco-firepower": 4,
 }
 
 // AddedAfter returns deep copies of the defaults introduced after generation

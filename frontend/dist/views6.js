@@ -36,7 +36,7 @@ function renderListImport() {
     }
     else if (LI.view === "import" && LI.imp) liRenderImport(root);
     else liRenderList(root);
-  }).catch(e => { root.innerHTML = pageError(t("外部一覧の変換"), t("読み込み失敗") + ": " + terr(e)); });
+  }).catch(e => { root.innerHTML = pageError(t("他システムの一覧の取り込み設定"), t("読み込み失敗") + ": " + terr(e)); });
 }
 
 // ---- the rule list ----
@@ -61,9 +61,10 @@ function liRenderList(root) {
     (r, k) => k === "fields" ? nFields(r) : k === "exclude" ? (r.exclude || []).length : k === "lastUsed" ? (r.lastUsed || "") : r.name);
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(t("外部一覧の変換"))}</div>
+      <div><div class="page-title">${esc(t("他システムの一覧の取り込み設定"))}</div>
         <div class="page-sub">${esc(t("他のシステムが出力した機器一覧（Excel・CSV など）を、変換ルールでグループへ取り込みます。1 ファイルが 1 グループになります"))}${hintI(t("xls・xlsx・CSV・TSV に対応します。Excel で開くと保護ビューの警告が出るファイルもそのまま読めます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
+        <button class="btn" id="li-back">${esc(t("← 機器一覧"))}</button>
         <button class="btn" id="li-rimp" data-tip="${esc(t("人から受け取った変換ルール（JSON）を読み込みます"))}">${esc(t("ルールを読み込む"))}</button>
         <button class="btn" id="li-radd">${esc(t("＋ ルールを作る"))}</button>
         <button class="btn primary" id="li-pick" ${rules.length ? "" : "disabled"} ${rules.length ? "" : `data-tip="${esc(t("先に変換ルールを作ってください"))}"`}>${esc(t("ファイルを選んで取り込む…"))}</button>
@@ -99,6 +100,7 @@ function liRenderList(root) {
     catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); INV = await App().GetInventory(); renderListImport(); }
   });
   root.querySelector("#li-radd").onclick = () => liOpenEditor(null);
+  root.querySelector("#li-back").onclick = () => switchTab("devices");
   root.querySelector("#li-rimp").onclick = async () => {
     try {
       const id = await App().ImportImportRuleFile();
@@ -771,15 +773,18 @@ const LI_STEP_TYPES = [["split", "区切って残す"], ["map", "置き換え表
 // The guessing steps belong to one field each.
 const LI_STEP_FOR = { guessOS: "osType", guessSet: "commandSet" };
 
-function liStepEditor(key, unit = 0) {
+function liStepEditor(key, unit = 0, ctx = null) {
   // unit: 0 = the first device's field, u = the u-th further device's.
-  const f = unit ? liEnsureUnitField(unit - 1, key) : liEnsureField(key);
+  // ctx: another editor's field (差し込みルール, fillrule.js) — { field,
+  // label, sample, done }: its steps are edited here, done() after 決定.
+  const f = ctx ? ctx.field : unit ? liEnsureUnitField(unit - 1, key) : liEnsureField(key);
+  if (ctx) f.steps = f.steps || [];
   const steps = JSON.parse(JSON.stringify(f.steps || []));
-  const secret = liField(key).kind === "secret";
-  const sample = liSampleRow(unit + 1);
-  let input = sample ? (sample.raw[key] || "") : "";
+  const secret = !ctx && liField(key).kind === "secret";
+  const sample = ctx ? null : liSampleRow(unit + 1);
+  let input = ctx ? (ctx.sample || "") : sample ? (sample.raw[key] || "") : "";
   const node = h(`<div>
-    <h3>${esc(t("加工手順: {f}", { f: liFieldLabel(key) }))}${unit ? esc("（" + liUnitName(unit - 1) + "）") : ""}</h3>
+    <h3>${esc(t("加工手順: {f}", { f: ctx ? ctx.label : liFieldLabel(key) }))}${unit ? esc("（" + liUnitName(unit - 1) + "）") : ""}</h3>
     <div class="field"><label>${esc(t("元の値（見本・書き換えて試せます）"))}</label>
       <div class="row-inline" style="gap:6px"><input type="${secret ? "password" : "text"}" id="se-in" class="mono" style="flex:1" value="${esc(input)}" autocomplete="off" data-guard-skip>
       </div></div>
@@ -900,6 +905,7 @@ function liStepEditor(key, unit = 0) {
     for (const s of steps) if (s.type === "map") s.rows = (s.rows || []).filter(r => r.from);
     f.steps = steps;
     closeModal();
+    if (ctx) { ctx.done(); return; }
     if (LI.sample) liRunTest(true); else renderListImport();
   };
   draw();

@@ -4,6 +4,10 @@
 // ---- Command sets tab ----
 function renderCommands() {
   const root = document.getElementById("tab-commands");
+  // 変数の取り込み設定 and its rule editor (fillrule.js) show in the tab in
+  // place of the sets.
+  if (FR.view === "edit" && FR.rule) { frRenderEdit(root); return; }
+  if (FR.view === "list") { frRenderList(root); return; }
   // Sort / filter (display only; see listView in app.js). The text box
   // also searches the commands themselves, so "show arp" finds every set
   // that runs it.
@@ -21,7 +25,7 @@ function renderCommands() {
   const rows = visible.map(s => `
     <tr data-key="${esc(s.name)}">
       ${listViewDragCell(LV)}
-      <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div></td>
+      <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div>${s.fill ? `<div class="clip muted cs-setfill" data-tip="${esc(t("変数の一覧: {f}（{n} 台分・{d} に読み込み）", { f: s.fill.file, n: (s.fill.devices || []).length, d: s.fill.read }))}">📄 ${esc(s.fill.file)} · ${(s.fill.items || []).map(fillChip).join(" ")}</div>` : ""}</td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
       <td class="mono muted cs-preview" data-view="${esc(s.name)}" style="cursor:pointer"><div class="clip" data-tip="${esc(t("クリックで別窓に表示（「表示」と同じ）") + "\n\n" + (s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
       <td class="ops"><div class="ops-btns">
@@ -34,15 +38,16 @@ function renderCommands() {
 
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット" : t("メニュー:コマンドセット"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "コマンド一覧" : t("メニュー:コマンドセット"))}</div>
         <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群"))}${hintI(t("書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます"))}</div></div>
       <div class="row-inline">
+        <button class="btn" style="margin-right:18px" id="fr-open" data-tip="${esc(t("一覧ファイル（Excel・CSV など）の値を、機器ごとに変数としてコマンドに入れます。どの列をどの変数にするかは、ルールで決めます"))}">${esc(t("変数の取り込み設定"))}</button>
         <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
       </div>
     </div>
     ${sets.length ? listViewBar(LV, t("絞り込み（セット名・コマンド）")) : ""}
-    <div class="panel scrollx">
+    <div class="panel scrollx cs-scroll">
       ${sets.length === 0
         ? `<div class="empty">${esc(t("コマンドセットがありません。"))}</div>`
         : visible.length === 0 ? `<div class="empty">${esc(t("絞り込みに一致するコマンドセットがありません"))}</div>`
@@ -51,6 +56,7 @@ function renderCommands() {
     </div>`, [listView(LV)]);
   listViewWire(LV, root, renderCommands, focus);
   wireColResize(root);
+  root.querySelector("#fr-open").onclick = () => frShow("list");
 
   if (!listViewActive(LV)) wireRowReorder(root.querySelector("#cs-body"), async order => {
     try { await App().ReorderCommandSets(order); await refreshInventory(); }
@@ -144,8 +150,11 @@ function editCommandSet(set, tpl) {
     <div class="field"><label>${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label><input id="s-name" value="${esc(s.name)}" ${set ? `data-tip="${esc(t("名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います"))}"` : ""}></div>
     <div class="row-inline" style="gap:16px;flex-wrap:wrap">
       <label style="font-size:12px;color:var(--text-dim)">${esc(t("コマンド（1行1コマンド・待機秒はコマンドごとに指定）"))}</label>
+      <span class="cmd-mode" data-tip="${esc(t("テキストで編集: メモ帳のように全体を 1 枚で書けます。待つ文字列・待機秒は表で編集します（文字の変わらない行はそのまま引き継ぎます）"))}"><button type="button" data-cmode="table">${esc(t("表で編集"))}</button><button type="button" data-cmode="text">${esc(t("テキストで編集"))}</button></span>
       <label style="font-size:12px;font-weight:normal;display:flex;gap:6px;align-items:center;cursor:pointer" data-tip="${esc(t("オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または「待つ文字列」）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです"))}"><input type="checkbox" id="s-usepause" style="width:auto" ${s.pauseOff ? "" : "checked"}> ${esc(t("待機秒を使う ⓘ"))}</label>
     </div>
+    <div id="fill-band"></div>
+    <div id="cmd-table-wrap">
     <div class="scroll"><table style="margin-top:6px">
       <thead><tr>
         <th style="width:26px"></th><th style="width:36px">#</th><th>${esc(t("コマンド"))}</th>
@@ -156,7 +165,12 @@ function editCommandSet(set, tpl) {
     </table></div>
     <button class="btn sm" id="add-cmd" type="button" style="margin-top:8px">${esc(t("＋ 行を追加"))}</button>
     <button class="btn sm" id="bulk-cmd" type="button" style="margin-top:8px" data-tip="${esc(t("複数のコマンドを 1 行 1 コマンドで入力して一度に追加します（待機はすべて 1 秒）"))}">${esc(t("＋ まとめて追加…"))}</button>
-    <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
+    </div>
+    <div id="cmd-text-wrap" class="hidden">
+      <div class="cmd-textwrap"><div class="cmd-gutter" id="cmd-gutter"></div><textarea class="cmd-text" id="cmd-text" spellcheck="false" wrap="off" data-guard-skip placeholder="show clock&#10;show running-config"></textarea></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("1 行に 1 コマンド。待つ文字列・待機秒は「表で編集」で設定します（文字の変わらない行はそのまま引き継ぎ、新しい行は 1 秒）"))}</div>
+    </div>
+    <div class="muted cmd-tablenote" style="font-size:12px;margin-top:6px">${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
@@ -188,7 +202,7 @@ function editCommandSet(set, tpl) {
   usePause.onchange = syncPause;
   function render() {
     tbody.innerHTML = cmds.map((c, i) => `
-      <tr data-key="${i}">
+      <tr data-key="${i}" class="${FILL_MARK_RE.test(c.text) ? "cmd-rep" : ""}">
         <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
         <td class="muted">${i + 1}</td>
         <td><input class="c-text mono" style="width:100%" value="${esc(c.text)}" placeholder="show running-config"></td>
@@ -239,8 +253,91 @@ function editCommandSet(set, tpl) {
     // Drag-reorder rows; collect() reads the new DOM order.
     wireRowReorder(tbody, () => { cmds = collect(); render(); });
     syncPause();
+    if (band) band.changed();
   }
+
+  // テキストで編集: the commands as one text, a line a command (as a
+  // notepad edits a file). A line whose text is unchanged keeps its wait
+  // and pauses (matched in order among the lines of that text); a new line
+  // gets the 1 second 「＋ 行を追加」 gives. The mode is remembered per PC.
+  const ta = node.querySelector("#cmd-text"), gutter = node.querySelector("#cmd-gutter");
+  let mode = "table";
+  try { if (localStorage.getItem("palaterm_cmdset_textmode") === "1") mode = "text"; } catch (e) { }
+  const textToCmds = (text, base) => {
+    const pool = new Map();
+    base.forEach(c => { const k = c.text.trim(); if (!pool.has(k)) pool.set(k, []); pool.get(k).push(c); });
+    const lines = text.split(/\r\n|\r|\n/);
+    while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
+    return lines.map(l => {
+      const q = pool.get(l.trim());
+      const old = q && q.length ? q.shift() : null;
+      return old ? { ...old, text: l } : { text: l, pauseSec: 1, serialSec: 1, wait: "" };
+    });
+  };
+  const current = () => mode === "text" ? textToCmds(ta.value, cmds) : collect();
+  const drawGutter = () => {
+    const lines = ta.value.split(/\r\n|\r|\n/);
+    gutter.innerHTML = lines.map((l, i) => FILL_MARK_RE.test(l) ? `<span class="rep">${i + 1}</span>` : String(i + 1)).join("\n");
+    gutter.scrollTop = ta.scrollTop;
+  };
+  ta.addEventListener("scroll", () => { gutter.scrollTop = ta.scrollTop; });
+  ta.addEventListener("input", () => { drawGutter(); if (band) band.changed(); });
+  let modeSet = false;
+  function setMode(m) {
+    if (modeSet && m === mode) return;
+    if (m === "text" && (mode !== "text" || !modeSet)) { cmds = collect(); ta.value = cmds.map(c => c.text).join("\n"); }
+    else if (m === "table" && mode === "text" && modeSet) { cmds = textToCmds(ta.value, cmds); if (!cmds.length) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }]; render(); }
+    mode = m;
+    modeSet = true;
+    try { localStorage.setItem("palaterm_cmdset_textmode", m === "text" ? "1" : "0"); } catch (e) { }
+    node.querySelector("#cmd-table-wrap").classList.toggle("hidden", m === "text");
+    node.querySelector(".cmd-tablenote").classList.toggle("hidden", m === "text");
+    node.querySelector("#cmd-text-wrap").classList.toggle("hidden", m !== "text");
+    node.querySelectorAll("[data-cmode]").forEach(b => b.classList.toggle("on", b.dataset.cmode === m));
+    if (m === "text") drawGutter();
+  }
+  node.querySelectorAll("[data-cmode]").forEach(b => b.onclick = () => setMode(b.dataset.cmode));
+
+  // The 変数 band (fillrule.js): the list linked to the saved set, the
+  // {{name}} buttons (into the box last typed in, at its caret) and 🔁.
+  let lastBox = null;
+  node.addEventListener("focusin", e => { if (e.target === ta || e.target.classList.contains("c-text")) lastBox = e.target; });
+  const insertText = text => {
+    let el = lastBox && lastBox.isConnected && !lastBox.closest(".hidden") ? lastBox : null;
+    if (!el) el = mode === "text" ? ta : [...tbody.querySelectorAll(".c-text")].pop();
+    if (!el) return;
+    el.focus();
+    el.setRangeText(text, el.selectionStart, el.selectionEnd, "end");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const repeatRows = () => {
+    if (mode === "text") {
+      const v = ta.value, a = ta.selectionStart;
+      let b = Math.max(a, ta.selectionEnd);
+      if (b > a && v[b - 1] === "\n") b--;
+      const ls = v.lastIndexOf("\n", a - 1) + 1;
+      let le = v.indexOf("\n", b);
+      if (le < 0) le = v.length;
+      ta.focus();
+      ta.setRangeText(FILL_EACH + "\n" + v.slice(ls, le) + "\n" + FILL_END, ls, le, "select");
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+    const tr = lastBox && lastBox.isConnected && lastBox.closest("tr[data-key]");
+    const rows = collect();
+    const i = tr ? +tr.dataset.key : rows.length - 1;
+    if (i < 0) return;
+    rows.splice(i + 1, 0, { text: FILL_END, pauseSec: 0, serialSec: 0, wait: "" });
+    rows.splice(i, 0, { text: FILL_EACH, pauseSec: 0, serialSec: 0, wait: "" });
+    cmds = rows;
+    render();
+  };
+  let band = null;
   render();
+  band = fillEditorBand(node.querySelector("#fill-band"), set ? set.name : null,
+    { insert: insertText, repeat: repeatRows, commands: () => current().map(c => ({ text: c.text })) });
+  tbody.addEventListener("input", () => band.changed());
+  setMode(mode);
 
   node.querySelector("#add-cmd").onclick = () => {
     cmds = collect(); cmds.push({ text: "", pauseSec: 1, serialSec: 1, wait: "" }); render();
@@ -253,7 +350,7 @@ function editCommandSet(set, tpl) {
     render();
     toast(t("{n} 行を追加しました", { n: lines.length }), "ok");
   });
-  guardDiscard(node, "#cancel");
+  guardDiscard(node, "#cancel", () => mode === "text" ? ta.value : null);
   node.querySelector("#save").onclick = async () => {
     const name = node.querySelector("#s-name").value.trim();
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
@@ -261,7 +358,7 @@ function editCommandSet(set, tpl) {
     if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
     // A negative pause runs as no pause: refused where it is typed, at the
     // field (only while the pauses are used — off, the fields are greyed).
-    if (usePause.checked) {
+    if (usePause.checked && mode === "table") {
       const rows = [...tbody.querySelectorAll("tr")];
       for (let i = 0; i < rows.length; i++) {
         if (!rows[i].querySelector(".c-text").value.trim()) continue;
@@ -272,7 +369,7 @@ function editCommandSet(set, tpl) {
         return;
       }
     }
-    const commands = collect().filter(c => c.text.trim().length > 0)
+    const commands = current().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
     let renamed = false;
     try {
@@ -502,6 +599,8 @@ function renderRun() {
     // every second by updateEta via the data-dev hook.
     const eta = devEta(d.name, st);
     const pnum = st.total > 0 ? `<div class="pnum">${st.done || 0}/${st.total}<span class="pwait pdev-eta" data-dev="${esc(d.name)}">${eta ? " " + esc(eta) : ""}</span></div>` : "";
+    // Before any run of the row: the values its device gets (変数).
+    const fillNote = !runState[d.name] && !running ? fillRowNote(d) : null;
     const pbar = st.phase === "off" ? ""
       : `<div class="pbar" data-tip="${esc(tip)}"><i class="pf-${st.phase}" style="width:${pct}%"></i></div>${pnum}`;
     return `<tr>
@@ -512,7 +611,7 @@ function renderRun() {
       <td><div class="clip" data-tip="${esc(d.site || "")}">${esc(d.site || "")}</div></td>
       <td><div class="clip" data-tip="${esc(d.role || "")}">${esc(d.role || "")}</div></td>
       <td class="muted"><div class="clip" data-tip="${esc(runSetMissing(d) ? t("コマンドセット「{s}」は存在しません（削除または改名）。機器の編集で割り当て直してください。このままだとログインのみで終わります", { s: d.commandSet }) : runSetName(d) || t("コマンドセット未割り当て: ログインのみで終わります"))}" ${runSetSel ? 'style="color:var(--accent)"' : (runSetMissing(d) || !runSetName(d) ? 'style="color:var(--warn)"' : "")}>${esc(runSetMissing(d) ? t("{s}（存在しません）", { s: d.commandSet }) : runSetName(d) || t("（なし）"))}</div></td>
-      <td class="muted mono"><div class="${st.phase === "error" || (st.warnings && st.warnings.length) ? "clip2 run-msg" : "clip"}" ${st.phase === "error" || (st.warnings && st.warnings.length) ? `data-msg="${esc(d.name)}" data-tip="${esc(t("クリックで全文を表示"))}"` : `data-tip="${esc(runMsg(st))}"`}>${esc(runMsgShort(st))}</div></td>
+      ${fillNote ? `<td class="muted mono"><div class="clip" data-tip="${esc(fillNote.text)}" style="color:${fillNote.warn ? "var(--warn)" : "#7dd3fc"}">${esc(fillNote.text)}</div></td>` : `<td class="muted mono"><div class="${st.phase === "error" || (st.warnings && st.warnings.length) ? "clip2 run-msg" : "clip"}" ${st.phase === "error" || (st.warnings && st.warnings.length) ? `data-msg="${esc(d.name)}" data-tip="${esc(t("クリックで全文を表示"))}"` : `data-tip="${esc(runMsg(st))}"`}>${esc(runMsgShort(st))}</div></td>`}
       <td style="text-align:right;white-space:nowrap">
         ${st.output ? `<span class="link" data-output="${esc(d.name)}" data-tip="${esc(t("接続確認で機器が表示した内容を見ます（ログは残していません）"))}">${esc(t("出力"))}</span> ` : ""}
         ${st.logPath ? `<span class="link" data-watch="${esc(st.logPath)}" data-tip="${esc(t("機器の画面を表示のみで開きます（実行中は出力をそのまま追います）"))}">${esc(t("画面"))}</span> <span class="link" data-log="${esc(st.logPath)}">${esc(t("ログ表示"))}</span> ` : ""}
@@ -873,7 +972,7 @@ function profileNameOf(key) {
 // Open the editor of the device's OS type (保存して接続確認へ is in there).
 function editDeviceProfile(dev) {
   const prof = (INV.customProfiles || []).find(p => p.key === dev.osType);
-  if (!prof) { toast(t("OS タイプ「{k}」のプロファイルが見つかりません（OSタイプタブで確認してください）", { k: profileNameOf(dev.osType) }), "err"); return; }
+  if (!prof) { toast(t("OS タイプ「{k}」のプロファイルが見つかりません（OS一覧タブで確認してください）", { k: profileNameOf(dev.osType) }), "err"); return; }
   editProfile(prof);
 }
 // A host-key mismatch of a jump host rather than of the device itself: the
@@ -1098,6 +1197,18 @@ async function startRun(dryRun) {
     doRun(targets, true, false, keepRows);
     return;
   }
+  // 変数 (fillrule.js): each device's commands with its values in are
+  // shown before the run, and a device they cannot be filled in for is
+  // left out of it (its box stays as it is).
+  if (runFillNeeded(targets.map(runDev))) {
+    const names = await runFillCheck(targets, scope, (req, ok) => {
+      const noSet1 = ok.filter(n => reqCommandCount(req, runDev(n)) === 0);
+      return (noSet1.length ? `<br><span style="font-size:12px;color:var(--warn)">${esc(t("⚠ 実行するコマンドが無い機器 {n} 台はログインのみで終わります（セット未割り当て・削除済み・空のセット。ログはログイン画面だけ）: {list}", { n: noSet1.length, list: noSet1.slice(0, 10).join(", ") + (noSet1.length > 10 ? " …" : "") }))}</span>` : "")
+        + secretCommandNote(req, ok) + directNote(runDirect, ok);
+    });
+    if (names) doRun(names, false, false, keepRows);
+    return;
+  }
   // Devices that would run no commands at all (no set assigned, none chosen
   // for this run) only log in and show 完了 — said before the run, not
   // discovered in an empty log afterwards.
@@ -1199,6 +1310,9 @@ let lastRunAfter = null;
 // and pressing ↻ used to send that set, unwarned.
 let lastRunReq = null;
 function reqCommandCount(req, d) {
+  // A set with {{…}}: what the run's check filled in for the device.
+  const fd = d && runFillPreview && runFillPreview[d.name];
+  if (fd && fd.fill) return (fd.commands || []).length;
   if (req.adHoc && req.adHoc.length) return req.adHoc.length;
   const cs = (INV.commandSets || []).find(s => s.name === (req.commandSet || (d && d.commandSet)));
   return cs ? (cs.commands || []).length : 0;
@@ -1994,7 +2108,7 @@ function renderOSTypes() {
     (p, k) => k === "login" ? (p.login || []).length : p[k]);
   renderListTab(root, `
     <div class="page-head">
-      <div><div class="page-title">${esc(LANG === "ja" ? "OSタイプ" : t("メニュー:OSタイプ"))}</div>
+      <div><div class="page-title">${esc(LANG === "ja" ? "OS一覧" : t("メニュー:OSタイプ"))}</div>
         <div class="page-sub">${esc(t("機器種別ごとのログイン自動化（待つ文字 → 送る文字）"))}${hintI(t("待つ文字は「#」「assword:」のような文字そのまま（部分一致）。標準プロファイルの JSON は export\\os-profiles\\ に自動で置かれ、アプリが消すことはないので、削除しても「読み込み」で戻せます。書き出しは「機器一覧」の一式書き出しに含まれます"))}</div></div>
       <div class="row-inline" style="gap:6px;white-space:nowrap">
         <button class="btn" id="prof-imp" data-tip="${esc(t("OSタイププロファイルの JSON を 1 ファイル読み込みます（削除した標準プロファイルの復元にも）"))}">${esc(t("読み込み"))}</button>

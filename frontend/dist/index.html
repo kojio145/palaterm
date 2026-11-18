@@ -37,8 +37,8 @@
       <div class="nav-group">
         <div class="nav-head" data-i18n="メニュー見出し:準備">準備</div>
         <button class="nav-btn active" data-tab="devices">機器一覧</button>
-        <button class="nav-btn" data-tab="import">外部一覧の変換</button>
-        <button class="nav-btn" data-tab="commands" data-i18n="メニュー:コマンドセット">コマンドセット</button>
+        <button class="nav-btn" data-tab="commands" data-i18n="メニュー:コマンドセット">コマンド一覧</button>
+        <button class="nav-btn" data-tab="ostypes" data-i18n="メニュー:OSタイプ">OS一覧</button>
       </div>
       <div class="nav-group">
         <div class="nav-head" data-i18n="メニュー見出し:作業">作業</div>
@@ -48,8 +48,8 @@
       </div>
       <div class="nav-group">
         <div class="nav-head" data-i18n="メニュー見出し:管理">管理</div>
-        <button class="nav-btn" data-tab="ostypes" data-i18n="メニュー:OSタイプ">OSタイプ</button>
         <button class="nav-btn" data-tab="settings">設定</button>
+        <button class="nav-btn" data-tab="update">最新版の確認</button>
       </div>
       <div class="side-spacer"></div>
       <!-- Page zoom (app.js wireMainZoom): A− / A+, also Ctrl+wheel,
@@ -77,6 +77,7 @@
       <section id="tab-settings" class="tab"></section>
       <section id="tab-ostypes" class="tab"></section>
       <section id="tab-import" class="tab"></section>
+      <section id="tab-update" class="tab"></section>
     </main>
   </div>
 
@@ -97,6 +98,8 @@
   <script src="/views4.js"></script>
   <script src="/views5.js"></script>
   <script src="/views6.js"></script>
+  <script src="/fillrule.js"></script>
+  <script src="/update.js"></script>
   <script src="/terminal.js"></script>
   <script src="/viewer.js"></script>
   <script src="/diff.js"></script>

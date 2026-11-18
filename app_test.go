@@ -85,12 +85,12 @@ func TestProfilesExposed(t *testing.T) {
 	if err := a.CreateVault("master"); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.ListProfiles()) != 17 {
-		t.Fatalf("expected 17 profiles exposed to UI, got %d", len(a.ListProfiles()))
+	if len(a.ListProfiles()) != 18 {
+		t.Fatalf("expected 18 profiles exposed to UI, got %d", len(a.ListProfiles()))
 	}
 }
 
-// A vault from before profiles-as-data gets the 17 defaults seeded exactly
+// A vault from before profiles-as-data gets the 18 defaults seeded exactly
 // once on unlock; a default the user then deletes stays deleted.
 func TestProfileSeedingAndDeletion(t *testing.T) {
 	a := newTestApp(t)
@@ -111,8 +111,8 @@ func TestProfileSeedingAndDeletion(t *testing.T) {
 	if err := a2.Unlock("master"); err != nil {
 		t.Fatal(err)
 	}
-	if n := len(a2.GetInventory().CustomProfiles); n != 17 {
-		t.Fatalf("unlock should seed 17 default profiles, got %d", n)
+	if n := len(a2.GetInventory().CustomProfiles); n != 18 {
+		t.Fatalf("unlock should seed 18 default profiles, got %d", n)
 	}
 	if err := a2.DeleteProfile("yamaha-rtx"); err != nil {
 		t.Fatalf("defaults should be deletable: %v", err)
@@ -126,8 +126,8 @@ func TestProfileSeedingAndDeletion(t *testing.T) {
 	if a3.profiles.Has("yamaha-rtx") {
 		t.Fatal("deleted default must not be reseeded on the next unlock")
 	}
-	if n := len(a3.GetInventory().CustomProfiles); n != 16 {
-		t.Fatalf("profiles after deletion = %d, want 16", n)
+	if n := len(a3.GetInventory().CustomProfiles); n != 17 {
+		t.Fatalf("profiles after deletion = %d, want 17", n)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestNewDefaultProfilesAddedToOlderVault(t *testing.T) {
 	a.mu.Lock()
 	var old []profile.Profile
 	for _, p := range a.inv.CustomProfiles {
-		if p.Key != "alaxala-ax" && p.Key != "linux" && p.Key != "linux-root" {
+		if p.Key != "alaxala-ax" && p.Key != "linux" && p.Key != "linux-root" && p.Key != "cisco-firepower" {
 			old = append(old, p)
 		}
 	}
@@ -162,12 +162,12 @@ func TestNewDefaultProfilesAddedToOlderVault(t *testing.T) {
 	}
 	ps := a2.GetInventory().CustomProfiles
 	n := len(ps)
-	if n != 17 || ps[n-1].Key != "generic" || ps[n-2].Key != "linux-root" || ps[n-3].Key != "linux" || ps[n-4].Key != "alaxala-ax" {
+	if n != 18 || ps[n-1].Key != "generic" || ps[n-2].Key != "linux-root" || ps[n-3].Key != "linux" || ps[n-4].Key != "alaxala-ax" || ps[n-5].Key != "cisco-firepower" {
 		keys := make([]string, len(ps))
 		for i, p := range ps {
 			keys[i] = p.Key
 		}
-		t.Fatalf("ALAXALA and Linux should be added before generic, got %v", keys)
+		t.Fatalf("Firepower, ALAXALA and Linux should be added before generic, got %v", keys)
 	}
 	if a2.GetInventory().ProfileSeedGen != profile.SeedGen {
 		t.Fatalf("generation not recorded: %d", a2.GetInventory().ProfileSeedGen)

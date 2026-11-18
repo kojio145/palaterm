@@ -37,7 +37,7 @@ func CheckCommands(cmds []Command) error {
 			return fmt.Errorf("%d 行目の待つ文字列に%w", i+1, err)
 		}
 	}
-	return nil
+	return CheckFill(cmds)
 }
 
 // CheckCommandPauses refuses a negative wait. It is kept apart from

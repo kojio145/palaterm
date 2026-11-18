@@ -2106,12 +2106,15 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 	found := false
 	for i := range a.inv.CommandSets {
 		if a.inv.CommandSets[i].Name == cs.Name {
+			// The linked list stays: only its own bindings change it.
+			cs.Fill = a.inv.CommandSets[i].Fill
 			a.inv.CommandSets[i] = cs
 			found = true
 			break
 		}
 	}
 	if !found {
+		cs.Fill = nil
 		a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	}
 	a.mu.Unlock()
@@ -2138,6 +2141,15 @@ func (a *App) CreateCommandSet(cs model.CommandSet) error {
 		}
 	}
 	snap := a.snapshotLocked()
+	// A 複製 of a set with a linked list keeps the link (the page sends
+	// the source's); anything else it may send is checked as a link is.
+	if cs.Fill != nil {
+		if err := checkSetFill(cs.Fill); err != nil {
+			a.mu.Unlock()
+			return err
+		}
+		cs.Fill = cs.Fill.Clone()
+	}
 	a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	a.mu.Unlock()
 	return a.persistOr(snap, nil)
@@ -2224,6 +2236,7 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	dup := *src
 	dup.Name = newName
 	dup.Commands = append([]model.Command(nil), src.Commands...)
+	dup.Fill = src.Fill.Clone()
 	snap := a.snapshotLocked()
 	a.inv.CommandSets = append(a.inv.CommandSets, dup)
 	a.mu.Unlock()
@@ -2601,6 +2614,10 @@ func (a *App) run(req RunRequest) error {
 		a.mu.Unlock()
 		return err
 	}
+	if _, err := fillSets(snap, req); err != nil {
+		a.mu.Unlock()
+		return err
+	}
 	if a.runActive {
 		err := a.busyErrLocked()
 		a.mu.Unlock()
@@ -2754,7 +2771,10 @@ func (a *App) execBatch(ctx context.Context, cancel context.CancelFunc, snap *mo
 	if !retry {
 		logStage = schedLogStage(dir, req.Stage) // a retry's files are named as the original batch's were
 	}
-	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: logStage}, counted)
+	// Checked when the run was started (run); a device whose values cannot
+	// be filled in here is left out by the runner (FillMissingMsg).
+	devSets, _ := fillSets(snap, req)
+	results, runDir := a.runner.RunBatchOpts(ctx, snap, runpkg.Options{Stage: model.Stage(req.Stage), DryRun: req.DryRun, Group: req.Group, Dir: dir, LogStage: logStage, DeviceSets: devSets}, counted)
 	// Back to the vault before the next batch may start (runActive below):
 	// restored later, it could undo the next batch's own copy.
 	a.runner.HostKeys = a.hostKeys()
@@ -4109,7 +4129,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.9.41"
+const appVersion = "1.10.0"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

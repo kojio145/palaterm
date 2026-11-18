@@ -61,8 +61,8 @@ func TestDefaultsArePlainText(t *testing.T) {
 
 func TestExpectedDefaultCount(t *testing.T) {
 	// 14 network OS families + Linux (user / root) + 1 generic fallback.
-	if got := len(Defaults()); got != 17 {
-		t.Fatalf("expected 17 default profiles, got %d", got)
+	if got := len(Defaults()); got != 18 {
+		t.Fatalf("expected 18 default profiles, got %d", got)
 	}
 }
 

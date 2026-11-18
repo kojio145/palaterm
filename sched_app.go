@@ -1583,6 +1583,10 @@ func (a *App) SaveSchedule(sc schedule.Schedule) (string, error) {
 		a.mu.Unlock()
 		return "", err
 	}
+	if err := fillSetsErr(snap); err != nil {
+		a.mu.Unlock()
+		return "", err
+	}
 	if sc.ID == "" {
 		sc.ID = schedule.NewID()
 	}

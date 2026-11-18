@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.41";
+const APP_VERSION = "1.10.0";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -1728,8 +1728,9 @@ async function switchTab(name) {
   // showing the tab starts one (renderCommands).
   const leaving = document.querySelector(".tab.active");
   if (leaving && leaving.id === "tab-commands" && name !== "commands") App().DropSpareCommandSetWindow().catch(() => {});
+  // 他システムの一覧の取り込み設定 (import) has no menu entry: it is 機器一覧's.
   document.querySelectorAll(".nav-btn[data-tab]").forEach(b =>
-    b.classList.toggle("active", b.dataset.tab === name));
+    b.classList.toggle("active", b.dataset.tab === (name === "import" ? "devices" : name)));
   document.querySelectorAll(".tab").forEach(el =>
     el.classList.toggle("active", el.id === "tab-" + name));
   savePlace();
@@ -1756,6 +1757,7 @@ function renderTab(name) {
   else if (name === "settings") renderSettings();
   else if (name === "ostypes") renderOSTypes();
   else if (name === "import") renderListImport();
+  else if (name === "update") renderUpdate();
 }
 
 // ---- idle auto-lock ----
