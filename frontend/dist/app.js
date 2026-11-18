@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.9.40";
+const APP_VERSION = "1.9.41";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -500,6 +500,9 @@ function keepFocusedBox(root, prefix) {
 function renderListTab(root, html, viewKey, prefix) {
   const tpl = document.createElement("template");
   tpl.innerHTML = html;
+  // The saved column widths first, so the kept panel's scroll offset is put
+  // back against the rows as they will stand (see applyColWidths).
+  tpl.content.querySelectorAll("table[data-colw]").forEach(applyColWidths);
   let keepPanel = null;
   const panel = viewKey === undefined ? null : tpl.content.querySelector(".panel.scrollx");
   if (panel) {
@@ -647,6 +650,38 @@ function loadColWidths(key) {
 function saveColWidths(key, w) {
   try { localStorage.setItem(colWidthsKey(key), JSON.stringify(w)); } catch (e) { }
 }
+// applyColWidths puts a table's saved column widths on its headers; the
+// template's own width stays in data-defw, the default a double-click
+// returns to. renderListTab runs it on the parsed HTML before it is shown,
+// wireColResize again on the table in the page (the same widths: no
+// change). Set only after the swap, the widths changed the header row's
+// height under a panel whose scroll offset had just been put back: a tick in
+// the run tab moved the table by a row, and a list only a little longer
+// than its panel went back to the top (2026-11-18 user report).
+function applyColWidths(table) {
+  const ths = [...table.querySelectorAll("thead th")];
+  const saved = loadColWidths(table.dataset.colw);
+  ths.forEach((th, i) => {
+    if (th.dataset.defw === undefined) th.dataset.defw = th.style.width || "";
+    if (saved[i]) th.style.width = saved[i] + "px";
+  });
+  fitTableMin(table, ths, saved);
+  return { ths, saved };
+}
+// A column with no width of its own (the run table's メッセージ) takes what
+// the others leave: nothing, once the window is narrow or the others were
+// dragged wide. Its header then broke into a line per letter and the header
+// row grew several lines tall (2026-11-18 user report). The table stays this
+// much wider than its other columns ask for, and the panel scrolls sideways
+// instead. 1000px is the stylesheet's own minimum (.panel.scrollx > table):
+// a table that fits in it is left to that rule.
+const COL_FREE_MIN = 120;
+function fitTableMin(table, ths, saved) {
+  let sum = 0, free = 0;
+  ths.forEach((th, i) => { const w = saved[i] || parseFloat(th.dataset.defw); if (w) sum += w; else free++; });
+  const min = free ? sum + free * COL_FREE_MIN : 0;
+  table.style.minWidth = min > 1000 ? min + "px" : "";
+}
 // fitPanels caps every scrolling list panel at the window's bottom edge, so
 // the panel (not the page) scrolls: the title, toolbar and filter row above
 // it stay where they are, and the sticky header row stays in view. Called
@@ -727,12 +762,8 @@ function wireColResize(root) {
   fitPanels(root);
   root.querySelectorAll("table[data-colw]").forEach(table => {
     const key = table.dataset.colw;
-    const ths = [...table.querySelectorAll("thead th")];
-    const saved = loadColWidths(key);
+    const { ths, saved } = applyColWidths(table);
     ths.forEach((th, i) => {
-      // The template's own width is the default a double-click returns to.
-      th.dataset.defw = th.style.width || "";
-      if (saved[i]) th.style.width = saved[i] + "px";
       if (i === ths.length - 1) return;
       const grip = document.createElement("div");
       grip.className = "col-resizer";
@@ -747,6 +778,7 @@ function wireColResize(root) {
         if (!fit || saved[i] === fit) { delete saved[i]; th.style.width = th.dataset.defw || ""; }
         else { saved[i] = fit; th.style.width = fit + "px"; }
         saveColWidths(key, saved);
+        fitTableMin(table, ths, saved);
       });
       grip.addEventListener("pointerdown", e => {
         e.preventDefault(); e.stopPropagation();
