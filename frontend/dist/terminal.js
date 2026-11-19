@@ -111,6 +111,7 @@ async function bootTerminalWindow() {
         <span id="tw-bc-pill" class="pill hidden" style="background:#7c2d12;color:#fed7aa;border:1px solid #f97316"></span>
         <button class="btn sm" id="tw-bcast" data-tip="${esc(t("オンにした窓どうしで、この窓で打ったキーをすべての窓へ同時に送ります（Tera Term のブロードキャストコマンドのリアルタイムモードと同じ）。ログイン中・切断中・ロック中の窓には送りません（Alt+Shift+B でオン／オフ）"))}">${esc(t("同時入力"))}</button>
         <button class="btn sm" id="tw-tile" data-tip="${esc(t("開いている端末窓をすべて、この窓のある画面いっぱいに並べます（開いた順）"))}">${esc(t("並べ直す"))}</button>
+        <button class="btn sm hidden" id="tw-break" data-tip="${esc(t("シリアル回線にブレーク信号を送ります（Alt+B。Tera Term と同じ）。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）"))}">${esc(t("ブレーク"))}</button>
         <span id="tw-copied" class="pill ok hidden">${esc(t("コピーしました"))}</span>
         <button class="btn sm" id="tw-color" data-tip="${esc(t("文字色・背景色を変えます（この PC のすべての端末窓に反映）"))}">${esc(t("色"))}</button>
         <button class="btn sm" id="tw-font-dec" data-tip="${esc(t("文字を小さく（Ctrl+-）"))}">A−</button>
@@ -120,7 +121,6 @@ async function bootTerminalWindow() {
         <button class="btn sm" id="tw-log" data-tip="${esc(t("接続した時点からログをファイルへ書いています（Tera Term と同じリアルタイム記録）。停止すると以後の内容は記録されず、再開すると同じファイルに続きが書かれます"))}">${esc(t("ログ停止"))}</button>
         <button class="btn sm" id="tw-logview" data-tip="${esc(t("この対話接続のログを別ウィンドウで開きます（追記を自動で追います）"))}">${esc(t("ログ表示"))}</button>
         <button class="btn sm" id="tw-logdir" data-tip="${esc(t("この対話接続のログがあるフォルダを開きます（まだ何も記録していなければログフォルダ）"))}">${esc(t("ログフォルダを開く"))}</button>
-        <button class="btn sm hidden" id="tw-break" data-tip="${esc(t("シリアル回線にブレーク信号を送ります（Alt+B。Tera Term と同じ）。Cisco の起動中に送ると ROMMON に入れます（パスワードリカバリ）"))}">${esc(t("ブレーク"))}</button>
         <button class="btn sm ok-outline hidden" id="tw-reconnect" data-tip="${esc(t("同じ機器にもう一度接続します（切断後に Enter キーでも再接続できます）"))}">${esc(t("再接続"))}</button>
         <button class="btn sm warn-outline hidden" id="tw-switch" data-tip="${esc(t("自動ログインをここで打ち切り、今の画面のまま手で操作します（機器が想定外の画面で止まっているときに）"))}">${esc(t("手動に切り替え"))}</button>
         <span id="tw-state" class="pill run">${esc(t("接続中…"))}</span>
