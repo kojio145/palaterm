@@ -798,6 +798,9 @@ tr.li-nounit td { font-size: 11px; font-style: italic; background: rgba(147,161,
    column labels). */
 #tab-import .scrollx { overflow-x: auto; max-width: 100%; }
 #tab-import .li-sheetbox { overflow: auto; }
+/* The variable rule editor (fillrule.js) uses the same tables. */
+#tab-commands .li-sec .scrollx { overflow-x: auto; max-width: 100%; }
+#tab-commands .li-sheetbox { overflow: auto; }
 .li-fb { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11px; }
 .li-fb select { flex: 1; min-width: 0; }
 .li-fbadd { background: none; border: 0; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; padding: 3px 0 0; }
@@ -863,3 +866,37 @@ tr.cmd-rep td input.c-text { color: #c4b5fd; }
 .upd-new { margin-top: 14px; padding: 14px 16px; border-radius: 10px; border: 1px solid rgba(245,158,11,.55); background: rgba(245,158,11,.07); }
 .btn.upd-big { font-size: 15px; padding: 10px 22px; }
 .upd-steps { margin: 4px 0 0 20px; padding: 0; line-height: 1.9; font-size: 13px; }
+/* Set editor: two lines over the table (name + mode, 全行の待ち方), rows
+   in italics when they follow it and bold when they have their own. */
+.cs-l1 { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+.cs-l1 > label:first-child { font-size: 12px; color: var(--text-dim); white-space: nowrap; margin: 0; }
+.cs-l1 #s-name { flex: 1; min-width: 200px; }
+.cs-usepause { font-size: 12px; font-weight: normal; display: flex; gap: 6px; align-items: center; cursor: pointer; white-space: nowrap; margin: 0; }
+.cs-l2 { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; padding: 6px 10px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; }
+.cs-l2 input, .cs-bulkbar input, .cw-pop input { padding: 4px 6px; }
+.cs-table .c-cell { position: relative; display: flex; align-items: center; gap: 2px; }
+.cs-table .c-cell input { flex: 1; min-width: 0; width: 100%; }
+.cs-table input.inh { font-style: italic; color: var(--text-dim); }
+.cs-table input.ovr { font-weight: 600; }
+.c-rs { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 0 2px; font-size: 13px; }
+.c-rs:hover { color: var(--text); }
+.c-fill { position: absolute; right: -2px; bottom: -2px; width: 7px; height: 7px; background: var(--accent); border: 1px solid var(--bg); cursor: ns-resize; display: none; }
+.c-cell:focus-within .c-fill, .c-cell:hover .c-fill { display: block; }
+#cmd-rows tr.fill-sel td { background: rgba(56,189,248,.14); }
+#cmd-rows tr.sel td { background: rgba(59,130,246,.10); }
+#cs-bulk th { background: rgba(59,130,246,.14); padding: 6px 10px; }
+.cs-bulkbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--text); font-weight: normal; }
+#cmd-text-wrap { position: relative; }
+.cmd-waits { flex: none; width: 210px; padding: 8px 6px 40px; overflow: hidden; background: var(--bg-2); border-left: 1px solid var(--border); }
+.cw-l { height: 20px; line-height: 20px; white-space: nowrap; overflow: hidden; }
+.cw-chip { font-size: 11px; line-height: 15px; padding: 0 7px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-3); color: var(--text-dim); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; vertical-align: middle; }
+.cw-chip.ovr { color: #fbbf24; border-color: #a16207; font-style: normal; font-weight: 600; }
+.cw-pop { position: absolute; right: 8px; width: 340px; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 20; font-size: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cw-pop .rw { display: flex; gap: 6px; align-items: center; }
+.cs-l1 input:not([type=checkbox]), .cs-l2 input, .cs-bulkbar input, .cw-pop input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 13px; }
+.cs-l1 input:not([type=checkbox]) { padding: 7px 10px; }
+.cs-l1 input:focus, .cs-l2 input:focus, .cs-bulkbar input:focus, .cw-pop input:focus { outline: none; border-color: var(--accent); }
+.cs-l2 input.mono, .cs-bulkbar input.mono, .cw-pop input.mono { font-family: "Consolas", monospace; }
+.cs-table th, .cs-table td { padding-left: 6px; padding-right: 6px; }
+.cs-bulkbar { gap: 5px; }
+.cs-bulkbar .btn.sm { padding: 5px 9px; }

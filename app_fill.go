@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -200,6 +201,7 @@ type fillRead struct {
 	Sheet    string
 	Fill     *model.SetFill
 	Rows     int
+	Excluded int
 	Missing  []string
 	Warnings []string
 	// lines are the rows as the editor shows them (the first few).
@@ -218,11 +220,25 @@ type FillTestRow struct {
 	// Cont: the row's device cell is empty; it is one more row of the
 	// device above.
 	Cont bool `json:"cont,omitempty"`
+	// Unit is which device of the line (1 = the first; 2… = the rule's
+	// Units); Excluded the condition that left the row out (its rows are
+	// then not used).
+	Unit     int               `json:"unit"`
+	Excluded *model.ImportCond `json:"excluded,omitempty"`
 }
+
+// fillContMark stands in for an empty device cell while a list is read, so
+// the reader judges the exclusions of a row continuing the device above
+// too (it leaves a row with no name out before them).
+const fillContMark = "\x00cont"
 
 // readFill runs a rule over a book. A row whose device cell is empty is one
 // more row of the device above (a list writes the name once for several
-// lines); one with no value at all is a blank line and is skipped.
+// lines); one with no value at all is a blank line and is skipped. A rule
+// with units reads each line once per device: a line whose first device
+// cell is empty continues every device of the line above; one whose
+// further device cell is empty has no such device. A row meeting an
+// exclusion is left out with the rows continuing it.
 func readFill(b *sheet.Book, r *model.FillRule) (*fillRead, error) {
 	ir := r.AsImportRule()
 	sh, err := listimport.PickSheet(b, ir)
@@ -233,8 +249,22 @@ func readFill(b *sheet.Book, r *model.FillRule) (*fillRead, error) {
 	if err != nil {
 		return nil, err
 	}
-	conv := listimport.Convert(t, ir, nil)
-	out := &fillRead{Sheet: sh.Name, Missing: conv.Missing, Warnings: append(append([]string{}, b.Warnings...), t.Warnings...)}
+	out := &fillRead{Warnings: append(append([]string{}, b.Warnings...), t.Warnings...), Sheet: sh.Name}
+	missing := map[string]bool{}
+	var convs []*listimport.Converted
+	for u := 0; u <= len(r.Units); u++ {
+		ur := r.UnitRule(u)
+		ur.Fields[0].Default = fillContMark
+		c := listimport.Convert(t, ur, nil)
+		for _, m := range c.Missing {
+			missing[m] = true
+		}
+		convs = append(convs, c)
+	}
+	for m := range missing {
+		out.Missing = append(out.Missing, m)
+	}
+	sort.Strings(out.Missing)
 	f := &model.SetFill{RuleID: r.ID, Rule: r.Name, Devices: []model.FillDevice{}}
 	for _, it := range r.Items {
 		f.Items = append(f.Items, it.Name)
@@ -243,41 +273,74 @@ func readFill(b *sheet.Book, r *model.FillRule) (*fillRead, error) {
 		}
 	}
 	at := map[string]int{}
-	cur := -1
-	for _, row := range conv.Rows {
-		vals, raw := map[string]string{}, map[string]string{}
-		any := false
-		for _, it := range r.Items {
-			v := strings.TrimSpace(row.Values[model.FillItemKey(it.Name)])
-			vals[it.Name] = v
-			raw[it.Name] = row.Raw[model.FillItemKey(it.Name)]
-			any = any || v != ""
-		}
-		name := strings.TrimSpace(row.Values["name"])
-		cont := false
-		if name == "" {
-			if !any || cur < 0 {
+	cur := make([]int, len(convs))
+	for u := range cur {
+		cur[u] = -1
+	}
+	full := false
+	for i := range convs[0].Rows {
+		lineCont := slices.Contains(convs[0].Rows[i].Filled, "name")
+		for u, c := range convs {
+			row := c.Rows[i]
+			vals, raw := map[string]string{}, map[string]string{}
+			any := false
+			for _, it := range r.Items {
+				v := strings.TrimSpace(row.Values[model.FillItemKey(it.Name)])
+				vals[it.Name] = v
+				raw[it.Name] = row.Raw[model.FillItemKey(it.Name)]
+				any = any || v != ""
+			}
+			cont := slices.Contains(row.Filled, "name")
+			name := ""
+			if !cont {
+				name = strings.TrimSpace(row.Values["name"])
+			}
+			switch {
+			case cont && (!any || cur[u] < 0 || (u > 0 && !lineCont)):
+				// a blank line, nothing above to continue, or a line
+				// without this device
+				if u > 0 && !lineCont {
+					cur[u] = -1
+				}
+				continue
+			case row.Exclusion != nil:
+				// The device's own row: its continuing rows go with it. A
+				// continuing row: only itself.
+				if !cont {
+					cur[u] = -1
+				}
+			case !cont:
+				k := model.FillKey(name)
+				d, ok := at[k]
+				if !ok {
+					d = len(f.Devices)
+					at[k] = d
+					f.Devices = append(f.Devices, model.FillDevice{Name: name})
+				}
+				cur[u] = d
+			}
+			dev := name
+			if cur[u] >= 0 {
+				dev = f.Devices[cur[u]].Name
+			}
+			if len(out.lines) < 8+4*len(r.Units) {
+				out.lines = append(out.lines, FillTestRow{Line: row.Line, Unit: u + 1, Device: dev, Values: vals, Raw: raw,
+					RawDevice: row.Raw["name"], Cont: cont, Excluded: row.Exclusion})
+			}
+			if row.Exclusion != nil {
+				out.Excluded++
 				continue
 			}
-			cont = true
-		} else {
-			k := model.FillKey(name)
-			i, ok := at[k]
-			if !ok {
-				i = len(f.Devices)
-				at[k] = i
-				f.Devices = append(f.Devices, model.FillDevice{Name: name})
+			if out.Rows == maxFillListRows {
+				full = true
+				break
 			}
-			cur = i
+			out.Rows++
+			f.Devices[cur[u]].Rows = append(f.Devices[cur[u]].Rows, vals)
 		}
-		if out.Rows == maxFillListRows {
+		if full {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("%d 行を超える分は読みませんでした", maxFillListRows))
 			break
-		}
-		out.Rows++
-		f.Devices[cur].Rows = append(f.Devices[cur].Rows, vals)
-		if len(out.lines) < 8 {
-			out.lines = append(out.lines, FillTestRow{Line: row.Line, Device: f.Devices[cur].Name, Values: vals, Raw: raw, RawDevice: row.Raw["name"], Cont: cont})
 		}
 	}
 	out.Fill = f
@@ -294,8 +357,9 @@ type FillRuleTest struct {
 	Cols     int                 `json:"cols"`
 	Headers  []listimport.Header `json:"headers"`
 	Rows     []FillTestRow       `json:"rows"`
-	Total    int                 `json:"total"`   // value rows read
-	Devices  int                 `json:"devices"` // devices those rows name
+	Total    int                 `json:"total"`    // value rows read
+	Excluded int                 `json:"excluded"` // rows an exclusion left out
+	Devices  int                 `json:"devices"`  // devices those rows name
 	Missing  []string            `json:"missing"`
 	Warnings []string            `json:"warnings"`
 	Error    string              `json:"error,omitempty"`
@@ -340,7 +404,7 @@ func (a *App) TestFillRule(path string, r model.FillRule) (*FillRuleTest, error)
 		out.Error = err.Error()
 		return out, nil
 	}
-	out.Rows, out.Total, out.Devices, out.Missing = rd.lines, rd.Rows, len(rd.Fill.Devices), rd.Missing
+	out.Rows, out.Total, out.Devices, out.Missing, out.Excluded = rd.lines, rd.Rows, len(rd.Fill.Devices), rd.Missing, rd.Excluded
 	if out.Rows == nil {
 		out.Rows = []FillTestRow{}
 	}
@@ -410,12 +474,54 @@ func (a *App) readFillFile(path string, r *model.FillRule, picked bool) (*fillRe
 	if err != nil {
 		return nil, err
 	}
+	a.matchFillNames(rd.Fill, r.Match)
 	if len(rd.Fill.Devices) == 0 {
 		return nil, fmt.Errorf("機器名の列「%s」に値のある行がありません（見出しの行・シートがルールと合っているか確かめてください）", r.Key.Column)
 	}
 	rd.Fill.File, rd.Fill.Path = filepath.Base(path), path
 	rd.Fill.Read = time.Now().Format("2006-01-02 15:04")
 	return rd, nil
+}
+
+// matchFillNames names each device of a read list as PalaTerm does when the
+// rule's match settings (全角・半角, spaces, the domain part, "-" and "_")
+// find it: the set then finds the device as it always does (case and the
+// spaces around aside). Rows of list names that come to one device are
+// joined in the list's order. A name matching none is kept as the list has
+// it, as is one that would match two devices.
+func (a *App) matchFillNames(f *model.SetFill, m model.ImportMatch) {
+	m.IgnoreCase, m.KeyColumn = true, ""
+	if !m.Width && !m.Space && !m.Domain && !m.Dash {
+		return
+	}
+	a.mu.Lock()
+	byNorm := map[string]string{}
+	if a.inv != nil {
+		for _, d := range a.inv.Devices {
+			k := listimport.NormName(d.Name, m)
+			if _, dup := byNorm[k]; dup {
+				byNorm[k] = ""
+			} else {
+				byNorm[k] = d.Name
+			}
+		}
+	}
+	a.mu.Unlock()
+	var out []model.FillDevice
+	at := map[string]int{}
+	for _, d := range f.Devices {
+		if pal := byNorm[listimport.NormName(d.Name, m)]; pal != "" {
+			d.Name = pal
+		}
+		k := model.FillKey(d.Name)
+		if i, ok := at[k]; ok {
+			out[i].Rows = append(out[i].Rows, d.Rows...)
+			continue
+		}
+		at[k] = len(out)
+		out = append(out, d)
+	}
+	f.Devices = out
 }
 
 // ReadFillList reads a picked list with a rule, for the dialog that links

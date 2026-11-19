@@ -106,8 +106,8 @@ function bulkCommandsDialog(onAdd) {
   const ov = h(`<div class="sub-overlay">
     <div class="sub-modal">
       <h3>${esc(t("コマンドをまとめて追加"))}</h3>
-      <div class="muted" style="font-size:12px;margin:-8px 0 10px">${esc(t("1 行に 1 コマンドを入力してください。待機秒はリモート・シリアルともすべて 1 秒で追加されます（追加後に個別に変更できます）。空行は無視します。"))}</div>
-      <div class="field" style="margin:0"><textarea id="bulk-text" style="min-height:220px" placeholder="show clock&#10;show running-config"></textarea></div>
+      <div class="muted" style="font-size:12px;margin:-8px 0 10px">${esc(t("1 行に 1 コマンドを入力してください。待ち方は「全行の待ち方」のとおりで追加されます（追加後に行ごとに変えられます）。空行は無視します。"))}</div>
+      <div class="field" style="margin:0"><textarea id="bulk-text" style="min-height:220px" placeholder="${esc(t("例: show version"))}"></textarea></div>
       <div class="modal-actions">
         <span class="muted" style="font-size:12px;margin-right:auto;align-self:center">${esc(t("Ctrl+Enter で追加 / Esc で閉じる"))}</span>
         <button class="btn" id="bulk-cancel" type="button">${esc(t("キャンセル"))}</button>
@@ -137,40 +137,76 @@ function bulkCommandsDialog(onAdd) {
 }
 
 // editCommandSet edits set, or adds a new one (filled from tpl for 複製).
+// 全行の待ち方 (s.default) is what a new row gets and what a row shows as
+// 既定. Every row keeps its own wait and pauses, and the run reads only
+// those: a row equal to the default is shown in italics and follows it
+// when it is changed, a row that differs keeps its own value (bold, ↺
+// puts the default back). A set saved before has no default: the 1 second
+// a new row always got, so its rows show as they were and run as before.
 function editCommandSet(set, tpl) {
   const s = set || tpl || { name: "", commands: [] };
-  // Working copy: one row per command, each with its own pause (sec).
+  const d0 = s.default || {};
+  let def = { wait: (d0.wait || "").trim(), pauseSec: d0.pauseSec ?? 1, serialSec: d0.serialSec ?? 1 };
+  const blank = (text = "") => ({ text, pauseSec: def.pauseSec, serialSec: def.serialSec, wait: def.wait });
   let cmds = (s.commands || []).map(c => ({
     text: c.text || "", pauseSec: c.pauseSec ?? 1, serialSec: c.serialSec ?? 1, wait: c.wait || "",
   }));
-  if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }];
+  if (cmds.length === 0) cmds = [blank()];
+  const KEYS = [["c-wait", "wait"], ["c-pause", "pauseSec"], ["c-spause", "serialSec"]];
+  const isDef = (k, v) => k === "wait" ? String(v || "").trim() === def.wait : v === def[k];
+  const allDef = c => KEYS.every(([, k]) => isDef(k, c[k]));
+  // 「# のあと 1 秒」: a row's wait as words (chips, the merge button).
+  const waitWords = c => t("{w} のあと {n} 秒", { w: (c.wait || "").trim() || t("（プロンプト）"), n: c.pauseSec })
+    + (c.serialSec !== c.pauseSec ? t("（シリアル {n} 秒）", { n: c.serialSec }) : "");
+  const secIn = (id, v, extra = "") => `<input id="${id}" type="number" min="0" style="width:56px" value="${esc(String(v))}" ${extra}>`;
 
   const node = h(`<div>
     <h3>${esc(set ? t("コマンドセットを編集") : t("コマンドセットを追加"))}</h3>
-    <div class="field"><label>${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label><input id="s-name" value="${esc(s.name)}" ${set ? `data-tip="${esc(t("名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います"))}"` : ""}></div>
-    <div class="row-inline" style="gap:16px;flex-wrap:wrap">
-      <label style="font-size:12px;color:var(--text-dim)">${esc(t("コマンド（1行1コマンド・待機秒はコマンドごとに指定）"))}</label>
-      <span class="cmd-mode" data-tip="${esc(t("テキストで編集: メモ帳のように全体を 1 枚で書けます。待つ文字列・待機秒は表で編集します（文字の変わらない行はそのまま引き継ぎます）"))}"><button type="button" data-cmode="table">${esc(t("表で編集"))}</button><button type="button" data-cmode="text">${esc(t("テキストで編集"))}</button></span>
-      <label style="font-size:12px;font-weight:normal;display:flex;gap:6px;align-items:center;cursor:pointer" data-tip="${esc(t("オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または「待つ文字列」）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです"))}"><input type="checkbox" id="s-usepause" style="width:auto" ${s.pauseOff ? "" : "checked"}> ${esc(t("待機秒を使う ⓘ"))}</label>
+    <div class="cs-l1">
+      <label for="s-name">${esc(t("セット名"))} <span class="req">${esc(t("必須"))}</span></label>
+      <input id="s-name" value="${esc(s.name)}" ${set ? `data-tip="${esc(t("名前を変えると、このセットを割り当てている機器もそのまま新しい名前を使います"))}"` : ""}>
+      <span class="cmd-mode" data-tip="${esc(t("行ごとに設定: 1 行ずつ待ち方を決められる表です。テキストで書く: メモ帳のように全体を 1 枚で書けます（右の欄で行ごとの待ち方も変えられます）"))}"><button type="button" data-cmode="table">${esc(t("行ごとに設定"))}</button><button type="button" data-cmode="text">${esc(t("テキストで書く"))}</button></span>
+      <label class="cs-usepause" data-tip="${esc(t("オフにすると、このセットの全コマンドで待機秒を使わず、プロンプト（または「待つ文字列」）が出たらすぐ次のコマンドを送ります。待機秒の値は残るので、オンに戻せば元どおりです"))}"><input type="checkbox" id="s-usepause" style="width:auto" ${s.pauseOff ? "" : "checked"}> ${esc(t("待機秒を使う ⓘ"))}</label>
+    </div>
+    <div class="cs-l2">
+      <b>${esc(t("全行の待ち方"))}</b>${hintI(t("各コマンドのあと、機器の今の行がこの「待つ文字列」で終わったら（空欄なら OS タイプのプロンプトが出たら）、さらに指定の秒だけ待って次のコマンドを送ります（0 秒なら出たらすぐ次へ）。新しい行はこの値で入ります。この値どおりの行（斜体）はここを変えると一緒に変わり、行ごとに変えた値（太字）はそのまま残ります"))}
+      <span>${esc(t("待つ文字列"))}</span><input id="s-dwait" class="mono" style="width:110px" value="${esc(def.wait)}" placeholder="${esc(t("（プロンプト）"))}">
+      <span>${esc(t("のあと"))}</span>${secIn("s-dpause", def.pauseSec)}<span>${esc(t("秒"))}</span>
+      <span class="muted">${esc(t("（シリアル"))}</span>${secIn("s-dspause", def.serialSec)}<span class="muted">${esc(t("秒）"))}</span>
+      <span id="s-merge"></span>
+      <span style="flex:1"></span>
+      <button class="btn sm" type="button" id="s-xls">${esc(t("＋ Excel から変数の値を読み込む…"))}</button>
     </div>
     <div id="fill-band"></div>
     <div id="cmd-table-wrap">
-    <div class="scroll"><table style="margin-top:6px">
-      <thead><tr>
-        <th style="width:26px"></th><th style="width:36px">#</th><th>${esc(t("コマンド"))}</th>
-        <th style="width:170px"><span data-tip="${esc(t("このコマンドのあと、機器の今の行がこの文字列で終わったら次のコマンドを送ります（例: (config)#）。文字そのまま・行末で一致（行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプト（コマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
-        <th style="width:110px">${esc(t("待機(リモート)"))}</th><th style="width:110px">${esc(t("待機(シリアル)"))}</th><th style="width:76px"></th>
-      </tr></thead>
+    <div class="scroll"><table class="cs-table fixed" style="margin-top:6px">
+      <colgroup><col style="width:34px"><col style="width:26px"><col style="width:38px"><col><col style="width:170px"><col style="width:110px"><col style="width:110px"><col style="width:84px"></colgroup>
+      <thead>
+        <tr id="cs-head"><th><input type="checkbox" class="cs-all" data-guard-skip style="width:auto" data-tip="${esc(t("すべての行を選ぶ（選ぶと、見出しが選んだ行の待ち方をまとめて変える欄になります）"))}"></th>
+          <th></th><th>#</th><th>${esc(t("コマンド"))}</th>
+          <th><span data-tip="${esc(t("このコマンドのあと、機器の今の行がこの文字列で終わったら次のコマンドを送ります（例: (config)#）。文字そのまま・行末で一致（行の途中に出ただけでは待ち続けます）。空欄なら OS タイプのプロンプト（コマンド完了の目印）を待ちます"))}">${esc(t("待つ文字列（任意） ⓘ"))}</span></th>
+          <th>${esc(t("待機(リモート)"))}</th><th>${esc(t("待機(シリアル)"))}</th><th></th></tr>
+        <tr id="cs-bulk" class="hidden"><th><input type="checkbox" class="cs-all" data-guard-skip style="width:auto" checked data-tip="${esc(t("選択を外す"))}"></th>
+          <th colspan="7"><div class="cs-bulkbar">
+            <b id="cs-bn"></b>
+            <span>${esc(t("待つ文字列"))}</span><input id="bk-wait" class="mono" data-guard-skip style="width:100px" placeholder="${esc(t("（変えない）"))}">
+            <span>${esc(t("のあと"))}</span><input id="bk-pause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span>${esc(t("秒"))}</span>
+            <span class="muted">${esc(t("（シリアル"))}</span><input id="bk-spause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span class="muted">${esc(t("秒）"))}</span>
+            <button class="btn sm primary" type="button" id="bk-set">${esc(t("選んだ行に入れる"))}</button>
+            <button class="btn sm" type="button" id="bk-def">${esc(t("既定に戻す"))}</button>
+            <button class="btn sm act-del" type="button" id="bk-del">${esc(t("削除"))}</button>
+          </div></th></tr>
+      </thead>
       <tbody id="cmd-rows"></tbody>
     </table></div>
     <button class="btn sm" id="add-cmd" type="button" style="margin-top:8px">${esc(t("＋ 行を追加"))}</button>
-    <button class="btn sm" id="bulk-cmd" type="button" style="margin-top:8px" data-tip="${esc(t("複数のコマンドを 1 行 1 コマンドで入力して一度に追加します（待機はすべて 1 秒）"))}">${esc(t("＋ まとめて追加…"))}</button>
+    <button class="btn sm" id="bulk-cmd" type="button" style="margin-top:8px" data-tip="${esc(t("複数のコマンドを 1 行 1 コマンドで入力して一度に追加します（待ち方は「全行の待ち方」のとおり）"))}">${esc(t("＋ まとめて追加…"))}</button>
     </div>
     <div id="cmd-text-wrap" class="hidden">
-      <div class="cmd-textwrap"><div class="cmd-gutter" id="cmd-gutter"></div><textarea class="cmd-text" id="cmd-text" spellcheck="false" wrap="off" data-guard-skip placeholder="show clock&#10;show running-config"></textarea></div>
-      <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("1 行に 1 コマンド。待つ文字列・待機秒は「表で編集」で設定します（文字の変わらない行はそのまま引き継ぎ、新しい行は 1 秒）"))}</div>
+      <div class="cmd-textwrap"><div class="cmd-gutter" id="cmd-gutter"></div><textarea class="cmd-text" id="cmd-text" spellcheck="false" wrap="off" data-guard-skip placeholder="${esc(t("例: show version"))}"></textarea><div class="cmd-waits" id="cmd-waits"></div></div>
+      <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("1 行に 1 コマンド。右の「既定」を押すと、その行だけ待ち方を変えられます"))}</div>
     </div>
-    <div class="muted cmd-tablenote" style="font-size:12px;margin-top:6px">${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
+    <div class="muted cmd-tablenote" style="font-size:12px;margin-top:6px">${esc(t("斜体＝全行の待ち方どおり　太字＝その行だけの値（↺ で戻す）"))}　${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
@@ -190,6 +226,16 @@ function editCommandSet(set, tpl) {
     }));
     return arr;
   }
+  const cellVal = (inp, k) => k === "wait" ? inp.value : (parseInt(inp.value, 10) || 0);
+  // A row's fields in italics (the default) or bold with ↺ (its own).
+  function markRow(tr) {
+    KEYS.forEach(([cls, k]) => {
+      const inp = tr.querySelector("." + cls), own = !isDef(k, cellVal(inp, k));
+      inp.classList.toggle("inh", !own);
+      inp.classList.toggle("ovr", own);
+      tr.querySelector(`[data-rs="${k}"]`).classList.toggle("hidden", !own);
+    });
+  }
   // 待機秒を使う off: the pause fields stay (their values are kept) but
   // are greyed out, since the run ignores them.
   const usePause = node.querySelector("#s-usepause");
@@ -200,30 +246,36 @@ function editCommandSet(set, tpl) {
     });
   }
   usePause.onchange = syncPause;
+  const cell = (cls, k, v, extra) => `<div class="c-cell"><input class="${cls}${k === "wait" ? " mono" : ""}" ${extra} value="${esc(String(v))}">`
+    + `<button class="c-rs hidden" type="button" data-rs="${k}" tabindex="-1" data-tip="${esc(t("全行の待ち方に戻す"))}">↺</button>`
+    + `<span class="c-fill" data-fill="${cls}" data-tip="${esc(t("上下へドラッグすると、この値をほかの行にも入れます"))}"></span></div>`;
   function render() {
     tbody.innerHTML = cmds.map((c, i) => `
       <tr data-key="${i}" class="${FILL_MARK_RE.test(c.text) ? "cmd-rep" : ""}">
+        <td><input type="checkbox" class="c-sel" data-guard-skip style="width:auto"></td>
         <td class="drag-handle" data-tip="${dragHandleTip()}">⠿</td>
         <td class="muted">${i + 1}</td>
-        <td><input class="c-text mono" style="width:100%" value="${esc(c.text)}" placeholder="show running-config"></td>
-        <td><input class="c-wait mono" style="width:100%" value="${esc(c.wait || "")}" placeholder="${esc(t("（プロンプト）"))}"></td>
-        <td><input class="c-pause" type="number" style="width:100%" value="${c.pauseSec}"></td>
-        <td><input class="c-spause" type="number" style="width:100%" value="${c.serialSec}"></td>
+        <td><input class="c-text mono" style="width:100%" value="${esc(c.text)}" placeholder="${esc(t("例: show running-config"))}"></td>
+        <td>${cell("c-wait", "wait", c.wait || "", `placeholder="${esc(t("（プロンプト）"))}"`)}</td>
+        <td>${cell("c-pause", "pauseSec", c.pauseSec, 'type="number"')}</td>
+        <td>${cell("c-spause", "serialSec", c.serialSec, 'type="number"')}</td>
         <td style="white-space:nowrap">
           <button class="btn sm" type="button" data-ins="${i}" data-tip="${esc(t("この行の下に挿入"))}">＋</button>
           <button class="btn sm act-del" type="button" data-rm="${i}" data-tip="${esc(t("この行を削除"))}">×</button>
         </td>
       </tr>`).join("");
+    tbody.querySelectorAll("tr").forEach(markRow);
     tbody.querySelectorAll("[data-rm]").forEach(btn => btn.onclick = () => {
       cmds = collect(); cmds.splice(parseInt(btn.dataset.rm, 10), 1);
-      if (cmds.length === 0) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }];
+      if (cmds.length === 0) cmds = [blank()];
       render();
     });
-    // Insert a blank row directly below this one, and focus it.
+    // Insert a blank row directly below this one, and focus it. It takes
+    // the seconds of the row above, as it always did.
     tbody.querySelectorAll("[data-ins]").forEach(btn => btn.onclick = () => {
       const i = parseInt(btn.dataset.ins, 10);
       cmds = collect();
-      cmds.splice(i + 1, 0, { text: "", pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec, wait: "" });
+      cmds.splice(i + 1, 0, { ...blank(), pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec });
       render();
       const inputs = tbody.querySelectorAll(".c-text");
       if (inputs[i + 1]) inputs[i + 1].focus();
@@ -243,7 +295,7 @@ function editCommandSet(set, tpl) {
         e.preventDefault();
         cmds = collect();
         const lines = txt.split("\n").map(l => l.trim()).filter(l => l);
-        const add = lines.map(text => ({ text, pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec, wait: "" }));
+        const add = lines.map(text => ({ ...blank(text), pauseSec: cmds[i].pauseSec, serialSec: cmds[i].serialSec }));
         // A row that holds a command keeps it: the pasted lines go in
         // below it (pasting over a typed row used to replace the row).
         if (cmds[i].text.trim()) cmds.splice(i + 1, 0, ...add); else cmds.splice(i, 1, ...add);
@@ -253,14 +305,120 @@ function editCommandSet(set, tpl) {
     // Drag-reorder rows; collect() reads the new DOM order.
     wireRowReorder(tbody, () => { cmds = collect(); render(); });
     syncPause();
+    syncSel();
+    drawMerge();
     if (band) band.changed();
   }
+  tbody.addEventListener("input", e => {
+    const tr = e.target.closest("tr");
+    if (!tr || e.target.classList.contains("c-sel")) return;
+    markRow(tr);
+    drawMerge();
+    if (band) band.changed();
+  });
+  tbody.addEventListener("click", e => {
+    const rs = e.target.closest("[data-rs]");
+    if (!rs) return;
+    const tr = rs.closest("tr"), cls = KEYS.find(([, k]) => k === rs.dataset.rs)[0];
+    tr.querySelector("." + cls).value = def[rs.dataset.rs];
+    markRow(tr);
+    drawMerge();
+  });
 
-  // テキストで編集: the commands as one text, a line a command (as a
+  // Rows chosen with their boxes: the head turns into the bar that sets
+  // their wait (an empty field there leaves that value as it is).
+  let lastSel = -1;
+  const selBoxes = () => [...tbody.querySelectorAll(".c-sel")];
+  const chosen = () => selBoxes().map((b, i) => b.checked ? i : -1).filter(i => i >= 0);
+  function syncSel() {
+    const n = chosen().length;
+    selBoxes().forEach(b => b.closest("tr").classList.toggle("sel", b.checked));
+    node.querySelector("#cs-head").classList.toggle("hidden", n > 0);
+    node.querySelector("#cs-bulk").classList.toggle("hidden", n === 0);
+    node.querySelector("#cs-bn").textContent = t("{n} 行を選択中", { n });
+    node.querySelectorAll(".cs-all").forEach(b => { b.checked = n > 0; });
+  }
+  tbody.addEventListener("click", e => {
+    const b = e.target.closest(".c-sel");
+    if (!b) return;
+    const boxes = selBoxes(), i = boxes.indexOf(b);
+    if (e.shiftKey && lastSel >= 0 && lastSel < boxes.length) {
+      for (let j = Math.min(lastSel, i); j <= Math.max(lastSel, i); j++) boxes[j].checked = b.checked;
+    }
+    lastSel = i;
+    syncSel();
+  });
+  node.querySelectorAll(".cs-all").forEach(b => b.onchange = () => {
+    const on = b.closest("#cs-head") ? b.checked : false;
+    selBoxes().forEach(x => { x.checked = on; });
+    syncSel();
+  });
+  const bulkRows = () => chosen().map(i => tbody.querySelectorAll("tr")[i]);
+  node.querySelector("#bk-set").onclick = () => {
+    const w = node.querySelector("#bk-wait"), p = node.querySelector("#bk-pause"), sp = node.querySelector("#bk-spause");
+    for (const inp of [p, sp]) {
+      if (inp.value !== "" && !(parseInt(inp.value, 10) >= 0)) { fieldError(inp, t("0 以上で入力")); return; }
+    }
+    if (w.value === "" && p.value === "" && sp.value === "") { toast(t("入れる値を入力してください"), "err"); w.focus(); return; }
+    const rows = bulkRows();
+    rows.forEach(tr => {
+      if (w.value !== "") tr.querySelector(".c-wait").value = w.value.trim();
+      if (p.value !== "") tr.querySelector(".c-pause").value = parseInt(p.value, 10);
+      if (sp.value !== "") tr.querySelector(".c-spause").value = parseInt(sp.value, 10);
+      markRow(tr);
+    });
+    drawMerge();
+    toast(t("{n} 行に入れました", { n: rows.length }), "ok");
+  };
+  node.querySelector("#bk-def").onclick = () => {
+    bulkRows().forEach(tr => { KEYS.forEach(([cls, k]) => { tr.querySelector("." + cls).value = def[k]; }); markRow(tr); });
+    drawMerge();
+  };
+  node.querySelector("#bk-del").onclick = () => {
+    const del = new Set(chosen());
+    cmds = collect().filter((c, i) => !del.has(i));
+    if (cmds.length === 0) cmds = [blank()];
+    render();
+  };
+
+  // The fill handle (■ at a cell's corner, as in Excel): dragged up or
+  // down, it puts the cell's value into the rows it passes over.
+  tbody.addEventListener("mousedown", e => {
+    const hd = e.target.closest(".c-fill");
+    if (!hd || e.button !== 0) return;
+    e.preventDefault();
+    const rows = [...tbody.querySelectorAll("tr")];
+    const from = rows.indexOf(hd.closest("tr")), cls = hd.dataset.fill;
+    const val = rows[from].querySelector("." + cls).value;
+    let to = from;
+    const span = () => [Math.min(from, to), Math.max(from, to)];
+    const paint = () => { const [a, b] = span(); rows.forEach((r, i) => r.classList.toggle("fill-sel", i >= a && i <= b)); };
+    const move = ev => {
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const tr = el && el.closest && el.closest("#cmd-rows tr");
+      if (tr && rows.includes(tr)) { to = rows.indexOf(tr); paint(); }
+    };
+    const up = () => {
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+      const [a, b] = span();
+      rows.forEach((r, i) => {
+        r.classList.remove("fill-sel");
+        if (i >= a && i <= b && i !== from) { r.querySelector("." + cls).value = val; markRow(r); }
+      });
+      drawMerge();
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+    paint();
+  });
+
+  // テキストで書く: the commands as one text, a line a command (as a
   // notepad edits a file). A line whose text is unchanged keeps its wait
   // and pauses (matched in order among the lines of that text); a new line
-  // gets the 1 second 「＋ 行を追加」 gives. The mode is remembered per PC.
-  const ta = node.querySelector("#cmd-text"), gutter = node.querySelector("#cmd-gutter");
+  // gets 全行の待ち方. The column on the right shows each line's wait; a
+  // click there changes that line's. The mode is remembered per PC.
+  const ta = node.querySelector("#cmd-text"), gutter = node.querySelector("#cmd-gutter"), waitsCol = node.querySelector("#cmd-waits");
   let mode = "table";
   try { if (localStorage.getItem("palaterm_cmdset_textmode") === "1") mode = "text"; } catch (e) { }
   const textToCmds = (text, base) => {
@@ -271,7 +429,7 @@ function editCommandSet(set, tpl) {
     return lines.map(l => {
       const q = pool.get(l.trim());
       const old = q && q.length ? q.shift() : null;
-      return old ? { ...old, text: l } : { text: l, pauseSec: 1, serialSec: 1, wait: "" };
+      return old ? { ...old, text: l } : blank(l);
     });
   };
   const current = () => mode === "text" ? textToCmds(ta.value, cmds) : collect();
@@ -280,13 +438,62 @@ function editCommandSet(set, tpl) {
     gutter.innerHTML = lines.map((l, i) => FILL_MARK_RE.test(l) ? `<span class="rep">${i + 1}</span>` : String(i + 1)).join("\n");
     gutter.scrollTop = ta.scrollTop;
   };
-  ta.addEventListener("scroll", () => { gutter.scrollTop = ta.scrollTop; });
-  ta.addEventListener("input", () => { drawGutter(); if (band) band.changed(); });
+  const drawWaits = () => {
+    const cur = textToCmds(ta.value, cmds);
+    waitsCol.innerHTML = ta.value.split(/\r\n|\r|\n/).map((l, i) => {
+      const c = cur[i];
+      if (!l.trim() || !c) return `<div class="cw-l"></div>`;
+      const own = !allDef(c);
+      return `<div class="cw-l"><button type="button" class="cw-chip${own ? " ovr" : ""}" data-wl="${i}" tabindex="-1">${esc(own ? waitWords(c) : t("既定"))}</button></div>`;
+    }).join("");
+    waitsCol.scrollTop = ta.scrollTop;
+  };
+  ta.addEventListener("scroll", () => { gutter.scrollTop = ta.scrollTop; waitsCol.scrollTop = ta.scrollTop; });
+  ta.addEventListener("input", () => { drawGutter(); drawWaits(); drawMerge(); if (band) band.changed(); });
+  // A line's own wait: a small window by its chip.
+  waitsCol.addEventListener("mousedown", e => { if (e.target.closest("[data-wl]")) e.preventDefault(); });
+  waitsCol.addEventListener("click", e => {
+    const b = e.target.closest("[data-wl]");
+    if (!b) return;
+    cmds = textToCmds(ta.value, cmds);
+    const i = +b.dataset.wl, c = cmds[i];
+    if (c) linePop(b, i, c);
+  });
+  function linePop(chip, i, c) {
+    const wrap = node.querySelector("#cmd-text-wrap");
+    wrap.querySelectorAll(".cw-pop").forEach(p => p.remove());
+    const pop = h(`<div class="cw-pop">
+      <b>${esc(t("{n} 行目の待ち方", { n: i + 1 }))}</b>
+      <div class="rw"><span>${esc(t("待つ文字列"))}</span><input class="mono" id="cwp-wait" style="width:120px" value="${esc(c.wait || "")}" placeholder="${esc(t("（プロンプト）"))}"></div>
+      <div class="rw"><span>${esc(t("のあと"))}</span>${secIn("cwp-pause", c.pauseSec)}<span>${esc(t("秒"))}</span><span class="muted">${esc(t("（シリアル"))}</span>${secIn("cwp-spause", c.serialSec)}<span class="muted">${esc(t("秒）"))}</span></div>
+      <div class="rw" style="justify-content:flex-end"><button class="btn sm" type="button" id="cwp-def">${esc(t("既定に戻す"))}</button><button class="btn sm primary" type="button" id="cwp-ok">OK</button></div>
+    </div>`);
+    pop.querySelectorAll("input").forEach(x => { x.dataset.guardSkip = ""; });
+    wrap.appendChild(pop);
+    const wr = wrap.getBoundingClientRect(), cr = chip.getBoundingClientRect();
+    pop.style.top = Math.max(0, Math.min(cr.bottom - wr.top + 4, wrap.clientHeight - pop.offsetHeight)) + "px";
+    const close = () => { pop.remove(); document.removeEventListener("mousedown", away, true); ta.focus(); };
+    const away = ev => { if (!pop.contains(ev.target)) close(); };
+    setTimeout(() => document.addEventListener("mousedown", away, true));
+    const done = vals => { Object.assign(c, vals); close(); drawWaits(); drawMerge(); };
+    pop.querySelector("#cwp-def").onclick = () => done({ wait: def.wait, pauseSec: def.pauseSec, serialSec: def.serialSec });
+    pop.querySelector("#cwp-ok").onclick = () => {
+      const p = pop.querySelector("#cwp-pause"), sp = pop.querySelector("#cwp-spause");
+      for (const inp of [p, sp]) if (!(parseInt(inp.value || "0", 10) >= 0)) { fieldError(inp, t("0 以上で入力")); return; }
+      done({ wait: pop.querySelector("#cwp-wait").value.trim(), pauseSec: parseInt(p.value, 10) || 0, serialSec: parseInt(sp.value, 10) || 0 });
+    };
+    // Enter is OK, Esc closes this window only (not the editor).
+    pop.addEventListener("keydown", ev => {
+      if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); }
+      else if (ev.key === "Enter" && !ev.isComposing && !ev.ctrlKey) { ev.preventDefault(); ev.stopPropagation(); pop.querySelector("#cwp-ok").click(); }
+    });
+    pop.querySelector("#cwp-wait").focus();
+  }
   let modeSet = false;
   function setMode(m) {
     if (modeSet && m === mode) return;
     if (m === "text" && (mode !== "text" || !modeSet)) { cmds = collect(); ta.value = cmds.map(c => c.text).join("\n"); }
-    else if (m === "table" && mode === "text" && modeSet) { cmds = textToCmds(ta.value, cmds); if (!cmds.length) cmds = [{ text: "", pauseSec: 1, serialSec: 1, wait: "" }]; render(); }
+    else if (m === "table" && mode === "text" && modeSet) { cmds = textToCmds(ta.value, cmds); if (!cmds.length) cmds = [blank()]; render(); }
     mode = m;
     modeSet = true;
     try { localStorage.setItem("palaterm_cmdset_textmode", m === "text" ? "1" : "0"); } catch (e) { }
@@ -294,12 +501,42 @@ function editCommandSet(set, tpl) {
     node.querySelector(".cmd-tablenote").classList.toggle("hidden", m === "text");
     node.querySelector("#cmd-text-wrap").classList.toggle("hidden", m !== "text");
     node.querySelectorAll("[data-cmode]").forEach(b => b.classList.toggle("on", b.dataset.cmode === m));
-    if (m === "text") drawGutter();
+    if (m === "text") { drawGutter(); drawWaits(); }
   }
   node.querySelectorAll("[data-cmode]").forEach(b => b.onclick = () => setMode(b.dataset.cmode));
 
+  // 全行の待ち方: changed (on leaving the field, not per key — 1 → 15
+  // would pass 1 and take the rows of 15 with it), the rows that showed it
+  // take the new value; a row's own value stays.
+  const dIn = { wait: node.querySelector("#s-dwait"), pauseSec: node.querySelector("#s-dpause"), serialSec: node.querySelector("#s-dspause") };
+  const readDef = () => ({ wait: dIn.wait.value.trim(), pauseSec: parseInt(dIn.pauseSec.value, 10) || 0, serialSec: parseInt(dIn.serialSec.value, 10) || 0 });
+  function setDefault(nd) {
+    cmds = current();
+    cmds.forEach(c => KEYS.forEach(([, k]) => { if (isDef(k, c[k])) c[k] = nd[k]; }));
+    def = nd;
+    KEYS.forEach(([, k]) => { dIn[k].value = nd[k]; });
+    if (mode === "text") { drawWaits(); drawMerge(); } else render();
+  }
+  Object.values(dIn).forEach(inp => inp.addEventListener("change", () => {
+    const nd = readDef();
+    if (nd.pauseSec < 0 || nd.serialSec < 0) { fieldError(inp, t("0 以上で入力")); return; }
+    if (KEYS.some(([, k]) => nd[k] !== def[k])) setDefault(nd);
+  }));
+  // 全行が同じ → 既定にまとめる: every row has one same wait other than the
+  // default (a set from before the default, all its rows at 0 seconds);
+  // the user makes it the default (nothing changes on its own).
+  function drawMerge() {
+    const box = node.querySelector("#s-merge");
+    const rows = current().filter(c => c.text.trim());
+    const r0 = rows[0];
+    const same = rows.length > 1 && !allDef(r0) && rows.every(c => (c.wait || "").trim() === (r0.wait || "").trim() && c.pauseSec === r0.pauseSec && c.serialSec === r0.serialSec);
+    box.innerHTML = same ? `<button class="btn sm" type="button" id="s-mergebtn" data-tip="${esc(t("全行の待ち方をこの値にします（各行の値は変わらないので、実行は今までどおりです）"))}">${esc(t("全行が「{w}」→ 既定にまとめる", { w: waitWords(r0) }))}</button>` : "";
+    const b = box.querySelector("#s-mergebtn");
+    if (b) b.onclick = () => setDefault({ wait: (r0.wait || "").trim(), pauseSec: r0.pauseSec, serialSec: r0.serialSec });
+  }
+
   // The 変数 band (fillrule.js): the list linked to the saved set, the
-  // {{name}} buttons (into the box last typed in, at its caret) and 🔁.
+  // {{name}} buttons (into the box last typed in, at its caret).
   let lastBox = null;
   node.addEventListener("focusin", e => { if (e.target === ta || e.target.classList.contains("c-text")) lastBox = e.target; });
   const insertText = text => {
@@ -310,47 +547,34 @@ function editCommandSet(set, tpl) {
     el.setRangeText(text, el.selectionStart, el.selectionEnd, "end");
     el.dispatchEvent(new Event("input", { bubbles: true }));
   };
-  const repeatRows = () => {
-    if (mode === "text") {
-      const v = ta.value, a = ta.selectionStart;
-      let b = Math.max(a, ta.selectionEnd);
-      if (b > a && v[b - 1] === "\n") b--;
-      const ls = v.lastIndexOf("\n", a - 1) + 1;
-      let le = v.indexOf("\n", b);
-      if (le < 0) le = v.length;
-      ta.focus();
-      ta.setRangeText(FILL_EACH + "\n" + v.slice(ls, le) + "\n" + FILL_END, ls, le, "select");
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-      return;
-    }
-    const tr = lastBox && lastBox.isConnected && lastBox.closest("tr[data-key]");
-    const rows = collect();
-    const i = tr ? +tr.dataset.key : rows.length - 1;
-    if (i < 0) return;
-    rows.splice(i + 1, 0, { text: FILL_END, pauseSec: 0, serialSec: 0, wait: "" });
-    rows.splice(i, 0, { text: FILL_EACH, pauseSec: 0, serialSec: 0, wait: "" });
-    cmds = rows;
-    render();
+  // ＋ Excel から変数の値を読み込む…: a saved set without a linked list
+  // (a linked one has its buttons in the band; a new one is saved first).
+  const xls = node.querySelector("#s-xls");
+  const xlsState = linked => {
+    xls.classList.toggle("hidden", !!linked);
+    xls.disabled = !set;
+    xls.dataset.tip = set ? t("機器ごとに違う値（{{NH}} などに入る値）を、Excel・CSV の一覧から読み込みます") : t("セットを保存したあとで読み込めます");
   };
   let band = null;
   render();
   band = fillEditorBand(node.querySelector("#fill-band"), set ? set.name : null,
-    { insert: insertText, repeat: repeatRows, commands: () => current().map(c => ({ text: c.text })) });
-  tbody.addEventListener("input", () => band.changed());
+    { insert: insertText, commands: () => current().map(c => ({ text: c.text })), linked: xlsState });
+  xls.onclick = () => band.link();
   setMode(mode);
 
   node.querySelector("#add-cmd").onclick = () => {
-    cmds = collect(); cmds.push({ text: "", pauseSec: 1, serialSec: 1, wait: "" }); render();
+    cmds = collect(); cmds.push(blank()); render();
   };
-  // まとめて追加: one command per line, each with a 1-second pause, appended
+  // まとめて追加: one command per line, each with 全行の待ち方, appended
   // after the existing rows (a lone empty row is replaced instead).
   node.querySelector("#bulk-cmd").onclick = () => bulkCommandsDialog(lines => {
     cmds = collect().filter((c, i, all) => !(all.length === 1 && !c.text.trim()));
-    cmds.push(...lines.map(text => ({ text, pauseSec: 1, serialSec: 1, wait: "" })));
+    cmds.push(...lines.map(text => blank(text)));
     render();
     toast(t("{n} 行を追加しました", { n: lines.length }), "ok");
   });
-  guardDiscard(node, "#cancel", () => mode === "text" ? ta.value : null);
+  // The text mode's line waits live in cmds, not in a field.
+  guardDiscard(node, "#cancel", () => mode === "text" ? JSON.stringify(textToCmds(ta.value, cmds)) : null);
   node.querySelector("#save").onclick = async () => {
     const name = node.querySelector("#s-name").value.trim();
     if (!name) { toast(t("セット名は必須です"), "err"); return; }
@@ -358,6 +582,10 @@ function editCommandSet(set, tpl) {
     if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
     // A negative pause runs as no pause: refused where it is typed, at the
     // field (only while the pauses are used — off, the fields are greyed).
+    if (usePause.checked) {
+      const bad = [dIn.pauseSec, dIn.serialSec].find(inp => parseInt(inp.value, 10) < 0);
+      if (bad) { toast(t("全行の待ち方の秒がマイナスです（0 以上で指定してください）"), "err"); fieldError(bad, t("0 以上で入力")); return; }
+    }
     if (usePause.checked && mode === "table") {
       const rows = [...tbody.querySelectorAll("tr")];
       for (let i = 0; i < rows.length; i++) {
@@ -371,6 +599,7 @@ function editCommandSet(set, tpl) {
     }
     const commands = current().filter(c => c.text.trim().length > 0)
       .map(c => ({ text: c.text.trim(), pauseSec: c.pauseSec, serialSec: c.serialSec, wait: c.wait.trim() }));
+    const payload = { name, commands, pauseOff: !usePause.checked, default: { ...def, ...readDef() } };
     let renamed = false;
     try {
       // An edited set may have been renamed: move it (and the devices that
@@ -384,8 +613,8 @@ function editCommandSet(set, tpl) {
       }
       // A new set must not land on an existing name (SaveCommandSet replaces
       // by name: a typo of "backup" used to overwrite backup's 30 lines).
-      if (set) await App().SaveCommandSet({ name, commands, pauseOff: !usePause.checked });
-      else await App().CreateCommandSet({ name, commands, pauseOff: !usePause.checked });
+      if (set) await App().SaveCommandSet(payload);
+      else await App().CreateCommandSet(payload);
       closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
     }
     catch (e) {

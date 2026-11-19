@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -27,6 +28,19 @@ type FillRule struct {
 	Key   ImportField `json:"key"`
 	Items []FillItem  `json:"items"`
 
+	// Units are more devices on the same row (a redundant pair listed as
+	// one line: 2台目 = the backup), as an ImportRule's: each names its
+	// device's column and the items read from other columns than the
+	// first device's (the rest read the same).
+	Units []FillUnit `json:"units,omitempty"`
+	// Exclude leaves out the rows meeting any condition (as an
+	// ImportRule's: a field — "name" or FillItemKey — or a column).
+	Exclude []ImportCond `json:"exclude,omitempty"`
+	// Match: differences ignored when a list's device name is matched to
+	// PalaTerm's (case always is). Only Width, Space, Domain and Dash
+	// are read.
+	Match ImportMatch `json:"match"`
+
 	SampleName string `json:"sampleName,omitempty"`
 	LastUsed   string `json:"lastUsed,omitempty"`
 }
@@ -40,6 +54,15 @@ type FillItem struct {
 	// the lines holding it are left out. A Default fills an empty value
 	// first.
 	Empty string `json:"empty,omitempty"`
+}
+
+// FillUnit is a further device of a row: its label, its device column
+// and the items it reads from columns of its own (Empty is the first
+// device's item's).
+type FillUnit struct {
+	Label string      `json:"label,omitempty"`
+	Key   ImportField `json:"key"`
+	Items []FillItem  `json:"items,omitempty"`
 }
 
 // FillEmptySkip is FillItem.Empty for "leave the line out".
@@ -56,20 +79,57 @@ const fillKeyPrefix = "fill:"
 func FillItemKey(name string) string { return fillKeyPrefix + name }
 
 // AsImportRule is the rule as the list reader takes it: the device column
-// under "name", each item under FillItemKey.
+// under "name", each item under FillItemKey, the units and exclusions as
+// they are.
 func (r *FillRule) AsImportRule() *ImportRule {
-	ir := &ImportRule{Sheet: r.Sheet, SheetIndex: r.SheetIndex, HeaderRow: r.HeaderRow, DataRow: r.DataRow,
-		StartCol: r.StartCol, MergeOnlyFirst: r.MergeOnlyFirst}
-	k := r.Key
-	k.Key = "name"
-	ir.Fields = append(ir.Fields, k)
-	for _, it := range r.Items {
-		f := it.ImportField
-		f.Key = FillItemKey(it.Name)
-		ir.Fields = append(ir.Fields, f)
+	ir := &ImportRule{Name: r.Name, Sheet: r.Sheet, SheetIndex: r.SheetIndex, HeaderRow: r.HeaderRow, DataRow: r.DataRow,
+		StartCol: r.StartCol, MergeOnlyFirst: r.MergeOnlyFirst, Exclude: r.Exclude}
+	ir.Fields = fillFields(r.Key, r.Items)
+	for _, u := range r.Units {
+		ir.Units = append(ir.Units, ImportUnit{Label: u.Label, Fields: fillFields(u.Key, u.Items)})
 	}
 	return ir
 }
+
+// UnitRule is the rule as one device of the row reads it (0: the first,
+// 1…: Units[unit-1]) — an ImportRule of no units whose fields are the
+// first device's with the unit's own in their place.
+func (r *FillRule) UnitRule(unit int) *ImportRule {
+	ir := r.AsImportRule()
+	ir.Units = nil
+	if unit < 1 || unit > len(r.Units) {
+		return ir
+	}
+	for _, o := range fillFields(r.Units[unit-1].Key, r.Units[unit-1].Items) {
+		if o.Source == "" {
+			continue
+		}
+		for i := range ir.Fields {
+			if ir.Fields[i].Key == o.Key {
+				if o.Default == "" && o.Key != "name" {
+					o.Default = ir.Fields[i].Default
+				}
+				ir.Fields[i] = o
+			}
+		}
+	}
+	return ir
+}
+
+func fillFields(key ImportField, items []FillItem) []ImportField {
+	key.Key = "name"
+	out := []ImportField{key}
+	for _, it := range items {
+		f := it.ImportField
+		f.Key = FillItemKey(it.Name)
+		out = append(out, f)
+	}
+	return out
+}
+
+// reImportKey finds a field key in an ImportRule's message, to name it as
+// the variable rule's page does.
+var reImportKey = regexp.MustCompile(`項目「(fill:)?([^」]*)」`)
 
 // CheckFillRule refuses a rule that cannot be read or used: no name, no
 // device column, an item without a column or with a name a command line
@@ -117,6 +177,46 @@ func CheckFillRule(r *FillRule) error {
 		if it.Empty != "" && it.Empty != FillEmptySkip {
 			it.Empty = ""
 		}
+	}
+	for u := range r.Units {
+		un := &r.Units[u]
+		if un.Key.Source == "" {
+			return fmt.Errorf("%d 台目の機器名の列を選んでください", u+2)
+		}
+		kept := un.Items[:0]
+		for _, it := range un.Items {
+			if !seen[strings.ToLower(strings.TrimSpace(it.Name))] {
+				return fmt.Errorf("%d 台目の変数「%s」が 1 台目にありません", u+2, it.Name)
+			}
+			if it.Source != "" {
+				it.Empty = ""
+				kept = append(kept, it)
+			}
+		}
+		un.Items = kept
+	}
+	for i, c := range r.Exclude {
+		if c.Target != "field" || c.Key == "name" {
+			continue
+		}
+		if !strings.HasPrefix(c.Key, fillKeyPrefix) || !seen[strings.ToLower(strings.TrimPrefix(c.Key, fillKeyPrefix))] {
+			return fmt.Errorf("除外条件 %d の変数「%s」がありません", i+1, strings.TrimPrefix(c.Key, fillKeyPrefix))
+		}
+	}
+	// What an import rule checks besides (sizes, steps, templates, units,
+	// conditions), in the variable rule's words.
+	if err := r.AsImportRule().Validate(); err != nil {
+		msg := reImportKey.ReplaceAllStringFunc(err.Error(), func(m string) string {
+			sm := reImportKey.FindStringSubmatch(m)
+			if sm[1] == "" && sm[2] == "name" {
+				return "機器名"
+			}
+			if sm[1] != "" {
+				return "変数「" + sm[2] + "」"
+			}
+			return m
+		})
+		return fmt.Errorf("%s", msg)
 	}
 	return nil
 }

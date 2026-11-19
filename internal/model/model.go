@@ -438,6 +438,13 @@ type Command struct {
 	Wait string `json:"wait,omitempty"`
 }
 
+// WaitDefault is a CommandSet's 全行の待ち方 (see CommandSet.Default).
+type WaitDefault struct {
+	Wait      string `json:"wait"`
+	PauseSec  int    `json:"pauseSec"`
+	SerialSec int    `json:"serialSec"`
+}
+
 // CheckLine is one expected configuration line of a Checklist: the line as
 // the device prints it, and the block it must be in ("" = global).
 type CheckLine struct {
@@ -460,6 +467,10 @@ type CommandSet struct {
 	// kept for when it is turned back on): each command goes as soon as the
 	// prompt, or its Wait, shows. 待機秒を使う = !PauseOff.
 	PauseOff bool `json:"pauseOff,omitempty"`
+	// Default is the editor's 全行の待ち方: what a new line gets, and what
+	// the editor shows a line equal to it as (既定). The run never reads
+	// it — every command carries its own Wait and pauses.
+	Default *WaitDefault `json:"default,omitempty"`
 	// Fill is the list linked to a set with {{name}} lines (変数): the
 	// values read from it, per device. Only the link / re-read / unlink
 	// bindings change it; a save of the commands keeps it.

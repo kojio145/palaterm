@@ -11,7 +11,6 @@ const FILL_SRC = String.raw`\{\{\s*([#/]?)([\p{L}_][\p{L}\p{N}_\-]*)(\?)?\s*\}\}
 // A new RegExp each time: a shared /g one carries its lastIndex over.
 function fillMatches(text) { return [...String(text || "").matchAll(new RegExp(FILL_SRC, "gu"))]; }
 function setHasFill(cmds) { return (cmds || []).some(c => fillMatches(c.text).length > 0); }
-const FILL_EACH = "{{#each}}", FILL_END = "{{/each}}";
 // A line that is a repeat marker (shown in the repeat colour). No /g: test
 // keeps no position.
 const FILL_MARK_RE = /^\s*\{\{\s*[#/]each\s*\}\}\s*$/;
@@ -111,7 +110,8 @@ function frRenderList(root) {
 
 function frBlankRule() {
   return { id: "", name: "", sheet: "", sheetIndex: 0, headerRow: 1, dataRow: 0, startCol: "", mergeOnlyFirst: false,
-    key: { key: "", source: "", column: "", steps: [] }, items: [] };
+    key: { key: "", source: "", column: "", steps: [] }, items: [], units: [], exclude: [],
+    match: { width: false, space: false, domain: false, dash: false } };
 }
 
 function frOpenEditor(id, copyFrom) {
@@ -126,6 +126,10 @@ function frOpenEditor(id, copyFrom) {
   }
   r.key = r.key || { source: "", column: "", steps: [] };
   r.items = r.items || [];
+  r.units = r.units || [];
+  r.units.forEach(u => { u.key = u.key || { source: "", column: "", steps: [] }; u.items = u.items || []; });
+  r.exclude = r.exclude || [];
+  r.match = Object.assign({ width: false, space: false, domain: false, dash: false }, r.match || {});
   FR = { view: "edit", rule: r, start: JSON.stringify(r), sample: null, test: null };
   renderCommands();
 }
@@ -135,15 +139,31 @@ function frLeave() {
   frShow("list");
 }
 
+// frClean drops what a field's source does not use (the fallbacks of a
+// template, the template of a column).
+function frClean(f) {
+  if (f.source !== "column") f.fallback = [];
+  else f.fallback = (f.fallback || []).filter(Boolean);
+  if (f.source !== "template") f.template = "";
+}
+
 function frRuleOut() {
   const r = JSON.parse(JSON.stringify(FR.rule));
   r.headerRow = Math.max(1, parseInt(r.headerRow, 10) || 1);
   r.dataRow = Math.max(0, parseInt(r.dataRow, 10) || 0);
+  frClean(r.key);
   r.items.forEach(it => {
     const m = frEmptyMode(it);
     it.empty = m === "skip" ? "skip" : "";
     if (m !== "default") it.default = "";
     delete it._mode;
+    frClean(it);
+  });
+  r.units = (r.units || []).map(u => {
+    frClean(u.key);
+    const items = (u.items || []).filter(it => it.source && r.items.some(x => x.name === it.name));
+    items.forEach(frClean);
+    return { label: (u.label || "").trim(), key: u.key, items };
   });
   return r;
 }
@@ -174,20 +194,89 @@ function frColOpt(name) {
   const h = frHeaders().find(x => x.name === name);
   return h ? `${name}（${colLetter(h.col)}）` : name;
 }
-function frColSelect(attr, cur, need) {
+// A further device's name: its label, or 2台目.
+function frUnitName(u) { const un = FR.rule.units[u] || {}; return (un.label || "").trim() || t("{n}台目", { n: u + 2 }); }
+
+// frField finds the field a control edits: "k" the device column, "i:3"
+// item 3, "u:0:k" device 2's device column, "u:0:i:NH" device 2's NH —
+// made when make is set (a further device's item is an override of the
+// first device's; without one it reads the same column).
+function frField(path, make) {
+  const r = FR.rule, p = path.split(":");
+  if (p[0] === "k") return r.key;
+  if (p[0] === "i") return r.items[+p[1]] || null;
+  const un = r.units[+p[1]];
+  if (!un) return null;
+  if (p[2] === "k") return un.key;
+  const name = p.slice(3).join(":");
+  let it = un.items.find(x => x.name === name);
+  if (!it && make) { it = { name, source: "", column: "", steps: [] }; un.items.push(it); }
+  return it || null;
+}
+
+// frSrcHTML is a field's source as the import rules' editor offers it: a
+// column, a template joining columns, and further columns read in turn
+// while the value is still empty. same: the first choice of a further
+// device's item (the first device's source, in words); need marks an
+// empty required choice.
+function frSrcHTML(path, f, same, need) {
+  f = f || { source: "" };
   const names = frHeaders().map(x => x.name).filter(Boolean);
-  if (cur && !names.includes(cur)) names.push(cur);
-  return `<select ${attr} class="${need && !cur ? "li-need" : ""}" data-guard-skip>
-    <option value="" ${cur ? "" : "selected"}>${esc(t("（選んでください）"))}</option>
-    ${names.map(n => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(frColOpt(n))}${frHeaders().some(x => x.name === n) || !FR.sample ? "" : esc(t("（見本にない）"))}</option>`).join("")}</select>`;
+  const cur = f.source === "column" ? "col:" + (f.column || "") : f.source === "template" ? "tpl" : "";
+  const list = names.slice();
+  if (f.source === "column" && f.column && !list.includes(f.column)) list.push(f.column);
+  const miss = n => names.includes(n) || !FR.sample ? "" : esc(t("（見本にない）"));
+  const fb = f.source !== "column" ? "" : (f.fallback || []).map((c, i) => `<div class="li-fb"><span class="muted">${esc(t("空のときは →"))}</span>
+      <select data-frfb="${esc(path)}" data-fbi="${i}" data-guard-skip>
+        <option value="" ${c ? "" : "selected"}>${esc(c ? t("（外す）") : t("（選んでください）"))}</option>
+        ${list.concat(c && !list.includes(c) ? [c] : []).filter(n => n !== f.column).map(n => `<option value="${esc(n)}" ${c === n ? "selected" : ""}>${esc(frColOpt(n))}${miss(n)}</option>`).join("")}
+      </select></div>`).join("") + `<button class="li-fbadd" type="button" data-frfbadd="${esc(path)}">${esc(t("＋ 空のときは別の列"))}</button>`;
+  return `<select data-frsrc="${esc(path)}" class="${need && !cur ? "li-need" : ""}" data-guard-skip>
+      <option value="" ${cur ? "" : "selected"}>${esc(same || t("（選んでください）"))}</option>
+      ${list.map(n => `<option value="${esc("col:" + n)}" ${cur === "col:" + n ? "selected" : ""}>${esc(frColOpt(n))}${miss(n)}</option>`).join("")}
+      <option value="tpl" ${cur === "tpl" ? "selected" : ""}>${esc(t("組み立て（列をつなげる）"))}</option></select>
+    ${f.source === "template" ? `<input type="text" class="li-tpl" data-frtpl="${esc(path)}" value="${esc(f.template || "")}" placeholder="${esc(t("{拠点コード}-{機器名称}"))}" data-guard-skip>` : ""}
+    ${fb}`;
 }
-function frSteps(field, attr) {
-  if (!field.source) return "";
-  return `<div class="li-steps">${(field.steps || []).map(s => `<button class="li-step" ${attr}>${esc(liStepLabel(s))}</button>`).join("")}
-    <button class="li-step add" ${attr} data-tip="${esc(t("加工手順を編集"))}">${(field.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>`;
+// Where a field's value comes from, in words (a further device's "same as
+// the first device" says it).
+function frSrcWords(f) {
+  if (!f || !f.source) return "";
+  return f.source === "template" ? t("組み立て") : frColOpt(f.column || "");
 }
-// The first value row of the sample: what the results column shows.
-function frSample() { return ((FR.test && FR.test.rows) || [])[0] || null; }
+function frSteps(field, path) {
+  if (!field || !field.source) return "";
+  return `<div class="li-steps">${(field.steps || []).map(s => `<button class="li-step" data-frstep="${esc(path)}">${esc(liStepLabel(s))}</button>`).join("")}
+    <button class="li-step add" data-frstep="${esc(path)}" data-tip="${esc(t("加工手順を編集"))}">${(field.steps || []).length ? "✎" : esc(t("＋ 加工"))}</button></div>`;
+}
+// The sample row the results column shows: the first device's first row
+// not left out; a further device's on the same line when it has one.
+function frSample() {
+  const rows = (FR.test && FR.test.rows) || [];
+  return rows.find(x => (x.unit || 1) === 1 && !x.excluded) || rows.find(x => (x.unit || 1) === 1) || null;
+}
+function frUnitSample(u) {
+  const rows = ((FR.test && FR.test.rows) || []).filter(x => x.unit === u + 2 && !x.excluded);
+  const s = frSample();
+  return (s && rows.find(x => x.line === s.line)) || rows[0] || null;
+}
+function frValHTML(row, name) {
+  if (!row) return "";
+  const v = name === "" ? row.device : (row.values || {})[name];
+  return v ? esc(v) : `<span class="muted">${esc(t("（空）"))}</span>`;
+}
+// An exclusion in words, as the import rules' results say it.
+function frCondText(c) {
+  if (!c) return "";
+  const w = c.target === "field" ? (c.key === "name" ? t("機器名") : "{{" + c.key.replace(/^fill:/, "") + "}}") : c.key;
+  const v = c.value || "";
+  const text = {
+    empty: t("{w}が空", { w }), notempty: t("{w}が空でない", { w }),
+    contains: t("{w}が「{v}」を含む", { w, v }), notcontains: t("{w}が「{v}」を含まない", { w, v }),
+    equals: t("{w}が「{v}」", { w, v }), notequals: t("{w}が「{v}」でない", { w, v }),
+  }[c.op] || w;
+  return t("除外条件: {x}", { x: text });
+}
 
 function frGridHTML() {
   const test = FR.test, r = FR.rule;
@@ -205,8 +294,9 @@ function frGridHTML() {
     for (let c = 1; c <= nc; c++) html += `<td class="${c < c1 || c > c2 ? "out" : ""}">${esc(row[c - 1] || "")}</td>`;
     html += `</tr>`;
   });
+  const cut = (test.cols || 0) > nc ? `<span class="li-warntxt">${esc(t("先頭 {n} 列まで表示しています（ほか {m} 列。下の紐付けではすべての列を選べます）", { n: nc, m: test.cols - nc }))}</span>` : "";
   return html + `</tbody></table></div>
-    <div class="li-legend"><span><i class="h"></i>${esc(t("見出しの行"))}</span><span><i class="v"></i>${esc(t("読み取る値"))}</span><span><i class="out"></i>${esc(t("表の外（読まない）"))}</span></div>`;
+    <div class="li-legend">${cut}<span><i class="h"></i>${esc(t("見出しの行"))}</span><span><i class="v"></i>${esc(t("読み取る値"))}</span><span><i class="out"></i>${esc(t("表の外（読まない）"))}</span></div>`;
 }
 
 function frResultsHTML() {
@@ -215,28 +305,44 @@ function frResultsHTML() {
   if (!test) return `<div class="muted" style="font-size:12px">${esc(t("読み込み中…"))}</div>`;
   if (!r.key.source) return `<div class="muted" style="font-size:12px">${esc(t("機器名の列を選ぶと、ここに読み取り結果が出ます"))}</div>`;
   const rows = test.rows || [];
-  return `<div class="muted" style="font-size:12px;margin-bottom:6px">${esc(t("値の行 {n} → 機器 {d} 台（先頭 {k} 行を表示）", { n: test.total || 0, d: test.devices || 0, k: rows.length }))}</div>
-    <div class="scrollx"><table class="li-res-t"><thead><tr><th>${esc(t("行"))}</th><th>${esc(t("機器名"))}</th>${r.items.map(it => `<th>${fillChip(it.name || "?")}</th>`).join("")}</tr></thead><tbody>
-    ${rows.map(row => `<tr><td class="muted">${row.line}</td><td>${row.cont ? `<span class="muted">${esc(t("↳ 上と同じ（{d}）", { d: row.device }))}</span>` : `<b>${esc(row.device)}</b>`}</td>
-      ${r.items.map(it => `<td class="mono">${row.values[it.name] ? esc(row.values[it.name]) : `<span class="muted">${esc(t("（空）"))}</span>`}</td>`).join("")}</tr>`).join("")}
+  const unitsN = r.units.length;
+  return `<div class="muted" style="font-size:12px;margin-bottom:6px">${esc(t("値の行 {n} → 機器 {d} 台（先頭 {k} 行を表示）", { n: test.total || 0, d: test.devices || 0, k: rows.length }))}${test.excluded ? " · " + esc(t("除外 {x} 行", { x: test.excluded })) : ""}</div>
+    <div class="scrollx"><table class="li-res-t"><thead><tr><th>${esc(t("行"))}</th>${unitsN ? `<th>${esc(t("台"))}</th>` : ""}<th>${esc(t("機器名"))}</th>${r.items.map(it => `<th>${fillChip(it.name || "?")}</th>`).join("")}<th></th></tr></thead><tbody>
+    ${rows.map(row => `<tr class="${row.excluded ? "li-skip" : ""}"><td class="muted">${row.line}</td>${unitsN ? `<td class="muted">${(row.unit || 1) > 1 ? esc(frUnitName(row.unit - 2)) : esc(t("1台目"))}</td>` : ""}
+      <td>${row.cont ? `<span class="muted">${esc(t("↳ 上と同じ（{d}）", { d: row.device }))}</span>` : `<b>${esc(row.device)}</b>`}</td>
+      ${r.items.map(it => `<td class="mono">${row.values[it.name] ? esc(row.values[it.name]) : `<span class="muted">${esc(t("（空）"))}</span>`}</td>`).join("")}
+      <td class="muted" style="font-size:12px">${esc(frCondText(row.excluded))}</td></tr>`).join("")}
     </tbody></table></div>`;
 }
 function frRenderResults(root) {
   const box = root.querySelector("#fr-res");
   if (box) box.innerHTML = frResultsHTML();
-  const s = frSample();
   root.querySelectorAll("[data-frval]").forEach(el => {
-    const k = el.dataset.frval;
-    const v = !s ? "" : k === "" ? s.device : s.values[k];
-    el.innerHTML = !s ? "" : v ? esc(v) : `<span class="muted">${esc(t("（空）"))}</span>`;
+    const u = el.dataset.fru;
+    el.innerHTML = frValHTML(u === undefined ? frSample() : frUnitSample(+u), el.dataset.frval);
   });
 }
 
 function frRenderEdit(root) {
+  const sb = root.querySelector(".li-sheetbox");
+  const gridScroll = sb ? [sb.scrollLeft, sb.scrollTop] : null;
   const r = FR.rule, test = FR.test;
   const sheets = (test && test.sheets) || (r.sheet ? [r.sheet] : []);
   const s = frSample();
-  const sampleVal = k => !s ? "" : (k === "" ? s.device : s.values[k]) ? esc(k === "" ? s.device : s.values[k]) : `<span class="muted">${esc(t("（空）"))}</span>`;
+  const units = r.units;
+  const hdrNames = frHeaders().map(h => h.name).filter(Boolean);
+  const OPS = [["empty", t("が空")], ["notempty", t("が空でない")], ["contains", t("が次を含む")], ["notcontains", t("が次を含まない")], ["equals", t("が次と一致")], ["notequals", t("が次と一致しない")]];
+  const condTargets = () => [{ v: "field:name", l: t("変換後: {f}", { f: t("機器名") }) }]
+    .concat(r.items.filter(it => it.name).map(it => ({ v: "field:fill:" + it.name, l: t("変換後: {f}", { f: "{{" + it.name + "}}" }) })))
+    .concat(hdrNames.map(n => { const h = frHeaders().find(x => x.name === n); return { v: "column:" + n, l: h ? t("元の列({l}): {c}", { l: colLetter(h.col), c: n }) : t("元の列: {c}", { c: n }) }; }));
+  const unitKeyCell = u => `<td class="li-ucell">${frSrcHTML(`u:${u}:k`, units[u].key, "", true)}${frSteps(units[u].key, `u:${u}:k`)}
+    <div class="li-ures" data-frval="" data-fru="${u}">${frValHTML(frUnitSample(u), "")}</div></td>`;
+  const unitItemCell = (u, it) => {
+    if (!it.name) return `<td class="li-ucell muted" style="font-size:12px">${esc(t("先に変数の名前を入れてください"))}</td>`;
+    const path = `u:${u}:i:${it.name}`, uf = frField(path, false);
+    return `<td class="li-ucell">${frSrcHTML(path, uf, t("1台目と同じ（{c}）", { c: frSrcWords(it) || t("未選択") }))}${frSteps(uf, path)}
+      <div class="li-ures" data-frval="${esc(it.name)}" data-fru="${u}">${frValHTML(frUnitSample(u), it.name)}</div></td>`;
+  };
   root.innerHTML = `
     <div class="page-head">
       <div><div class="page-title">${esc(r.id ? t("変数ルールの編集") : t("変数ルールを作る"))}</div>
@@ -271,7 +377,7 @@ function frRenderEdit(root) {
           <option value="fill" ${r.mergeOnlyFirst ? "" : "selected"}>${esc(t("すべてのセルで同じ値"))}</option>
           <option value="first" ${r.mergeOnlyFirst ? "selected" : ""}>${esc(t("左上のセルだけ"))}</option></select></div>
       </div>
-      ${frGridHTML()}
+      <div id="fr-gridbox"></div>
       ${test && test.error ? `<div class="li-err">${esc(terr(test.error))}</div>` : ""}
       ${test && (test.warnings || []).length ? `<div class="li-warn">${test.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
       ${test && (test.missing || []).length ? `<div class="li-warn">${esc(t("見本に無い列: {c}", { c: test.missing.join(t("、")) }))}</div>` : ""}
@@ -280,32 +386,62 @@ function frRenderEdit(root) {
     <div class="panel li-sec">
       <div class="li-h"><b>${esc(t("変数と列の対応"))}${hintI(t("変数の名前は、コマンドの中で {{名前}} と書いて使います。コマンドセットの編集画面では、ボタンを押すだけで入れられます"))}</b>
         <span class="muted">${esc(t("どの列の値を、どの変数にするか"))}</span></div>
+      <div class="li-units">
+        <span class="muted">${esc(t("1 行に 2 台分が載っている一覧（冗長構成など）は、2 台目を追加します"))}${hintI(t("1 行に 2 台分（冗長構成のメインとバックアップなど）が載っている一覧は、2 台目を追加して、2 台目の機器名の列と、2 台目で列が違う変数だけを選びます。選ばない変数は 1 台目と同じ列の値です。2 台目の機器名が空の行では 2 台目を作りません。機器名がどちらも空の行は、上の 2 台それぞれの続きです。"))}</span>
+        <div class="row-inline" style="flex-wrap:wrap;gap:6px 12px;margin-top:6px">
+          ${units.map((un, u) => `<span class="li-unitchip"><b>${esc(t("{n}台目", { n: u + 2 }))}</b>
+            <input type="text" data-frulabel="${u}" value="${esc(un.label || "")}" placeholder="${esc(t("名前（例: バックアップ）"))}" maxlength="40" data-guard-skip>
+            <button class="btn sm act-del" data-frudel="${u}" data-tip="${esc(t("この台を外す"))}">×</button></span>`).join("")}
+          ${units.length < 3 ? `<button class="btn sm" id="fr-uadd">${esc(units.length ? t("＋ {n}台目を追加", { n: units.length + 2 }) : t("＋ 2台目を追加（冗長構成など）"))}</button>` : ""}
+        </div>
+      </div>
       <div class="scrollx"><table class="li-map"><thead><tr>
-        <th style="width:230px">${esc(t("変数"))}</th><th style="width:230px">${esc(t("元の値（列）"))}</th><th>${esc(t("加工手順"))}</th>
-        <th style="width:230px">${esc(t("空のとき"))}</th><th style="width:180px">${esc(s ? t("見本 {n} 行目の結果", { n: s.line }) : t("見本の結果"))}</th><th style="width:44px"></th></tr></thead><tbody>
+        <th style="width:200px">${esc(t("変数"))}</th><th style="width:230px">${esc(units.length ? t("元の値（1台目）") : t("元の値（列）"))}</th><th>${esc(t("加工手順"))}</th>
+        <th style="width:210px">${esc(t("空のとき"))}</th><th style="width:170px">${esc(s ? t("見本 {n} 行目の結果", { n: s.line }) : t("見本の結果"))}</th>
+        ${units.map((un, u) => `<th style="width:240px">${esc(frUnitName(u))}</th>`).join("")}<th style="width:44px"></th></tr></thead><tbody>
         <tr><td><b>${esc(t("機器名（照合）"))}</b> <span class="req">${esc(t("必須"))}</span><div class="muted" style="font-size:11px">${esc(t("PalaTerm の機器名と照らし合わせる列（大文字小文字は区別しません）"))}</div></td>
-          <td>${frColSelect('data-frkey', r.key.column, true)}</td><td>${frSteps(r.key, 'data-frstep=""')}</td>
-          <td class="muted" style="font-size:12px">${esc(t("空の行は、上の機器の続きになります"))}</td><td class="li-res" data-frval="">${sampleVal("")}</td><td></td></tr>
+          <td>${frSrcHTML("k", r.key, "", true)}</td><td>${frSteps(r.key, "k")}</td>
+          <td class="muted" style="font-size:12px">${esc(t("空の行は、上の機器の続きになります"))}</td><td class="li-res" data-frval="">${frValHTML(s, "")}</td>
+          ${units.map((un, u) => unitKeyCell(u)).join("")}<td></td></tr>
         ${r.items.map((it, i) => `<tr>
-          <td><input type="text" data-frname="${i}" value="${esc(it.name)}" placeholder="${esc(t("例: NH"))}" maxlength="64" style="width:100%" data-guard-skip>
-            <div style="margin-top:4px">${it.name ? fillChip(it.name) : ""}</div></td>
-          <td>${frColSelect(`data-frcol-sel="${i}"`, it.column, true)}</td>
-          <td>${frSteps(it, `data-frstep="${i}"`)}</td>
+          <td><input type="text" data-frname="${i}" value="${esc(it.name)}" placeholder="${esc(t("例: NH"))}" maxlength="64" style="width:100%" data-guard-skip></td>
+          <td>${frSrcHTML(`i:${i}`, it, "", true)}</td>
+          <td>${frSteps(it, `i:${i}`)}</td>
           <td><select data-frempty="${i}" data-guard-skip>
               <option value="" ${frEmptyMode(it) === "" ? "selected" : ""}>${esc(t("その機器は実行しない"))}</option>
               <option value="skip" ${frEmptyMode(it) === "skip" ? "selected" : ""}>${esc(t("その行だけ送らない"))}</option>
               <option value="default" ${frEmptyMode(it) === "default" ? "selected" : ""}>${esc(t("決まった値を使う"))}</option></select>
             ${frEmptyMode(it) === "default" ? `<input type="text" data-frdef="${i}" value="${esc(it.default || "")}" placeholder="${esc(t("空のときの値"))}" style="width:100%;margin-top:4px" data-guard-skip>` : ""}</td>
-          <td class="li-res" data-frval="${esc(it.name)}">${it.name ? sampleVal(it.name) : ""}</td>
+          <td class="li-res" data-frval="${esc(it.name)}">${it.name ? frValHTML(s, it.name) : ""}</td>
+          ${units.map((un, u) => unitItemCell(u, it)).join("")}
           <td><button class="btn sm act-del" data-frdelitem="${i}" data-tip="${esc(t("この変数を外す"))}">×</button></td></tr>`).join("")}
-        <tr><td colspan="6"><button class="btn sm" id="fr-additem">${esc(t("＋ 変数を追加"))}</button>
+        <tr><td colspan="${6 + units.length}"><button class="btn sm" id="fr-additem">${esc(t("＋ 変数を追加"))}</button>
           <span class="muted" style="font-size:12px;margin-left:8px">${esc(t("列を先に選ぶと、名前は見出しから入ります（あとで短く変えられます）"))}</span></td></tr>
       </tbody></table></div>
       <details id="fr-more" style="margin-top:10px" ${FR.more ? "open" : ""}>
         <summary style="cursor:pointer;font-size:13px">${esc(t("読み取った行を見る"))} <span class="muted" style="font-size:12px">${esc(t("同じ機器名の行が何行もあると、その機器の 2 行目以降になります"))}</span></summary>
         <div id="fr-res" style="margin-top:8px">${frResultsHTML()}</div>
       </details>
+    </div>
+
+    <div class="panel li-sec">
+      <div class="li-h"><b>${esc(t("機器名の照合"))}</b><span class="muted">${esc(t("一覧の機器名と PalaTerm の機器名を比べるとき、次の違いを無視します（大文字・小文字と前後の空白は常に無視します）"))}</span></div>
+      <div class="row-inline" style="flex-wrap:wrap;gap:6px 18px;font-size:13px">
+        ${[["width", t("全角・半角")], ["space", t("空白")], ["domain", t("ドメイン部（最初の「.」から後ろ）")], ["dash", t("「-」と「_」")]].map(([k, l]) =>
+          `<label class="row-inline" style="gap:6px"><input type="checkbox" data-frmatch="${k}" ${r.match[k] ? "checked" : ""} data-guard-skip> ${esc(l)}</label>`).join("")}
+      </div>
+    </div>
+
+    <div class="panel li-sec">
+      <div class="li-h"><b>${esc(t("除外条件"))}</b><span class="muted">${esc(t("どれか 1 つに当てはまる行は使いません（機器名のある行なら、その機器の続きの行も使いません）"))}</span></div>
+      ${r.exclude.map((c, i) => `<div class="row-inline li-cond">
+        <select data-frctgt="${i}" data-guard-skip>${condTargets().concat(condTargets().some(o => o.v === c.target + ":" + c.key) || !c.key ? [] : [{ v: c.target + ":" + c.key, l: c.key.replace(/^fill:/, "") }]).map(o => `<option value="${esc(o.v)}" ${o.v === c.target + ":" + c.key ? "selected" : ""}>${esc(o.l)}</option>`).join("")}</select>
+        <select data-frcop="${i}" data-guard-skip>${OPS.map(([v, l]) => `<option value="${v}" ${c.op === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>
+        ${c.op === "empty" || c.op === "notempty" ? "" : `<input type="text" data-frcval="${i}" value="${esc(c.value || "")}" data-guard-skip>`}
+        <button class="btn sm act-del" data-frcdel="${i}" data-tip="${esc(t("この行を削除"))}">×</button></div>`).join("")}
+      <button class="btn sm" id="fr-cadd">${esc(t("＋ 条件を追加"))}</button>
     </div>`;
+  liSetGrid(root.querySelector("#fr-gridbox"), frGridHTML(), gridScroll);
   root.querySelector("#fr-more").addEventListener("toggle", e => { FR.more = e.target.open; });
   frWireEdit(root);
 }
@@ -321,6 +457,7 @@ function frNameFrom(header) {
 function frWireEdit(root) {
   const r = FR.rule;
   const q = s => root.querySelector(s);
+  const redraw = () => { frRenderEdit(root); frRunTest(true); };
   q("#fr-name").oninput = e => { r.name = e.target.value; };
   q("#fr-cancel").onclick = async () => {
     if (JSON.stringify(r) !== FR.start && !(await uiConfirm({ title: t("編集をやめる"), message: esc(t("編集した内容は保存されていません。破棄して閉じますか？")), okLabel: t("破棄して閉じる"), danger: true }))) return;
@@ -354,16 +491,44 @@ function frWireEdit(root) {
   q("#fr-merge").onchange = e => { r.mergeOnlyFirst = e.target.value === "first"; frTestSoon(true); };
   root.querySelectorAll("[data-frrow]").forEach(td => td.onclick = () => { r.headerRow = +td.dataset.frrow; r.dataRow = 0; frRunTest(true); });
   root.querySelectorAll("[data-frcol]").forEach(th => th.onclick = () => { r.startCol = colLetter(+th.dataset.frcol); frRunTest(true); });
-  const setCol = (f, v) => { f.source = v ? "column" : ""; f.column = v; f.colIndex = 0; if (!v) f.steps = []; };
-  q("[data-frkey]").onchange = e => { setCol(r.key, e.target.value); frRunTest(true); if (!FR.sample) frRenderEdit(root); };
-  root.querySelectorAll("[data-frcol-sel]").forEach(sel => sel.onchange = () => {
-    const it = r.items[+sel.dataset.frcolSel];
-    setCol(it, sel.value);
-    if (!it.name && sel.value) it.name = frNameFrom(sel.value);
-    frRenderEdit(root);
-    frRunTest(true);
+  // A source choice: a column, a template, or none (a further device's
+  // item then reads as the first device's).
+  root.querySelectorAll("[data-frsrc]").forEach(sel => sel.onchange = () => {
+    const path = sel.dataset.frsrc, v = sel.value, unitItem = /^u:\d+:i:/.test(path);
+    if (!v && unitItem) {
+      const p = path.split(":"), un = r.units[+p[1]];
+      un.items = un.items.filter(x => x.name !== p.slice(3).join(":"));
+    } else {
+      const f = frField(path, true);
+      if (!v) { f.source = ""; f.column = ""; f.steps = []; f.fallback = []; f.template = ""; }
+      else if (v === "tpl") { f.source = "template"; f.column = ""; f.colIndex = 0; f.fallback = []; f.template = f.template || ""; }
+      else { f.source = "column"; f.column = v.slice(4); f.colIndex = 0; f.template = ""; }
+      if (path.startsWith("i:") && !f.name && f.source === "column") f.name = frNameFrom(f.column);
+    }
+    redraw();
   });
-  root.querySelectorAll("[data-frname]").forEach(inp => inp.oninput = () => { r.items[+inp.dataset.frname].name = inp.value.trim(); frTestSoon(false); });
+  root.querySelectorAll("[data-frtpl]").forEach(inp => inp.oninput = () => { frField(inp.dataset.frtpl, true).template = inp.value; frTestSoon(false); });
+  root.querySelectorAll("[data-frfb]").forEach(sel => sel.onchange = () => {
+    const f = frField(sel.dataset.frfb, true), i = +sel.dataset.fbi;
+    if (sel.value) f.fallback[i] = sel.value; else f.fallback.splice(i, 1);
+    redraw();
+  });
+  root.querySelectorAll("[data-frfbadd]").forEach(b => b.onclick = () => {
+    const f = frField(b.dataset.frfbadd, true);
+    f.fallback = (f.fallback || []).concat([""]);
+    frRenderEdit(root);
+  });
+  // Renaming a variable carries its further devices' columns and its
+  // exclusions along (they name it).
+  root.querySelectorAll("[data-frname]").forEach(inp => inp.oninput = () => {
+    const it = r.items[+inp.dataset.frname], old = it.name, nw = inp.value.trim();
+    if (old && old !== nw) {
+      r.units.forEach(un => un.items.forEach(x => { if (x.name === old) x.name = nw; }));
+      r.exclude.forEach(c => { if (c.target === "field" && c.key === "fill:" + old) c.key = "fill:" + nw; });
+    }
+    it.name = nw;
+    frTestSoon(false);
+  });
   root.querySelectorAll("[data-frname]").forEach(inp => inp.onchange = () => frRenderEdit(root));
   root.querySelectorAll("[data-frempty]").forEach(sel => sel.onchange = () => {
     const it = r.items[+sel.dataset.frempty];
@@ -374,18 +539,44 @@ function frWireEdit(root) {
     frTestSoon(false);
   });
   root.querySelectorAll("[data-frdef]").forEach(inp => inp.oninput = () => { r.items[+inp.dataset.frdef].default = inp.value; frTestSoon(false); });
-  root.querySelectorAll("[data-frdelitem]").forEach(b => b.onclick = () => { r.items.splice(+b.dataset.frdelitem, 1); frRenderEdit(root); frRunTest(false); });
+  root.querySelectorAll("[data-frdelitem]").forEach(b => b.onclick = () => {
+    const [it] = r.items.splice(+b.dataset.frdelitem, 1);
+    if (it && it.name) {
+      r.units.forEach(un => { un.items = un.items.filter(x => x.name !== it.name); });
+      r.exclude = r.exclude.filter(c => !(c.target === "field" && c.key === "fill:" + it.name));
+    }
+    redraw();
+  });
   q("#fr-additem").onclick = () => { r.items.push({ name: "", source: "", column: "", steps: [] }); frRenderEdit(root); };
   root.querySelectorAll("[data-frstep]").forEach(b => b.onclick = () => {
-    const i = b.dataset.frstep;
-    const f = i === "" ? r.key : r.items[+i];
-    const s = frSample();
+    const path = b.dataset.frstep, f = frField(path, false);
+    if (!f) return;
+    const m = path.match(/^u:(\d+):/), u = m ? +m[1] : -1;
+    const s = u < 0 ? frSample() : frUnitSample(u);
+    const isKey = path === "k" || /^u:\d+:k$/.test(path);
     liStepEditor("", 0, {
-      field: f, label: i === "" ? t("機器名（照合）") : "{{" + (f.name || "?") + "}}",
-      sample: !s ? "" : i === "" ? s.rawDevice : (s.raw || {})[f.name],
-      done: () => { frRenderEdit(root); frRunTest(true); },
+      field: f, label: (isKey ? t("機器名（照合）") : "{{" + (f.name || "?") + "}}") + (u < 0 ? "" : "（" + frUnitName(u) + "）"),
+      sample: !s ? "" : isKey ? s.rawDevice : (s.raw || {})[f.name],
+      done: redraw,
     });
   });
+  root.querySelectorAll("[data-frulabel]").forEach(inp => inp.oninput = () => { r.units[+inp.dataset.frulabel].label = inp.value; });
+  root.querySelectorAll("[data-frulabel]").forEach(inp => inp.onchange = () => frRenderEdit(root));
+  root.querySelectorAll("[data-frudel]").forEach(b => b.onclick = () => { r.units.splice(+b.dataset.frudel, 1); redraw(); });
+  if (q("#fr-uadd")) q("#fr-uadd").onclick = () => {
+    r.units.push({ label: r.units.length ? "" : t("バックアップ"), key: { source: "", column: "", steps: [] }, items: [] });
+    frRenderEdit(root);
+  };
+  root.querySelectorAll("[data-frmatch]").forEach(cb => cb.onchange = () => { r.match[cb.dataset.frmatch] = cb.checked; });
+  root.querySelectorAll("[data-frctgt]").forEach(sel => sel.onchange = () => {
+    const c = r.exclude[+sel.dataset.frctgt], v = sel.value, i = v.indexOf(":");
+    c.target = v.slice(0, i); c.key = v.slice(i + 1);
+    redraw();
+  });
+  root.querySelectorAll("[data-frcop]").forEach(sel => sel.onchange = () => { r.exclude[+sel.dataset.frcop].op = sel.value; redraw(); });
+  root.querySelectorAll("[data-frcval]").forEach(inp => inp.oninput = () => { r.exclude[+inp.dataset.frcval].value = inp.value; frTestSoon(false); });
+  root.querySelectorAll("[data-frcdel]").forEach(b => b.onclick = () => { r.exclude.splice(+b.dataset.frcdel, 1); redraw(); });
+  q("#fr-cadd").onclick = () => { r.exclude.push({ target: "field", key: "name", op: "empty", value: "" }); frRenderEdit(root); };
   root.onkeydown = e => { if (FR.view === "edit" && e.key === "Enter" && e.ctrlKey) { e.preventDefault(); frSave(); } };
 }
 
@@ -416,7 +607,7 @@ async function fillLinkDialog(ruleId, set, done) {
   catch (e) { App().ForgetListFile().catch(() => {}); toast(t("読み込み失敗") + ": " + terr(e), "err"); return; }
   const sets = (INV.commandSets || []).map(s => s.name);
   const node = h(`<div>
-    <h3>${esc(set ? t("変数の一覧を紐づける") : t("ファイルを読み込んでコマンドセットを作る"))}</h3>
+    <h3>${esc(set ? t("Excel から変数の値を読み込む") : t("ファイルを読み込んでコマンドセットを作る"))}</h3>
     <div class="fl-kv">
       <label>${esc(t("使うルール"))}</label><b>${esc(rule.name)}</b>
       <label>${esc(t("ファイル"))}</label><div><span class="fill-file">📄 ${esc(info.file)}</span></div>
@@ -425,7 +616,7 @@ async function fillLinkDialog(ruleId, set, done) {
     ${info.unknown.length ? `<div class="warn-box" style="margin-top:10px">${esc(t("PalaTerm に登録のない機器名が {n} 台あります（その行は使いません）: {list}", { n: info.devices - info.known, list: info.unknown.join(", ") + (info.devices - info.known > info.unknown.length ? " …" : "") }))}</div>` : ""}
     ${(info.missing || []).length ? `<div class="warn-box err">${esc(t("ファイルに無い列: {c}（その変数は空になります）", { c: info.missing.join(t("、")) }))}</div>` : ""}
     ${(info.warnings || []).length ? `<div class="warn-box">${info.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
-    ${set ? `<div class="fl-kv" style="margin-top:12px"><label>${esc(t("紐づけるセット"))}</label><b>${esc(set)}</b></div>` : `
+    ${set ? `<div class="fl-kv" style="margin-top:12px"><label>${esc(t("読み込むセット"))}</label><b>${esc(set)}</b></div>` : `
     <div class="fl-kv" style="margin-top:12px">
       <label>${esc(t("作り方"))}</label><div class="row-inline" style="gap:16px">
         <label style="display:flex;gap:6px;align-items:center;font-weight:normal"><input type="radio" name="fl-mode" value="new" checked style="width:auto"> ${esc(t("新しいコマンドセットを作る"))}</label>
@@ -435,7 +626,7 @@ async function fillLinkDialog(ruleId, set, done) {
     </div>`}
     <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.8">${esc(t("読み込んだ値はコマンドセットと一緒に保存されます（暗号化して保存）。ファイルを直したときは「読み直す」で取り込み直せます"))}</div>
     <div class="modal-actions"><button class="btn" id="fl-cancel">${esc(t("キャンセル"))}</button>
-      <button class="btn primary" id="fl-ok">${esc(set ? t("紐づける") : t("作って編集する"))}</button></div>
+      <button class="btn primary" id="fl-ok">${esc(set ? t("読み込む") : t("作って編集する"))}</button></div>
   </div>`);
   // Over the set editor (its own modal) as a small window; alone, a modal.
   const sub = !!set;
@@ -459,7 +650,7 @@ async function fillLinkDialog(ruleId, set, done) {
       await App().LinkFillList({ path, ruleId, set: name, new: isNew });
       close();
       await refreshInventory();
-      toast(t("「{n}」に変数の一覧を紐づけました", { n: name }), "ok");
+      toast(set ? t("「{n}」に変数の値を読み込みました", { n: name }) : t("「{n}」に変数の一覧を紐づけました", { n: name }), "ok");
       if (done) done();
       else { frShow("sets"); editCommandSet((INV.commandSets || []).find(s => s.name === name)); }
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
@@ -468,39 +659,64 @@ async function fillLinkDialog(ruleId, set, done) {
 
 // ---- the set editor's band ----
 
+// fillPickRule is the first step of reading a list into a set: what the
+// file is (the per-device values, read the way a rule says) and which rule
+// reads it. Always shown, one rule or many. Resolves the rule's id, or "".
+function fillPickRule(cur) {
+  const rs = fillRules();
+  return new Promise(res => {
+    const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(560px,94vw)"><h3>${esc(t("Excel から変数の値を読み込む"))}</h3>
+      <div style="font-size:13px;line-height:1.8;margin-bottom:12px">${esc(t("読み込むのは、機器ごとの値を並べた一覧（Excel・CSV）です。どの列をどの変数にするかは「取り込みルール」で決めます。使うルールを選んでから、ファイルを選んでください。"))}</div>
+      ${rs.length ? `<div class="field" style="margin:0"><label>${esc(t("取り込みルール"))}</label>
+        <select id="fbr-sel" style="width:100%">${rs.map(r => `<option value="${esc(r.id)}" ${cur === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>`
+      : `<div class="warn-box">${esc(t("取り込みルールがまだありません。先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください"))}</div>`}
+      <div class="modal-actions"><button class="btn" id="fbr-c" type="button">${esc(rs.length ? t("キャンセル") : t("閉じる"))}</button>
+        ${rs.length ? `<button class="btn primary" id="fbr-ok" type="button">${esc(t("Excel を選ぶ…"))}</button>` : ""}</div></div></div>`);
+    document.body.appendChild(ov);
+    const close = v => { ov.remove(); res(v); };
+    ov.querySelector("#fbr-c").onclick = () => close("");
+    const ok = ov.querySelector("#fbr-ok");
+    if (ok) { ok.onclick = () => close(ov.querySelector("#fbr-sel").value); ok.focus(); }
+    ov.addEventListener("keydown", e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(""); } });
+  });
+}
+
 // fillEditorBand builds the 変数 band of the set editor for the saved
-// set named name (null for a new set), into box. api: { insert(text),
-// repeat(), commands() } from the editor.
+// set named name (null for a new set), into box: shown while the set has
+// a linked list or a {{…}} in its commands. api: { insert(text),
+// commands(), linked(bool) } from the editor. Returns { changed(), link() }.
 function fillEditorBand(box, name, api) {
   let devSel = "";
   let seq = 0;
+  const cur = () => { const cs = name ? (INV.commandSets || []).find(s => s.name === name) : null; return cs && cs.fill; };
+  const link = async () => {
+    const f = cur();
+    const id = await fillPickRule(f && f.ruleId);
+    if (id) fillLinkDialog(id, name, () => draw());
+  };
   const draw = () => {
-    const cs = name ? (INV.commandSets || []).find(s => s.name === name) : null;
-    const f = cs && cs.fill;
-    const rules = fillRules();
+    const f = cur();
+    if (api.linked) api.linked(!!f);
     const has = setHasFill(api.commands());
-    if (!f && !rules.length && !has) { box.innerHTML = ""; return; }
+    if (!f && !has) { box.innerHTML = ""; return; }
     const items = f ? f.items || [] : [];
     const devs = f ? (f.devices || []).map(d => d.name) : [];
     if (!devs.includes(devSel)) devSel = devs[0] || "";
     box.innerHTML = `<div class="fill-band">
       <div class="row-inline" style="gap:8px;flex-wrap:wrap;align-items:center">
-        <b>${esc(t("変数の一覧"))}</b>${hintI(t("コマンドに {{項目名}} と書いた所が、実行のとき、この一覧の機器ごとの値に置き換わります。読み込んだ値はセットと一緒に保存されます"))}
+        <b>${esc(t("変数の値（機器ごと）"))}</b>${hintI(t("コマンドに {{変数名}} と書いた所が、実行のとき、読み込んだ一覧の機器ごとの値に置き換わります。読み込んだ値はセットと一緒に保存されます"))}
         ${f ? `<span class="fill-file">📄 ${esc(f.file)}</span>
           <span class="muted" style="font-size:12px">${esc(t("ルール「{r}」・{n} 台分・{d} に読み込み", { r: f.rule, n: (f.devices || []).length, d: f.read }))}</span>
-          <button class="btn sm" type="button" id="fb-reread" data-tip="${esc(f.path)}">${esc(t("読み直す"))}</button>
-          <button class="btn sm" type="button" id="fb-other">${esc(t("別のファイルにする…"))}</button>
+          <button class="btn sm" type="button" id="fb-reread" data-tip="${esc(f.path)}">${esc(t("Excel を読み直す"))}</button>
+          <button class="btn sm" type="button" id="fb-other">${esc(t("別の Excel にする…"))}</button>
           <button class="btn sm" type="button" id="fb-unlink">${esc(t("✕ 外す"))}</button>`
-        : name ? `<span class="muted" style="font-size:12px">${esc(t("なし"))}</span>
-          ${rules.length ? `<button class="btn sm" type="button" id="fb-link">${esc(t("変数の一覧を紐づける…"))}</button>` : `<span class="muted" style="font-size:12px">${esc(t("（先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください）"))}</span>`}`
-        : `<span class="muted" style="font-size:12px">${esc(t("セットを保存したあとで紐づけられます"))}</span>`}
+        : `<span class="muted" style="font-size:12px">${esc(name ? t("まだ読み込んでいません（右上の「＋ Excel から変数の値を読み込む…」から）") : t("セットを保存したあとで、Excel から読み込めます"))}</span>`}
       </div>
-      ${f || has ? `<div class="row-inline" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      ${items.length ? `<div class="row-inline" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <span class="muted" style="font-size:12px">${esc(t("変数（押すとカーソルの位置に入ります）:"))}</span>
         ${items.map(n => `<button class="fill-chip btn-chip" type="button" data-fbins="${esc(n)}">{{${esc(n)}}}</button>`).join("")}
-        <button class="btn sm" type="button" id="fb-repeat" data-tip="${esc(t("選んだ行（テキストでは選んだ範囲の行）を {{#each}} と {{/each}} で囲みます。その間は、一覧にあるその機器の行の数だけ繰り返して送ります"))}">${esc(t("🔁 選んだ行を繰り返しにする"))}</button>
       </div>` : ""}
-      ${f && setHasFill(api.commands()) ? `<div class="row-inline" style="gap:8px;align-items:center;margin-top:10px">
+      ${f && has ? `<div class="row-inline" style="gap:8px;align-items:center;margin-top:10px">
         <span class="section-label" style="margin:0">${esc(t("機器ごとの中身:"))}</span>
         <select id="fb-dev" data-guard-skip class="btn" style="padding-right:8px;max-width:260px">${devs.map(d => `<option value="${esc(d)}" ${d === devSel ? "selected" : ""}>${esc(d)}</option>`).join("")}</select></div>
         <div id="fb-prev" class="fill-prev mono"></div>` : ""}
@@ -509,31 +725,15 @@ function fillEditorBand(box, name, api) {
       b.onmousedown = e => e.preventDefault(); // the command box keeps the focus
       b.onclick = () => api.insert("{{" + b.dataset.fbins + "}}");
     });
-    const rep = box.querySelector("#fb-repeat");
-    if (rep) { rep.onmousedown = e => e.preventDefault(); rep.onclick = () => api.repeat(); }
     const re = box.querySelector("#fb-reread");
     if (re) re.onclick = async () => {
       try { await App().RereadFillList(name); await refreshInventory(); draw(); toast(t("読み直しました"), "ok"); }
       catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
     };
-    const pickRule = async () => {
-      const rs = fillRules();
-      if (rs.length === 1) return rs[0].id;
-      return await new Promise(res => {
-        const ov = h(`<div class="sub-overlay"><div class="sub-modal"><h3>${esc(t("変数ルールを選ぶ"))}</h3>
-          <select id="fbr-sel" style="width:100%">${rs.map(r => `<option value="${esc(r.id)}" ${f && f.ruleId === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select>
-          <div class="modal-actions"><button class="btn" id="fbr-c">${esc(t("キャンセル"))}</button><button class="btn primary" id="fbr-ok">${esc(t("ファイルを選ぶ…"))}</button></div></div></div>`);
-        document.body.appendChild(ov);
-        ov.querySelector("#fbr-c").onclick = () => { ov.remove(); res(""); };
-        ov.querySelector("#fbr-ok").onclick = () => { const v = ov.querySelector("#fbr-sel").value; ov.remove(); res(v); };
-      });
-    };
-    const link = async () => { const id = await pickRule(); if (id) fillLinkDialog(id, name, () => draw()); };
-    const lk = box.querySelector("#fb-link"); if (lk) lk.onclick = link;
     const ot = box.querySelector("#fb-other"); if (ot) ot.onclick = link;
     const un = box.querySelector("#fb-unlink");
     if (un) un.onclick = async () => {
-      if (!(await subConfirm(esc(t("変数の一覧の紐づけを外しますか？読み込んだ値も消えます（コマンドはそのまま残ります）")), t("外す")))) return;
+      if (!(await subConfirm(esc(t("読み込んだ Excel を外しますか？読み込んだ値も消えます（コマンドはそのまま残ります）")), t("外す")))) return;
       try { await App().UnlinkFillList(name); await refreshInventory(); draw(); }
       catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
     };
@@ -557,10 +757,11 @@ function fillEditorBand(box, name, api) {
   // {{…}} is typed, and the preview follows.
   return {
     changed: () => {
-      const had = !!box.querySelector("#fb-repeat"), has = setHasFill(api.commands());
-      if (had !== has || !!box.querySelector("#fb-prev") !== has) { draw(); return; }
+      const has = setHasFill(api.commands()), shown = !!box.firstElementChild;
+      if ((has || !!cur()) !== shown || !!box.querySelector("#fb-prev") !== (has && !!cur())) { draw(); return; }
       clearTimeout(timer); timer = setTimeout(preview, 300);
     },
+    link,
   };
 }
 

@@ -2086,8 +2086,17 @@ func checkCommandSet(cs *model.CommandSet) error {
 	if err := model.CheckCommands(cs.Commands); err != nil {
 		return err
 	}
+	if cs.Default != nil {
+		cs.Default.Wait = strings.TrimSpace(cs.Default.Wait)
+		if err := model.CheckCommandText(cs.Default.Wait); err != nil {
+			return fmt.Errorf("全行の待ち方の待つ文字列に%w", err)
+		}
+	}
 	if cs.PauseOff {
 		return nil
+	}
+	if d := cs.Default; d != nil && (d.PauseSec < 0 || d.SerialSec < 0) {
+		return fmt.Errorf("全行の待ち方の秒がマイナスです（0 以上で指定してください）")
 	}
 	return model.CheckCommandPauses(cs.Commands)
 }
@@ -2236,6 +2245,10 @@ func (a *App) CopyCommandSet(name string) (string, error) {
 	dup := *src
 	dup.Name = newName
 	dup.Commands = append([]model.Command(nil), src.Commands...)
+	if src.Default != nil {
+		d := *src.Default
+		dup.Default = &d
+	}
 	dup.Fill = src.Fill.Clone()
 	snap := a.snapshotLocked()
 	a.inv.CommandSets = append(a.inv.CommandSets, dup)
@@ -4129,7 +4142,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.10.3"
+const appVersion = "1.10.4"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

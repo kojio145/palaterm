@@ -154,6 +154,9 @@ type Options struct {
 	Decisions map[int]Decision // by Row.ID (the line number for a line's first device)
 }
 
+// NormName is normName for the variable rules' device names.
+func NormName(s string, m model.ImportMatch) string { return normName(s, m) }
+
 // normName makes two names comparable per the rule's match settings.
 func normName(s string, m model.ImportMatch) string {
 	s = strings.TrimSpace(s)

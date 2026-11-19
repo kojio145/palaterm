@@ -25,3 +25,41 @@ func TestCheckCommandSetRefusesNegativeWait(t *testing.T) {
 		t.Errorf("0 must pass: %v", err)
 	}
 }
+
+// 全行の待ち方 is checked as a line's wait is (a negative second refused
+// while the waits are used) and is kept by a save and a copy.
+func TestCommandSetDefaultWait(t *testing.T) {
+	cmds := []model.Command{{Text: "show clock", Wait: "#"}}
+	neg := model.CommandSet{Name: "lab-show", Commands: cmds, Default: &model.WaitDefault{Wait: "#", PauseSec: -1}}
+	if err := checkCommandSet(&neg); err == nil || !strings.Contains(err.Error(), "全行の待ち方の秒がマイナス") {
+		t.Errorf("a negative default must be refused: %v", err)
+	}
+	neg.PauseOff = true
+	if err := checkCommandSet(&neg); err != nil {
+		t.Errorf("waits off: the default seconds are not used: %v", err)
+	}
+	bad := model.CommandSet{Name: "lab-show", Commands: cmds, Default: &model.WaitDefault{Wait: "a\nb"}}
+	if err := checkCommandSet(&bad); err == nil || !strings.Contains(err.Error(), "全行の待ち方の待つ文字列に") {
+		t.Errorf("a line break in the default wait must be refused: %v", err)
+	}
+
+	a := newTestApp(t)
+	if err := a.CreateVault("master"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.CreateCommandSet(model.CommandSet{Name: "lab-show", Commands: cmds, Default: &model.WaitDefault{Wait: " # ", PauseSec: 0, SerialSec: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	nm, err := a.CopyCommandSet("lab-show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cs := range a.GetInventory().CommandSets {
+		if cs.Name != "lab-show" && cs.Name != nm {
+			continue
+		}
+		if cs.Default == nil || *cs.Default != (model.WaitDefault{Wait: "#", PauseSec: 0, SerialSec: 2}) {
+			t.Errorf("%s: default = %+v", cs.Name, cs.Default)
+		}
+	}
+}
