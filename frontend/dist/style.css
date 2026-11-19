@@ -40,14 +40,14 @@ html, body {
 /* ---- Layout ---- */
 .app { display: flex; height: 100%; }
 .sidebar {
-  width: 180px; background: var(--bg-2); border-right: 1px solid var(--border);
+  width: 190px; background: var(--bg-2); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 16px 10px; gap: 4px;
 }
 .side-brand { font-size: 22px; font-weight: 700; padding: 6px 10px 18px; }
 .side-spacer { flex: 1; }
 .nav-btn {
   text-align: left; background: transparent; color: var(--text-dim);
-  border: none; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+  border: none; padding: 10px 10px; border-radius: 8px; cursor: pointer;
   font-size: 14px; transition: .15s;
 }
 .nav-btn:hover { background: var(--bg-3); color: var(--text); }
@@ -72,10 +72,17 @@ html, body {
 .content { flex: 1; overflow: auto; padding: 24px 28px; }
 /* A laptop screen (the window may now be 960×540): a narrower side bar and
    margins, and the side bar scrolls rather than pushing its last buttons
-   off the bottom. */
+   off the bottom. The longest menu name (コマンドセット一覧, v1.10.1) stays
+   on one line down to 760px; below that it may wrap. */
 .sidebar { overflow-y: auto; }
+/* A thin scrollbar there, so a short window does not lose 16px of the menu
+   names' room to it (v1.10.2). */
+.sidebar::-webkit-scrollbar { width: 6px; }
+.sidebar::-webkit-scrollbar-thumb { background: #3a4656; border-radius: 3px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
 @media (max-width: 1099px) {
-  .sidebar { width: 150px; padding: 12px 8px; }
+  .sidebar { width: 164px; padding: 12px 8px; }
+  .nav-btn { padding: 10px 8px; font-size: 13px; }
   .side-brand { font-size: 19px; padding: 4px 8px 12px; }
   .content { padding: 16px 16px; }
 }
@@ -91,7 +98,7 @@ html, body {
   .page-title { font-size: 17px; }
 }
 @media (max-height: 720px) {
-  .nav-btn { padding: 7px 12px; }
+  .nav-btn { padding-top: 7px; padding-bottom: 7px; }
   .nav-group { margin-top: 10px; padding-top: 10px; }
   .side-brand { padding-bottom: 10px; }
   .content { padding-top: 14px; padding-bottom: 14px; }
@@ -415,6 +422,11 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
    taller, so the side bar scrolls sooner and its scrollbar takes 16px —
    the zoom bar must fit in the 96px left. After the rules above, which
    would else win over the narrow-window block at the top of the file. */
+/* A short window scrolls the side bar, and its 16px scrollbar would push
+   the longest menu name onto a second line: 16px more for it (v1.10.2). */
+@media (max-width: 1099px) and (min-width: 760px) and (max-height: 720px) {
+  .sidebar { width: 180px; }
+}
 @media (max-width: 759px) {
   .zoom-bar { gap: 2px; margin: 2px 0 4px; }
   .zoom-bar .btn.sm { padding: 3px 5px; font-size: 12px; }
