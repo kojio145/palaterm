@@ -155,12 +155,53 @@ func FillNames(cmds []Command) []FillName {
 	return out
 }
 
+// HasFillEach reports whether a set has a {{#each}} block.
+func HasFillEach(cmds []Command) bool {
+	lines, err := parseFill(cmds)
+	if err != nil {
+		return false
+	}
+	for _, l := range lines {
+		if l.marker == "#" {
+			return true
+		}
+	}
+	return false
+}
+
+// fillValue is the row's value of a name: the name as written, else the
+// one that differs only in case ({{nh}} takes NH's — a rule's names differ
+// by more than case, so at most one does).
+func fillValue(row map[string]string, name string) string {
+	if v, ok := row[name]; ok {
+		return v
+	}
+	for k, v := range row {
+		if strings.EqualFold(k, name) {
+			return v
+		}
+	}
+	return ""
+}
+
+func fillSkips(skip map[string]bool, name string) bool {
+	if skip[name] {
+		return true
+	}
+	for k, on := range skip {
+		if on && strings.EqualFold(k, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExpandFill is the set as one device runs it: rows are the device's rows
 // of the list (name → value). The block goes out once per row; outside it
 // a name takes the first row's value. A value that is empty stops the
 // device, unless written {{name?}} or named in skip (the rule's 「空なら
 // その行を送らない」): then its line is left out. The markers themselves
-// are not sent.
+// are not sent. Names are matched whatever their case.
 func ExpandFill(cmds []Command, rows []map[string]string, skip map[string]bool) ([]Command, error) {
 	lines, err := parseFill(cmds)
 	if err != nil {
@@ -180,9 +221,9 @@ func ExpandFill(cmds []Command, rows []map[string]string, skip map[string]bool) 
 		leave := false
 		c.Text = fillRe.ReplaceAllStringFunc(c.Text, func(s string) string {
 			m := fillRe.FindStringSubmatch(s)
-			v := strings.TrimSpace(row[m[2]])
+			v := strings.TrimSpace(fillValue(row, m[2]))
 			if v == "" {
-				if m[3] != "" || skip[m[2]] {
+				if m[3] != "" || fillSkips(skip, m[2]) {
 					leave = true
 				} else if ferr == nil {
 					ferr = fmt.Errorf("「%s」の値が空です", m[2])

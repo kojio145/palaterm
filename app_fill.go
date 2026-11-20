@@ -149,10 +149,10 @@ func (a *App) ImportFillRuleFile() (string, error) {
 	defer recoverBound(a.ctx, "ImportFillRuleFile")
 	_ = os.MkdirAll(fillRulesDir(), 0o700)
 	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title:            a.word("変数ルールを読み込む", "Load a fill-in rule"),
+		Title:            a.word("変数ルールを読み込む", "Load a variable rule"),
 		DefaultDirectory: dialogDir(fillRulesDir()),
 		Filters: []runtime.FileFilter{
-			{DisplayName: a.word("変数ルール (*.json)", "Fill-in rule (*.json)"), Pattern: "*.json"},
+			{DisplayName: a.word("変数ルール (*.json)", "Variable rule (*.json)"), Pattern: "*.json"},
 		},
 	})
 	if err != nil || path == "" {
@@ -536,10 +536,18 @@ func (a *App) ReadFillList(path, ruleID string) (*FillListRead, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &FillListRead{File: rd.Fill.File, Rule: r.Name, Items: rd.Fill.Items, Rows: rd.Rows, Devices: len(rd.Fill.Devices),
+	return a.fillListRead(rd, r.Name), nil
+}
+
+// fillListRead is what a read of a list holds, for the page.
+func (a *App) fillListRead(rd *fillRead, rule string) *FillListRead {
+	out := &FillListRead{File: rd.Fill.File, Rule: rule, Items: rd.Fill.Items, Rows: rd.Rows, Devices: len(rd.Fill.Devices),
 		Unknown: []string{}, Missing: rd.Missing, Warnings: rd.Warnings}
 	if out.Missing == nil {
 		out.Missing = []string{}
+	}
+	if out.Warnings == nil {
+		out.Warnings = []string{}
 	}
 	a.mu.Lock()
 	known := map[string]bool{}
@@ -556,7 +564,7 @@ func (a *App) ReadFillList(path, ruleID string) (*FillListRead, error) {
 			out.Unknown = append(out.Unknown, d.Name)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // FillLinkReq links a picked list to a set: a new one (New, named Set) or
@@ -618,13 +626,13 @@ func (a *App) LinkFillList(req FillLinkReq) error {
 }
 
 // RereadFillList reads a set's linked list again, from where it was, with
-// its rule as it is now.
-func (a *App) RereadFillList(set string) error {
+// its rule as it is now, and returns what it read (as ReadFillList does).
+func (a *App) RereadFillList(set string) (*FillListRead, error) {
 	defer recoverBound(a.ctx, "RereadFillList")
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return errVaultLocked
+		return nil, errVaultLocked
 	}
 	var fill *model.SetFill
 	for i := range a.inv.CommandSets {
@@ -634,20 +642,20 @@ func (a *App) RereadFillList(set string) error {
 	}
 	a.mu.Unlock()
 	if fill == nil {
-		return fmt.Errorf("このコマンドセットには変数の一覧が紐づいていません")
+		return nil, fmt.Errorf("このコマンドセットは一覧ファイルを読み込んでいません")
 	}
 	r, err := a.fillRuleCopy(fill.RuleID)
 	if err != nil {
-		return fmt.Errorf("変数ルール「%s」が見つかりません（削除されました）。「別のファイルにする…」でルールを選び直してください", fill.Rule)
+		return nil, fmt.Errorf("変数ルール「%s」が見つかりません（削除されました）。「別の一覧ファイルにする…」でルールを選び直してください", fill.Rule)
 	}
 	rd, err := a.readFillFile(fill.Path, &r, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	a.mu.Lock()
 	if a.inv == nil {
 		a.mu.Unlock()
-		return errVaultLocked
+		return nil, errVaultLocked
 	}
 	snap := a.snapshotLocked()
 	found := false
@@ -659,9 +667,12 @@ func (a *App) RereadFillList(set string) error {
 	}
 	a.mu.Unlock()
 	if !found {
-		return fmt.Errorf("コマンドセット「%s」が見つかりません", set)
+		return nil, fmt.Errorf("コマンドセット「%s」が見つかりません", set)
 	}
-	return a.persistOr(snap, nil)
+	if err := a.persistOr(snap, nil); err != nil {
+		return nil, err
+	}
+	return a.fillListRead(rd, r.Name), nil
 }
 
 // UnlinkFillList drops a set's linked list and its values.
@@ -712,6 +723,9 @@ type FillDevicePreview struct {
 	Values   []string `json:"values,omitempty"` // "名前=値" of the first row
 	Commands []string `json:"commands,omitempty"`
 	Error    string   `json:"error,omitempty"`
+	// Notes are what the user should know of a device that does run: a
+	// {{name?}} the list has no such name for, rows that are not used.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // PreviewFill fills in each device of a run request.
@@ -764,18 +778,42 @@ func fillDevice(cs *model.CommandSet, device string) FillDevicePreview {
 	}
 	fd.Set, fd.Fill = cs.Name, true
 	if cs.Fill == nil {
-		fd.Error = "変数の一覧が紐づいていません"
+		fd.Error = "一覧ファイルを読み込んでいません"
 		return fd
 	}
 	fd.File = cs.Fill.File
 	rows := cs.Fill.RowsFor(device)
 	fd.Rows = len(rows)
 	if rows == nil {
-		fd.Error = "変数の一覧にこの機器の行がありません"
+		fd.Error = "一覧ファイルにこの機器の行がありません"
 		return fd
 	}
 	for _, n := range cs.Fill.Items {
 		fd.Values = append(fd.Values, n+"="+rows[0][n])
+	}
+	// A name the list does not have is most often a slip of the hand: said
+	// by name, not as an empty value. Written {{name?}} its line is left out
+	// as it always was, with a note.
+	var unknown, left []string
+	for _, n := range model.FillNames(cs.Commands) {
+		if fillHasItem(cs.Fill, n.Name) {
+			continue
+		}
+		if n.Optional {
+			left = append(left, n.Name)
+		} else {
+			unknown = append(unknown, n.Name)
+		}
+	}
+	if len(unknown) > 0 {
+		fd.Error = fmt.Sprintf("「%s」という変数はありません（読み込んだ変数: %s）", strings.Join(unknown, "」「"), strings.Join(cs.Fill.Items, "、"))
+		return fd
+	}
+	if len(left) > 0 {
+		fd.Notes = append(fd.Notes, fmt.Sprintf("「%s」という変数はありません（その行は送りません）", strings.Join(left, "」「")))
+	}
+	if len(rows) > 1 && !model.HasFillEach(cs.Commands) {
+		fd.Notes = append(fd.Notes, fmt.Sprintf("一覧ファイルにこの機器の行が %d 行あります（1 行目の値だけ使います）", len(rows)))
 	}
 	cmds, err := expandFor(cs, rows)
 	if err != nil {
@@ -786,6 +824,17 @@ func fillDevice(cs *model.CommandSet, device string) FillDevicePreview {
 		fd.Commands = append(fd.Commands, c.Text)
 	}
 	return fd
+}
+
+// fillHasItem reports whether the list has a value by that name (whatever
+// its case, as ExpandFill reads it).
+func fillHasItem(f *model.SetFill, name string) bool {
+	for _, it := range f.Items {
+		if strings.EqualFold(it, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func setNamed(inv *model.Inventory, name string) *model.CommandSet {

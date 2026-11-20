@@ -106,6 +106,22 @@ func startExplorer(args ...string) error {
 	return exec.Command("explorer", args...).Start()
 }
 
+// showInExplorer opens the file's folder in Explorer with the file
+// selected. Explorer reads its own command line (/select,"path"), so the
+// line is given as it is, not as arguments Go would quote.
+func showInExplorer(path string) error {
+	const createBreakawayFromJob = 0x01000000
+	line := `explorer.exe /select,"` + path + `"`
+	cmd := exec.Command("explorer")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createBreakawayFromJob, CmdLine: line}
+	if err := cmd.Start(); err == nil {
+		return nil
+	}
+	cmd = exec.Command("explorer")
+	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: line}
+	return cmd.Start()
+}
+
 // isChildProcess reports whether this process is one of the child windows
 // (started with --connect / --view / --diff / --paste), not the main one.
 func isChildProcess() bool {

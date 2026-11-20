@@ -21,14 +21,14 @@ function renderUpdate() {
       ${i && !i.newer ? `<div class="upd-ok">${esc(t("お使いの版は最新です"))}</div>` : ""}
       ${i && i.newer ? `<div class="upd-new">
         <div style="font-size:15px;font-weight:600">${esc(t("新しい版があります（v{c} → v{v}）", { c: i.current, v: i.latest }))}</div>
-        ${!UPD.path ? (i.hasExe ? `<div class="muted" style="font-size:12px;margin:4px 0 10px">${esc(t("最新版の PalaTerm.exe を、この PC の「ダウンロード」フォルダに保存します（今の PalaTerm はそのまま動きます）"))}</div>
+        ${!UPD.path ? (i.hasExe ? `<div class="muted" style="font-size:12px;margin:4px 0 10px">${esc(t("最新版の PalaTerm.exe を {d} に保存します（今の PalaTerm はそのまま動きます）", { d: i.saveDir || t("この PC の「ダウンロード」フォルダ") }))}</div>
           <button class="btn run upd-big" id="upd-dl" ${UPD.busy ? "disabled" : ""}>${esc(UPD.busy === "dl" ? t("ダウンロード中…") : t("⬇ 最新版をダウンロード（{m} MB）", { m: (i.exeSize / 1048576).toFixed(1) }))}</button>`
           : `<div class="muted" style="font-size:12px;margin-top:4px">${esc(t("最新版に PalaTerm.exe が添付されていません。マニュアルのページから入手してください"))}</div>`)
         : `<div style="margin-top:8px;line-height:1.9">✓ ${esc(t("ダウンロードしました: {p}", { p: UPD.path }))}</div>
           <div class="section-label" style="margin:10px 0 4px">${esc(t("あとの手順"))}</div>
           <ol class="upd-steps">
-            <li>${esc(t("PalaTerm を閉じます（トレイにいるときは、トレイのアイコンの右クリック → 終了）"))}</li>
-            <li>${esc(t("今の PalaTerm.exe があるフォルダの PalaTerm.exe を、ダウンロードしたファイルで置き換えます（名前を PalaTerm.exe に変えます）"))}</li>
+            <li>${esc(t("PalaTerm の窓をすべて閉じます（対話接続の窓も。トレイにいるときは、トレイのアイコンの右クリック → 終了）"))}</li>
+            <li>${esc(t("ダウンロードしたファイルの名前を PalaTerm.exe に変えて、今の PalaTerm.exe に上書きします"))}</li>
             <li>${esc(t("PalaTerm.exe を起動します。データ（data・logs などのフォルダ）はそのまま使えます"))}</li>
           </ol>
           <div class="row-inline" style="gap:8px;margin-top:8px;flex-wrap:wrap">
@@ -49,9 +49,13 @@ function renderUpdate() {
     </div>`;
   const q = s => root.querySelector(s);
   q("#upd-check").onclick = async () => {
+    const was = UPD;
     UPD = { info: null, busy: "check", error: "", path: "" };
     renderUpdate();
     try { UPD.info = await App().CheckLatestVersion(); } catch (e) { UPD.error = terr(e); }
+    // The exe downloaded before this check is still the latest: its steps
+    // stay on the page.
+    if (UPD.info && was.info && was.path && UPD.info.latest === was.info.latest) UPD.path = was.path;
     UPD.busy = "";
     renderUpdate();
   };
@@ -60,8 +64,9 @@ function renderUpdate() {
     const i = UPD.info;
     const ok = await uiConfirm({
       title: t("最新版のダウンロード"),
-      message: t("PalaTerm v{v} の PalaTerm.exe（{m} MB）を GitHub の公開リリースからダウンロードして、この PC の「ダウンロード」フォルダに保存します。よろしいですか？", { v: esc(i.latest), m: (i.exeSize / 1048576).toFixed(1) })
-        + `<br><span class="muted" style="font-size:12px">${esc(t("保存したファイルは、リリースに登録された SHA-256 と照合します。今の PalaTerm は置き換えず、起動もしません"))}</span>`,
+      message: t("PalaTerm v{v} の PalaTerm.exe（{m} MB）を GitHub の公開リリースからダウンロードして、{d} に保存します。よろしいですか？", { v: esc(i.latest), m: (i.exeSize / 1048576).toFixed(1), d: esc(i.saveDir || t("この PC の「ダウンロード」フォルダ")) })
+        + `<br><span class="muted" style="font-size:12px">${esc(i.hasDigest ? t("保存したファイルは、リリースに登録された SHA-256 と照合します。今の PalaTerm は置き換えず、起動もしません")
+          : t("このリリースには SHA-256 の登録がないため、保存したファイルは大きさだけ照合します。今の PalaTerm は置き換えず、起動もしません"))}</span>`,
       okLabel: t("ダウンロードする"),
     });
     if (!ok) return;

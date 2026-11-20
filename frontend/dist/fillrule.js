@@ -14,6 +14,26 @@ function setHasFill(cmds) { return (cmds || []).some(c => fillMatches(c.text).le
 // A line that is a repeat marker (shown in the repeat colour). No /g: test
 // keeps no position.
 const FILL_MARK_RE = /^\s*\{\{\s*[#/]each\s*\}\}\s*$/;
+// fillUnknownNames are the {{name}}s of a set's commands that the list it
+// read does not have (the letters' case does not count, as in the run).
+function fillUnknownNames(cs) {
+  const have = new Set(((cs.fill && cs.fill.items) || []).map(n => n.toLowerCase()));
+  const out = [];
+  (cs.commands || []).forEach(c => fillMatches(c.text).forEach(m => {
+    if (m[1] || have.has(m[2].toLowerCase()) || out.includes(m[2])) return;
+    out.push(m[2]);
+  }));
+  return out;
+}
+// fillReadNotes is what a list just read has to say (the dialog and 読み直す
+// say it the same way): the devices PalaTerm does not have, the columns
+// the file lacks, the reader's own warnings.
+function fillReadNotes(info) {
+  const un = info.unknown || [], more = (info.devices || 0) - (info.known || 0);
+  return `${un.length ? `<div class="warn-box" style="margin-top:10px">${esc(t("PalaTerm に登録のない機器名が {n} 台あります（その行は使いません）: {list}", { n: more, list: un.join(", ") + (more > un.length ? " …" : "") }))}</div>` : ""}
+    ${(info.missing || []).length ? `<div class="warn-box err">${esc(t("ファイルに無い列: {c}（その変数は空になります）", { c: info.missing.join(t("、")) }))}</div>` : ""}
+    ${(info.warnings || []).length ? `<div class="warn-box">${info.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}`;
+}
 function fillChip(name) { return `<span class="fill-chip">{{${esc(name)}}}</span>`; }
 function fillRules() { return INV.fillRules || []; }
 function fillRule(id) { return fillRules().find(r => r.id === id); }
@@ -65,7 +85,7 @@ function frRenderList(root) {
           <td><div class="clip">${(r.items || []).map(i => fillChip(i.name)).join(" ")}</div></td>
           <td class="muted" style="font-size:12px"><div class="clip">${esc(frWhere(r))}</div></td>
           <td class="ops"><div class="ops-btns">
-            <button class="btn sm primary" data-frread="${esc(r.id)}" data-tip="${esc(t("このルールで一覧ファイルを読み込み、コマンドセットに紐づけます"))}">${esc(t("このルールで一覧を読み込む…"))}</button>
+            <button class="btn sm primary" data-frread="${esc(r.id)}" data-tip="${esc(t("このルールで一覧ファイルを読み込み、コマンドセットに変数の値を入れます"))}">${esc(t("このルールで一覧ファイルを読み込む…"))}</button>
             <button class="btn sm act-edit" data-fredit="${esc(r.id)}">${esc(t("編集"))}</button>
             <button class="btn sm act-copy" data-frcopy="${esc(r.id)}">${esc(t("複製"))}</button>
             <button class="btn sm" data-frexp="${esc(r.id)}" data-tip="${esc(t("export\\fill-rules\\ に書き出します"))}">${esc(t("書き出し"))}</button>
@@ -294,7 +314,7 @@ function frGridHTML() {
     for (let c = 1; c <= nc; c++) html += `<td class="${c < c1 || c > c2 ? "out" : ""}">${esc(row[c - 1] || "")}</td>`;
     html += `</tr>`;
   });
-  const cut = (test.cols || 0) > nc ? `<span class="li-warntxt">${esc(t("先頭 {n} 列まで表示しています（ほか {m} 列。下の紐付けではすべての列を選べます）", { n: nc, m: test.cols - nc }))}</span>` : "";
+  const cut = (test.cols || 0) > nc ? `<span class="li-warntxt">${esc(t("先頭 {n} 列まで表示しています（ほか {m} 列。下の「変数と列の対応」ではすべての列を選べます）", { n: nc, m: test.cols - nc }))}</span>` : "";
   return html + `</tbody></table></div>
     <div class="li-legend">${cut}<span><i class="h"></i>${esc(t("見出しの行"))}</span><span><i class="v"></i>${esc(t("読み取る値"))}</span><span><i class="out"></i>${esc(t("表の外（読まない）"))}</span></div>`;
 }
@@ -404,7 +424,7 @@ function frRenderEdit(root) {
           <td class="muted" style="font-size:12px">${esc(t("空の行は、上の機器の続きになります"))}</td><td class="li-res" data-frval="">${frValHTML(s, "")}</td>
           ${units.map((un, u) => unitKeyCell(u)).join("")}<td></td></tr>
         ${r.items.map((it, i) => `<tr>
-          <td><input type="text" data-frname="${i}" value="${esc(it.name)}" placeholder="${esc(t("例: NH"))}" maxlength="64" style="width:100%" data-guard-skip></td>
+          <td><input type="text" data-frname="${i}" value="${esc(it.name)}" placeholder="${esc(t("例: gateway"))}" maxlength="64" style="width:100%" data-guard-skip></td>
           <td>${frSrcHTML(`i:${i}`, it, "", true)}</td>
           <td>${frSteps(it, `i:${i}`)}</td>
           <td><select data-frempty="${i}" data-guard-skip>
@@ -593,9 +613,9 @@ async function frSave() {
 
 // ---- reading a list with a rule: links it to a set ----
 
-// fillLinkDialog picks a list, reads it with the rule and links it to a
-// new set or an existing one. set: an existing set to link to (the set
-// editor's 紐づける / 別のファイルにする); then done() runs after the link.
+// fillLinkDialog picks a list, reads it with the rule and puts its values
+// into a new set or an existing one. set: the set to read into (the set
+// editor's 読み込む / 別の一覧ファイルにする); then done() runs after it.
 async function fillLinkDialog(ruleId, set, done) {
   const rule = fillRule(ruleId);
   if (!rule) return;
@@ -607,24 +627,22 @@ async function fillLinkDialog(ruleId, set, done) {
   catch (e) { App().ForgetListFile().catch(() => {}); toast(t("読み込み失敗") + ": " + terr(e), "err"); return; }
   const sets = (INV.commandSets || []).map(s => s.name);
   const node = h(`<div>
-    <h3>${esc(set ? t("Excel から変数の値を読み込む") : t("ファイルを読み込んでコマンドセットを作る"))}</h3>
+    <h3>${esc(set ? t("一覧ファイルから変数の値を読み込む") : t("一覧ファイルを読み込んでコマンドセットを作る"))}</h3>
     <div class="fl-kv">
-      <label>${esc(t("使うルール"))}</label><b>${esc(rule.name)}</b>
-      <label>${esc(t("ファイル"))}</label><div><span class="fill-file">📄 ${esc(info.file)}</span></div>
+      <label>${esc(t("変数ルール"))}</label><b>${esc(rule.name)}</b>
+      <label>${esc(t("一覧ファイル"))}</label><div><span class="fill-file">📄 ${esc(info.file)}</span></div>
       <label>${esc(t("読み取り結果"))}</label><div>${esc(t("機器 {d} 台・{n} 行", { d: info.devices, n: info.rows }))}　${(info.items || []).map(fillChip).join(" ")}</div>
     </div>
-    ${info.unknown.length ? `<div class="warn-box" style="margin-top:10px">${esc(t("PalaTerm に登録のない機器名が {n} 台あります（その行は使いません）: {list}", { n: info.devices - info.known, list: info.unknown.join(", ") + (info.devices - info.known > info.unknown.length ? " …" : "") }))}</div>` : ""}
-    ${(info.missing || []).length ? `<div class="warn-box err">${esc(t("ファイルに無い列: {c}（その変数は空になります）", { c: info.missing.join(t("、")) }))}</div>` : ""}
-    ${(info.warnings || []).length ? `<div class="warn-box">${info.warnings.map(w => esc(terr(w))).join("<br>")}</div>` : ""}
+    ${fillReadNotes(info)}
     ${set ? `<div class="fl-kv" style="margin-top:12px"><label>${esc(t("読み込むセット"))}</label><b>${esc(set)}</b></div>` : `
     <div class="fl-kv" style="margin-top:12px">
       <label>${esc(t("作り方"))}</label><div class="row-inline" style="gap:16px">
         <label style="display:flex;gap:6px;align-items:center;font-weight:normal"><input type="radio" name="fl-mode" value="new" checked style="width:auto"> ${esc(t("新しいコマンドセットを作る"))}</label>
-        <label style="display:flex;gap:6px;align-items:center;font-weight:normal"><input type="radio" name="fl-mode" value="old" ${sets.length ? "" : "disabled"} style="width:auto"> ${esc(t("既存のセットに紐づける"))}</label></div>
+        <label style="display:flex;gap:6px;align-items:center;font-weight:normal"><input type="radio" name="fl-mode" value="old" ${sets.length ? "" : "disabled"} style="width:auto"> ${esc(t("既存のセットに読み込む"))}</label></div>
       <label>${esc(t("セット名"))}</label><div><input type="text" id="fl-new" value="${esc(rule.name)}">
         <select id="fl-old" class="hidden" style="width:100%">${sets.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select></div>
     </div>`}
-    <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.8">${esc(t("読み込んだ値はコマンドセットと一緒に保存されます（暗号化して保存）。ファイルを直したときは「読み直す」で取り込み直せます"))}</div>
+    <div class="muted" style="font-size:12px;margin-top:12px;line-height:1.8">${esc(t("読み込んだ値はコマンドセットと一緒に保存されます（暗号化して保存）。ファイルを直したときは「一覧ファイルを読み直す」で取り込み直せます"))}${set ? `<br>${esc(t("この読み込みはすぐ保存されます（編集画面をキャンセルしても戻りません）"))}` : ""}</div>
     <div class="modal-actions"><button class="btn" id="fl-cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="fl-ok">${esc(set ? t("読み込む") : t("作って編集する"))}</button></div>
   </div>`);
@@ -639,7 +657,7 @@ async function fillLinkDialog(ruleId, set, done) {
     node.querySelector("#fl-new").classList.toggle("hidden", mode() !== "new");
     node.querySelector("#fl-old").classList.toggle("hidden", mode() === "new");
     const ok = node.querySelector("#fl-ok");
-    ok.textContent = mode() === "new" ? t("作って編集する") : t("紐づける");
+    ok.textContent = mode() === "new" ? t("作って編集する") : t("読み込む");
   });
   node.querySelector("#fl-cancel").onclick = close;
   node.querySelector("#fl-ok").onclick = async () => {
@@ -650,9 +668,11 @@ async function fillLinkDialog(ruleId, set, done) {
       await App().LinkFillList({ path, ruleId, set: name, new: isNew });
       close();
       await refreshInventory();
-      toast(set ? t("「{n}」に変数の値を読み込みました", { n: name }) : t("「{n}」に変数の一覧を紐づけました", { n: name }), "ok");
+      toast(t("「{n}」に変数の値を読み込みました", { n: name }), "ok");
       if (done) done();
-      else { frShow("sets"); editCommandSet((INV.commandSets || []).find(s => s.name === name)); }
+      // A set made here is saved already: its editor's キャンセル asks
+      // whether to keep it while it has no commands (fresh).
+      else { frShow("sets"); editCommandSet((INV.commandSets || []).find(s => s.name === name), null, isNew ? { fresh: true } : {}); }
     } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
   };
 }
@@ -665,13 +685,13 @@ async function fillLinkDialog(ruleId, set, done) {
 function fillPickRule(cur) {
   const rs = fillRules();
   return new Promise(res => {
-    const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(560px,94vw)"><h3>${esc(t("Excel から変数の値を読み込む"))}</h3>
-      <div style="font-size:13px;line-height:1.8;margin-bottom:12px">${esc(t("読み込むのは、機器ごとの値を並べた一覧（Excel・CSV）です。どの列をどの変数にするかは「取り込みルール」で決めます。使うルールを選んでから、ファイルを選んでください。"))}</div>
-      ${rs.length ? `<div class="field" style="margin:0"><label>${esc(t("取り込みルール"))}</label>
+    const ov = h(`<div class="sub-overlay"><div class="sub-modal" style="width:min(560px,94vw)"><h3>${esc(t("一覧ファイルから変数の値を読み込む"))}</h3>
+      <div style="font-size:13px;line-height:1.8;margin-bottom:12px">${esc(t("読み込むのは、機器ごとの値を並べた一覧ファイル（Excel・CSV）です。どの列をどの変数にするかは「変数ルール」で決めます。使うルールを選んでから、ファイルを選んでください。"))}</div>
+      ${rs.length ? `<div class="field" style="margin:0"><label>${esc(t("変数ルール"))}</label>
         <select id="fbr-sel" style="width:100%">${rs.map(r => `<option value="${esc(r.id)}" ${cur === r.id ? "selected" : ""}>${esc(r.name)}</option>`).join("")}</select></div>`
-      : `<div class="warn-box">${esc(t("取り込みルールがまだありません。先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください"))}</div>`}
+      : `<div class="warn-box">${esc(t("変数ルールがまだありません。先にコマンドセット一覧の「変数の取り込み設定」でルールを作ってください"))}</div>`}
       <div class="modal-actions"><button class="btn" id="fbr-c" type="button">${esc(rs.length ? t("キャンセル") : t("閉じる"))}</button>
-        ${rs.length ? `<button class="btn primary" id="fbr-ok" type="button">${esc(t("Excel を選ぶ…"))}</button>` : ""}</div></div></div>`);
+        ${rs.length ? `<button class="btn primary" id="fbr-ok" type="button">${esc(t("一覧ファイルを選ぶ…"))}</button>` : ""}</div></div></div>`);
     document.body.appendChild(ov);
     const close = v => { ov.remove(); res(v); };
     ov.querySelector("#fbr-c").onclick = () => close("");
@@ -683,19 +703,30 @@ function fillPickRule(cur) {
 
 // fillEditorBand builds the 変数 band of the set editor for the saved
 // set named name (null for a new set), into box: shown while the set has
-// a linked list or a {{…}} in its commands. api: { insert(text),
-// commands(), linked(bool) } from the editor. Returns { changed(), link() }.
+// read a list or has a {{…}} in its commands. api: { insert(text),
+// commands(), linked(bool), copy(), dropCopy() } from the editor; copy()
+// is { from, fill } while a new set is the 複製 of a set that read a list
+// (the values it will get on 保存, shown here; dropCopy() leaves them
+// out). Returns { changed(), link() }.
 function fillEditorBand(box, name, api) {
   let devSel = "";
   let seq = 0;
-  const cur = () => { const cs = name ? (INV.commandSets || []).find(s => s.name === name) : null; return cs && cs.fill; };
+  // What 読み直す read last (said in the band until another list is read).
+  let reread = null;
+  const copy = () => !name && api.copy ? api.copy() : null;
+  const cur = () => {
+    const cp = copy();
+    if (cp) return cp.fill;
+    const cs = name ? (INV.commandSets || []).find(s => s.name === name) : null;
+    return cs && cs.fill;
+  };
   const link = async () => {
     const f = cur();
     const id = await fillPickRule(f && f.ruleId);
-    if (id) fillLinkDialog(id, name, () => draw());
+    if (id) fillLinkDialog(id, name, () => { reread = null; draw(); });
   };
   const draw = () => {
-    const f = cur();
+    const f = cur(), cp = copy();
     if (api.linked) api.linked(!!f);
     const has = setHasFill(api.commands());
     if (!f && !has) { box.innerHTML = ""; return; }
@@ -707,11 +738,13 @@ function fillEditorBand(box, name, api) {
         <b>${esc(t("変数の値（機器ごと）"))}</b>${hintI(t("コマンドに {{変数名}} と書いた所が、実行のとき、読み込んだ一覧の機器ごとの値に置き換わります。読み込んだ値はセットと一緒に保存されます"))}
         ${f ? `<span class="fill-file">📄 ${esc(f.file)}</span>
           <span class="muted" style="font-size:12px">${esc(t("ルール「{r}」・{n} 台分・{d} に読み込み", { r: f.rule, n: (f.devices || []).length, d: f.read }))}</span>
-          <button class="btn sm" type="button" id="fb-reread" data-tip="${esc(f.path)}">${esc(t("Excel を読み直す"))}</button>
-          <button class="btn sm" type="button" id="fb-other">${esc(t("別の Excel にする…"))}</button>
+          ${cp ? `<span class="muted" style="font-size:12px">${esc(t("複製元「{s}」と同じ値です（保存すると、このセットにも入ります）", { s: cp.from }))}</span>` : `
+          <button class="btn sm" type="button" id="fb-reread" data-tip="${esc(t("読み直した値はすぐ保存されます") + (f.path ? "（" + f.path + "）" : ""))}">${esc(t("一覧ファイルを読み直す"))}</button>
+          <button class="btn sm" type="button" id="fb-other">${esc(t("別の一覧ファイルにする…"))}</button>`}
           <button class="btn sm" type="button" id="fb-unlink">${esc(t("✕ 外す"))}</button>`
-        : `<span class="muted" style="font-size:12px">${esc(name ? t("まだ読み込んでいません（右上の「＋ Excel から変数の値を読み込む…」から）") : t("セットを保存したあとで、Excel から読み込めます"))}</span>`}
+        : `<span class="muted" style="font-size:12px">${esc(t("まだ読み込んでいません（右上の「＋ 一覧ファイルから変数の値を読み込む…」から）"))}</span>`}
       </div>
+      ${f && reread ? `<div style="font-size:12px;margin-top:8px">${esc(t("読み直した結果: 機器 {d} 台・{n} 行", { d: reread.devices, n: reread.rows }))}</div>${fillReadNotes(reread)}` : ""}
       ${items.length ? `<div class="row-inline" style="gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
         <span class="muted" style="font-size:12px">${esc(t("変数（押すとカーソルの位置に入ります）:"))}</span>
         ${items.map(n => `<button class="fill-chip btn-chip" type="button" data-fbins="${esc(n)}">{{${esc(n)}}}</button>`).join("")}
@@ -727,14 +760,20 @@ function fillEditorBand(box, name, api) {
     });
     const re = box.querySelector("#fb-reread");
     if (re) re.onclick = async () => {
-      try { await App().RereadFillList(name); await refreshInventory(); draw(); toast(t("読み直しました"), "ok"); }
+      try { const info = await App().RereadFillList(name); await refreshInventory(); reread = info || null; draw(); toast(t("読み直しました"), "ok"); }
       catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); }
     };
     const ot = box.querySelector("#fb-other"); if (ot) ot.onclick = link;
     const un = box.querySelector("#fb-unlink");
     if (un) un.onclick = async () => {
-      if (!(await subConfirm(esc(t("読み込んだ Excel を外しますか？読み込んだ値も消えます（コマンドはそのまま残ります）")), t("外す")))) return;
-      try { await App().UnlinkFillList(name); await refreshInventory(); draw(); }
+      // A 複製 not yet saved: nothing to save, the copy just goes without.
+      if (cp) {
+        if (!(await subConfirm(esc(t("複製元の一覧ファイルの値を、この複製には入れません。よろしいですか？")), t("外す")))) return;
+        api.dropCopy(); draw();
+        return;
+      }
+      if (!(await subConfirm(esc(t("読み込んだ一覧ファイルを外しますか？読み込んだ値も消えます（コマンドはそのまま残ります）。外すとすぐ保存されます")), t("外す")))) return;
+      try { await App().UnlinkFillList(name); await refreshInventory(); reread = null; draw(); }
       catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); }
     };
     const ds = box.querySelector("#fb-dev");
@@ -746,10 +785,12 @@ function fillEditorBand(box, name, api) {
     if (!out || !devSel) return;
     const my = ++seq;
     let p;
-    try { p = await App().PreviewFillSet(name, api.commands(), devSel); } catch (e) { p = { error: terr(e) }; }
+    const cp = copy();
+    try { p = await App().PreviewFillSet(cp ? cp.from : name, api.commands(), devSel); } catch (e) { p = { error: terr(e) }; }
     if (my !== seq || !box.isConnected) return;
     out.innerHTML = p.error ? `<span style="color:var(--err)">${esc(terr(p.error))}</span>`
-      : (p.commands || []).map((c, i) => `<div><span class="muted fill-ln">${i + 1}</span>${esc(c)}</div>`).join("");
+      : (p.notes || []).map(n => `<div style="color:var(--warn);white-space:normal">⚠ ${esc(terr(n))}</div>`).join("")
+        + (p.commands || []).map((c, i) => `<div><span class="muted fill-ln">${i + 1}</span>${esc(c)}</div>`).join("");
   };
   let timer = null;
   draw();
@@ -777,10 +818,13 @@ function fillRowNote(d) {
   if (!runFillDev(d)) return null;
   const cs = runSetOf(d);
   const f = cs.fill;
-  if (!f) return { text: t("⚠ 変数の一覧が紐づいていません（コマンドセットの編集で紐づけてください）"), warn: true };
+  if (!f) return { text: t("⚠ 一覧ファイルを読み込んでいません（コマンドセットの編集で読み込んでください）"), warn: true };
   const key = String(d.name || "").trim().toLowerCase();
   const fd = (f.devices || []).find(x => String(x.name || "").trim().toLowerCase() === key);
-  if (!fd) return { text: t("⚠ 変数の一覧にこの機器の行がありません（実行しません）"), warn: true };
+  if (!fd) return { text: t("⚠ 一覧ファイルにこの機器の行がありません（実行しません）"), warn: true };
+  // A name the list does not have (a typo): no device of the set runs.
+  const un = fillUnknownNames(cs);
+  if (un.length) return { text: t("⚠ 「{v}」という変数はありません（読み込んだ変数: {l}）", { v: un.join(t("」「")), l: (f.items || []).join(t("、")) }), warn: true };
   const row = (fd.rows || [])[0] || {};
   const vals = (f.items || []).map(n => `${n}=${row[n] || ""}`).join("  ");
   return { text: (fd.rows.length > 1 ? t("変数 {n} 行: ", { n: fd.rows.length }) : t("変数: ")) + vals, warn: false };
@@ -790,7 +834,9 @@ function fillRowNote(d) {
 let runFillPreview = null;
 
 // fillConfirm shows each device's commands with the values in, before the
-// run; resolves true to run okNames.
+// run; resolves true to run okNames. The lines that change a device's
+// settings are marked on the device they go to (warnings: per device, the
+// line numbers of what is sent), as is what the filling-in has to say.
 function fillConfirm(okNames, skipped, warnings, scope, stage, extraNote) {
   return new Promise(resolve => {
     const by = runFillPreview || {};
@@ -801,12 +847,18 @@ function fillConfirm(okNames, skipped, warnings, scope, stage, extraNote) {
       return cs ? (cs.commands || []).map(c => c.text) : [];
     };
     const files = [...new Set(okNames.map(n => by[n] && by[n].fill ? by[n].file : "").filter(Boolean))];
+    const hitsOf = n => { const w = (warnings || []).find(x => x.device === n); return (w && w.hits) || []; };
+    const notesOf = n => (by[n] && by[n].fill && by[n].notes) || [];
     const danger = warnings && warnings.length > 0;
-    let sel = okNames[0];
+    // The devices with something to look at come first, the first of them
+    // shown (the rest stay in the order of the run tab).
+    const marked = n => hitsOf(n).length > 0 || notesOf(n).length > 0;
+    const shown = okNames.filter(marked).concat(okNames.filter(n => !marked(n)));
+    let sel = shown[0];
     const node = h(`<div>
       <h3${danger ? ' style="color:var(--warn)"' : ""}>${esc(danger ? t("⚠ 送信内容の確認（設定を変更するコマンドを含みます）") : t("送信内容の確認"))}</h3>
       ${stageBanner(stage || "")}
-      <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${t("{s}<b>{n} 台</b>に一括実行します。", { s: scope, n: okNames.length })}<span class="muted" style="font-size:12px">${esc(t("変数の一覧: {f}", { f: files.join(", ") }))}</span></p>
+      <p style="font-size:14px;line-height:1.8;margin:4px 0 10px">${t("{s}<b>{n} 台</b>に一括実行します。", { s: scope, n: okNames.length })}<span class="muted" style="font-size:12px">${esc(t("一覧ファイル: {f}", { f: files.join(", ") }))}</span></p>
       <div style="display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px">
         <div style="max-height:52vh;overflow:auto">
           <div class="section-label" style="margin-bottom:6px">${esc(t("実行する機器"))}</div>
@@ -823,12 +875,17 @@ function fillConfirm(okNames, skipped, warnings, scope, stage, extraNote) {
         <button class="btn ${danger ? "danger" : "run"}" id="fc-ok" ${danger ? "disabled" : ""}>${esc(t("▶ この内容で {n} 台に実行", { n: okNames.length }))}</button></div>
     </div>`);
     function draw() {
-      node.querySelector("#fc-devs").innerHTML = okNames.map(n => `<div class="fc-dev" data-n="${esc(n)}" style="padding:7px 10px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;${n === sel ? "background:var(--accent);color:#fff" : ""}">
-        <b class="clip">${esc(n)}</b><span style="font-size:12px;opacity:.85;white-space:nowrap">${esc(t("{n} 行", { n: cmdsOf(n).length }))}</span></div>`).join("");
+      node.querySelector("#fc-devs").innerHTML = shown.map(n => `<div class="fc-dev" data-n="${esc(n)}" style="padding:7px 10px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;gap:8px;${n === sel ? "background:var(--accent);color:#fff" : ""}">
+        <b class="clip">${marked(n) ? `<span${n === sel ? "" : ' style="color:var(--warn)"'}>⚠</span> ` : ""}${esc(n)}</b><span style="font-size:12px;opacity:.85;white-space:nowrap">${esc(t("{n} 行", { n: cmdsOf(n).length }))}</span></div>`).join("");
       const d = runDev(sel);
+      const hs = hitsOf(sel);
       node.querySelector("#fc-cmds").innerHTML = `<div style="margin-bottom:8px"><b>${esc(t("{d}（{h}）に送るコマンド", { d: sel, h: d ? d.host : "" }))}</b>
         ${by[sel] && by[sel].fill ? "" : ` <span class="muted" style="font-size:12px">${esc(t("変数なしのセット"))}</span>`}</div>
-        <div class="mono" style="font-size:12.5px;white-space:pre;line-height:1.75">${cmdsOf(sel).map((c, i) => `<div><span class="muted" style="display:inline-block;width:28px;text-align:right;margin-right:12px">${i + 1}</span>${esc(c)}</div>`).join("")}</div>`;
+        ${notesOf(sel).map(x => `<div class="fc-note" style="color:var(--warn);font-size:12px;margin-bottom:6px">⚠ ${esc(terr(x))}</div>`).join("")}
+        <div class="mono" style="font-size:12.5px;white-space:pre;line-height:1.75">${cmdsOf(sel).map((c, i) => {
+          const hit = hs.find(x => x.index === i);
+          return `<div${hit ? ' class="fc-hit" style="color:var(--warn)"' : ""}><span class="muted" style="display:inline-block;width:28px;text-align:right;margin-right:12px">${i + 1}</span>${esc(c)}${hit ? `<span style="margin-left:16px;font-size:12px">⚠ ${esc(t(hit.reason))}</span>` : ""}</div>`;
+        }).join("")}</div>`;
       node.querySelectorAll(".fc-dev").forEach(el => el.onclick = () => { sel = el.dataset.n; draw(); });
     }
     draw();
@@ -838,6 +895,26 @@ function fillConfirm(okNames, skipped, warnings, scope, stage, extraNote) {
     node.querySelector("#fc-cancel").onclick = () => { closeModal(); resolve(false); };
     ok.onclick = () => { if (ack && !ack.checked) return; closeModal(); resolve(true); };
   });
+}
+
+// fillNoneDialog says why no device of a run can be given its values: each
+// reason once, with the devices it is said of.
+function fillNoneDialog(skipped) {
+  // The reasons are worded to follow a device's name: here they stand alone.
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const by = new Map();
+  skipped.forEach(s => { if (!by.has(s.why)) by.set(s.why, []); by.get(s.why).push(s.name); });
+  const node = h(`<div>
+    <h3 style="color:var(--warn)">${esc(t("変数を入れられる機器がありません"))}</h3>
+    <div id="fn-list" style="max-height:52vh;overflow:auto">${[...by.entries()].map(([why, names]) => `<div class="warn-box">
+      <div><b>${esc(cap(terr(why)))}</b></div>
+      <div class="muted" style="font-size:12px;margin-top:4px">${esc(t("{n} 台: {d}", { n: names.length, d: names.slice(0, 10).join(", ") + (names.length > 10 ? t(" ほか {n} 台", { n: names.length - 10 }) : "") }))}</div>
+    </div>`).join("")}</div>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">${esc(t("コマンドセットの編集で、変数名と一覧ファイルを確かめてください"))}</p>
+    <div class="modal-actions"><button class="btn primary" id="fn-close" autofocus>${esc(t("閉じる"))}</button></div>
+  </div>`);
+  openModal(node, "mid");
+  node.querySelector("#fn-close").onclick = () => closeModal();
 }
 
 // runFillCheck is startRun's step for a run with fill-in sets: the values
@@ -851,7 +928,7 @@ async function runFillCheck(targets, scope, extra) {
   (p.devices || []).forEach(fd => { runFillPreview[fd.device] = fd; });
   const okNames = [], skipped = [];
   targets.forEach(n => { const fd = runFillPreview[n]; if (fd && fd.fill && fd.error) skipped.push({ name: n, why: fd.error }); else okNames.push(n); });
-  if (!okNames.length) { toast(t("変数を入れられる機器がありません（各行のメッセージを確かめてください）"), "err"); return null; }
+  if (!okNames.length) { fillNoneDialog(skipped); return null; }
   const req = runRequest(okNames, false);
   const warnings = await App().CheckDangerousCommands(req).catch(() => []);
   if (!(await fillConfirm(okNames, skipped, warnings, scope, runStage, extra(req, okNames)))) return null;

@@ -25,7 +25,7 @@ function renderCommands() {
   const rows = visible.map(s => `
     <tr data-key="${esc(s.name)}">
       ${listViewDragCell(LV)}
-      <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div>${s.fill ? `<div class="clip muted cs-setfill" data-tip="${esc(t("変数の一覧: {f}（{n} 台分・{d} に読み込み）", { f: s.fill.file, n: (s.fill.devices || []).length, d: s.fill.read }))}">📄 ${esc(s.fill.file)} · ${(s.fill.items || []).map(fillChip).join(" ")}</div>` : ""}</td>
+      <td><div class="clip" data-tip="${esc(s.name)}"><b>${esc(s.name)}</b></div>${s.fill ? `<div class="clip muted cs-setfill" data-tip="${esc(t("一覧ファイル: {f}（{n} 台分・{d} に読み込み）", { f: s.fill.file, n: (s.fill.devices || []).length, d: s.fill.read }))}">📄 ${esc(s.fill.file)} · ${(s.fill.items || []).map(fillChip).join(" ")}</div>` : ""}</td>
       <td>${esc(t("{n} コマンド", { n: (s.commands || []).length }))}${s.pauseOff ? `<br><span class="muted" style="font-size:11px" data-tip="${esc(t("「待機秒を使う」がオフのセットです（プロンプトが出たらすぐ次のコマンド）"))}">${esc(t("待機秒なし"))}</span>` : ""}</td>
       <td class="mono muted cs-preview" data-view="${esc(s.name)}" style="cursor:pointer"><div class="clip" data-tip="${esc(t("クリックで別窓に表示（「表示」と同じ）") + "\n\n" + (s.commands || []).map(c => c.text).join("\n"))}">${esc((s.commands || []).slice(0, 3).map(c => c.text).join("  /  "))}${(s.commands || []).length > 3 ? " …" : ""}</div></td>
       <td class="ops"><div class="ops-btns">
@@ -39,10 +39,10 @@ function renderCommands() {
   renderListTab(root, `
     <div class="page-head">
       <div><div class="page-title">${esc(LANG === "ja" ? "コマンドセット一覧" : t("メニュー:コマンドセット"))}</div>
-        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群"))}${hintI(t("書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます"))}</div></div>
+        <div class="page-sub">${esc(t("機器ごとに割り当てて一括実行するコマンド群"))}${hintI(t("書き出しは「機器一覧」の一式書き出し（グループ単位、または全機器）に含まれます。ここの「セットの読み込み」は 1 ファイル（CSV / 旧 .list）だけを読み込みます"))}</div></div>
       <div class="row-inline">
         <button class="btn" style="margin-right:18px" id="fr-open" data-tip="${esc(t("一覧ファイル（Excel・CSV など）の値を、機器ごとに変数としてコマンドに入れます。どの列をどの変数にするかは、ルールで決めます"))}">${esc(t("変数の取り込み設定"))}</button>
-        <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("読み込み"))}</button>
+        <button class="btn" id="cs-imp" data-tip="${esc(t("コマンドセット 1 ファイル（CSV / 旧 .list）を読み込みます"))}">${esc(t("セットの読み込み"))}</button>
         <button class="btn primary" id="add-set">${esc(t("＋ セットを追加"))}</button>
       </div>
     </div>
@@ -79,13 +79,14 @@ function renderCommands() {
   root.querySelectorAll("[data-copy]").forEach(b => b.onclick = () => {
     // As a device's 複製: a new, unsaved set filled from the source (its
     // name with _copy) — nothing exists until 保存, so キャンセル leaves no
-    // "backup_copy" behind in the list.
+    // "backup_copy" behind in the list. The list the source read goes with
+    // it (fillFrom: taken from the vault on 保存).
     const src = (INV.commandSets || []).find(s => s.name === b.dataset.copy);
     if (!src) return;
     const taken = new Set((INV.commandSets || []).map(s => s.name));
     let nm = src.name + "_copy";
     for (let i = 2; taken.has(nm); i++) nm = `${src.name}_copy${i}`;
-    editCommandSet(null, { ...JSON.parse(JSON.stringify(src)), name: nm });
+    editCommandSet(null, { ...JSON.parse(JSON.stringify(src)), name: nm, fillFrom: src.fill ? src.name : "" });
     const inp = document.getElementById("s-name"); if (inp) { inp.focus(); inp.select(); }
   });
   root.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
@@ -137,14 +138,20 @@ function bulkCommandsDialog(onAdd) {
 }
 
 // editCommandSet edits set, or adds a new one (filled from tpl for 複製).
+// opts.link: the list dialog opens at once (a new set saved to read one);
+// opts.fresh: the set was made a moment ago, so キャンセル asks whether to
+// keep it when it still has no commands.
 // 全行の待ち方 (s.default) is what a new row gets and what a row shows as
-// 既定. Every row keeps its own wait and pauses, and the run reads only
+// 全行どおり. Every row keeps its own wait and pauses, and the run reads only
 // those: a row equal to the default is shown in italics and follows it
 // when it is changed, a row that differs keeps its own value (bold, ↺
 // puts the default back). A set saved before has no default: the 1 second
 // a new row always got, so its rows show as they were and run as before.
-function editCommandSet(set, tpl) {
+function editCommandSet(set, tpl, opts = {}) {
   const s = set || tpl || { name: "", commands: [] };
+  // 複製 of a set that read a list: the copy gets the same values on 保存
+  // (✕ 外す in the band drops them from the copy).
+  let copyFrom = !set && tpl && tpl.fill && tpl.fillFrom ? tpl.fillFrom : "";
   const d0 = s.default || {};
   let def = { wait: (d0.wait || "").trim(), pauseSec: d0.pauseSec ?? 1, serialSec: d0.serialSec ?? 1 };
   const blank = (text = "") => ({ text, pauseSec: def.pauseSec, serialSec: def.serialSec, wait: def.wait });
@@ -171,11 +178,11 @@ function editCommandSet(set, tpl) {
     <div class="cs-l2">
       <b>${esc(t("全行の待ち方"))}</b>${hintI(t("各コマンドのあと、機器の今の行がこの「待つ文字列」で終わったら（空欄なら OS タイプのプロンプトが出たら）、さらに指定の秒だけ待って次のコマンドを送ります（0 秒なら出たらすぐ次へ）。新しい行はこの値で入ります。この値どおりの行（斜体）はここを変えると一緒に変わり、行ごとに変えた値（太字）はそのまま残ります"))}
       <span>${esc(t("待つ文字列"))}</span><input id="s-dwait" class="mono" style="width:110px" value="${esc(def.wait)}" placeholder="${esc(t("（プロンプト）"))}">
-      <span>${esc(t("のあと"))}</span>${secIn("s-dpause", def.pauseSec)}<span>${esc(t("秒"))}</span>
-      <span class="muted">${esc(t("（シリアル"))}</span>${secIn("s-dspause", def.serialSec)}<span class="muted">${esc(t("秒）"))}</span>
+      <span>${esc(t("待機(リモート)"))}</span>${secIn("s-dpause", def.pauseSec)}<span>${esc(t("秒"))}</span>
+      <span>${esc(t("待機(シリアル)"))}</span>${secIn("s-dspause", def.serialSec)}<span>${esc(t("秒"))}</span>
       <span id="s-merge"></span>
       <span style="flex:1"></span>
-      <button class="btn sm" type="button" id="s-xls">${esc(t("＋ Excel から変数の値を読み込む…"))}</button>
+      <button class="btn sm" type="button" id="s-xls">${esc(t("＋ 一覧ファイルから変数の値を読み込む…"))}</button>
     </div>
     <div id="fill-band"></div>
     <div id="cmd-table-wrap">
@@ -190,10 +197,11 @@ function editCommandSet(set, tpl) {
           <th colspan="7"><div class="cs-bulkbar">
             <b id="cs-bn"></b>
             <span>${esc(t("待つ文字列"))}</span><input id="bk-wait" class="mono" data-guard-skip style="width:100px" placeholder="${esc(t("（変えない）"))}">
-            <span>${esc(t("のあと"))}</span><input id="bk-pause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span>${esc(t("秒"))}</span>
-            <span class="muted">${esc(t("（シリアル"))}</span><input id="bk-spause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span class="muted">${esc(t("秒）"))}</span>
+            <button class="btn sm" type="button" id="bk-blank" data-tip="${esc(t("選んだ行の待つ文字列を空欄にします（OS タイプのプロンプトを待ちます）"))}">${esc(t("空欄に"))}</button>
+            <span>${esc(t("待機(リモート)"))}</span><input id="bk-pause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span>${esc(t("秒"))}</span>
+            <span>${esc(t("待機(シリアル)"))}</span><input id="bk-spause" type="number" min="0" data-guard-skip style="width:50px" placeholder="－"><span>${esc(t("秒"))}</span>
             <button class="btn sm primary" type="button" id="bk-set">${esc(t("選んだ行に入れる"))}</button>
-            <button class="btn sm" type="button" id="bk-def">${esc(t("既定に戻す"))}</button>
+            <button class="btn sm" type="button" id="bk-def" data-tip="${esc(t("全行の待ち方に戻す"))}">${esc(t("↺ 戻す"))}</button>
             <button class="btn sm act-del" type="button" id="bk-del">${esc(t("削除"))}</button>
           </div></th></tr>
       </thead>
@@ -204,9 +212,8 @@ function editCommandSet(set, tpl) {
     </div>
     <div id="cmd-text-wrap" class="hidden">
       <div class="cmd-textwrap"><div class="cmd-gutter" id="cmd-gutter"></div><textarea class="cmd-text" id="cmd-text" spellcheck="false" wrap="off" data-guard-skip placeholder="${esc(t("例: show version"))}"></textarea><div class="cmd-waits" id="cmd-waits"></div></div>
-      <div class="muted" style="font-size:12px;margin-top:6px">${esc(t("1 行に 1 コマンド。右の「既定」を押すと、その行だけ待ち方を変えられます"))}</div>
     </div>
-    <div class="muted cmd-tablenote" style="font-size:12px;margin-top:6px">${esc(t("斜体＝全行の待ち方どおり　太字＝その行だけの値（↺ で戻す）"))}　${esc(t("コマンド欄には複数行をまとめて貼り付けできます"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}　${esc(t("制御キーはキー札で送れます"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
+    <div class="muted" style="font-size:12px;margin-top:6px"><span class="cmd-tablenote">${esc(t("斜体＝全行の待ち方どおり　太字＝その行だけの値（↺ で戻す）"))}　${esc(t("複数行の貼り付け"))}${hintI(t("貼り付けは「行を追加」後の各コマンド欄へ。複数行をまとめて貼るとその行数ぶん自動で分割されます。"))}</span><span class="cmd-textnote hidden">${esc(t("1 行に 1 コマンド。右の「全行どおり」を押すと、その行だけ待ち方を変えられます"))}</span>　${esc(t("キー札（制御キー）"))}${hintI(t("書けるキー札: {ctrl+a}〜{ctrl+z} {ctrl+[} {ctrl+\\} {ctrl+]} {ctrl+^} {ctrl+_} {esc} {tab} {enter} {break}（大文字小文字は区別しません）。例: 設定モードを抜ける {ctrl+z}、止まらないコマンドを止める {ctrl+c}、Cisco の ping を抜ける {ctrl+^}x。キー札を含む行は改行を付けずにそのまま送るので、改行も送るなら行末に {enter} を書きます。{break} はシリアルのブレーク信号です。使えない札（{ctrl+1} など）は保存時に止まります"))}</div>
     <div class="modal-actions">
       <button class="btn" id="cancel">${esc(t("キャンセル"))}</button>
       <button class="btn primary" id="save" data-tip="Ctrl+Enter">${esc(t("保存"))}</button>
@@ -370,6 +377,14 @@ function editCommandSet(set, tpl) {
     drawMerge();
     toast(t("{n} 行に入れました", { n: rows.length }), "ok");
   };
+  // 空欄に: the wait string of the chosen rows back to the prompt (an empty
+  // field in the bar means "leave it", so it cannot say this).
+  node.querySelector("#bk-blank").onclick = () => {
+    const rows = bulkRows();
+    rows.forEach(tr => { tr.querySelector(".c-wait").value = ""; markRow(tr); });
+    drawMerge();
+    toast(t("{n} 行の待つ文字列を空欄にしました", { n: rows.length }), "ok");
+  };
   node.querySelector("#bk-def").onclick = () => {
     bulkRows().forEach(tr => { KEYS.forEach(([cls, k]) => { tr.querySelector("." + cls).value = def[k]; }); markRow(tr); });
     drawMerge();
@@ -415,22 +430,53 @@ function editCommandSet(set, tpl) {
 
   // テキストで書く: the commands as one text, a line a command (as a
   // notepad edits a file). A line whose text is unchanged keeps its wait
-  // and pauses (matched in order among the lines of that text); a new line
-  // gets 全行の待ち方. The column on the right shows each line's wait; a
-  // click there changes that line's. The mode is remembered per PC.
+  // and pauses (matched in order among the lines of that text), and so
+  // does a line that is a row edited (likeLine); a new line gets
+  // 全行の待ち方. The column on the right shows each line's wait; a click
+  // there changes that line's. The mode is remembered per PC.
   const ta = node.querySelector("#cmd-text"), gutter = node.querySelector("#cmd-gutter"), waitsCol = node.querySelector("#cmd-waits");
   let mode = "table";
   try { if (localStorage.getItem("palaterm_cmdset_textmode") === "1") mode = "text"; } catch (e) { }
+  // likeLine: is the line a the row b with its text edited? The same
+  // first word (or one the other begins with: sh / show), or most of the
+  // letters the same (a typo put right). Another command written in a
+  // row's place is not: it must not wait for what that row waited for.
+  const likeLine = (a, b) => {
+    a = a.trim().toLowerCase(); b = b.trim().toLowerCase();
+    if (!a || !b) return false;
+    const wa = a.split(/\s+/)[0], wb = b.split(/\s+/)[0];
+    if (wa.startsWith(wb) || wb.startsWith(wa)) return true;
+    let pre = 0, suf = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    return (pre + suf) * 2 >= Math.max(a.length, b.length);
+  };
   const textToCmds = (text, base) => {
     const pool = new Map();
-    base.forEach(c => { const k = c.text.trim(); if (!pool.has(k)) pool.set(k, []); pool.get(k).push(c); });
+    base.forEach((c, i) => { const k = c.text.trim(); if (!pool.has(k)) pool.set(k, []); pool.get(k).push(i); });
     const lines = text.split(/\r\n|\r|\n/);
     while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
-    return lines.map(l => {
-      const q = pool.get(l.trim());
-      const old = q && q.length ? q.shift() : null;
-      return old ? { ...old, text: l } : blank(l);
-    });
+    // from[j]: the row line j was (-1: none of that text).
+    const from = lines.map(l => { const q = pool.get(l.trim()); return q && q.length ? q.shift() : -1; });
+    // A line whose text was edited matches no row. Between two lines that
+    // do, such a line is the next row left over there that it is like
+    // (likeLine), and keeps that row's wait; a line like none of them is
+    // a new one (全行の待ち方), whatever the count of lines and rows.
+    const used = new Set(from.filter(i => i >= 0));
+    for (let j = 0; j < lines.length;) {
+      if (from[j] >= 0) { j++; continue; }
+      let e = j;
+      while (e < lines.length && from[e] < 0) e++;
+      const lo = j > 0 ? from[j - 1] : -1, hi = e < lines.length ? from[e] : base.length;
+      const free = [];
+      for (let i = lo + 1; i < hi; i++) if (!used.has(i)) free.push(i);
+      for (let k = j, q0 = 0; k < e; k++) {
+        const q = free.findIndex((i, n) => n >= q0 && likeLine(lines[k], base[i].text));
+        if (q >= 0) { from[k] = free[q]; q0 = q + 1; }
+      }
+      j = e;
+    }
+    return lines.map((l, j) => from[j] >= 0 ? { ...base[from[j]], text: l } : blank(l));
   };
   const current = () => mode === "text" ? textToCmds(ta.value, cmds) : collect();
   const drawGutter = () => {
@@ -444,7 +490,7 @@ function editCommandSet(set, tpl) {
       const c = cur[i];
       if (!l.trim() || !c) return `<div class="cw-l"></div>`;
       const own = !allDef(c);
-      return `<div class="cw-l"><button type="button" class="cw-chip${own ? " ovr" : ""}" data-wl="${i}" tabindex="-1">${esc(own ? waitWords(c) : t("既定"))}</button></div>`;
+      return `<div class="cw-l"><button type="button" class="cw-chip${own ? " ovr" : ""}" data-wl="${i}" tabindex="-1">${esc(own ? waitWords(c) : t("全行どおり"))}</button></div>`;
     }).join("");
     waitsCol.scrollTop = ta.scrollTop;
   };
@@ -465,8 +511,8 @@ function editCommandSet(set, tpl) {
     const pop = h(`<div class="cw-pop">
       <b>${esc(t("{n} 行目の待ち方", { n: i + 1 }))}</b>
       <div class="rw"><span>${esc(t("待つ文字列"))}</span><input class="mono" id="cwp-wait" style="width:120px" value="${esc(c.wait || "")}" placeholder="${esc(t("（プロンプト）"))}"></div>
-      <div class="rw"><span>${esc(t("のあと"))}</span>${secIn("cwp-pause", c.pauseSec)}<span>${esc(t("秒"))}</span><span class="muted">${esc(t("（シリアル"))}</span>${secIn("cwp-spause", c.serialSec)}<span class="muted">${esc(t("秒）"))}</span></div>
-      <div class="rw" style="justify-content:flex-end"><button class="btn sm" type="button" id="cwp-def">${esc(t("既定に戻す"))}</button><button class="btn sm primary" type="button" id="cwp-ok">OK</button></div>
+      <div class="rw"><span>${esc(t("待機(リモート)"))}</span>${secIn("cwp-pause", c.pauseSec)}<span>${esc(t("秒"))}</span><span>${esc(t("待機(シリアル)"))}</span>${secIn("cwp-spause", c.serialSec)}<span>${esc(t("秒"))}</span></div>
+      <div class="rw" style="justify-content:flex-end"><button class="btn sm" type="button" id="cwp-def">${esc(t("全行の待ち方に戻す"))}</button><button class="btn sm primary" type="button" id="cwp-ok">OK</button></div>
     </div>`);
     pop.querySelectorAll("input").forEach(x => { x.dataset.guardSkip = ""; });
     wrap.appendChild(pop);
@@ -482,7 +528,8 @@ function editCommandSet(set, tpl) {
       for (const inp of [p, sp]) if (!(parseInt(inp.value || "0", 10) >= 0)) { fieldError(inp, t("0 以上で入力")); return; }
       done({ wait: pop.querySelector("#cwp-wait").value.trim(), pauseSec: parseInt(p.value, 10) || 0, serialSec: parseInt(sp.value, 10) || 0 });
     };
-    // Enter is OK, Esc closes this window only (not the editor).
+    // Enter is OK, Esc closes this window only (not the editor). Ctrl+Enter
+    // goes on to 保存, which takes this window's values first (saveSet).
     pop.addEventListener("keydown", ev => {
       if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); }
       else if (ev.key === "Enter" && !ev.isComposing && !ev.ctrlKey) { ev.preventDefault(); ev.stopPropagation(); pop.querySelector("#cwp-ok").click(); }
@@ -499,6 +546,7 @@ function editCommandSet(set, tpl) {
     try { localStorage.setItem("palaterm_cmdset_textmode", m === "text" ? "1" : "0"); } catch (e) { }
     node.querySelector("#cmd-table-wrap").classList.toggle("hidden", m === "text");
     node.querySelector(".cmd-tablenote").classList.toggle("hidden", m === "text");
+    node.querySelector(".cmd-textnote").classList.toggle("hidden", m !== "text");
     node.querySelector("#cmd-text-wrap").classList.toggle("hidden", m !== "text");
     node.querySelectorAll("[data-cmode]").forEach(b => b.classList.toggle("on", b.dataset.cmode === m));
     if (m === "text") { drawGutter(); drawWaits(); }
@@ -522,7 +570,7 @@ function editCommandSet(set, tpl) {
     if (nd.pauseSec < 0 || nd.serialSec < 0) { fieldError(inp, t("0 以上で入力")); return; }
     if (KEYS.some(([, k]) => nd[k] !== def[k])) setDefault(nd);
   }));
-  // 全行が同じ → 既定にまとめる: every row has one same wait other than the
+  // 全行が同じ → 全行の待ち方にする: every row has one same wait other than the
   // default (a set from before the default, all its rows at 0 seconds);
   // the user makes it the default (nothing changes on its own).
   function drawMerge() {
@@ -530,7 +578,7 @@ function editCommandSet(set, tpl) {
     const rows = current().filter(c => c.text.trim());
     const r0 = rows[0];
     const same = rows.length > 1 && !allDef(r0) && rows.every(c => (c.wait || "").trim() === (r0.wait || "").trim() && c.pauseSec === r0.pauseSec && c.serialSec === r0.serialSec);
-    box.innerHTML = same ? `<button class="btn sm" type="button" id="s-mergebtn" data-tip="${esc(t("全行の待ち方をこの値にします（各行の値は変わらないので、実行は今までどおりです）"))}">${esc(t("全行が「{w}」→ 既定にまとめる", { w: waitWords(r0) }))}</button>` : "";
+    box.innerHTML = same ? `<button class="btn sm" type="button" id="s-mergebtn" data-tip="${esc(t("全行の待ち方をこの値にします（各行の値は変わらないので、実行は今までどおりです）"))}">${esc(t("全行が「{w}」→ 全行の待ち方にする", { w: waitWords(r0) }))}</button>` : "";
     const b = box.querySelector("#s-mergebtn");
     if (b) b.onclick = () => setDefault({ wait: (r0.wait || "").trim(), pauseSec: r0.pauseSec, serialSec: r0.serialSec });
   }
@@ -547,20 +595,35 @@ function editCommandSet(set, tpl) {
     el.setRangeText(text, el.selectionStart, el.selectionEnd, "end");
     el.dispatchEvent(new Event("input", { bubbles: true }));
   };
-  // ＋ Excel から変数の値を読み込む…: a saved set without a linked list
-  // (a linked one has its buttons in the band; a new one is saved first).
+  // ＋ 一覧ファイルから変数の値を読み込む…: a set that has read no list (one
+  // that has shows its buttons in the band). The values are kept with the
+  // saved set, so a new set is saved first — asked, then done here.
   const xls = node.querySelector("#s-xls");
   const xlsState = linked => {
     xls.classList.toggle("hidden", !!linked);
-    xls.disabled = !set;
-    xls.dataset.tip = set ? t("機器ごとに違う値（{{NH}} などに入る値）を、Excel・CSV の一覧から読み込みます") : t("セットを保存したあとで読み込めます");
+    xls.dataset.tip = set ? t("機器ごとに違う値（{{gateway}} などに入る値）を、一覧ファイル（Excel・CSV）から読み込みます")
+      : t("このセットを保存してから、一覧ファイル（Excel・CSV）を読み込みます");
   };
   let band = null;
   render();
-  band = fillEditorBand(node.querySelector("#fill-band"), set ? set.name : null,
-    { insert: insertText, commands: () => current().map(c => ({ text: c.text })), linked: xlsState });
-  xls.onclick = () => band.link();
+  band = fillEditorBand(node.querySelector("#fill-band"), set ? set.name : null, {
+    insert: insertText, commands: () => current().map(c => ({ text: c.text })), linked: xlsState,
+    copy: () => copyFrom ? { from: copyFrom, fill: tpl.fill } : null,
+    dropCopy: () => { copyFrom = ""; },
+  });
+  xls.onclick = async () => {
+    if (set) { band.link(); return; }
+    // No rule yet: said before the set is saved for it, not after.
+    if (!fillRules().length) { await fillPickRule(""); return; }
+    if (!(await subConfirm(esc(t("読み込む前に、このセットを保存します。よろしいですか？")), t("保存して読み込む"), null, "primary"))) return;
+    const name = await saveSet();
+    if (!name) return;
+    try { await refreshInventory(); } catch (e) { toast(t("読み込み失敗") + ": " + terr(e), "err"); closeModal(); return; }
+    const cs = (INV.commandSets || []).find(x => x.name === name);
+    if (cs) editCommandSet(cs, null, { link: true, fresh: true }); else closeModal();
+  };
   setMode(mode);
+  if (opts.link) band.link();
 
   node.querySelector("#add-cmd").onclick = () => {
     cmds = collect(); cmds.push(blank()); render();
@@ -573,19 +636,46 @@ function editCommandSet(set, tpl) {
     render();
     toast(t("{n} 行を追加しました", { n: lines.length }), "ok");
   });
-  // The text mode's line waits live in cmds, not in a field.
-  guardDiscard(node, "#cancel", () => mode === "text" ? JSON.stringify(textToCmds(ta.value, cmds)) : null);
-  node.querySelector("#save").onclick = async () => {
+  // The text mode's line waits live in cmds, not in a field; nor does the
+  // list a 複製 takes along.
+  guardDiscard(node, "#cancel", () => [mode === "text" ? JSON.stringify(textToCmds(ta.value, cmds)) : null, copyFrom], async () => {
+    // A set made a moment ago to read a list into (作って編集する, 保存して
+    // 読み込む) is already saved: left without a command, the user is asked
+    // whether to keep it (never deleted unasked).
+    if (!opts.fresh || !set) return;
+    const cs = (INV.commandSets || []).find(x => x.name === set.name);
+    if (!cs || (cs.commands || []).length) return;
+    if (!(await uiConfirm({ title: t("コマンドが空のセット"), message: t("コマンドセット「<b>{n}</b>」は作成済みですが、コマンドがまだありません。削除しますか？", { n: esc(set.name) }), okLabel: t("削除する"), cancelLabel: t("残す"), danger: true }))) return;
+    try { await App().DeleteCommandSet(set.name); await refreshInventory(); toast(t("削除しました"), "ok"); }
+    catch (e) { toast(t("削除失敗") + ": " + terr(e), "err"); }
+  });
+  // saveSet saves what the editor holds and resolves the saved name (null:
+  // a check stopped it, or the save failed and said so).
+  let saving = false;
+  async function saveSet() {
+    if (saving) return null;
+    saving = true;
+    try { return await saveSet1(); } finally { saving = false; }
+  }
+  async function saveSet1() {
+    // A line's small window left open (Ctrl+Enter typed in it): its values
+    // are taken as OK does; a value it refuses stops the save there.
+    const pop = node.querySelector(".cw-pop");
+    if (pop) { pop.querySelector("#cwp-ok").click(); if (node.querySelector(".cw-pop")) return null; }
     const name = node.querySelector("#s-name").value.trim();
-    if (!name) { toast(t("セット名は必須です"), "err"); return; }
+    if (!name) { toast(t("セット名は必須です"), "err"); return null; }
     // "__adhoc__" and the like are the run tab's own markers.
-    if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return; }
+    if (name.startsWith("__")) { fieldError(node.querySelector("#s-name"), t("「__」で始まる名前は使えません（内部の目印と重なります）")); return null; }
     // A negative pause runs as no pause: refused where it is typed, at the
     // field (only while the pauses are used — off, the fields are greyed).
     if (usePause.checked) {
       const bad = [dIn.pauseSec, dIn.serialSec].find(inp => parseInt(inp.value, 10) < 0);
-      if (bad) { toast(t("全行の待ち方の秒がマイナスです（0 以上で指定してください）"), "err"); fieldError(bad, t("0 以上で入力")); return; }
+      if (bad) { toast(t("全行の待ち方の秒がマイナスです（0 以上で指定してください）"), "err"); fieldError(bad, t("0 以上で入力")); return null; }
     }
+    // 全行の待ち方 typed and saved with Ctrl+Enter: the field has not lost
+    // the focus, so its change has not reached the rows that follow it.
+    const nd = readDef();
+    if (nd.pauseSec >= 0 && nd.serialSec >= 0 && KEYS.some(([, k]) => nd[k] !== def[k])) setDefault(nd);
     if (usePause.checked && mode === "table") {
       const rows = [...tbody.querySelectorAll("tr")];
       for (let i = 0; i < rows.length; i++) {
@@ -594,7 +684,7 @@ function editCommandSet(set, tpl) {
         if (!bad) continue;
         toast(t("{n} 行目の待機秒がマイナスです（0 以上で指定してください）", { n: i + 1 }), "err");
         fieldError(bad, t("0 以上で入力"));
-        return;
+        return null;
       }
     }
     const commands = current().filter(c => c.text.trim().length > 0)
@@ -614,14 +704,27 @@ function editCommandSet(set, tpl) {
       // A new set must not land on an existing name (SaveCommandSet replaces
       // by name: a typo of "backup" used to overwrite backup's 30 lines).
       if (set) await App().SaveCommandSet(payload);
-      else await App().CreateCommandSet(payload);
-      closeModal(); await refreshInventory(); toast(t("保存しました"), "ok");
+      else await App().CreateCommandSetFrom(payload, copyFrom);
+      return name;
     }
     catch (e) {
       toast(t("保存失敗") + ": " + terr(e), "err");
       // The list behind the editor shows the new name (the rename is saved).
       if (renamed) await refreshInventory().catch(() => {});
+      return null;
     }
+  }
+  node.querySelector("#save").onclick = async () => {
+    const name = await saveSet();
+    if (!name) return;
+    try { closeModal(); await refreshInventory(); }
+    catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); return; }
+    // A {{name}} the list read into the set does not have (a slip of the
+    // hand, most often) is said now, not first at the run.
+    const cs = (INV.commandSets || []).find(x => x.name === name);
+    const miss = cs && cs.fill ? fillUnknownNames(cs) : [];
+    if (miss.length) toast(t("保存しました。ただし「{v}」という変数はありません（読み込んだ変数: {l}）", { v: miss.join(t("」「")), l: (cs.fill.items || []).join(t("、")) }), "warn", { ms: 9000 });
+    else toast(t("保存しました"), "ok");
   };
 }
 
@@ -1492,13 +1595,31 @@ function secretCommandNote(req, targets) {
 // acknowledgement checkbox that gates the run button.
 function dangerConfirm(warnings, n, scope, stage, extraNote) {
   return new Promise(resolve => {
-    const bySet = {};
-    warnings.forEach(w => { (bySet[w.commandSet] = bySet[w.commandSet] || { hits: w.hits, devices: [] }).devices.push(w.device); });
-    const blocks = Object.keys(bySet).map(set => `
+    // One block per set and the lines found in it (which lines, and why).
+    // A set with variables sends each device its own text on those lines:
+    // the block lists the texts, each with the devices it goes to, instead
+    // of one block a device.
+    const groups = new Map();
+    warnings.forEach(w => {
+      const hs = w.hits || [];
+      const key = w.commandSet + "\u0000" + JSON.stringify(hs.map(x => [x.index, x.reason]));
+      if (!groups.has(key)) groups.set(key, { set: w.commandSet, hits: hs.map(x => ({ index: x.index, reason: x.reason, texts: new Map() })), devices: [] });
+      const g = groups.get(key);
+      g.devices.push(w.device);
+      hs.forEach((x, i) => { const m = g.hits[i].texts; if (!m.has(x.text)) m.set(x.text, []); m.get(x.text).push(w.device); });
+    });
+    const some = (list, max) => list.slice(0, max).join(", ") + (list.length > max ? t(" ほか {n} 台", { n: list.length - max }) : "");
+    const textCell = texts => {
+      const all = [...texts.entries()];
+      if (all.length === 1) return esc(all[0][0]);
+      return all.slice(0, 6).map(([x, ds]) => `<div>${esc(x)} <span class="muted" style="font-size:12px">— ${esc(some(ds, 3))}</span></div>`).join("")
+        + (all.length > 6 ? `<div class="muted" style="font-size:12px">${esc(t("ほか {n} 通り（機器ごとに値が違います）", { n: all.length - 6 }))}</div>` : "");
+    };
+    const blocks = [...groups.values()].map(({ set, hits, devices }) => `
       <div class="warn-box">
-        <div><b>${esc(t("コマンドセット「{s}」", { s: set === "（今回のみ入力したコマンド）" ? t(set) : set }))}</b> <span class="muted">${esc(t("— 対象 {n} 台: {d}", { n: bySet[set].devices.length, d: bySet[set].devices.slice(0, 10).join(", ") + (bySet[set].devices.length > 10 ? t(" ほか {n} 台", { n: bySet[set].devices.length - 10 }) : "") }))}</span></div>
+        <div><b>${esc(t("コマンドセット「{s}」", { s: set === "（今回のみ入力したコマンド）" ? t(set) : set }))}</b> <span class="muted">${esc(t("— 対象 {n} 台: {d}", { n: devices.length, d: devices.slice(0, 10).join(", ") + (devices.length > 10 ? t(" ほか {n} 台", { n: devices.length - 10 }) : "") }))}</span></div>
         <table style="margin-top:6px"><tbody>
-          ${bySet[set].hits.map(h => `<tr><td class="muted" style="padding:3px 8px 3px 0;width:36px">#${h.index + 1}</td><td class="mono" style="padding:3px 8px 3px 0">${esc(h.text)}</td><td class="muted" style="padding:3px 0;color:var(--warn)">${esc(t(h.reason))}</td></tr>`).join("")}
+          ${hits.map(h => `<tr><td class="muted" style="padding:3px 8px 3px 0;width:36px">#${h.index + 1}</td><td class="mono dg-text" style="padding:3px 8px 3px 0">${textCell(h.texts)}</td><td class="muted" style="padding:3px 0;color:var(--warn)">${esc(t(h.reason))}</td></tr>`).join("")}
         </tbody></table>
       </div>`).join("");
     const node = h(`<div>

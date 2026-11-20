@@ -2135,6 +2135,14 @@ func (a *App) SaveCommandSet(cs model.CommandSet) error {
 // replaces by name, so a typo of an existing name silently overwrote that
 // set's commands on every device that used it.
 func (a *App) CreateCommandSet(cs model.CommandSet) error {
+	return a.CreateCommandSetFrom(cs, "")
+}
+
+// CreateCommandSetFrom is CreateCommandSet for a 複製: the new set takes
+// the list read into the set named fillFrom ("" for none). The values are
+// the vault's, never the page's: a Fill the page sends is dropped, so the
+// path 読み直す reads stays one a dialog picked.
+func (a *App) CreateCommandSetFrom(cs model.CommandSet, fillFrom string) error {
 	if err := checkCommandSet(&cs); err != nil {
 		return err
 	}
@@ -2149,16 +2157,16 @@ func (a *App) CreateCommandSet(cs model.CommandSet) error {
 			return fmt.Errorf("「%s」は既にあります", cs.Name)
 		}
 	}
-	snap := a.snapshotLocked()
-	// A 複製 of a set with a linked list keeps the link (the page sends
-	// the source's); anything else it may send is checked as a link is.
-	if cs.Fill != nil {
-		if err := checkSetFill(cs.Fill); err != nil {
+	cs.Fill = nil
+	if fillFrom != "" {
+		src := setNamed(a.inv, fillFrom)
+		if src == nil || src.Fill == nil {
 			a.mu.Unlock()
-			return err
+			return fmt.Errorf("複製元「%s」が読み込んだ一覧ファイルが見つかりません。変数の値の「✕ 外す」を押してから保存し、そのあとで一覧ファイルを読み込んでください", fillFrom)
 		}
-		cs.Fill = cs.Fill.Clone()
+		cs.Fill = src.Fill.Clone()
 	}
+	snap := a.snapshotLocked()
 	a.inv.CommandSets = append(a.inv.CommandSets, cs)
 	a.mu.Unlock()
 	return a.persistOr(snap, nil)
@@ -2967,7 +2975,10 @@ func (a *App) CheckDangerousCommands(req RunRequest) []DangerWarning {
 }
 
 // dangerOf lists, per device of a run snapshot, the commands of its set
-// that change the device.
+// that change the device. A set that fills in values is read with the
+// device's values in — what is sent, not what is written: a line that is
+// only {{CMD}} changes the device when its value does. (A device whose
+// values cannot be filled in is not run; its lines are read as written.)
 func dangerOf(snap *model.Inventory) []DangerWarning {
 	out := []DangerWarning{}
 	sets := map[string]*model.CommandSet{}
@@ -2979,14 +2990,19 @@ func dangerOf(snap *model.Inventory) []DangerWarning {
 		if d.CommandSet == "" {
 			continue
 		}
+		cs := sets[d.CommandSet]
+		if cs != nil && cs.Fill != nil && model.HasFill(cs.Commands) {
+			if cmds, err := expandFor(cs, cs.Fill.RowsFor(d.Name)); err == nil {
+				if hits := guard.Check(commandTexts(cmds)); len(hits) > 0 {
+					out = append(out, DangerWarning{Device: d.Name, CommandSet: d.CommandSet, Hits: hits})
+				}
+				continue
+			}
+		}
 		hits, ok := scanned[d.CommandSet]
 		if !ok {
-			if cs := sets[d.CommandSet]; cs != nil {
-				texts := make([]string, len(cs.Commands))
-				for i, c := range cs.Commands {
-					texts[i] = c.Text
-				}
-				hits = guard.Check(texts)
+			if cs != nil {
+				hits = guard.Check(commandTexts(cs.Commands))
 			}
 			scanned[d.CommandSet] = hits
 		}
@@ -2995,6 +3011,14 @@ func dangerOf(snap *model.Inventory) []DangerWarning {
 		}
 	}
 	return out
+}
+
+func commandTexts(cmds []model.Command) []string {
+	texts := make([]string, len(cmds))
+	for i, c := range cmds {
+		texts[i] = c.Text
+	}
+	return texts
 }
 
 // ---- 作業サイクル（対話接続の作業フォルダ） ----
@@ -4142,7 +4166,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.10.4"
+const appVersion = "1.10.5"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

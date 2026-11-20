@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"testing"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 // The device's address and the browser's spelling of it are one origin:
@@ -99,5 +101,18 @@ func TestComHandlersShareVtable(t *testing.T) {
 	// The object's first word is the vtable pointer, as COM reads it.
 	if *(*uintptr)(unsafe.Pointer(a)) != uintptr(unsafe.Pointer(&comHandlerVtbl)) {
 		t.Error("vtable pointer not first")
+	}
+}
+
+// The exe carries its icon twice: #1 is what Explorer, the tray and the GUI
+// window read, #3 is what Wails loads for its windows (winc.AppIconID). With
+// only #1 the title bars showed the Windows default icon (2026-11-20).
+func TestAppIconResources(t *testing.T) {
+	var inst windows.Handle
+	_ = windows.GetModuleHandleEx(0, nil, &inst)
+	for _, id := range []uintptr{1, 3} {
+		if h, _, _ := procLoadIconW.Call(uintptr(inst), id); h == 0 {
+			t.Errorf("icon resource #%d is not in the exe (build/windows/winres.json, then go-winres make)", id)
+		}
 	}
 }

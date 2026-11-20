@@ -264,7 +264,7 @@ tr.sc-dim td { opacity: .65; }
 .tp-wrap select { width: auto; padding-right: 6px; }
 .tp-wrap span { font-size: 12px; color: var(--text-dim); margin-right: 4px; }
 /* The command set editor: room for the command, its 待つ文字列 and pauses. */
-.modal.set-edit { width: min(900px, 94vw); }
+.modal.set-edit { width: min(980px, 94vw); }
 .modal h3 { margin: 0 0 18px; font-size: 17px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 .section-label { font-size: 12px; color: var(--accent); text-transform: uppercase;
@@ -891,7 +891,7 @@ tr.cmd-rep td input.c-text { color: #c4b5fd; }
 .cw-l { height: 20px; line-height: 20px; white-space: nowrap; overflow: hidden; }
 .cw-chip { font-size: 11px; line-height: 15px; padding: 0 7px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-3); color: var(--text-dim); cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: italic; vertical-align: middle; }
 .cw-chip.ovr { color: #fbbf24; border-color: #a16207; font-style: normal; font-weight: 600; }
-.cw-pop { position: absolute; right: 8px; width: 340px; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 20; font-size: 12px; display: flex; flex-direction: column; gap: 8px; }
+.cw-pop { position: absolute; right: 8px; width: 400px; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,.4); z-index: 20; font-size: 12px; display: flex; flex-direction: column; gap: 8px; }
 .cw-pop .rw { display: flex; gap: 6px; align-items: center; }
 .cs-l1 input:not([type=checkbox]), .cs-l2 input, .cs-bulkbar input, .cw-pop input { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; font: inherit; font-size: 13px; }
 .cs-l1 input:not([type=checkbox]) { padding: 7px 10px; }
