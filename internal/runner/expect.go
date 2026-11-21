@@ -52,6 +52,14 @@ type expecter struct {
 	tee     func([]byte) // when set, also gets every byte the transcript gets (a batch device's live log)
 	onClose func()       // called once when the read loop ends (session closed)
 
+	// The watch for the jump host's shell coming back (jumpback.go):
+	// the prompt line of the jump host the device was reached from, the
+	// latest output, whether it ended there, and who is told.
+	jumpPrompt string
+	jumpTail   string
+	jumpBack   bool
+	jumpFn     func()
+
 	lastData time.Time // when the last byte arrived (creation time until then)
 
 	// eol ends a line sent to this transport. CRLF for Telnet; CR for SSH and
@@ -118,6 +126,7 @@ func (e *expecter) readLoop() {
 				chunk := make([]byte, n)
 				copy(chunk, tmp[:n])
 				sink(chunk)
+				e.watchJump(chunk)
 			} else {
 				select {
 				case e.newData <- struct{}{}:

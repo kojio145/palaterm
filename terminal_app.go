@@ -94,6 +94,12 @@ type Term struct {
 	rightClick  string // Settings.RightClickPaste() once the vault is open
 	lang        string
 	exp         *runpkg.Expecter // the live session's line (SendBreak)
+	// atJump: the live session's output came back to the jump host's shell
+	// (the device ended its session, the line to the jump host still up):
+	// Reconnect closes it and logs in again. again marks that close, so its
+	// term:closed says so (termClosed.Again).
+	atJump bool
+	again  bool
 	pasteProc   *os.Process      // the open paste-confirmation window (ended on Lock)
 	pasteIn     io.WriteCloser   // its stdin (pasteLineDump before Lock ends it)
 	pasteInMu   sync.Mutex       // one writer on it at a time (the request, then Lock's line)
@@ -790,6 +796,9 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		// Not live any more: closing the window needs no confirmation, and
 		// Reconnect may open the session again.
 		t.send, t.resizeFn, t.closeFn, t.exp = nil, nil, nil, nil
+		t.atJump = false
+		again := t.again
+		t.again = false
 		t.mu.Unlock()
 		t.bcastReport() // no longer takes keys from the other windows
 		p, _ := slog.Close()
@@ -823,7 +832,7 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 				return history.AddSession(prev, session(done)), true
 			})
 		}
-		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, LogPath: p})
+		runtime.EventsEmit(t.ctx, "term:closed", termClosed{Device: t.label, LogPath: p, Again: again})
 	}
 	var send func(string) error
 	var resize func(cols, rows int) error
@@ -836,8 +845,17 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	// A multi-line paste goes out a line at a time on a console (see
 	// pacedSend); keys typed one by one are not held.
 	send = pacedSend(send, settings.PasteLineDelay(d.Conn))
+	// Through jump hosts, the device ending its session leaves the line on
+	// the jump host's shell: the window is told, and offers 再接続.
+	exp.OnBackAtJump(func() {
+		t.mu.Lock()
+		t.atJump = true
+		t.mu.Unlock()
+		runtime.EventsEmit(t.ctx, "term:jump-back")
+	})
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
+	t.atJump = false
 	cols, rows := t.cols, t.rows
 	t.mu.Unlock()
 	// The screen may have changed while the login ran (並べて接続 placing
@@ -1594,18 +1612,30 @@ func (t *Term) RightClickPaste() string {
 }
 
 // Reconnect opens the session again after it ended (a reloaded device, a
-// dropped line), with the same device and mode — Tera Term's reconnect.
+// dropped line), with the same device and mode — Tera Term's reconnect. A
+// session whose line came back to the jump host's shell (atJump) is closed
+// first, and the login runs again from the first jump host.
 func (t *Term) Reconnect() error {
 	if t.isLocked() {
 		return errLocked
 	}
 	t.mu.Lock()
-	pw, live := t.pw, t.send != nil
+	pw, live, atJump := t.pw, t.send != nil, t.atJump
 	t.mu.Unlock()
 	if pw == "" {
 		return fmt.Errorf("ロック中です。本体で解錠してから再接続してください")
 	}
 	if live {
+		if !atJump {
+			return nil
+		}
+		t.mu.Lock()
+		t.again = true
+		t.mu.Unlock()
+		t.closeSession(termCloseWait)
+		if !t.startConnect(pw) {
+			return fmt.Errorf("前の接続を閉じきれませんでした。もう一度「再接続」を押してください")
+		}
 		return nil
 	}
 	t.startConnect(pw)

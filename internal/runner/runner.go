@@ -711,6 +711,9 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	if jerr := hop.check(exp); jerr != nil {
 		return exp, prof, "", fmt.Errorf("機器へのジャンプに失敗: %w", jerr)
 	}
+	if hop != nil {
+		exp.setJumpPrompt(hop.prompt) // a terminal window watches for it (OnBackAtJump)
+	}
 
 	warn, err = r.disablePager(ctx, exp, prof, vars, dev, emit, cmdTimeout)
 	return exp, prof, warn, err

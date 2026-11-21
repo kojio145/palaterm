@@ -3966,6 +3966,10 @@ type termClosed struct {
 	// AtJumpLogin: that open line is at a jump host's own login or password
 	// prompt (the hop's login failed): neither the device nor a shell.
 	AtJumpLogin bool `json:"atJumpLogin,omitempty"`
+	// Again: the session was closed to be opened again at once (再接続
+	// pressed while the line was back on the jump host): the window stays
+	// at 接続中… instead of offering a reconnect.
+	Again bool `json:"again,omitempty"`
 }
 
 // SpawnTerminal opens the interactive terminal for a device in a separate,
@@ -4166,7 +4170,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.10.5"
+const appVersion = "1.10.6"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

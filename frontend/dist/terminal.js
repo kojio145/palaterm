@@ -815,7 +815,28 @@ async function bootTerminalWindow() {
   // The group is known before the connection is made: a window whose first
   // connection fails (term:ready never names it) has it in its title too.
   rt().EventsOn("term:device", ev => { osTitleGroup = (ev && ev.group) || ""; });
+  // Through jump hosts, the device ending its session (its idle timeout,
+  // exit) leaves the line up on the jump host's shell: no term:closed comes,
+  // and the window read 接続済み with nothing to press. The backend sees the
+  // jump host's shell come back (term:jump-back): the window says so and
+  // offers 再接続, which closes the line and logs in again from the start.
+  // Enter still goes to the jump host (the line is live).
+  rt().EventsOn("term:jump-back", () => {
+    if (closed || connecting) return;
+    stateBase = t("踏み台に戻りました");
+    stateEl.className = "pill warn";
+    renderState();
+    setOSTitle("", "", t("踏み台に戻りました"));
+    reconnectBtn.classList.remove("hidden");
+    reconnectBtn.dataset.tip = t("機器のセッションが終わり、踏み台に戻っています。押すと、つなぎ直して機器まで自動でログインします");
+  });
   rt().EventsOn("term:closed", ev => {
+    // Closed to be opened again at once (再接続 on the jump host's shell):
+    // the window stays at 接続中… for the login that follows.
+    if (ev.again) {
+      if (ev.logPath) term.write("\x1b[36m" + t("[ログ保存] ") + ev.logPath + "\x1b[0m\r\n");
+      return;
+    }
     closed = true;
     stateBase = "";
     setHkAsk(false);
