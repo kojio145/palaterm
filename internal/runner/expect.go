@@ -59,6 +59,11 @@ type expecter struct {
 	jumpTail   string
 	jumpBack   bool
 	jumpFn     func()
+	// The same watch on a session reached without jump hosts (a serial
+	// console above all): the device's login prompt coming back (loginWatch,
+	// see loggedOutAtLogin), told once the output has paused (loginSeq).
+	loginWatch bool
+	loginSeq   uint64
 
 	lastData time.Time // when the last byte arrived (creation time until then)
 

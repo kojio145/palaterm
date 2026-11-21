@@ -713,6 +713,8 @@ func (r *Runner) connect(ctx context.Context, dev *model.Device, s model.Setting
 	}
 	if hop != nil {
 		exp.setJumpPrompt(hop.prompt) // a terminal window watches for it (OnBackAtJump)
+	} else {
+		exp.setLoginWatch() // the device's login prompt coming back (a console: OnBackAtJump)
 	}
 
 	warn, err = r.disablePager(ctx, exp, prof, vars, dev, emit, cmdTimeout)

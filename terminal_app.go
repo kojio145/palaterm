@@ -846,12 +846,15 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	// pacedSend); keys typed one by one are not held.
 	send = pacedSend(send, settings.PasteLineDelay(d.Conn))
 	// Through jump hosts, the device ending its session leaves the line on
-	// the jump host's shell: the window is told, and offers 再接続.
+	// the jump host's shell; on a console (serial, a console server's port)
+	// it leaves the line on the device's login prompt. The window is told,
+	// and offers 再接続.
+	atLogin := exp.AtLoginWatch()
 	exp.OnBackAtJump(func() {
 		t.mu.Lock()
 		t.atJump = true
 		t.mu.Unlock()
-		runtime.EventsEmit(t.ctx, "term:jump-back")
+		runtime.EventsEmit(t.ctx, "term:jump-back", map[string]bool{"login": atLogin})
 	})
 	t.mu.Lock()
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp

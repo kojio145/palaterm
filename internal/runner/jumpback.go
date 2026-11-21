@@ -3,6 +3,7 @@ package runner
 import (
 	"regexp"
 	"strings"
+	"time"
 )
 
 // A terminal window logged in through jump hosts (by commands typed on
@@ -60,25 +61,91 @@ func (e *expecter) setJumpPrompt(prompt string) {
 }
 
 // OnBackAtJump has fn called, from the read loop, each time the output of
-// an interactive session comes back to the jump host's shell (backAtJump).
-// Nothing happens for a session that did not go through jump hosts by
-// commands typed on them.
+// an interactive session comes back to the jump host's shell (backAtJump),
+// or, on a session reached without jump hosts, rests on the device's login
+// prompt (loggedOutAtLogin; AtLoginWatch tells which).
 func (e *expecter) OnBackAtJump(fn func()) {
 	e.mu.Lock()
 	e.jumpFn = fn
 	e.mu.Unlock()
 }
 
+// A serial console holds no session either: when the device logs the user
+// out (its exec timeout, exit), the port stays open and the console just
+// shows the login prompt again, so the window went on reading 接続済み
+// with nothing to press, as through jump hosts. The same goes for a Telnet
+// or SSH line to a console server's port. On a session reached without
+// jump hosts the window watches for the device's login prompt instead:
+//
+//   - the line the screen is on now asking for the login name ("Username:",
+//     "lab1 login:"), not a "Last login:" line;
+//   - or the last line Cisco's "Press RETURN to get started." with nothing
+//     after it.
+//
+// A password prompt alone does not count ("enable" asks for one too).
+// Because a line may be cut anywhere between two chunks of output, the
+// window is told only once the output has paused (loginSettle) on it.
+
+// reLoginLine is a login prompt as the current line, spaces trimmed.
+var reLoginLine = regexp.MustCompile(`(?i)(?:^|\s)(?:login|username|user name)\s*:$`)
+
+// reLastLogin is a shell's "Last login: …", cut after its colon.
+var reLastLogin = regexp.MustCompile(`(?i)\blast\s+login\s*:$`)
+
+// rePressReturn is Cisco's console line after a session ended.
+var rePressReturn = regexp.MustCompile(`(?i)^press return to get started\.?$`)
+
+// loginSettle is how long the output must stay on a login prompt before the
+// window is told.
+var loginSettle = 400 * time.Millisecond
+
+// loggedOutAtLogin reports that tail, the latest output, ends on the device's
+// login prompt.
+func loggedOutAtLogin(tail string) bool {
+	text := reEscape.ReplaceAllString(tail, "")
+	line := currentLine(text)
+	if line != "" {
+		return (reLoginLine.MatchString(line) && !reLastLogin.MatchString(line)) || rePressReturn.MatchString(line)
+	}
+	last := ""
+	for _, l := range strings.FieldsFunc(text, func(r rune) bool { return r == '\r' || r == '\n' }) {
+		if l = strings.TrimSpace(l); l != "" {
+			last = l
+		}
+	}
+	return rePressReturn.MatchString(last)
+}
+
+// setLoginWatch has a terminal window watch for the device's login prompt
+// coming back (a login without jump hosts by commands typed on them).
+func (e *expecter) setLoginWatch() {
+	e.mu.Lock()
+	e.loginWatch = true
+	e.mu.Unlock()
+}
+
+// AtLoginWatch reports that the watch is for the device's login prompt
+// (loggedOutAtLogin) rather than a jump host's shell.
+func (e *expecter) AtLoginWatch() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.jumpPrompt == "" && e.loginWatch
+}
+
 // watchJump is the read loop's step for a chunk of interactive output.
 func (e *expecter) watchJump(chunk []byte) {
 	e.mu.Lock()
-	if e.jumpFn == nil || e.jumpPrompt == "" {
+	if e.jumpFn == nil || (e.jumpPrompt == "" && !e.loginWatch) {
 		e.mu.Unlock()
 		return
 	}
 	e.jumpTail += string(chunk)
 	if len(e.jumpTail) > jumpTailMax {
 		e.jumpTail = e.jumpTail[len(e.jumpTail)-jumpTailMax:]
+	}
+	if e.jumpPrompt == "" {
+		e.watchLoginLocked()
+		return
 	}
 	back := backAtJump(e.jumpTail, e.jumpPrompt)
 	fire := back && !e.jumpBack
@@ -88,4 +155,33 @@ func (e *expecter) watchJump(chunk []byte) {
 	if fire {
 		fn()
 	}
+}
+
+// watchLoginLocked is watchJump's step on a session without jump hosts,
+// with e.mu held (it unlocks): the window is told when the output comes to
+// rest on the device's login prompt, once each time it does.
+func (e *expecter) watchLoginLocked() {
+	e.loginSeq++
+	seq := e.loginSeq
+	back := loggedOutAtLogin(e.jumpTail)
+	if !back {
+		e.jumpBack = false
+	}
+	arm := back && !e.jumpBack
+	e.mu.Unlock()
+	if !arm {
+		return
+	}
+	time.AfterFunc(loginSettle, func() {
+		e.mu.Lock()
+		fire := e.loginSeq == seq && !e.jumpBack && e.jumpFn != nil && !e.closed
+		if fire {
+			e.jumpBack = true
+		}
+		fn := e.jumpFn
+		e.mu.Unlock()
+		if fire {
+			fn()
+		}
+	})
 }

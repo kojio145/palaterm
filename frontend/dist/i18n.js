@@ -1230,6 +1230,8 @@ const I18N_EN = {
   "[Enter または「再接続」でもう一度接続します]": "[Press Enter or Reconnect to connect again]",
   "[再接続します]": "[Reconnecting]",
   "踏み台に戻りました": "Back on the jump host",
+  "ログイン画面に戻りました": "Back at the login prompt",
+  "機器がログアウトし、ログイン画面に戻っています。押すと、つなぎ直して自動でログインします": "The device logged you out and is back at its login prompt. Press to connect again and log in automatically",
   "機器のセッションが終わり、踏み台に戻っています。押すと、つなぎ直して機器まで自動でログインします": "The device ended its session and the line is back on the jump host. Press to connect again and log in to the device automatically",
   "前の接続を閉じきれませんでした。もう一度「再接続」を押してください": "The previous connection did not close in time. Press Reconnect again",
   "ブレーク信号を送りました": "Break signal sent",

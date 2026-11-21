@@ -821,14 +821,20 @@ async function bootTerminalWindow() {
   // jump host's shell come back (term:jump-back): the window says so and
   // offers 再接続, which closes the line and logs in again from the start.
   // Enter still goes to the jump host (the line is live).
-  rt().EventsOn("term:jump-back", () => {
+  // A console (serial, a console server's port) is the same: the device
+  // logging out leaves the port open on its login prompt (ev.login).
+  rt().EventsOn("term:jump-back", ev => {
     if (closed || connecting) return;
-    stateBase = t("踏み台に戻りました");
+    const login = !!(ev && ev.login);
+    const st = login ? t("ログイン画面に戻りました") : t("踏み台に戻りました");
+    stateBase = st;
     stateEl.className = "pill warn";
     renderState();
-    setOSTitle("", "", t("踏み台に戻りました"));
+    setOSTitle("", "", st);
     reconnectBtn.classList.remove("hidden");
-    reconnectBtn.dataset.tip = t("機器のセッションが終わり、踏み台に戻っています。押すと、つなぎ直して機器まで自動でログインします");
+    reconnectBtn.dataset.tip = login
+      ? t("機器がログアウトし、ログイン画面に戻っています。押すと、つなぎ直して自動でログインします")
+      : t("機器のセッションが終わり、踏み台に戻っています。押すと、つなぎ直して機器まで自動でログインします");
   });
   rt().EventsOn("term:closed", ev => {
     // Closed to be opened again at once (再接続 on the jump host's shell):
