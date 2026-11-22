@@ -434,9 +434,46 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--accent);
   .zoom-pct { font-size: 10px; }
 }
 
-/* About dialog */
-.about-box { text-align: center; padding: 8px 6px 2px; }
-.about-box .brand { font-size: 30px; }
+/* バージョン情報 (update.js): the author card under the version check,
+   framed the way the old about dialog was. */
+.about-card {
+  position: relative; overflow: hidden; max-width: 760px; margin-top: 16px;
+  text-align: center; padding: 22px 20px 18px; border-radius: 14px;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 14px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.about-card::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+}
+.about-card .brand { font-size: 30px; }
+.about-card .about-rows { margin-top: 10px; line-height: 1.9; user-select: none; }
+.about-links { margin-top: 8px; font-size: 13px; color: var(--text-dim); }
+.about-links a { color: var(--accent); margin: 0 8px; text-decoration: none; }
+.about-links a:hover { text-decoration: underline; }
+/* Three clicks on the author's name: the icon pops up. */
+.author-pop {
+  position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,.55); animation: author-fade .2s ease-out;
+}
+.author-pop img {
+  width: min(240px, 60vw); height: auto; filter: drop-shadow(0 18px 40px rgba(0,0,0,.6));
+  animation: author-pop .45s cubic-bezier(.2,1.4,.4,1);
+}
+@keyframes author-fade { from { opacity: 0; } to { opacity: 1; } }
+.author-hello {
+  padding: 22px 34px; border-radius: 18px; font-size: 30px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6); border: 3px solid #fff;
+  box-shadow: 0 18px 50px rgba(0,0,0,.55); white-space: nowrap;
+  animation: author-pop .45s cubic-bezier(.2,1.4,.4,1);
+}
+@keyframes author-pop { from { transform: scale(.2) rotate(-12deg); opacity: 0; } to { transform: scale(1) rotate(0); opacity: 1; } }
+/* The version under the logo in the sidebar: opens バージョン情報. */
+.side-ver {
+  display: block; margin-top: 2px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 500; color: var(--text-dim);
+}
+.side-ver:hover { color: var(--text); text-decoration: underline; }
 .about-rows { margin: 14px auto 0; font-size: 13px; color: var(--text-dim); line-height: 2; }
 
 /* Per-device command progress (run tab) */

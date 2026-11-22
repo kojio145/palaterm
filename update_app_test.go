@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestVersionNewer(t *testing.T) {
 	cases := []struct {
@@ -33,5 +36,24 @@ func TestUsageNotes(t *testing.T) {
 	}
 	if got := noteBody("Fixes.\r\n\r\n## Download\r\n\r\nzip"); got != "Fixes." {
 		t.Fatalf("noteBody: %q", got)
+	}
+}
+
+// The new exe goes beside the running one (its data, logs and export
+// folders), and no probe file is left behind there.
+func TestUpdateDirIsAppDir(t *testing.T) {
+	d := updateDir()
+	if !sameDir(d, exeDir()) {
+		t.Fatalf("updateDir() = %q, want the exe folder %q", d, exeDir())
+	}
+	m, _ := filepath.Glob(filepath.Join(exeDir(), "PalaTerm-download-*.part"))
+	if len(m) != 0 {
+		t.Fatalf("left behind: %v", m)
+	}
+	if !dirWritable(t.TempDir()) {
+		t.Fatal("a temp folder should be writable")
+	}
+	if dirWritable(filepath.Join(t.TempDir(), "missing")) {
+		t.Fatal("a missing folder is not writable")
 	}
 }

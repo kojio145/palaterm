@@ -1,8 +1,9 @@
 package main
 
 // 最新版の確認: the 管理 tab's page asks GitHub for the newest public release
-// of PalaTerm, and on request downloads its PalaTerm.exe into the user's
-// Downloads folder. Nothing is sent or fetched until a button is pressed;
+// of PalaTerm, and on request downloads its PalaTerm.exe into the folder
+// PalaTerm.exe runs from (the Downloads folder when that one cannot be
+// written to). Nothing is sent or fetched until a button is pressed;
 // the running exe is never replaced (the user swaps it after closing).
 
 import (
@@ -35,6 +36,9 @@ const (
 	// sections start (the newest first), for when no version is known.
 	manualChanges    = "https://kojio145.github.io/palaterm/manual.html#changes-%s"
 	manualChangesTop = "https://kojio145.github.io/palaterm/manual.html#changes"
+	// The links on the バージョン情報 page (the author card).
+	repoPage   = "https://github.com/kojio145/palaterm"
+	manualPage = "https://kojio145.github.io/palaterm/manual.html"
 	// usageRaw is the user guide of a tag: its 「vX での変更」 sections are
 	// the release notes in Japanese.
 	usageRaw = "https://raw.githubusercontent.com/kojio145/palaterm/%s/docs/USAGE.md"
@@ -56,8 +60,10 @@ type UpdateInfo struct {
 	// HasDigest: the release gives the exe's SHA-256 (the download is
 	// checked against it; without one, against the size only).
 	HasDigest bool `json:"hasDigest"`
-	// SaveDir is the folder a download goes to.
-	SaveDir string `json:"saveDir"`
+	// SaveDir is the folder a download goes to; InAppDir: it is the
+	// folder this PalaTerm.exe runs from.
+	SaveDir  string `json:"saveDir"`
+	InAppDir bool   `json:"inAppDir"`
 	// Notes are the changes of every release newer than this build, the
 	// newest first: in Japanese from the user guide when the page is in
 	// Japanese and the guide could be read (Lang "ja"), else the English
@@ -318,6 +324,7 @@ func (a *App) CheckLatestVersion() (*UpdateInfo, error) {
 		return nil, err
 	}
 	info := &UpdateInfo{Current: appVersion, Latest: strings.TrimPrefix(rel.TagName, "v"), URL: releasePage, Notes: []ReleaseNote{}, Lang: "en", SaveDir: updateDir()}
+	info.InAppDir = sameDir(info.SaveDir, exeDir())
 	info.Newer = versionNewer(rel.TagName, appVersion)
 	if info.Newer {
 		if notes, lang := a.releaseNotes(rel.TagName, appVersion); len(notes) > 0 {
@@ -336,9 +343,15 @@ func (a *App) CheckLatestVersion() (*UpdateInfo, error) {
 	return info, nil
 }
 
-// updateDir is where a downloaded exe goes: the user's Downloads folder,
-// or export\ beside the exe when there is none.
+// updateDir is where a downloaded exe goes: the folder PalaTerm.exe runs
+// from (beside its data, logs and export folders, so the new exe uses them
+// as they are), the user's Downloads folder when that folder cannot be
+// written to (Program Files, a read-only share), or export\ beside the exe
+// when there is neither.
 func updateDir() string {
+	if d := exeDir(); dirWritable(d) {
+		return d
+	}
 	if h := os.Getenv("USERPROFILE"); h != "" {
 		d := filepath.Join(h, "Downloads")
 		if st, err := os.Stat(d); err == nil && st.IsDir() {
@@ -348,8 +361,30 @@ func updateDir() string {
 	return filepath.Join(exeDir(), "export")
 }
 
+// dirWritable reports whether a file can be made in dir (it makes and
+// removes one).
+func dirWritable(dir string) bool {
+	f, err := os.CreateTemp(dir, "PalaTerm-download-*.part")
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return true
+}
+
+// sameDir reports whether a and b name the same folder.
+func sameDir(a, b string) bool {
+	if strings.EqualFold(filepath.Clean(a), filepath.Clean(b)) {
+		return true
+	}
+	sa, err1 := os.Stat(a)
+	sb, err2 := os.Stat(b)
+	return err1 == nil && err2 == nil && os.SameFile(sa, sb)
+}
+
 // DownloadLatestVersion downloads the newest release's PalaTerm.exe into
-// the Downloads folder as PalaTerm-v<版>.exe and returns its path. The file
+// updateDir() as PalaTerm-v<版>.exe and returns its path. The file
 // is checked against the size and, when GitHub gives one, the SHA-256 of
 // the release asset.
 func (a *App) DownloadLatestVersion() (string, error) {
@@ -477,6 +512,17 @@ func (a *App) OpenReleasePage(version string) {
 		return
 	}
 	runtime.BrowserOpenURL(a.ctx, releasePage)
+}
+
+// OpenProjectPage opens the repository ("github") or the manual ("manual")
+// in the browser, from the バージョン情報 page. Only these fixed addresses.
+func (a *App) OpenProjectPage(which string) {
+	switch which {
+	case "github":
+		runtime.BrowserOpenURL(a.ctx, repoPage)
+	case "manual":
+		runtime.BrowserOpenURL(a.ctx, manualPage)
+	}
 }
 
 // OpenAppFolder shows the folder of the running PalaTerm.exe (where the

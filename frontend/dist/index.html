@@ -29,7 +29,7 @@
   <!-- Main app -->
   <div id="app" class="app hidden">
     <nav class="sidebar">
-      <div class="side-brand"><span class="logo">Pala</span>Term</div>
+      <div class="side-brand"><span class="logo">Pala</span>Term<button type="button" class="side-ver" id="side-ver"></button></div>
       <!-- Grouped by when they are used. The headings are labels, not
            buttons (no focus, no click). data-i18n names the English entry
            when the same Japanese word means something else elsewhere
@@ -49,7 +49,7 @@
       <div class="nav-group">
         <div class="nav-head" data-i18n="メニュー見出し:管理">管理</div>
         <button class="nav-btn" data-tab="settings">設定</button>
-        <button class="nav-btn" data-tab="update">最新版の確認</button>
+        <button class="nav-btn" data-tab="update">バージョン情報</button>
       </div>
       <div class="side-spacer"></div>
       <!-- Page zoom (app.js wireMainZoom): A− / A+, also Ctrl+wheel,
@@ -64,7 +64,6 @@
         <option value="ja">🌐 日本語</option>
       </select>
       <button class="nav-btn subtle" id="btn-chpw">パスワード変更</button>
-      <button class="nav-btn subtle" id="btn-about">バージョン情報</button>
       <button class="nav-btn subtle" id="btn-lock">ロック</button>
     </nav>
 

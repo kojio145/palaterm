@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.10.7";
+const APP_VERSION = "1.10.8";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -1652,21 +1652,15 @@ async function resetVaultFlow() {
   };
 }
 
-// ---- about dialog ----
-$("#btn-about").onclick = () => {
-  const node = h(`<div class="about-box">
-    <div class="brand"><span class="logo">Pala</span>Term</div>
-    <div class="brand-sub" style="margin-bottom:0">Parallel SSH / Telnet / Serial Access</div>
-    <div class="about-rows">
-      ${esc(t("バージョン"))} ${esc(APP_VERSION)}<br>
-      ${esc(t("作者"))}: ${esc(APP_AUTHOR)}<br>
-      MIT License &copy; 2026 ${esc(APP_AUTHOR)}
-    </div>
-    <div class="modal-actions" style="justify-content:center"><button class="btn" id="ab-close">${esc(t("閉じる"))}</button></div>
-  </div>`);
-  openModal(node);
-  node.querySelector("#ab-close").onclick = closeModal;
-};
+// ---- the version under the logo ----
+// Always shown (asked about on the phone: "which version?"); a click opens
+// the バージョン情報 tab, which took over the old about dialog (update.js).
+{
+  const v = $("#side-ver");
+  v.textContent = "v" + APP_VERSION;
+  v.dataset.tip = t("バージョン情報を開く");
+  v.onclick = () => switchTab("update");
+}
 
 // ---- language selector (persisted; the UI re-renders via reload) ----
 {
