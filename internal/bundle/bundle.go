@@ -182,6 +182,26 @@ func keepCredentials(d *model.Device, cur model.Device) bool {
 	return kept
 }
 
+// movedTo describes how d's address differs from cur's ("192.0.2.10 →
+// 192.0.2.66"), or "" when it is the same place: the host (case aside),
+// the port, the connection method, and for serial the COM port.
+func movedTo(d, cur model.Device) string {
+	where := func(x model.Device) string {
+		w := string(x.Conn) + " " + x.Host
+		if x.Conn == model.ConnSerial {
+			w = string(x.Conn) + " " + x.SerialPort
+		} else if x.Port > 0 {
+			w += fmt.Sprintf(":%d", x.Port)
+		}
+		return strings.TrimSpace(w)
+	}
+	if strings.EqualFold(d.Host, cur.Host) && d.EffectivePort() == cur.EffectivePort() && d.Conn == cur.Conn &&
+		(d.Conn != model.ConnSerial || strings.EqualFold(d.SerialPort, cur.SerialPort)) {
+		return ""
+	}
+	return where(cur) + " → " + where(d)
+}
+
 // FileNameSafe turns s into one plain file (or folder) name: the characters
 // Windows forbids become "_", as do the names that would leave the folder
 // ("..", ".") or that Windows reserves (CON, COM1…); a trailing dot or space
@@ -241,18 +261,31 @@ func FormatCommandSet(s model.CommandSet) string {
 	if s.PauseOff {
 		b.WriteString(directive + "pause=off\r\n")
 	}
+	if s.Default != nil {
+		if j, err := json.Marshal(s.Default); err == nil {
+			fmt.Fprintf(&b, "%sdefault=%s\r\n", directive, j)
+		}
+	}
 	for _, c := range s.Commands {
 		if c.Wait != "" {
 			fmt.Fprintf(&b, "%swait=%s\r\n", directive, c.Wait)
 		}
-		fmt.Fprintf(&b, "%s,%d,%d\r\n", c.Text, c.PauseSec, c.SerialSec)
+		// A command starting with "#" would read back as a comment: it
+		// goes in a cmd= directive instead (review 2026-11-23).
+		lead := ""
+		if strings.HasPrefix(strings.TrimSpace(c.Text), "#") {
+			lead = directive + "cmd="
+		}
+		fmt.Fprintf(&b, "%s%s,%d,%d\r\n", lead, c.Text, c.PauseSec, c.SerialSec)
 	}
 	return b.String()
 }
 
 // directive starts the comment lines that carry what the "command,pause,
 // pause" lines cannot: "pause=off" (待機秒を使わない) for the whole set, and
-// "wait=<text>" (待つ文字列) for the command on the next line. Being
+// "wait=<text>" (待つ文字列) for the command on the next line, "default=
+// <json>" (全行の待ち方), and "cmd=<command>,<pause>,<pause>" for a command
+// that itself starts with "#". Being
 // comments, an older PalaTerm (and the legacy .list reader) skips them.
 const directive = "# palaterm: "
 
@@ -276,10 +309,18 @@ func ParseCommandSet(data string) (model.CommandSet, error) {
 				set.PauseOff = true
 			case strings.HasPrefix(d, "wait="):
 				wait = strings.TrimSpace(strings.TrimPrefix(d, "wait="))
+			case strings.HasPrefix(d, "default="):
+				var w model.WaitDefault
+				if json.Unmarshal([]byte(strings.TrimPrefix(d, "default=")), &w) == nil {
+					set.Default = &w
+				}
+			case strings.HasPrefix(d, "cmd="):
+				line = strings.TrimPrefix(d, "cmd=")
 			}
-			continue
-		}
-		if line == "" || strings.HasPrefix(line, "#") {
+			if !strings.HasPrefix(d, "cmd=") {
+				continue
+			}
+		} else if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		text, p1, p2 := line, 1, 1
@@ -588,6 +629,11 @@ type Summary struct {
 	// CredsKept lists existing devices whose row left some credentials
 	// empty and that therefore kept their own (see keepCredentials).
 	CredsKept []string `json:"credsKept"`
+	// CredsNewHost lists those of CredsKept whose row also points the
+	// device somewhere else (host, port, connection method or serial
+	// port): the kept password would go to the new address, so the import
+	// screen shows it as a warning ("name: old → new", review 2026-11-23).
+	CredsNewHost []string `json:"credsNewHost"`
 	// SecretSteps lists the bundle's profile steps that send {password} or
 	// {enable} to something other than a password prompt ("profile: ログイン
 	// 手順 2: 「sername:」 → {password}", see model.SecretSteps): shown on
@@ -629,15 +675,20 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 	s.JumpCommands = []string{}
 	s.SecretCommands = []string{}
 	s.CredsKept = []string{}
+	s.CredsNewHost = []string{}
 	s.SecretSteps = []string{}
 	s.GroupNoCreds = []string{}
 	// A file without 端末の色 (older than v1.8.0) leaves the devices'
 	// colours as they are rather than clearing them: a display preference,
 	// not worth a warning. The other missing columns go back to defaults.
-	keepTint := false
+	// Likewise 文字コード (older than v1.9.34): a device set to Shift_JIS
+	// went back to UTF-8 without a word (review 2026-11-23).
+	keepTint, keepEnc := false, false
 	for _, k := range c.MissingColumns {
 		if k == "termColor" {
 			keepTint = true
+		} else if k == "encoding" {
+			keepEnc = true
 		} else {
 			s.MissingColumns = append(s.MissingColumns, k)
 		}
@@ -792,8 +843,10 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		// Credentials the row leaves empty stay as the existing device has
 		// them (checked before Validate, which looks at the username).
 		credsKept := false
+		var kept model.Device
 		if i, ok := devByKey[devKey(d)]; ok && !inFile[devKey(d)] {
-			credsKept = keepCredentials(&d, inv.Devices[i])
+			kept = inv.Devices[i]
+			credsKept = keepCredentials(&d, kept)
 		}
 		if err := inv.ValidateIn(&d); err != nil {
 			s.Invalid = append(s.Invalid, label+": "+err.Error())
@@ -812,6 +865,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		s.Devices++ // rows actually imported (skipped ones are listed apart)
 		if credsKept {
 			s.CredsKept = append(s.CredsKept, label)
+			if newHost := movedTo(d, kept); newHost != "" {
+				s.CredsNewHost = append(s.CredsNewHost, label+": "+newHost)
+			}
 		}
 		if k, ok := keyMap[d.OSType]; ok {
 			d.OSType = k
@@ -836,6 +892,9 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 			d.ID = inv.Devices[i].ID
 			if keepTint {
 				d.TermColor = inv.Devices[i].TermColor
+			}
+			if keepEnc {
+				d.Encoding = inv.Devices[i].Encoding
 			}
 			if len(s.MissingColumns) > 0 {
 				s.MissingColumnsReset++

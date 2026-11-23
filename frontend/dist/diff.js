@@ -488,7 +488,7 @@ async function bootDiffWindow() {
   $("dw-find-next").onclick = () => fNext(1);
   $("dw-find-prev").onclick = () => fNext(-1);
   $("dw-find-close").onclick = closeFind;
-  fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
+  fin.addEventListener("keydown", e => { if (e.isComposing || e.keyCode === 229) return; if (e.key === "Enter") { e.preventDefault(); fNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
   fin.addEventListener("input", () => { fLast = ""; fn.textContent = ""; });
 
   // Load (and reload when an option changes). The current block, the
@@ -668,7 +668,7 @@ async function bootDiffWindow() {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (e.ctrlKey && (e.key === "a" || e.key === "A" || e.code === "KeyA") && !isTextField(e.target)) { e.preventDefault(); selectSide(); return; }
     // Esc: the search bar, then the 戻す / 揃える / 影響 pane, then the window.
-    if (e.key === "Escape" && !document.getElementById("sc-pop")) {
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229) && !document.getElementById("sc-pop")) {
       if (!fbar.classList.contains("hidden")) closeFind();
       else if (!$("dw-cmdpane").classList.contains("hidden")) closeCmdPane();
       else D().Close();

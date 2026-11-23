@@ -170,8 +170,8 @@ func ImportInfo(text string) ([]model.Device, []string, error) {
 		return nil, nil, err
 	}
 	var missing []string
-	// termColor: an older file keeps the devices' colours (bundle).
-	for _, key := range []string{"useMyBastion", "cli", "gui", "guiScheme", "guiPort", "termColor"} {
+	// termColor / encoding: an older file keeps the devices' values (bundle).
+	for _, key := range []string{"useMyBastion", "cli", "gui", "guiScheme", "guiPort", "termColor", "encoding"} {
 		if !has(key) {
 			missing = append(missing, key)
 		}

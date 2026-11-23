@@ -69,7 +69,9 @@ async function bootPasteWindow() {
   // window appears, before any click into the textarea.
   document.addEventListener("keydown", e => {
     if (zoom.key(e)) { e.preventDefault(); return; }
-    if (e.key === "Escape") { e.preventDefault(); cancel(); return; }
+    // An Esc that only cancels an IME conversion is not 閉じる (it closed the
+    // window with the edits, review 2026-11-23).
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229)) { e.preventDefault(); cancel(); return; }
     // Enter or Ctrl+Enter (the primary button, as in the main window's
     // dialogs) pastes; Shift+Enter is left to the textarea (a new line), and
     // an Enter that confirms an IME conversion is not a paste. On a button
@@ -397,7 +399,7 @@ async function bootTerminalWindow() {
   pasteText.addEventListener("keydown", e => {
     // Enter or Ctrl+Enter pastes (as the paste window); Shift+Enter inserts a new line.
     if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); confirmPaste(); }
-    else if (e.key === "Escape") { e.preventDefault(); closePasteDialog(); }
+    else if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229)) { e.preventDefault(); closePasteDialog(); }
   });
   term.textarea.addEventListener("paste", e => {
     const txt = (e.clipboardData || window.clipboardData || {}).getData ? (e.clipboardData || window.clipboardData).getData("text") : "";
@@ -550,6 +552,7 @@ async function bootTerminalWindow() {
   document.getElementById("tw-find-prev").onclick = () => findNext(-1);
   document.getElementById("tw-find-close").onclick = closeFind;
   findIn.addEventListener("keydown", e => {
+    if (e.isComposing || e.keyCode === 229) return; // the IME's own Enter / Esc
     if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
     else if (e.key === "Escape") { e.preventDefault(); closeFind(); }
   });
@@ -690,8 +693,10 @@ async function bootTerminalWindow() {
     }
     term.focus(); doFit();
     // The OS window may still be behind the main window: ask for the
-    // foreground once more now that there is something to type into.
-    Term().Focus().catch(() => {});
+    // foreground once more now that there is something to type into — not
+    // when a slow login ends while the user types in another window (it
+    // flashes instead; FocusReady). Older builds have Focus only.
+    (Term().FocusReady ? Term().FocusReady(Math.round(performance.now())) : Term().Focus()).catch(() => {});
     [150, 500].forEach(ms => setTimeout(() => term.focus(), ms));
   });
   // A changed host key is answered in the window: allow (device replaced)
@@ -786,11 +791,16 @@ async function bootTerminalWindow() {
   // the unlock while the backend still holds the text.
   const draftBar = document.getElementById("tw-draft");
   const hideDraftBar = () => { if (!draftBar.classList.contains("hidden")) { draftBar.classList.add("hidden"); doFit(); } };
-  function showDraftBar(n) {
-    document.getElementById("tw-draft-msg").textContent = t("ロック前に準備していた貼り付け内容があります（{n} 行）", { n });
+  function showDraftBar(n, msg) {
+    document.getElementById("tw-draft-msg").textContent = msg || t("ロック前に準備していた貼り付け内容があります（{n} 行）", { n });
     draftBar.classList.remove("hidden"); doFit();
     setTimeout(() => document.getElementById("tw-draft-show").focus(), 30);
   }
+  // A paste confirmed with no session to send it on (closed, or still
+  // logging in) is kept the same way.
+  rt().EventsOn("term:paste-unsent", n => {
+    if (n > 0 && !locked) showDraftBar(n, t("接続していないため、貼り付け内容（{n} 行）は送っていません。接続後に「再表示」から送れます", { n }));
+  });
   document.getElementById("tw-draft-show").onclick = () => {
     hideDraftBar();
     Term().ReopenPasteDraft().catch(e => { flashNote(terr(e), 0, "err"); term.focus(); });

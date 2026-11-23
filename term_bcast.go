@@ -164,6 +164,12 @@ func (t *Term) bcastIn(data string) {
 // every window but the one typed in, and they would drop out of 同時入力
 // in the middle of the work.
 func (t *Term) bcastSend(s string) {
+	// In turn with this window's own sends (sendText): a paced paste here
+	// is not cut into by another window's keys, and a Shift_JIS encoder is
+	// not used from two goroutines at once (review 2026-11-23). sendText
+	// never relays to its own window, so this cannot wait on itself.
+	t.sendMu.Lock()
+	defer t.sendMu.Unlock()
 	t.mu.Lock()
 	send, ok, ctx := t.send, t.bc.join && !t.locked, t.ctx
 	t.mu.Unlock()

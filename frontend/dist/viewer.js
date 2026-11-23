@@ -180,12 +180,12 @@ async function bootViewerWindow() {
   document.getElementById("lv-find-next").onclick = () => findNext(1);
   document.getElementById("lv-find-prev").onclick = () => findNext(-1);
   document.getElementById("lv-find-close").onclick = closeFind;
-  fin.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
+  fin.addEventListener("keydown", e => { if (e.isComposing || e.keyCode === 229) return; if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); } });
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); openFind(); return; }
     if (zoom.key(e)) { e.preventDefault(); return; }
     // Esc closes an open find bar first, the window only after that (as the diff window).
-    if (e.key === "Escape" && !document.getElementById("sc-pop")) { if (!bar.classList.contains("hidden")) closeFind(); else V().Close(); }
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229) && !document.getElementById("sc-pop")) { if (!bar.classList.contains("hidden")) closeFind(); else V().Close(); }
   });
   // Opened at a line (a grep hit), or sent one later (viewer:line: the grep
   // window reusing this window for another hit in the same file): that
@@ -274,7 +274,7 @@ async function bootWatchWindow() {
   ctxExtraItems = () => term.hasSelection() ? [[t("選択した文字をコピー"), () => copyText(term.getSelection(), t("コピーしました"))]] : [];
   document.addEventListener("keydown", e => {
     if (zoom.key(e)) { e.preventDefault(); return; }
-    if (e.key === "Escape" && !document.getElementById("sc-pop")) W().Close();
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229) && !document.getElementById("sc-pop")) W().Close();
   }, true); // capture: the terminal's own textarea would swallow the keys
 
   // Poll the file from where the last read ended; a full chunk means more

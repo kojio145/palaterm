@@ -360,3 +360,51 @@ func webviewInputChild(parent uintptr) uintptr {
 	}
 	return enumWin0
 }
+
+var (
+	pGetLastInputInfo = user32.NewProc("GetLastInputInfo")
+	pGetTickCount     = kernel32.NewProc("GetTickCount")
+	pFlashWindowEx    = user32.NewProc("FlashWindowEx")
+)
+
+// busyElsewhere reports that the user is at work in another window right
+// now: the foreground window is not this process's and there was keyboard
+// or mouse input in the last 1.5 s. A terminal whose slow login finishes
+// then must not take the keyboard (the rest of what was being typed in the
+// main window went to the device, review 2026-11-23).
+func busyElsewhere() bool {
+	fg, _, _ := pGetForegroundWindow.Call()
+	if fg == 0 {
+		return false
+	}
+	var pid uint32
+	pGetWindowThreadProcess.Call(fg, uintptr(unsafe.Pointer(&pid)))
+	if int(pid) == os.Getpid() {
+		return false
+	}
+	li := struct{ cbSize, dwTime uint32 }{cbSize: 8}
+	if r, _, _ := pGetLastInputInfo.Call(uintptr(unsafe.Pointer(&li))); r == 0 {
+		return false
+	}
+	now, _, _ := pGetTickCount.Call()
+	return uint32(now)-li.dwTime < 1500
+}
+
+// flashOwnWindow flashes this window's taskbar button until it is brought
+// to the front (FLASHW_TRAY | FLASHW_TIMERNOFG): ready, without taking the
+// keyboard.
+func flashOwnWindow() {
+	hwnd := ownTopLevelWindow()
+	if hwnd == 0 {
+		return
+	}
+	fi := struct {
+		cbSize    uint32
+		hwnd      uintptr
+		dwFlags   uint32
+		uCount    uint32
+		dwTimeout uint32
+	}{hwnd: hwnd, dwFlags: 0x2 | 0xC}
+	fi.cbSize = uint32(unsafe.Sizeof(fi))
+	pFlashWindowEx.Call(uintptr(unsafe.Pointer(&fi)))
+}

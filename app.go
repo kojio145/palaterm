@@ -4170,7 +4170,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.10.8"
+const appVersion = "1.10.9"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was
@@ -4753,6 +4753,14 @@ func (a *App) OpenExportFile(path string) error {
 	}
 	if st.IsDir() {
 		return fmt.Errorf("ファイルではありません: %s", filepath.Base(abs))
+	}
+	// Only what PalaTerm writes there (the comparison report and CSVs, a
+	// grep result): never a program or shortcut someone put in export\
+	// (review 2026-11-23).
+	switch strings.ToLower(filepath.Ext(abs)) {
+	case ".html", ".htm", ".csv", ".txt":
+	default:
+		return fmt.Errorf("この種類のファイルは開けません: %s", filepath.Base(abs))
 	}
 	return openWithDefaultApp(abs)
 }

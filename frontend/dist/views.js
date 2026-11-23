@@ -686,7 +686,7 @@ function devSelBar(selCount, hiddenCount) {
   if (!selCount) return `<div class="row-inline info-box" style="gap:8px;margin:-4px 0 10px"><span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。一括変更・一括削除には含まれません（含めるには絞り込みを解除）", { n: hiddenCount }))}</span></div>`;
   return `<div class="row-inline info-box" style="gap:8px;margin:-4px 0 10px">
       <b>${esc(t("{n} 台を選択中", { n: selCount }))}</b>
-      ${hiddenCount ? `<span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。一括変更・一括削除には含まれません（含めるには絞り込みを解除）", { n: hiddenCount }))}</span>` : ""}
+      ${hiddenCount ? `<span class="warn-box inline">${esc(t("⚠ 非表示の行にチェック済みが {n} 台あります。一括変更・一括削除には含まれません（並べて接続には含まれます。含めるには絞り込みを解除）", { n: hiddenCount }))}</span>` : ""}
       <button class="btn sm primary" id="bulk-tile" data-tip="${esc(t("選択した機器の端末窓をまとめて開き、画面いっぱいに並べます（最大 16 台。Tera Term の［ウィンドウ］-［並べて表示］と同じ）。各窓の「同時入力」をオンにすると、どれか 1 つの窓で打ったキーがオンの窓すべてに送られます（最初からオンで開くかは設定タブで選べます）"))}">${esc(t("並べて接続"))}</button>
       <button class="btn sm" id="bulk-edit">${esc(t("一括変更…"))}</button>
       <button class="btn sm danger" id="bulk-del">${esc(t("一括削除"))}</button>
@@ -1179,6 +1179,7 @@ function importSummaryLines(pv) {
     lines.push(t("OSタイププロファイル: {n}（新規 {a}・上書き {b}・既存のまま {c}）", { n: s.profiles, a: s.profilesNew, b: s.profilesUpdated, c: s.profilesSkipped }));
   }
   if ((s.credsKept || []).length) lines.push(t("認証情報が空の欄は、既存の機器の値を残します（{n} 台）: {g}", { n: s.credsKept.length, g: s.credsKept.slice(0, 10).join(", ") + (s.credsKept.length > 10 ? " …" : "") }));
+  if ((s.credsNewHost || []).length) lines.push(t("⚠ 接続先が変わる機器が、既存の機器のパスワードを引き継ぎます。新しい接続先で正しいか確認してください: {g}", { g: s.credsNewHost.join(" ／ ") }));
   if (s.groupsCreated.length) lines.push(t("新規グループ: {g}", { g: s.groupsCreated.join(", ") }));
   if (s.missingSets.length) lines.push(t("⚠ 見つからないコマンドセット（機器は読み込まれますが割り当ては空扱い）: {g}", { g: s.missingSets.join(", ") }));
   if ((s.missingColumns || []).length && s.missingColumnsReset) lines.push(t("⚠ 古い形式のファイルです（{c} の列がありません）。既存の機器 {n} 台は、これらの項目が既定（CLI を使う・GUI を使わない・自分の踏み台を通らない・https）に戻ります", { c: s.missingColumns.map(k => ({ useMyBastion: t("自分の踏み台を使う"), cli: t("CLIを使う"), gui: t("GUIを使う"), guiScheme: t("GUIの方式"), guiPort: t("GUIポート") }[k] || k)).join(t("・")), n: s.missingColumnsReset }));

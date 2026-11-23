@@ -275,6 +275,18 @@ func (t *Term) domReady(ctx context.Context) { go focusOwnWindow() }
 // for the case where the window became visible only after domReady.
 func (t *Term) Focus() { go focusOwnWindow() }
 
+// FocusReady is Focus for a login that has just finished, sinceOpenMs after
+// the window opened: a login that took longer than 2 s while the user is
+// typing or clicking in another window flashes the taskbar button instead
+// of taking the keyboard (busyElsewhere). Otherwise it is Focus.
+func (t *Term) FocusReady(sinceOpenMs int) {
+	if sinceOpenMs > 2000 && busyElsewhere() {
+		go flashOwnWindow()
+		return
+	}
+	go focusOwnWindow()
+}
+
 func (t *Term) shutdown(ctx context.Context) {
 	t.mu.Lock()
 	c, p := t.closeFn, t.pending
@@ -786,9 +798,15 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 	t.slog = slog
 	t.closeDone = closeDone
 	t.mu.Unlock()
+	// ended: onClose has run. It can run inside StartInteractive itself
+	// (the session was already over — a takeover of a login the device
+	// had hung up on), before the live fields below are set: they must not
+	// then be set, nor 接続済み shown over 切断 (review 2026-11-23).
+	ended := false
 	onClose := func() {
 		defer close(closeDone)
 		t.mu.Lock()
+		ended = true
 		if p, _ := slog.Flush(); p != "" {
 			t.lastLog = p // ログフォルダ opens this session's folder after the disconnect too
 		}
@@ -857,6 +875,10 @@ func (t *Term) attach(exp *runpkg.Expecter, dev *model.Device, settings model.Se
 		runtime.EventsEmit(t.ctx, "term:jump-back", map[string]bool{"login": atLogin})
 	})
 	t.mu.Lock()
+	if ended {
+		t.mu.Unlock()
+		return
+	}
 	t.send, t.resizeFn, t.closeFn, t.exp = send, resize, closeFn, exp
 	t.atJump = false
 	cols, rows := t.cols, t.rows
@@ -1130,6 +1152,18 @@ func (t *Term) openPaste(raw string, withCR, single bool) error {
 		time.AfterFunc(300*time.Millisecond, func() { focusOwnWindow() })
 		s, ok := pasteText(res)
 		if !ok {
+			runtime.EventsEmit(t.ctx, "term:paste-done", false)
+			return
+		}
+		// Nothing to send it on (the session ended while the window was
+		// open, or the login is still going): kept as a draft and said so,
+		// rather than dropped without a word (review 2026-11-23).
+		t.mu.Lock()
+		live := t.send != nil
+		t.mu.Unlock()
+		if !live {
+			t.keepDraft(res, answered)
+			runtime.EventsEmit(t.ctx, "term:paste-unsent", t.PasteDraftLines())
 			runtime.EventsEmit(t.ctx, "term:paste-done", false)
 			return
 		}

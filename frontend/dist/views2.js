@@ -1184,7 +1184,18 @@ function renderRun() {
   if (btnFailCsv) btnFailCsv.onclick = exportRunFailures;
   const btnClear = document.getElementById("btn-clear");
   // The 📂 button belongs to the results: it goes with them.
-  if (btnClear) btnClear.onclick = () => { for (const k in runState) delete runState[k]; lastRunDir = ""; lastRunAfter = null; discardLastRun(); renderRun(); };
+  // Failed / canceled devices and their ↻ re-run go with it: asked first,
+  // as the group switch does (review 2026-11-23).
+  if (btnClear) btnClear.onclick = async () => {
+    const failed = unfinishedNames().length;
+    if (failed && !await uiConfirm({
+      title: t("実行結果のクリア"),
+      message: t("前回の実行結果と再実行ボタン（失敗・中止 {n}台）は消えます。<br>クリアしますか？", { n: failed }),
+      okLabel: t("クリアする"),
+      danger: true,
+    })) return;
+    for (const k in runState) delete runState[k]; lastRunDir = ""; lastRunAfter = null; discardLastRun(); renderRun();
+  };
   document.getElementById("btn-logdir").onclick = () => App().OpenLogDir().catch(e => toast(terr(e), "err"));
   const btnRunDir = document.getElementById("btn-rundir");
   if (btnRunDir) btnRunDir.onclick = () => App().OpenRunFolder(lastRunDir).catch(e => toast(terr(e), "err"));
@@ -1669,13 +1680,15 @@ function reqCommandCount(req, d) {
 }
 // What a re-run sends: the last run's command choice and stage (not what
 // the toolbar shows now), spelled out in its confirmation.
-function rerunDetail() {
+// names: the devices re-run, for the own-jump-host warning (it counted
+// none without them, review 2026-11-23).
+function rerunDetail(names) {
   const r = lastRunReq || {};
-  if (lastRunDry) return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じく接続確認のみです（コマンドは送りません）"))}</span>` + directNote(r.direct);
+  if (lastRunDry) return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じく接続確認のみです（コマンドは送りません）"))}</span>` + directNote(r.direct, names);
   const cmds = r.adHoc && r.adHoc.length ? t("今回だけ入力: {s}", { s: r.adHoc.map(c => c.text).join(" / ") })
     : r.commandSet ? t("{s}（今回のみ）", { s: r.commandSet }) : t("機器ごとの設定どおり");
   const dirNote = lastRunDir ? `<br><span class="muted" style="font-size:12px">${esc(t("ログは前回と同じフォルダに保存します: {d}", { d: lastRunDir }))}</span>` : "";
-  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>` + dirNote + directNote(r.direct);
+  return `<br><span class="muted" style="font-size:12px">${esc(t("前回と同じ内容で実行します — コマンド: {c}", { c: cmds }))}${r.stage ? esc(" ／ " + t("作業タイミング: {s}", { s: stageLabel(r.stage) })) : ""}</span>` + dirNote + directNote(r.direct, names);
 }
 
 // A re-run passes the same change warning a first run does.
@@ -1687,7 +1700,7 @@ async function confirmRerun(names) {
     const scope = runGroupSel ? t("グループ「<b>{g}</b>」の ", { g: esc(runGroupLabel()) }) : "";
     // What the re-run sends (the batch's set, stage, folder, route), as the
     // plain question says it.
-    return dangerConfirm(warnings, names.length, scope, req.stage, rerunDetail());
+    return dangerConfirm(warnings, names.length, scope, req.stage, rerunDetail(names));
   }
   return null; // nothing to warn about: the caller asks its own question
 }
@@ -1889,7 +1902,7 @@ async function retryUnfinished() {
   if (danger === false) return;
   const ok = danger === true || await uiConfirm({
     title: t("失敗・中止のみ再実行"),
-    message: t("失敗・中止した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？", { n: names.length }) + rerunDetail(),
+    message: t("失敗・中止した <b>{n} 台</b>のみ再実行します（完了済みはそのまま）。よろしいですか？", { n: names.length }) + rerunDetail(names),
     okLabel: t("↻ 再実行"),
   });
   if (!ok) return;
@@ -2507,6 +2520,13 @@ function renderOSTypes() {
   });
   root.querySelectorAll("[data-pdel]").forEach(b => b.onclick = async () => {
     const p = (INV.customProfiles || []).find(x => x.key === b.dataset.pdel);
+    // A profile in use cannot go: said before the question rather than
+    // after the user confirmed it (review 2026-11-23).
+    const using = (INV.devices || []).filter(d => d.osType === b.dataset.pdel).map(d => d.name);
+    if (using.length) {
+      toast(t("機器 {n} 台がこの OS タイプを使用中のため削除できません（{d}）。機器の OS タイプを変えてから削除してください", { n: using.length, d: using.slice(0, 5).join(", ") + (using.length > 5 ? ", …" : "") }), "err");
+      return;
+    }
     if (!(await uiConfirm({ title: t("プロファイルを削除"), message: t("OSタイププロファイル「<b>{n}</b>」を削除しますか？<br><span class=\"muted\" style=\"font-size:12px\">標準プロファイルは export\\os-profiles\\ のJSONから、自作のものは一式書き出ししたフォルダから「読み込み」で戻せます</span>", { n: esc(p ? p.name : "") }), okLabel: t("削除"), danger: true }))) return;
     try {
       await App().DeleteProfile(b.dataset.pdel);
@@ -2661,6 +2681,7 @@ function editProfile(prof, tpl) {
     // where ⚡ 接続確認のみ tries the login — a profile for a new vendor
     // used to mean saving, finding a device, switching tabs, filtering.
     node.querySelector("#p-save-test").onclick = async () => {
+      if (profSaving) return;
       const saved = await saveProfile();
       if (!saved) return;
       const devs = (INV.devices || []).filter(d => d.osType === saved.key && !d.cliOff);
@@ -2678,7 +2699,11 @@ function editProfile(prof, tpl) {
     };
     // saveProfile writes the editor's profile; the saved profile (key and
     // name) comes back, or null when the save failed.
+    // One save at a time: a double click saved once and then reported the
+    // second call's 同名のプロファイル refusal as 保存失敗 (review 2026-11-23).
+    let profSaving = false;
     async function saveProfile() {
+      if (profSaving) return null;
       const login = collect().filter(s => s.expect.trim() || s.send.trim() || s.enter || s.sendRaw)
         .map(s => ({ ...s, expect: s.expect.trim(), send: s.send.trim() }));
       const pagerLines = node.querySelector("#p-pager").value
@@ -2701,6 +2726,9 @@ function editProfile(prof, tpl) {
         answers: collectAns().filter(a => a.expect.trim())
           .map(a => ({ ...a, expect: a.expect.trim(), send: a.send.trim(), enter: !a.send.trim() && !a.sendRaw })),
       };
+      profSaving = true;
+      const btns = [node.querySelector("#p-save"), node.querySelector("#p-save-test")];
+      btns.forEach(b => { if (b) b.disabled = true; });
       try {
         await App().SaveProfile(out);
         INV = await App().GetInventory();
@@ -2710,6 +2738,7 @@ function editProfile(prof, tpl) {
         toast(t("保存しました"), "ok");
         return PROFILES.find(x => (out.key && x.key === out.key) || x.name === out.name) || { key: out.key, name: out.name };
       } catch (e) { toast(t("保存失敗") + ": " + terr(e), "err"); return null; }
+      finally { profSaving = false; btns.forEach(b => { if (b) b.disabled = false; }); }
     }
     node.querySelector("#p-save").onclick = saveProfile;
 }
@@ -2769,7 +2798,7 @@ async function unlockNotices() {
       title: t("新しい版で保存された保管庫です"),
       message: esc(t("この保管庫は新しい版の PalaTerm{v} で保存されています。この版で保存すると、新しい版で追加された設定が消えます。", { v: info.savedBy ? " (v" + info.savedBy + ")" : "" })) +
         "<br>" + esc(t("新しい版の PalaTerm を使うことをお勧めします。この版では読み取り専用で開きます。")),
-      buttons: [{ id: "edit", label: t("この版で編集する（新しい版の設定は消えます）"), cls: "danger" }, { id: "ro", label: t("読み取り専用で開く"), cls: "primary" }],
+      buttons: [{ id: "edit", label: t("この版で編集する（新しい版の設定は消えます）"), cls: "danger" }, { id: "ro", label: t("読み取り専用で開く"), cls: "primary", esc: true }],
     });
     if (c === "edit") {
       try { await App().AllowOlderSave(); toast(t("この版で保存できるようにしました"), "warn"); }

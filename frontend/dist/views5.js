@@ -297,7 +297,7 @@ function uiChoice({ title, message, buttons }) {
     const node = h(`<div>
       <h3>${esc(title)}</h3>
       <div style="font-size:14px;line-height:1.8;margin:4px 0 10px">${message}</div>
-      <div class="modal-actions" style="flex-wrap:wrap">${buttons.map(b => `<button class="btn ${b.cls || ""}" data-choice="${esc(b.id)}">${esc(b.label)}</button>`).join("")}</div>
+      <div class="modal-actions" style="flex-wrap:wrap">${buttons.map(b => `<button class="btn ${b.cls || ""}" data-choice="${esc(b.id)}"${b.esc ? " data-esc=\"1\"" : ""}>${esc(b.label)}</button>`).join("")}</div>
     </div>`);
     openModal(node, "mid");
     node.querySelectorAll("[data-choice]").forEach(b => b.onclick = () => { closeModal(); resolve(b.dataset.choice); });

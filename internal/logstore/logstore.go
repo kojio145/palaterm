@@ -680,6 +680,12 @@ func sanitize(s string) string {
 		return r
 	}
 	out := strings.Map(repl, s)
+	// A value made only of dots ("." / "..") would name the folder itself
+	// or its parent: a group or site ".." in a nested template wrote the
+	// log outside the log folder (review 2026-11-23).
+	if out != "" && strings.Trim(out, ".") == "" {
+		out = strings.Repeat("_", len(out))
+	}
 	if reservedName(out) {
 		out += "_"
 	}

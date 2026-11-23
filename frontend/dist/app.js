@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.10.8";
+const APP_VERSION = "1.10.9";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -27,7 +27,7 @@ function toast(msg, kind, opts) {
   // screen of this kind): held while #lock shows.
   const lockEl = $("#lock");
   if (!o.lock && lockEl && !lockEl.classList.contains("hidden") && window.go && window.go.main && window.go.main.App) {
-    toastQueue.push([msg, kind]);
+    toastQueue.push([msg, kind, o]);
     while (toastQueue.length > 5) toastQueue.shift();
     return;
   }
@@ -38,10 +38,15 @@ function toast(msg, kind, opts) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add("hidden"), o.ms || (kind === "err" ? 9000 : 3200));
 }
-// The toasts held back during the lock, one after another.
+// The toasts held back during the lock, one after another, each for its
+// own time (an error's 9 s used to be cut to the 3.6 s spacing).
 function flushToasts() {
   const q = toastQueue.splice(0);
-  q.forEach(([msg, kind], i) => setTimeout(() => toast(msg, kind), 400 + i * 3600));
+  let at = 400;
+  q.forEach(([msg, kind, o]) => {
+    setTimeout(() => toast(msg, kind, o), at);
+    at += Math.max(3600, (o && o.ms) || (kind === "err" ? 9000 : 3200));
+  });
 }
 
 // An input that keeps a form from being saved is shown at the field itself:
@@ -146,8 +151,10 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (e.key !== "Escape") return;
-  const btn = [...document.querySelectorAll("#modal .modal-actions button")]
-    .find(b => !b.classList.contains("primary") && !b.classList.contains("danger") && !b.disabled);
+  // A choice with no plain button names its Esc choice (data-esc).
+  const all = [...document.querySelectorAll("#modal .modal-actions button")];
+  const btn = all.find(b => !b.classList.contains("primary") && !b.classList.contains("danger") && !b.disabled)
+    || all.find(b => b.dataset.esc && !b.disabled);
   if (btn) { e.preventDefault(); btn.click(); }
 });
 
@@ -1581,10 +1588,17 @@ $("#btn-chpw").onclick = () => {
   node.querySelector("#cp-cancel").onclick = closeModal;
   // Enter in any field changes it, as in the other one-step dialogs.
   // (Ctrl+Enter is the dialog's own key, handled once for every dialog.)
-  node.querySelectorAll("input").forEach(inp => inp.addEventListener("keydown", e => {
+  // A later field still empty takes the focus instead (Enter after the
+  // current password, the lock screen's habit, said 新しいパスワードを入力
+  // — review 2026-11-23); with all three filled, Enter changes as before.
+  const cpFields = ["#cp-cur", "#cp-new", "#cp-new2"].map(s => node.querySelector(s));
+  cpFields.forEach((inp, i) => inp.addEventListener("keydown", e => {
     if (e.key !== "Enter" || e.isComposing || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
-    if (!e.repeat) node.querySelector("#cp-ok").click();
+    if (e.repeat) return;
+    const next = cpFields.slice(i + 1).find(f => !f.value);
+    if (next) { next.focus(); return; }
+    node.querySelector("#cp-ok").click();
   }));
   const cpOk = node.querySelector("#cp-ok");
   cpOk.onclick = async () => {

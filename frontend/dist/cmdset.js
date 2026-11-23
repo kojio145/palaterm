@@ -240,6 +240,7 @@ async function bootCmdsetWindow() {
   document.getElementById("cw-find-prev").onclick = () => findNext(-1);
   document.getElementById("cw-find-close").onclick = closeFind;
   fin.addEventListener("keydown", e => {
+    if (e.isComposing || e.keyCode === 229) return; // the IME's own Enter / Esc (review 2026-11-23)
     if (e.key === "Enter") { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeFind(); }
   });
@@ -255,7 +256,7 @@ async function bootCmdsetWindow() {
     }
     if (!inFind && e.ctrlKey && (e.key === "c" || e.key === "C" || e.code === "KeyC")) { e.preventDefault(); copySel(); return; }
     // Esc closes an open find bar first, the window only after that.
-    if (e.key === "Escape") { if (!bar.classList.contains("hidden")) closeFind(); else C().Close(); }
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229)) { if (!bar.classList.contains("hidden")) closeFind(); else C().Close(); }
   });
 
   // A save in the main window: the set again (or the notice that it is

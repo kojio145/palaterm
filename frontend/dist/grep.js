@@ -158,7 +158,7 @@ async function bootGrepWindow() {
     return lines.join("\n") + "\n";
   }
   go.onclick = search;
-  q.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); search(); } });
+  q.addEventListener("keydown", e => { if (e.key === "Enter" && !(e.isComposing || e.keyCode === 229)) { e.preventDefault(); search(); } });
   noHit.onchange = () => { opts.noHit = noHit.checked; saveOpts(); draw(); if (last) copyBtn.disabled = saveBtn.disabled = !last.res.files.length && !last.res.noHit.length; };
   copyBtn.onclick = () => copyText(resultText(), t("コピーしました"));
   saveBtn.onclick = () => G().SaveText(resultText()).then(p => flash(t("保存しました: {p}", { p }))).catch(e => flash(t("保存できません") + ": " + terr(e), "err"));
@@ -167,7 +167,7 @@ async function bootGrepWindow() {
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && (e.key === "f" || e.key === "F" || e.code === "KeyF")) { e.preventDefault(); q.focus(); q.select(); return; }
     if (zoom.key(e)) { e.preventDefault(); return; }
-    if (e.key === "Escape" && !document.getElementById("sc-pop")) G().Close();
+    if (e.key === "Escape" && !(e.isComposing || e.keyCode === 229) && !document.getElementById("sc-pop")) G().Close();
   });
   q.focus();
 }

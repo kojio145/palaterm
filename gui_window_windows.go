@@ -88,6 +88,7 @@ var (
 	procGlobalAlloc      = kernel32.NewProc("GlobalAlloc")
 	procGlobalLock       = kernel32.NewProc("GlobalLock")
 	procGlobalUnlock     = kernel32.NewProc("GlobalUnlock")
+	procGlobalFree       = kernel32.NewProc("GlobalFree")
 )
 
 // setClipboardText puts s on the clipboard (the menu's URL をコピー; the
@@ -109,6 +110,7 @@ func setClipboardText(hwnd windows.HWND, s string) {
 	}
 	p, _, _ := procGlobalLock.Call(h)
 	if p == 0 {
+		procGlobalFree.Call(h) // not handed to the clipboard: still ours
 		return
 	}
 	// p is memory the system handed out, reinterpreted in place (not a
@@ -116,7 +118,11 @@ func setClipboardText(hwnd windows.HWND, s string) {
 	dst := *(*unsafe.Pointer)(unsafe.Pointer(&p))
 	copy(unsafe.Slice((*uint16)(dst), len(u)), u)
 	procGlobalUnlock.Call(h)
-	procSetClipboardData.Call(cfUnicodeText, h) // the system owns h from here
+	// The system owns h once it is set; a refused set leaves it ours to
+	// free (review 2026-11-23).
+	if r, _, _ := procSetClipboardData.Call(cfUnicodeText, h); r == 0 {
+		procGlobalFree.Call(h)
+	}
 }
 
 func u16(s string) *uint16 { p, _ := windows.UTF16PtrFromString(s); return p }
@@ -1133,6 +1139,7 @@ if (window.top !== window) return;
 // lock while this window is in use (the lock would close it).
 (function(){ var last=0; function act(){ var n=Date.now(); if(n-last<3000) return; last=n; try{ window.chrome.webview.postMessage("pt:active"); }catch(e){} }
 ["keydown","mousedown","mousemove","wheel","touchstart"].forEach(function(ev){ document.addEventListener(ev, act, {passive:true, capture:true}); }); })();
+` + guiRepeatGuardJS + `
 if (location.origin !== ` + string(jo) + `) return;
 function vis(e){ if(!e) return false; var r=e.getBoundingClientRect(); var s=getComputedStyle(e); return r.width>0&&r.height>0&&s.visibility!=="hidden"&&s.display!=="none"; }
 function q(sel){ var l=document.querySelectorAll(sel); for(var i=0;i<l.length;i++) if(vis(l[i])) return l[i]; return null; }
@@ -1196,6 +1203,19 @@ func guiAcceleratorBlocked(vk uint) bool {
 // saves the logged-in page, Ctrl+P prints it, Ctrl+U shows its source,
 // Ctrl+Shift+I / J / C open DevTools, Ctrl+O opens a file, Ctrl+J / H the
 // downloads / history, Ctrl+Shift+Delete browsing data, Alt+Home …).
+// guiRepeatGuardJS applies guiShortcutBlocked to a key held down: WebView2
+// asks AcceleratorKeyCallback about the first press only, and the repeats
+// went on to the browser (Ctrl+P held for a second printed the logged-in
+// page, review 2026-11-23). The page cancels a blocked repeat itself. The
+// same rules as guiShortcutBlocked, by keyCode (= the virtual key).
+const guiRepeatGuardJS = `(function(){ function blocked(e){ var vk=e.keyCode, c=e.ctrlKey, a=e.altKey, s=e.shiftKey;
+if(vk>=0x70&&vk<=0x87) return !(vk===0x74||vk===0x72)||a;
+if(vk===0x1B) return false; if(!c&&!a) return false;
+if(a&&!c) return !(vk===0x25||vk===0x27);
+if(s) return [0x5A,0x52,0x25,0x27,0x26,0x28,0x24,0x23].indexOf(vk)<0;
+return [0x46,0x52,0x43,0x56,0x58,0x41,0x5A,0x59,0xBB,0xBD,0x30,0x6B,0x6D,0x60,0x08,0x2E,0x25,0x27,0x26,0x28,0x24,0x23].indexOf(vk)<0; }
+window.addEventListener("keydown", function(e){ if(e.repeat&&blocked(e)) e.preventDefault(); }, true); })();`
+
 func guiShortcutBlocked(vk uint, ctrl, alt, shift bool) bool {
 	const (
 		vkBack   = 0x08

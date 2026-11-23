@@ -265,7 +265,7 @@ func (x *xlsxReader) sharedStrings(name string) []string {
 			switch t.Name.Local {
 			case "si":
 				if inSI {
-					out = append(out, sb.String())
+					out = append(out, unescapeX(sb.String()))
 				}
 				inSI, inT = false, false
 			case "rPh":
@@ -441,6 +441,29 @@ func (x *xlsxReader) readSheet(target, name string, sst []string, st *xlsxStyles
 	}
 }
 
+// unescapeX undoes Excel's _xHHHH_ escape in a text value: a character XML
+// cannot carry (a CR typed into a cell is "_x000D_") and a literal "_x"
+// written as "_x005F_x" (review 2026-11-23). Text without "_x" is returned
+// as it is.
+func unescapeX(s string) string {
+	if !strings.Contains(s, "_x") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if i+7 <= len(s) && s[i] == '_' && s[i+1] == 'x' && s[i+6] == '_' {
+			if n, err := strconv.ParseUint(s[i+2:i+6], 16, 16); err == nil {
+				b.WriteRune(rune(n))
+				i += 7
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+		i++
+	}
+	return b.String()
+}
+
 func xlsxValue(typ, v, is string, style int, sst []string, st *xlsxStyles) string {
 	switch typ {
 	case "s":
@@ -450,11 +473,11 @@ func xlsxValue(typ, v, is string, style int, sst []string, st *xlsxStyles) strin
 		return ""
 	case "inlineStr":
 		if is == "" {
-			return v
+			return unescapeX(v)
 		}
-		return is
+		return unescapeX(is)
 	case "str":
-		return v
+		return unescapeX(v)
 	case "b":
 		switch strings.TrimSpace(v) {
 		case "1", "true":

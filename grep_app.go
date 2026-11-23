@@ -176,8 +176,10 @@ func (g *GrepWin) SaveText(text string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", saveTextErr(dir, err)
 	}
-	p := filepath.Join(dir, "grep_"+time.Now().Format("20060102_150405")+".txt")
-	if err := os.WriteFile(p, []byte(strings.ReplaceAll(text, "\n", "\r\n")), 0o644); err != nil {
+	// A second save in the same second gets "_2" rather than overwriting
+	// the first (review 2026-11-23).
+	p, err := writeNewFile(dir, "grep_"+time.Now().Format("20060102_150405"), ".txt", strings.ReplaceAll(text, "\n", "\r\n"))
+	if err != nil {
 		return "", saveTextErr(dir, err)
 	}
 	return p, nil

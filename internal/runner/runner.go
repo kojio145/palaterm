@@ -1161,8 +1161,10 @@ func rejectedLine(out string) string {
 // Matched as the tail of the output only: a marker the device printed
 // earlier and scrolled past (quoted in a log line, or already answered)
 // is not one waiting now (review 2026-11-07 F-C-5). What follows on the
-// marker's line (blanks, escape codes) is allowed.
-const genericMore = `(?i)-{2,}\s*\(?\s*more[^\n]*\s*\z`
+// marker's line (blanks, escape codes) is allowed. "more" must be the word,
+// not the start of one: "--more-uplinks" in an interface description that
+// happened to end a read was answered with a space (review 2026-11-23).
+const genericMore = `(?i)-{2,}\s*\(?\s*more-*(?:[^a-z0-9\n-][^\n]*)?\s*\z`
 
 // promptMismatchHint names the case where the login worked and the device is
 // waiting at a prompt — just not the one this OS type expects.
@@ -1540,7 +1542,12 @@ func (r *Runner) expectAuth(ctx context.Context, exp *expecter, pattern, next, r
 		err := exp.Expect(ctx, pattern, min(remaining, 100*time.Millisecond))
 		if err == nil {
 			time.Sleep(promptSettle)
-			if exp.Idle() >= promptSettle {
+			// What came after the words in the beat is only blanks or
+			// escapes ("Password:" then " " in a read of its own, a slow
+			// serial line): still the prompt. The match was consumed, so
+			// going round again waited out the whole step and the password
+			// was never sent (review 2026-11-23).
+			if exp.Idle() >= promptSettle || exp.Seen(`\A`+tailPad) {
 				return nil
 			}
 			continue // more came after the words: not the prompt

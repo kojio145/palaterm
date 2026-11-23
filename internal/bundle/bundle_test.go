@@ -571,11 +571,12 @@ func TestImportNamesMissingColumns(t *testing.T) {
 	inv := sampleInventory()
 	inv.Devices[0].GUIOn, inv.Devices[0].UseMyBastion = true, true
 	inv.Devices[0].TermColor = "red"
+	inv.Devices[0].Encoding = "sjis"
 	c, err := ReadDevicesCSVText("name,group,host,conn\na-rt1,A社,192.0.2.1,ssh\nnew1,A社,192.0.2.99,ssh\n", "devices.csv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.MissingColumns) != 6 {
+	if len(c.MissingColumns) != 7 { // + 文字コード (kept like 端末の色, review 2026-11-23)
 		t.Fatalf("missing columns = %v", c.MissingColumns)
 	}
 	s, _ := Apply(inv, c, Options{})
@@ -586,6 +587,9 @@ func TestImportNamesMissingColumns(t *testing.T) {
 	for _, d := range inv.Devices {
 		if d.Name == "a-rt1" && d.TermColor != "red" {
 			t.Errorf("an older CSV cleared the terminal colour: %q", d.TermColor)
+		}
+		if d.Name == "a-rt1" && d.Encoding != "sjis" {
+			t.Errorf("an older CSV reset the character encoding: %q", d.Encoding)
 		}
 	}
 	// A file with the column sets it, empty included.

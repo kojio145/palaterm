@@ -380,7 +380,9 @@ func (r *biff) readSheet(pos int, name string) int {
 		if depth > 1 {
 			continue // an embedded chart's own substream
 		}
-		if len(body) < 6 && id != recMergedCells {
+		// STRING (a formula's text result) has no row/col header: "OK" or
+		// "○" is shorter than 6 bytes and was dropped (review 2026-11-23).
+		if len(body) < 6 && id != recMergedCells && id != recString {
 			continue
 		}
 		var row, col int
