@@ -57,7 +57,10 @@ function renderGroupChooser() {
   const LV = "groups";
   const focus = listViewFocus();
   const v = listView(LV);
-  const visible = listViewApply(LV, groups, g => [g.name], (g, k) => k === "count" ? groupCount(g.name) : g.name);
+  // 作成日: groups made before v1.10.10 have none; they count as older than
+  // any dated one, in their stored order (index - length: negative, rising).
+  const made = new Map(groups.map((g, i) => [g, g.created || i - groups.length]));
+  const visible = listViewApply(LV, groups, g => [g.name], (g, k) => k === "count" ? groupCount(g.name) : k === "created" ? made.get(g) : g.name);
   const active = listViewActive(LV);
   // Devices without a group (a deleted group leaves them there) get a card
   // of their own; nothing else in this tab would reach them.
@@ -74,12 +77,14 @@ function renderGroupChooser() {
     </div>
     ${groups.length ? `<div class="row-inline lv-bar" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
       <input id="lv-text-${LV}" class="btn" style="width:280px;text-align:left;cursor:text" placeholder="${esc(t("絞り込み（グループ名）"))}" value="${esc(v.text)}">
-      <select id="grp-sort" class="btn" style="padding-right:8px">
+      <select id="grp-sort" class="btn" style="padding-right:8px" data-tip="${esc(t("作成日は v1.10.10 以降に作ったグループから記録します。それより前のグループは古い側に、今の並びのまま並びます"))}">
         <option value="" ${!v.sort.key ? "selected" : ""}>${esc(t("並び順: 手動（ドラッグ）"))}</option>
         <option value="name:1" ${v.sort.key === "name" && v.sort.dir > 0 ? "selected" : ""}>${esc(t("並び順: 名前 ▲"))}</option>
         <option value="name:-1" ${v.sort.key === "name" && v.sort.dir < 0 ? "selected" : ""}>${esc(t("並び順: 名前 ▼"))}</option>
         <option value="count:-1" ${v.sort.key === "count" && v.sort.dir < 0 ? "selected" : ""}>${esc(t("並び順: 台数が多い順"))}</option>
         <option value="count:1" ${v.sort.key === "count" && v.sort.dir > 0 ? "selected" : ""}>${esc(t("並び順: 台数が少ない順"))}</option>
+        <option value="created:1" ${v.sort.key === "created" && v.sort.dir > 0 ? "selected" : ""}>${esc(t("並び順: 作成日が古い順"))}</option>
+        <option value="created:-1" ${v.sort.key === "created" && v.sort.dir < 0 ? "selected" : ""}>${esc(t("並び順: 作成日が新しい順"))}</option>
       </select>
       ${v.text.trim() ? `<button class="btn sm lv-clear" data-lv="${LV}">${esc(t("✕ 絞り込み解除"))}</button>` : ""}
     </div>` : ""}

@@ -814,7 +814,8 @@ func Apply(inv *model.Inventory, c Contents, opt Options) (Summary, []profile.Pr
 		if !groups[name] {
 			groupIdx[name] = len(inv.DeviceGroups)
 			inv.DeviceGroups = append(inv.DeviceGroups, model.DeviceGroup{
-				Name: name, Username: g.Username, Password: g.Password, EnablePassword: g.EnablePassword})
+				Name: name, Username: g.Username, Password: g.Password, EnablePassword: g.EnablePassword,
+				Created: model.NowCreated()})
 			groups[name] = true
 			s.GroupsCreated = append(s.GroupsCreated, name)
 			return

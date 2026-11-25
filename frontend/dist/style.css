@@ -234,6 +234,16 @@ tr:hover td { background: var(--bg-2); }
   resize: horizontal; overflow: auto; min-width: 520px;
 }
 .modal.mid { width: min(680px, 92vw); }
+/* 実行タブの 🔍 探す: the group list under the search box */
+.rgf-list { max-height: min(52vh, 460px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.rgf-head { font-size: 11px; color: var(--text-dim); padding: 8px 12px 4px; }
+.rgf-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 12px; cursor: pointer; border-left: 3px solid transparent; }
+.rgf-row:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.rgf-row.cur { background: color-mix(in srgb, var(--accent) 20%, transparent); border-left-color: var(--accent); }
+.rgf-name { flex: 1 1 0; min-width: 0; font-weight: 600; }
+.rgf-n, .rgf-now { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.rgf-now { color: var(--accent); }
+.rgf-hit { flex-basis: 100%; font-size: 12px; color: var(--text-dim); }
 /* 予約: one row per 日時 (slot), the date button + month calendar, and the
    時 / 分 / 秒 selects. */
 .sc-devs { padding: 4px 0; max-height: 220px; overflow: auto; }

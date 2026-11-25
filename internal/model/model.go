@@ -513,7 +513,15 @@ type DeviceGroup struct {
 	Username       string `json:"username,omitempty"`
 	Password       string `json:"password,omitempty"`
 	EnablePassword string `json:"enablePassword,omitempty"`
+
+	// Created is when the group was made in this vault (Unix ms), for the
+	// group chooser's 作成日 sort. 0 = made before v1.10.10 (unknown): those
+	// sort as older than any dated group, in their stored order.
+	Created int64 `json:"created,omitempty"`
 }
+
+// NowCreated is the value a new group's Created gets.
+func NowCreated() int64 { return time.Now().UnixMilli() }
 
 // HasCreds reports whether the group carries any default credential.
 func (g *DeviceGroup) HasCreds() bool {

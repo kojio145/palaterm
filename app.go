@@ -588,7 +588,7 @@ func (a *App) CreateVault(password string) error {
 		Settings:          model.DefaultSettings(),
 		CommandSets:       model.LocalizeSampleSets(model.DefaultCommandSets(), lang),
 		CommandSetSeedGen: model.CommandSetSeedGen,
-		DeviceGroups:      []model.DeviceGroup{{Name: model.SampleGroupName(lang)}},
+		DeviceGroups:      []model.DeviceGroup{{Name: model.SampleGroupName(lang), Created: model.NowCreated()}},
 		CustomProfiles:    profile.Defaults(),
 		ProfilesSeeded:    true,
 		ProfileSeedGen:    profile.SeedGen,
@@ -704,7 +704,7 @@ func (a *App) Unlock(password string) error {
 	}
 	// A vault with no groups and no devices also gets the starter group.
 	if len(inv.DeviceGroups) == 0 && len(inv.Devices) == 0 {
-		inv.DeviceGroups = []model.DeviceGroup{{Name: model.SampleGroupName(lang)}}
+		inv.DeviceGroups = []model.DeviceGroup{{Name: model.SampleGroupName(lang), Created: model.NowCreated()}}
 		seed = true
 	}
 	// Seed the default OS profiles into vaults created before profiles became
@@ -1454,7 +1454,7 @@ func (a *App) ensureGroupExists(name string) {
 			return
 		}
 	}
-	a.inv.DeviceGroups = append(a.inv.DeviceGroups, model.DeviceGroup{Name: name})
+	a.inv.DeviceGroups = append(a.inv.DeviceGroups, model.DeviceGroup{Name: name, Created: model.NowCreated()})
 }
 
 // DeleteDevice removes one device by ID.
@@ -1884,12 +1884,15 @@ func (a *App) saveDeviceGroup(g model.DeviceGroup, create bool) error {
 	found := false
 	for i := range a.inv.DeviceGroups {
 		if a.inv.DeviceGroups[i].Name == g.Name {
+			// The page's copy may lack it (or be stale): the stored one stays.
+			g.Created = a.inv.DeviceGroups[i].Created
 			a.inv.DeviceGroups[i] = g
 			found = true
 			break
 		}
 	}
 	if !found {
+		g.Created = model.NowCreated()
 		a.inv.DeviceGroups = append(a.inv.DeviceGroups, g)
 	}
 	a.mu.Unlock()
@@ -1937,6 +1940,7 @@ func (a *App) CopyDeviceGroup(name, newName, suffix string) (int, error) {
 	g := *src
 	g.Name = newName
 	g.Members = nil
+	g.Created = model.NowCreated()
 	snap := a.snapshotLocked()
 	a.inv.DeviceGroups = append(a.inv.DeviceGroups, g)
 	a.inv.Devices = append(a.inv.Devices, copies...)
@@ -4170,7 +4174,7 @@ const termEventClearHostKey = "PALATERM clear-hostkey"
 // appVersion is recorded in bundle manifests. The About screen has its own
 // copy (APP_VERSION in frontend/dist/app.js) and the exe resource lives in
 // build/windows/winres.json — bump all three together.
-const appVersion = "1.10.9"
+const appVersion = "1.10.10"
 
 // FileImport is what reading one command-set or OS-profile file did. When a
 // set / profile of that name is already there (and differs), nothing was

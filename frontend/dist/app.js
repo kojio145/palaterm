@@ -5,7 +5,7 @@
 const App = () => window.go.main.App;
 const rt = () => window.runtime;
 
-const APP_VERSION = "1.10.9";
+const APP_VERSION = "1.10.10";
 const APP_AUTHOR = "KJO";
 
 // ---- small helpers ----
@@ -1827,6 +1827,16 @@ document.addEventListener("keydown", e => {
   e.preventDefault();
   box.focus();
   if (box.select) box.select();
+});
+// Ctrl+G on the run tab opens 🔍 探す (find the group to run) — only when
+// its button is there and enabled (not while a run is going).
+document.addEventListener("keydown", e => {
+  if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "g" || e.isComposing) return;
+  if (!INV || $("#app").classList.contains("hidden") || modalOpen()) return;
+  const b = document.querySelector("#tab-run.active #run-grp-find:not([disabled])");
+  if (!b) return;
+  e.preventDefault();
+  b.click();
 });
 
 // ---- page zoom of the main window ----

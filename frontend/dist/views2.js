@@ -1019,7 +1019,8 @@ function renderRun() {
         <option value="">${esc(t("グループで対象を選択…"))}</option>
         ${groups.map(g => `<option value="${esc(g.name)}" ${g.name === runGroupSel ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: g.name, n: groupCount(g.name) }))}</option>`).join("")}
         ${ungroupedCount ? `<option value="${RUN_UNGROUPED}" ${runGroupSel === RUN_UNGROUPED ? "selected" : ""}>${esc(t("{g}（{n}台）", { g: t("（グループ未設定）"), n: ungroupedCount }))}</option>` : ""}
-      </select>` : ""}
+      </select>
+      <button class="btn" id="run-grp-find" ${running ? "disabled" : ""} data-tip="${esc(t("グループ名・機器名・IP・拠点で探して選びます。最近使ったグループが上に出ます（Ctrl+G）"))}">${esc(t("🔍 探す"))}</button>` : ""}
       <select id="run-stage" class="btn" style="padding-right:8px" ${running ? "disabled" : ""} data-tip="${esc(t("作業前／作業中／作業後のどのタイミングの取得かを選びます。ログのフォルダ名とファイル名に付き、実行履歴・比較タブで作業前と作業後を比較できます。「今回だけ入力…」で、その場で決めた語（切替前・rollback など）を付けられます。選んだ値は実行が終わっても変わりません"))}">
         ${STAGES.map(st => `<option value="${st}" ${st === runStage ? "selected" : ""}>${esc(st ? t("作業タイミング: {s}", { s: stageLabel(st) }) : t("作業タイミング: 指定なし"))}</option>`).join("")}
         <option value="${RUN_STAGE_CUSTOM}" ${isCustomStage(runStage) ? "selected" : ""}>${esc(isCustomStage(runStage) ? t("作業タイミング: 今回だけ入力（{s}）", { s: runStage }) : t("作業タイミング: 今回だけ入力…"))}</option>
@@ -1236,6 +1237,8 @@ function renderRun() {
   if (runGrp) runGrp.onchange = async () => {
     if (!(await runSwitchGroup(runGrp.value))) runGrp.value = runGroupSel;
   };
+  const runFind = document.getElementById("run-grp-find");
+  if (runFind) runFind.onclick = runGroupFinder;
   // 実行対象 toggles (Shift+クリック=範囲一括、ヘッダ=全選択/全解除)。
   // Optimistic: the UI flips instantly, the vault write happens behind it.
   const applyEnable = async (ids, on) => {
@@ -1281,6 +1284,7 @@ async function runSwitchGroup(sel, render = true) {
   // Each device keeps its own チェック state — switching groups no longer
   // rewrites Enabled flags, so selections survive group changes.
   runGroupSel = sel;
+  runRecentAdd(sel);
   // 踏み台を使わない is for the group it was chosen for: another group
   // starts from its devices' own settings again — said, since on site
   // the choice has to be made again for every group.
@@ -1289,6 +1293,94 @@ async function runSwitchGroup(sel, render = true) {
   if (render) renderRun(); // the heading names the group: no toast on top
   if (wasDirect && runGroupSel) toast(t("踏み台の選択を「機器の設定どおり」に戻しました（グループごとに選び直してください）"), "warn");
   return true;
+}
+
+// ---- 🔍 探す: find the run tab's group by its name or by a device in it ----
+// Many groups make the select long; this dialog filters them by group name,
+// device name, IP or 拠点 (width-blind, like the list filters) and lists the
+// groups used last first. The select stays as it was beside it.
+const RUN_RECENT_KEY = "palaterm_run_recent_groups";
+function runRecent() {
+  try { const a = JSON.parse(localStorage.getItem(RUN_RECENT_KEY) || "[]"); return Array.isArray(a) ? a.filter(x => typeof x === "string") : []; }
+  catch (e) { return []; }
+}
+function runRecentAdd(sel) {
+  if (!sel) return;
+  try { localStorage.setItem(RUN_RECENT_KEY, JSON.stringify([sel, ...runRecent().filter(x => x !== sel)].slice(0, 5))); } catch (e) { /* per-PC convenience only */ }
+}
+// Rows for query q: each group with its device count and, when the group
+// itself did not match, the devices that did.
+function runFinderRows(q) {
+  const fold = s => nfkc(s).toLowerCase();
+  const devs = INV.devices || [];
+  const all = (INV.deviceGroups || []).map(g => ({ value: g.name, label: g.name }));
+  if (devs.some(d => !d.group)) all.push({ value: RUN_UNGROUPED, label: t("（グループ未設定）") });
+  const byGroup = new Map(all.map(r => [r.value, []]));
+  devs.forEach(d => { const k = d.group || RUN_UNGROUPED; if (byGroup.has(k)) byGroup.get(k).push(d); });
+  const rows = all.map(r => ({ ...r, n: byGroup.get(r.value).length, hits: [] }));
+  if (!q) {
+    const rec = runRecent().filter(v => byGroup.has(v));
+    const recSet = new Set(rec);
+    return { recent: rec.map(v => rows.find(r => r.value === v)), rest: rows.filter(r => !recSet.has(r.value)) };
+  }
+  const out = [];
+  for (const r of rows) {
+    if (fold(r.label).includes(q)) { out.push(r); continue; }
+    const hits = byGroup.get(r.value).filter(d => [d.name, d.host, d.site].some(s => s && fold(s).includes(q)));
+    if (hits.length) out.push({ ...r, hits });
+  }
+  // Groups matched by name first, then those found through a device.
+  return { recent: [], rest: [...out.filter(r => !r.hits.length), ...out.filter(r => r.hits.length)] };
+}
+function runGroupFinder() {
+  if (running) return;
+  const node = h(`<div>
+    <h3>${esc(t("実行するグループを探す"))}</h3>
+    <div class="field"><input id="rgf-q" placeholder="${esc(t("グループ名・機器名・IP・拠点で絞り込み"))}" autocomplete="off" autofocus></div>
+    <div id="rgf-list" class="rgf-list" role="listbox"></div>
+    <div class="modal-actions"><button class="btn" id="rgf-cancel">${esc(t("キャンセル"))}</button></div>
+  </div>`);
+  openModal(node, "mid");
+  const qEl = node.querySelector("#rgf-q"), list = node.querySelector("#rgf-list");
+  let items = [], cur = 0;
+  const row = (r, i) => `<div class="rgf-row${i === cur ? " cur" : ""}" role="option" data-i="${i}" data-val="${esc(r.value)}">
+      <span class="rgf-name clip">${esc(r.label)}</span>
+      ${r.value === runGroupSel ? `<span class="rgf-now">${esc(t("選択中"))}</span>` : ""}
+      <span class="rgf-n">${esc(t("{n} 台", { n: r.n }))}</span>
+      ${r.hits.length ? `<div class="rgf-hit clip">${esc(t("一致した機器: {s}", { s: r.hits.slice(0, 3).map(d => d.name + (d.host ? ` (${d.host})` : "")).join("、") + (r.hits.length > 3 ? t(" ほか {n} 台", { n: r.hits.length - 3 }) : "") }))}</div>` : ""}
+    </div>`;
+  const draw = () => {
+    const q = nfkc(qEl.value.trim()).toLowerCase();
+    const { recent, rest } = runFinderRows(q);
+    items = [...recent, ...rest];
+    if (cur >= items.length) cur = Math.max(0, items.length - 1);
+    let i = 0;
+    const part = (head, rs) => rs.length ? (head ? `<div class="rgf-head">${esc(head)}</div>` : "") + rs.map(r => row(r, i++)).join("") : "";
+    list.innerHTML = !items.length ? `<div class="empty">${esc(t("一致するグループがありません"))}</div>`
+      : q ? part("", rest)
+      : part(t("最近使ったグループ"), recent) + part(recent.length ? t("すべてのグループ") : "", rest);
+    const c = list.querySelector(".rgf-row.cur");
+    if (c) c.scrollIntoView({ block: "nearest" });
+  };
+  const pick = async i => {
+    const r = items[i];
+    if (!r) return;
+    closeModal();
+    if (r.value === runGroupSel) return;
+    const sel = document.getElementById("run-grp");
+    if (!(await runSwitchGroup(r.value)) && sel) sel.value = runGroupSel;
+  };
+  qEl.addEventListener("input", () => { cur = 0; draw(); });
+  qEl.addEventListener("keydown", e => {
+    if (e.isComposing) return; // the IME's own Enter / arrows
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (items.length) { cur = (cur + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length; draw(); }
+    } else if (e.key === "Enter" && !e.repeat && !e.ctrlKey) { e.preventDefault(); pick(cur); }
+  });
+  list.addEventListener("click", e => { const r = e.target.closest(".rgf-row"); if (r) pick(+r.dataset.i); });
+  node.querySelector("#rgf-cancel").onclick = closeModal;
+  draw();
 }
 
 // Backend messages that flow through untranslated get their known phrases
